@@ -180,8 +180,8 @@ pub(super) fn expand(
     };
     s.nslots += g.nslots;
     s.orig.extend_from_slice(&g.orig);
-    for (i, t, p) in &g.seeds {
-        s.seeds.push((off + i, t.clone(), *p));
+    for (i, t, p, refuted) in &g.seeds {
+        s.seeds.push((off + i, t.clone(), *p, *refuted));
     }
     for &(a, b) in &g.edges {
         s.edges.push((tr(a), tr(b)));
@@ -229,7 +229,7 @@ pub(super) fn expand(
             } else {
                 if undef == NO_NODE {
                     undef = fresh(s);
-                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF));
+                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
                 }
                 s.edges.push((undef, d));
             }
@@ -240,7 +240,7 @@ pub(super) fn expand(
         s.cons.push((
             sp,
             Cons::Load {
-                key: Key::Any,
+                key: Key::any(),
                 dst: elems,
             },
         ));
@@ -265,12 +265,12 @@ pub(super) fn expand(
             ThisArg::Node(n) => n,
             ThisArg::Tok(x) => {
                 let n = fresh(s);
-                s.seeds.push((n & !SLOT, vec![x], 0));
+                s.seeds.push((n & !SLOT, vec![x], 0, false));
                 n
             }
             ThisArg::Undef => {
                 let n = fresh(s);
-                s.seeds.push((n & !SLOT, Vec::new(), prim::UNDEF));
+                s.seeds.push((n & !SLOT, Vec::new(), prim::UNDEF, false));
                 n
             }
         };
@@ -319,7 +319,7 @@ pub fn compress(s: &mut Summary) {
         }
     }
     let mut seeded = vec![false; n];
-    for &(i, _, _) in &s.seeds {
+    for &(i, _, _, _) in &s.seeds {
         seeded[i as usize] = true;
     }
     // Uses as a rule holder or field, or a call operand.
@@ -475,8 +475,8 @@ pub fn compress(s: &mut Summary) {
     s.seeds = s
         .seeds
         .drain(..)
-        .filter(|(i, _, _)| !dead[*i as usize])
-        .map(|(i, t, p)| (map[i as usize], t, p))
+        .filter(|(i, _, _, _)| !dead[*i as usize])
+        .map(|(i, t, p, refuted)| (map[i as usize], t, p, refuted))
         .collect();
     s.params = s.params.iter().map(|&p| rn(p)).collect();
     s.ret = rn(s.ret);

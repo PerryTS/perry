@@ -1817,12 +1817,12 @@ run_test test-files/test_memory_class_object_churn.ts 200 "done, kept=999999 has
 
 echo ""
 echo "=== GC-aggression regression tests (no crash + correct result) ==="
-run_test test-files/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
-run_test test-files/test_gc_deep_recursion.ts       30 "done, result=320400"
+run_test test-parity/language/object/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
+run_test test-parity/language/function/test_gc_deep_recursion.ts       30 "done, result=320400"
 # #1790: `class Sub extends make(...)` parent class object survives forced
 # evacuation — inherited mixed pointer/scalar static fields + static methods
 # (incl. a 2-level chain) must still resolve via the rewritten side-table ptr.
-run_test test-files/test_gc_class_object_forced.ts  50 "done: alpha|alpha|7|7|d:alpha:7|mid|d:mid:3"
+run_test test-parity/language/class/test_gc_class_object_forced.ts  50 "done: alpha|alpha|7|7|d:alpha:7|mid|d:mid:3"
 
 echo ""
 echo "=== Server GC unsafe-zone regression tests ==="

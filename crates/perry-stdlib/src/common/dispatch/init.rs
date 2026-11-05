@@ -113,6 +113,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             resource_limits: extern "C" fn() -> f64,
             thread_id: extern "C" fn() -> f64,
         );
+        fn js_register_worker_threads_callable_dispatch(
+            dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize, *mut f64) -> bool,
+        );
         fn js_register_worker_threads_environment_data(
             get: extern "C" fn(f64) -> f64,
             set: extern "C" fn(f64, f64) -> f64,
@@ -200,6 +203,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_resource_limits,
         crate::worker_threads::js_worker_threads_thread_id,
     );
+    js_register_worker_threads_callable_dispatch(
+        crate::worker_threads::dispatch_worker_threads_callable,
+    );
     js_register_worker_threads_environment_data(
         crate::worker_threads::js_worker_threads_get_environment_data,
         crate::worker_threads::js_worker_threads_set_environment_data,
@@ -210,6 +216,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_worker_threads_messaging_constructors(
         crate::worker_threads::js_worker_threads_message_channel_new,
         crate::worker_threads::js_worker_threads_broadcast_channel_new,
+    );
+    perry_runtime::messaging::register_broadcast_channel_dispatch(
+        crate::worker_threads::dispatch_broadcast_channel_operation,
     );
     crate::worker_threads::register_message_port_codec();
     perry_runtime::messaging::js_register_worker_threads_message_port_dispatch(

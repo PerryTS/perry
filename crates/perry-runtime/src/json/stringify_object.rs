@@ -191,7 +191,7 @@ unsafe fn stringify_object_walk(
     // bound; the member loop below re-derives the keys only after a call that
     // can run user code or collect. Re-deriving them at every key access cost
     // five probes per object (#10696).
-    let (mut keys_view, mut num_fields) = match plain_member {
+    let (mut keys_view, num_fields) = match plain_member {
         Some(member) => (member.keys, member.live_slots),
         None => crate::object::object_keys_and_live_slot_count(obj),
     };
@@ -319,7 +319,7 @@ unsafe fn stringify_object_walk(
             }
             // A declined attempt can have walked a member (and run its
             // `toJSON`) before rolling back, so re-resolve the facts.
-            (keys_view, num_fields) = crate::object::object_keys_and_live_slot_count(obj);
+            (keys_view, _) = crate::object::object_keys_and_live_slot_count(obj);
             index_keys_known = None;
         }
     }
@@ -367,7 +367,11 @@ unsafe fn stringify_object_walk(
     // fields and `is_object_pointer`'s `keys_len <= field_count` guard
     // returned false, so `JSON.stringify` emitted the literal string "null"
     // for any parsed object with ≥9 fields.
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    // The inline region is the object's own allocation, not the floor: a
+    // birth on a compiler-fixed layout has exactly its declared slots, so a
+    // one-slot birth that gained a key keeps it in overflow storage, and
+    // slot 1 lies past the object's end.
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_len);
     if !slotted {

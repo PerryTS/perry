@@ -1900,14 +1900,14 @@ mod state_record;
 pub(crate) use constructors::instance_birth;
 pub(crate) use proto_methods::{
     build_legacy_stream_prototype, build_passthrough_prototype, build_stream_prototype,
-    stream_prototype_value, user_hook_value, StreamProto,
+    is_builtin_stream_method, stream_prototype_value, user_hook_value, StreamProto,
 };
 use state_record::*;
-pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 #[cfg(test)]
 pub(crate) use state_record::{
     is_stream_record_word, test_read_inert_slot, test_record_slot_bits, test_write_inert_slot,
 };
+pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;
@@ -1935,6 +1935,13 @@ pub(super) fn bound_method(stream: f64, name: &'static [u8]) -> f64 {
         hidden_key(name),
     );
     unsafe { crate::closure::js_function_bind(method, [stream].as_ptr(), 1) }
+}
+
+/// The bytes of a stream chunk (Buffer, typed array or string), for runtime
+/// consumers outside node:stream (child_process exec output).
+#[cfg(unix)]
+pub(crate) fn chunk_bytes(value: f64, out: &mut Vec<u8>) {
+    append_chunk_bytes(value, out, 0);
 }
 
 /// Test seams for `gc::tests::native_payload_streams`.

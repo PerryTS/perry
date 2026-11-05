@@ -405,7 +405,7 @@ impl Model {
         }
         let open = match key {
             Key::Named(a) => !crate::builtins::object_final_read(&self.atoms[a as usize]),
-            Key::Any => true,
+            Key::Any(_) => true,
         };
         let tpl = &mut self.tmpls[tm as usize];
         tpl.chain_miss = true;
@@ -481,7 +481,7 @@ impl Model {
             match self.toks[t as usize] {
                 TokKind::Top
                 | TokKind::Builtin(_)
-                | TokKind::BuiltinFn
+                | TokKind::BuiltinFn(_)
                 | TokKind::NativeProto(_) => {}
                 TokKind::Obj(_, _) if self.is_array_like(t) => {}
                 // A program object/function iterates only through its
@@ -513,7 +513,7 @@ impl Model {
                 self.add_tok(dst, TOP);
                 return;
             }
-            return self.load_from(origin, t, Key::Any, dst);
+            return self.load_from(origin, t, Key::any(), dst);
         }
         if t == TOP {
             self.add_tok(dst, TOP);
@@ -524,16 +524,20 @@ impl Model {
             }
             return;
         }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+        // Rule R1: what stores under a key no native function declares put
+        // into the native function values' shared field.
+        self.builtin_field_use(t, key, crate::model::R1Wait::Load(dst));
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             // Opaque (no field storage, `store_into`): its members are
-            // builtin functions and primitives (`tok_load`), or ⊤ once any
-            // builtin function value has been written.
-            if self.bf_written.is_some() {
+            // builtin functions and primitives (`tok_load`), or ⊤ once a
+            // store into a builtin function value may have named the key
+            // (rule R2, `bf_key_written`); a read before waits on its key.
+            if self.bf_key_written(key).is_some() {
                 self.add_top(dst, |_| {
                     "property of a written builtin function value".into()
                 });
             } else {
-                self.bf_reads.push(dst);
+                self.bf_reads.entry(key).or_default().push(dst);
             }
             self.with_b(|m| builtins::tok_load(m, t, key, dst));
             return;
@@ -599,8 +603,8 @@ impl Model {
                     own(self, f);
                 }
             },
-            Key::Any => {
-                let all = self.all_fields(t);
+            Key::Any(_) => {
+                let all = self.key_fields(t, key);
                 own(self, all);
             }
         }
@@ -649,7 +653,7 @@ impl Model {
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`. An
         // `arguments` object's chain is an ordinary one (`Object.prototype`).
-        if key == Key::Any && self.is_array_like(t) && !self.is_args(t) {
+        if key == Key::any() && self.is_array_like(t) && !self.is_args(t) {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -728,7 +732,7 @@ impl Model {
             // An accessor under a numeric name (one under a computed key
             // made the object's fields ⊤ already).
             if self.numeric_accessor {
-                self.accessor_walk(t, t, Key::Any, act);
+                self.accessor_walk(t, t, Key::any(), act);
             }
         }
     }
@@ -738,7 +742,7 @@ impl Model {
     /// field and its program prototype chain, else `undefined`. The builtin
     /// member approximation (`tok_load`) has nothing under it.
     pub fn load_program_key(&mut self, t: Tok, a: Atom, dst: NodeId) {
-        if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+        if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             return self.load_from(t, t, Key::Named(a), dst);
         }
         self.mark_use(t, crate::model::MARK_READ);
@@ -754,6 +758,8 @@ impl Model {
     /// may be defined under walk the chain per receiver; computed keys
     /// visit, through the prototype closure, only holders with accessors.
     pub(crate) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
+        // Accessor groups are keyed by the computed key itself.
+        let key = key.unshaped();
         if !self.needs_accessor_walk(key) {
             return;
         }
@@ -762,8 +768,8 @@ impl Model {
         };
         match key {
             Key::Named(_) => self.holder_walk(origin, t, key, act, false),
-            Key::Any => {
-                self.accessor_hit(origin, t, Key::Any, act);
+            Key::Any(_) => {
+                self.accessor_hit(origin, t, Key::any(), act);
                 let cp = self.cp(t);
                 if self.any_walk_done.insert((cp, origin, act)) {
                     self.any_walks.push((cp, origin, t, act));
@@ -889,7 +895,7 @@ impl Model {
     pub fn needs_accessor_walk(&self, key: Key) -> bool {
         match key {
             Key::Named(a) => self.accessor_atoms.contains(&a),
-            Key::Any => !self.accessor_atoms.is_empty(),
+            Key::Any(_) => !self.accessor_atoms.is_empty(),
         }
     }
 
@@ -939,7 +945,7 @@ impl Model {
             TokKind::ObjectProto
                 | TokKind::NativeProto(_)
                 | TokKind::Builtin(_)
-                | TokKind::BuiltinFn
+                | TokKind::BuiltinFn(_)
         )
     }
 
@@ -1024,10 +1030,7 @@ impl Model {
     }
 
     pub fn is_constructor_key(&self, key: Key) -> bool {
-        match key {
-            Key::Any => true,
-            Key::Named(a) => self.atoms[a as usize] == "constructor",
-        }
+        self.key_may_name_str(key, "constructor")
     }
 
     /// Start or continue a chain lookup at `t`'s prototypes.
@@ -1081,7 +1084,7 @@ impl Model {
             ChainAct::Load(dst) => {
                 let f = match key {
                     Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
+                    Key::Any(_) => self.all_fields(start),
                 };
                 self.edge(f, dst);
                 // DECISIONS 217: `super.__proto__` runs Object.prototype's
@@ -1099,7 +1102,7 @@ impl Model {
             ChainAct::Call(call) => {
                 let f = match key {
                     Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
+                    Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
                 self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
@@ -1119,7 +1122,7 @@ impl Model {
                     self.holder_walk(origin, start, key, act, true)
                 }
             }
-            Key::Any => self.accessor_walk(origin, start, key, act),
+            Key::Any(_) => self.accessor_walk(origin, start, key, act),
             _ => {}
         }
     }
@@ -1149,9 +1152,11 @@ impl Model {
     /// Accessors named `key` (any key: `Key::Any`) declared on `holder`:
     /// they run with `origin` as `this`, through the holder's group.
     pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
+        // Accessor groups are keyed by the computed key itself.
+        let key = key.unshaped();
         let has = match key {
             Key::Named(a) => self.accessors.contains_key(&(holder, a)),
-            Key::Any => self
+            Key::Any(_) => self
                 .accessor_keys
                 .get(&holder)
                 .is_some_and(|ks| !ks.is_empty()),
@@ -1230,11 +1235,11 @@ impl Model {
                     let f = self.accessors[&(holder, a)].1[i];
                     self.group_connect(holder, key, f, true);
                 }
-                if self.acc_groups.contains_key(&(holder, Key::Any)) {
+                if self.acc_groups.contains_key(&(holder, Key::any())) {
                     self.group_link(holder, a);
                 }
             }
-            Key::Any => {
+            Key::Any(_) => {
                 let star = self.atom(crate::STAR_KEY);
                 let n = self.accessor_keys.get(&holder).map_or(0, |v| v.len());
                 for i in 0..n {
@@ -1251,14 +1256,14 @@ impl Model {
 
     /// Link named group (holder, a) under the holder's Any group.
     pub(super) fn group_link(&mut self, holder: Tok, a: Atom) {
-        let any = self.acc_groups[&(holder, Key::Any)].clone();
+        let any = self.acc_groups[&(holder, Key::any())].clone();
         let g = self.acc_groups[&(holder, Key::Named(a))].clone();
         self.edge_quiet(any.gt, g.gt);
         self.edge_quiet(g.ar, any.ar);
         self.edge_quiet(any.st, g.st);
         self.edge_quiet(any.sp, g.sp);
         if g.has_setter {
-            self.group_live(holder, Key::Any);
+            self.group_live(holder, Key::any());
         }
     }
 
@@ -1279,8 +1284,8 @@ impl Model {
             }
             self.group_bind(holder, key, f, true);
             self.group_live(holder, key);
-            if self.acc_groups.contains_key(&(holder, Key::Any)) {
-                self.group_live(holder, Key::Any);
+            if self.acc_groups.contains_key(&(holder, Key::any())) {
+                self.group_live(holder, Key::any());
             }
         } else {
             if let Some(this) = this {
@@ -1379,7 +1384,7 @@ impl Model {
     /// results leave through their contracts. An accessor installed on `t`
     /// later joins (`accessor_installed`).
     pub(crate) fn leave_walk(&mut self, t: Tok, dst: NodeId) {
-        if !self.needs_accessor_walk(Key::Any) {
+        if !self.needs_accessor_walk(Key::any()) {
             return;
         }
         let act = ChainAct::Load(dst);
@@ -1439,7 +1444,7 @@ impl Model {
         if self.acc_groups.contains_key(&(holder, k)) {
             self.group_connect(holder, k, f, setter);
         } else {
-            let any_exists = self.acc_groups.contains_key(&(holder, Key::Any));
+            let any_exists = self.acc_groups.contains_key(&(holder, Key::any()));
             if replay || any_exists {
                 // Creating the group picks up every accessor there (this
                 // one too) and links it under an existing Any group.
@@ -1457,16 +1462,16 @@ impl Model {
             }
         }
         self.leave_key(holder, key);
-        if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
+        if replay && !self.acc_groups.contains_key(&(holder, Key::any())) {
             let walks = self
                 .any_walk_holders
                 .get(&holder)
                 .cloned()
                 .unwrap_or_default();
             if !walks.is_empty() {
-                self.acc_group(holder, Key::Any);
+                self.acc_group(holder, Key::any());
                 for (origin, act) in walks {
-                    self.group_hit(origin, holder, Key::Any, act);
+                    self.group_hit(origin, holder, Key::any(), act);
                 }
             }
         }
@@ -1529,7 +1534,7 @@ impl Model {
             // A replay per new call is solve work.
             self.work += toks.len() as u64;
             for &t in &toks {
-                if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+                if self.per_receiver_callee(t) {
                     self.call_tok(call, t, Some(origin));
                 }
             }
@@ -1540,7 +1545,9 @@ impl Model {
     /// The `this` half of `call_tok(_, t, Some(origin))`.
     pub(super) fn this_to(&mut self, t: Tok, origin: Tok, calls: &[CallId]) {
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
+            // It runs per (call, receiver) (`BuiltinCallee`).
+            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if let Some(d) = self.diagnostic.as_mut() {
                     let n = d.cause_node;
                     for &c in calls {
@@ -1608,7 +1615,8 @@ impl Model {
     pub(super) fn call_args(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
+            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if self.bind_done.insert((call, t, u32::MAX - 2)) {
                     self.unknown_callee_args(call, t, false);
                 }

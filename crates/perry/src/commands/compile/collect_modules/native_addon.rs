@@ -243,6 +243,8 @@ pub(super) fn collect_node_addon_request(
                 package_dir,
                 entry_relative,
                 ship_package_payload: false,
+                #[cfg(feature = "target-wasi")]
+                wasm_archives: Vec::new(),
             });
         return Ok(Some(logical_id));
     }
@@ -291,8 +293,47 @@ pub(super) fn collect_node_addon_request(
             package_dir: package_root,
             entry_relative,
             ship_package_payload: true,
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
         });
     Ok(Some(logical_id))
+}
+
+/// WASI: record the addon at `entry` (a `.node` path inside the approved
+/// package at `package_root`) that the program links from its declared wasm32
+/// archives. Its logical id is the native one, `<package>/<entry>`, so the same
+/// requests resolve to it; no `.node` file needs to exist.
+pub(super) fn collect_linked_wasm_addon(
+    ctx: &mut CompilationContext,
+    package_root: &std::path::Path,
+    entry: &str,
+    _archives: Vec<PathBuf>,
+) -> Result<()> {
+    let (actual_package, version) = package_identity_from_package_json(package_root)
+        .unwrap_or_else(|| (package_root.display().to_string(), "0.0.0".to_string()));
+    let Some(owner_package) = approved_owner_package(ctx, package_root, &actual_package) else {
+        return Ok(());
+    };
+    let entry_relative = PathBuf::from(entry);
+    let logical_id = format!(
+        "{}/{}",
+        actual_package,
+        normalized_relative(&entry_relative)
+    );
+    ctx.native_addons
+        .entry(logical_id.clone())
+        .or_insert_with(|| NativeAddonModule {
+            logical_id,
+            package: owner_package,
+            version,
+            source_path: package_root.join(&entry_relative),
+            package_dir: package_root.to_path_buf(),
+            entry_relative,
+            ship_package_payload: false,
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: _archives,
+        });
+    Ok(())
 }
 
 /// Returns true exactly for `.node` inputs handled as sidecar graph members so

@@ -205,7 +205,7 @@ impl Model {
         self.cons(
             o,
             Cons::Store {
-                key: Key::Any,
+                key: Key::any(),
                 src: value,
                 site,
             },

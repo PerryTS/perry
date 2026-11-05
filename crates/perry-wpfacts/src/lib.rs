@@ -32,6 +32,7 @@ mod gen_expr;
 mod gen_rest;
 mod ledger;
 pub mod model;
+pub mod native_effects;
 pub mod pts;
 mod rooted;
 mod solve;
@@ -144,6 +145,9 @@ pub struct Stats {
     pub pts_entries: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
+    /// Rule R1: how many program fields of built-in objects, the largest
+    /// first (`holder.key`, set size), the sinks (`Model::r1_sinks`).
+    pub builtin_fields: (usize, Vec<(String, usize)>, [u64; 4]),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -330,7 +334,7 @@ use contracts::open_templates;
 use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
-use program_facts::big_nodes;
+use program_facts::{big_nodes, builtin_fields};
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -462,6 +466,18 @@ fn generate<'a>(
         for f in g.m.funcs.iter_mut() {
             f.no_summary = true;
         }
+    }
+    // An unwalked body is no evidence, even if its token reached a guard.
+    let pending: Vec<_> =
+        g.m.funcs
+            .iter()
+            .filter_map(|f| match f.own_test {
+                model::OwnTestBody::Pending(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+    for n in pending {
+        g.m.refute_own_test(n);
     }
     g.m.summarize_and_replay();
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
@@ -697,7 +713,7 @@ fn compute_act<'a>(
             .map(|((h, k), gr)| {
                 let ng = match k {
                     model::Key::Named(a) => m.accessors.get(&(*h, *a)).map_or(0, |x| x.0.len()),
-                    model::Key::Any => m.accessor_keys.get(h).map_or(0, |x| x.len()),
+                    model::Key::Any(_) => m.accessor_keys.get(h).map_or(0, |x| x.len()),
                 };
                 (
                     m.nodes[gr.ar as usize].pts.len(),
@@ -804,6 +820,7 @@ fn compute_act<'a>(
         checks,
         pts_entries: g.m.pts_entries,
         big_nodes: big_nodes(&g.m),
+        builtin_fields: builtin_fields(&g.m),
         top_calls: g.m.top_calls,
         profile: {
             let mut v: Vec<(String, u64, f64)> =

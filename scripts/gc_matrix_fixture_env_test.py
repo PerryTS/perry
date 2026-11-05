@@ -9,6 +9,7 @@ check the environment actually delivered to each compile/run command.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -17,9 +18,16 @@ import sys
 import tempfile
 
 
+from gc_corpus_sources import resolve_sources
+
+
 ROOT = Path(__file__).resolve().parent.parent
 TEST = "test_gap_gc_string_suffix_cursor"
 ARMS = "loop_polls,safepoint_minor,shipped_default,wb_off"
+
+
+def real_fixture(case_id: str) -> Path:
+    return resolve_sources(ROOT, [case_id])[0][1]
 
 
 def assignments(text: str) -> dict[str, str]:
@@ -82,7 +90,7 @@ def self_test() -> None:
     for fixture, seed in [("protected_poll_reclaim", "1"), ("ic_leaf_json", "12435")]:
         result = subprocess.run(
             [sys.executable, "-B", str(ROOT / "scripts/gc_matrix_fixture_env.py"),
-             str(ROOT / f"test-files/test_gap_gc_{fixture}.ts")],
+             str(real_fixture(f"test_gap_gc_{fixture}"))],
             capture_output=True, text=True, check=True,
         )
         settings = assignments(result.stdout)
@@ -93,28 +101,37 @@ def self_test() -> None:
         if fixture == "ic_leaf_json":
             assert settings["PERRY_GC_VERIFY_EVACUATION"] == "1"
     matrix = (ROOT / "scripts/gc_repsel_matrix.sh").read_text()
-    original_fixture = (ROOT / f"test-files/{TEST}.ts").read_text()
+    original_fixture = real_fixture(TEST).read_text()
     with tempfile.TemporaryDirectory(prefix="gc-matrix-routing-test-") as work:
         root = Path(work)
         for directory in ("scripts", "test-files", "test-parity", "probes", "target/release"):
             (root / directory).mkdir(parents=True)
+        (root / "test-parity/node-suite/http").mkdir(parents=True)
         shutil.copy(ROOT / "scripts/gc_matrix_fixture_env.py", root / "scripts")
         shutil.copy(ROOT / "scripts/parity_fixture_limits.py", root / "scripts")
+        shutil.copy(ROOT / "scripts/gc_corpus_sources.py", root / "scripts")
+        shutil.copy(ROOT / "scripts/parity.py", root / "scripts")
+        shutil.copy(ROOT / "scripts/parity_normalize.py", root / "scripts")
         shutil.copy(ROOT / ".node-version", root)
         (root / f"test-files/{TEST}.ts").write_text(original_fixture)
+        (root / f"test-parity/node-suite/http/{TEST}.ts").write_text(original_fixture)
         (root / "test-parity/gc_repsel_corpus.txt").write_text(TEST + "\n")
         (root / "probes/node").write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\nfrom pathlib import Path\n"
             "if '--version' not in sys.argv:\n"
+            " source = next((arg for arg in reversed(sys.argv) if arg.endswith('.ts')), '')\n"
+            " if not source or not Path(source).is_file(): raise SystemExit(3)\n"
             " with open(os.environ['ROUTING_RECEIPTS'], 'a') as f: "
-            "f.write(json.dumps({'stage':'oracle','argv':sys.argv[1:]})+'\\n')\n"
+            "f.write(json.dumps({'stage':'oracle','argv':sys.argv[1:], 'source':source})+'\\n')\n"
             "print('v' + Path('.node-version').read_text().strip() if '--version' in sys.argv else 'routing-probe-only')\n"
         )
         compiler = root / "target/release/perry"
         compiler.write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\nfrom pathlib import Path\n"
             "captured = {k:v for k,v in os.environ.items() if k.startswith('PERRY_') and k != 'PERRY_BIN'}\n"
-            "receipt = {'stage':'compile', 'compile_env':captured}\n"
+            "source = next((arg for arg in sys.argv if arg.endswith('.ts')), '')\n"
+            "if not source or not Path(source).is_file(): raise SystemExit(3)\n"
+            "receipt = {'stage':'compile', 'compile_env':captured, 'argv':sys.argv[1:], 'source':source}\n"
             "with open(os.environ['ROUTING_RECEIPTS'], 'a') as f: f.write(json.dumps(receipt)+'\\n')\n"
             "output = Path(sys.argv[sys.argv.index('-o')+1])\n"
             "runtime = '#!/usr/bin/env python3\\nimport json, os\\n'\n"
@@ -127,6 +144,56 @@ def self_test() -> None:
         )
         compiler.chmod(0o755)
         (root / "probes/node").chmod(0o755)
+        legacy = root / f"test-files/{TEST}.ts"
+        moved_source = f"test-parity/node-suite/http/{TEST}.ts"
+        legacy.unlink()
+        moved = run_probe(root, matrix)
+        assert moved.returncode == 0, moved.stdout[-2000:]
+        moved_receipts = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()]
+        assert any(r["stage"] == "oracle" and r["source"] == moved_source
+                   for r in moved_receipts), moved_receipts
+        compiles = [r for r in moved_receipts if r["stage"] == "compile"]
+        assert compiles and all(r["source"] == moved_source for r in compiles), compiles
+        assert len([r for r in moved_receipts if r["stage"] == "oracle"]) == 1
+        report = json.loads((root / "report.json").read_text())
+        assert len(report["cells"]) == 4 and {c["test"] for c in report["cells"]} == {TEST}
+        assert {c["arm"] for c in report["cells"]} == set(ARMS.split(",")), report["cells"]
+        assert any(r["stage"] == "run" and r["compile_env"].get("PERRY_GC_SCHEDULE_SEED") == "10061"
+                   for r in moved_receipts), moved_receipts
+        (root / "test-parity/gc_repsel_corpus.txt").write_text(TEST + "\n" + TEST + "\n")
+        repeated = run_probe(root, matrix)
+        assert repeated.returncode == 0, repeated.stdout[-2000:]
+        repeated_report = json.loads((root / "report.json").read_text())
+        assert len(repeated_report["cells"]) == 8
+        assert [cell["test"] for cell in repeated_report["cells"]] == [TEST] * 8
+        (root / "test-parity/gc_repsel_corpus.txt").write_text(TEST + "\n")
+        (root / moved_source).unlink()
+        legacy.write_text(original_fixture)
+        check_receipts(root, run_probe(root, matrix))
+        # Bad IDs and duplicate basenames fail before receipts or replacing a prior report.
+        report_path = root / "report.json"
+        report_before = report_path.read_bytes()
+        source_path = legacy
+        source_before = hashlib.sha256(source_path.read_bytes()).digest()
+        (root / "test-parity/gc_repsel_corpus.txt").write_text("unknown_gc_case\n")
+        unknown = run_probe(root, matrix)
+        assert unknown.returncode == 3, unknown.stdout
+        assert unknown.stdout.strip() == (
+            f"manifest lists unknown_gc_case but test-files/unknown_gc_case.ts does not exist"
+        ), unknown.stdout
+        assert not (root / "receipts.jsonl").exists()
+        assert report_path.read_bytes() == report_before
+        assert hashlib.sha256(source_path.read_bytes()).digest() == source_before
+        (root / "test-parity/gc_repsel_corpus.txt").write_text(TEST + "\n")
+        (root / moved_source).write_text(original_fixture)
+        ambiguous = run_probe(root, matrix)
+        assert ambiguous.returncode == 3 and "ambiguous GC witness source" in ambiguous.stdout, ambiguous.stdout
+        assert not (root / "receipts.jsonl").exists()
+        assert report_path.read_bytes() == report_before
+        assert hashlib.sha256(source_path.read_bytes()).digest() == source_before
+        (root / moved_source).unlink()
+        assert any(r["stage"] == "compile" and r["source"] == moved_source
+                   for r in moved_receipts), moved_receipts
         check_receipts(root, run_probe(root, matrix))
         exposed = "// parity-node-argv: --expose-gc\n" + original_fixture
         check_receipts(root, run_probe(root, matrix, exposed))
@@ -155,7 +222,7 @@ def self_test() -> None:
         assert result.returncode == 2, result.stdout
         assert not (root / "receipts.jsonl").exists(), "malformed metadata reached compiler"
         for name in ("fetch_streaming_chunks", "worker_transfer_ownership", "ic_leaf_json", "protected_poll_reclaim"):
-            fixture = ROOT / f"test-files/test_gap_gc_{name}.ts"
+            fixture = real_fixture(f"test_gap_gc_{name}")
             result = run_probe(root, matrix, fixture.read_text())
             report = json.loads((root / "report.json").read_text())
             receipts = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()]

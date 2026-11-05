@@ -269,6 +269,7 @@ js_array_sort_with_comparator	ptr	ptr,ptr
 js_array_splice	ptr	ptr,i32s,i32s,ptr,i32u,ptr
 js_array_splice_delete_count	i32s	f64
 js_array_spread_append	ptr	ptr,f64
+js_array_spread_append_iterator	ptr	ptr,f64
 js_array_subclass_init	f64	f64,f64
 js_array_subclass_init_args	f64	f64,ptr,usize
 js_array_to_locale_string	ptr	ptr,f64,f64
@@ -593,6 +594,7 @@ js_boxed_number_new	f64	f64
 js_boxed_string_new	f64	f64,i32s
 js_boxed_symbol_new	f64	f64
 js_broadcast_channel_new	f64	f64
+js_broadcast_channel_new_counted	f64	f64,i32u
 js_btoa	ptr	f64
 js_buffer_alloc	ptr	i32s,i32s
 js_buffer_alloc_fill_value	ptr	i32s,f64,i32s
@@ -2360,6 +2362,7 @@ js_nm_install_vm	void
 js_nm_install_wasi	void	
 js_nm_install_worker_threads	void	
 js_nm_install_zlib	void	
+js_node_api_static_addons	void	ptr,usize,ptr,usize
 js_node_http2_connect	i64	f64,f64,i64
 js_node_http2_create_secure_server	i64	f64,i64
 js_node_http2_create_server	i64	f64,f64

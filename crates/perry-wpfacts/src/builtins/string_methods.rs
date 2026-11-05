@@ -115,7 +115,7 @@ fn read_match(m: &mut Model, rec: NodeId) {
     m.cons(
         rec,
         Cons::Load {
-            key: Key::Any,
+            key: Key::any(),
             dst: v,
         },
     );
@@ -124,7 +124,7 @@ fn read_match(m: &mut Model, rec: NodeId) {
     m.cons(
         v,
         Cons::Load {
-            key: Key::Any,
+            key: Key::any(),
             dst: g,
         },
     );
@@ -436,7 +436,14 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
     let cap = m.node_l("split-capture");
     let i = m.node_l("split-capture-index");
     m.add_prim(i, prim::NUM);
-    m.cons(z, Cons::IdxLoad { idx: i, dst: cap });
+    m.cons(
+        z,
+        Cons::IdxLoad {
+            idx: i,
+            dst: cap,
+            shape: 0,
+        },
+    );
     let a = site_tmpl(m, call, "Array");
     let fa = m.field_any(a);
     m.add_prim(fa, prim::STR);

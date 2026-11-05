@@ -17,11 +17,11 @@ pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(
             |run| run(_closure, _this, _arg),
         )
 }
-static JS_BROADCAST_CHANNEL_NEW: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
-pub(crate) extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
+static JS_BROADCAST_CHANNEL_NEW: Hook<extern "C" fn(f64, u32) -> f64> = Hook::empty();
+pub(crate) extern "C" fn js_broadcast_channel_new(name: f64, argc: u32) -> f64 {
     JS_BROADCAST_CHANNEL_NEW.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(name),
+        |run| run(name, argc),
     )
 }
 static JS_MESSAGE_CHANNEL_CONSTRUCTOR_CALL_ERROR: Hook<
@@ -75,7 +75,7 @@ pub(crate) fn install() {
         crate::messaging::install_root_tls_resolver();
         JS_BROADCAST_CHANNEL_CONSTRUCTOR_CALL_ERROR
             .set(crate::messaging::js_broadcast_channel_constructor_call_error);
-        JS_BROADCAST_CHANNEL_NEW.set(crate::messaging::js_broadcast_channel_new);
+        JS_BROADCAST_CHANNEL_NEW.set(crate::messaging::js_broadcast_channel_new_counted);
         JS_MESSAGE_CHANNEL_CONSTRUCTOR_CALL_ERROR
             .set(crate::messaging::js_message_channel_constructor_call_error);
         JS_MESSAGE_CHANNEL_NEW.set(crate::messaging::js_message_channel_new);

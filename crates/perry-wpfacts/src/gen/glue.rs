@@ -62,7 +62,7 @@ impl<'a> Gen<'a> {
             let v = self.load(desc, Key::Named(va));
             let k = match &key {
                 Some(s) => Key::Named(self.m.atom(s)),
-                None => Key::Any,
+                None => Key::any(),
             };
             self.store(fx, o, k, v, "defineProperty".into(), None, false);
         }
@@ -149,7 +149,7 @@ impl<'a> Gen<'a> {
                 proto: Protocol::Any,
             },
         );
-        let vals = self.load(o, Key::Any);
+        let vals = self.load(o, Key::any());
         let (t, n) = self.bobj(mi, "descriptor");
         let fa = self.m.field_any(t);
         self.m.edge(vals, fa);
@@ -331,7 +331,7 @@ impl<'a> Gen<'a> {
                 self.store(
                     fx,
                     rest,
-                    Key::Any,
+                    Key::any(),
                     value,
                     "rest element append".into(),
                     None,

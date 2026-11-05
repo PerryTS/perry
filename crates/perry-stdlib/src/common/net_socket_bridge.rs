@@ -64,7 +64,6 @@ fn external_socket_method_name(property_name: &str) -> Option<&'static [u8]> {
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),
         "setDefaultEncoding" => Some(b"setDefaultEncoding"),
-        "upgradeToTLS" => Some(b"upgradeToTLS"),
         _ => None,
     }
 }

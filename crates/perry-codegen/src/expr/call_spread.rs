@@ -104,7 +104,7 @@ pub(crate) fn bundle_args_rooted<'f, R>(
                         // The one spread drain appends in place; `advance`
                         // re-reads the accumulator below it (#7192's shape).
                         let part_box = lower_expr(ctx, e)?;
-                        acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, &part_box)]);
+                        emit_spread_append(ctx, acc, e, &part_box);
                     }
                 }
             }
@@ -112,6 +112,41 @@ pub(crate) fn bundle_args_rooted<'f, R>(
         },
         finish,
     )
+}
+
+/// Append spread operand `operand` (its value `part_box`) to the rooted
+/// argument accumulator: `js_array_spread_append`, the complete drain. When
+/// the operand is an instance of a known class whose `[Symbol.iterator]` is a
+/// declared generator member (`proto_constants::iterator_member_site`), the
+/// site first proves the member from the receiver's family layout and the
+/// static prototype shapes, calls the generator body's entry itself and drains
+/// that iterator (`js_array_spread_append_iterator`); a miss takes the
+/// complete drain.
+pub(crate) fn emit_spread_append(
+    ctx: &mut FnCtx<'_>,
+    acc: &mut rooting::RootedAcc,
+    operand: &Expr,
+    part_box: &str,
+) {
+    let site = acc
+        .is_rooted()
+        .then(|| crate::proto_constants::iterator_member_site(ctx, operand))
+        .flatten();
+    let Some(site) = site else {
+        acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, part_box)]);
+        return;
+    };
+    let slow = ctx.new_block("spreaditer.generic");
+    let merge = ctx.new_block("spreaditer.merge");
+    let slow_l = ctx.block_label(slow);
+    let merge_l = ctx.block_label(merge);
+    let iter = crate::proto_constants::emit_iterator_call(ctx, part_box, &site, &slow_l);
+    acc.advance(ctx, "js_array_spread_append_iterator", &[Arg::Plain(DOUBLE, &iter)]);
+    ctx.block().br(&merge_l);
+    ctx.current_block = slow;
+    acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, part_box)]);
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -689,3 +724,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+#[path = "call_spread_iterator_tests.rs"]
+mod call_spread_iterator_tests;

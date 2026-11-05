@@ -11,6 +11,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
 
+mod broadcast_operations;
 mod port_operations;
 pub mod port_transfer;
 #[cfg(test)]
@@ -18,6 +19,10 @@ mod port_transfer_tests;
 pub mod port_transport;
 mod worker_async_dispose;
 mod worker_metadata;
+pub use broadcast_operations::{
+    broadcast_channel_id, broadcast_channel_object_with_id, register_broadcast_channel_dispatch,
+    BroadcastChannelOperation,
+};
 pub use port_operations::install_core_methods as install_message_port_core_methods;
 pub use port_operations::js_register_worker_threads_message_port_dispatch;
 pub use port_operations::{
@@ -118,18 +123,6 @@ fn closure_value(info: *const crate::closure::JsFunctionInfo, name: &str, arity:
     object::set_bound_native_closure_name(closure, name);
     object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
-}
-
-extern "C" fn noop0(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    js_undefined()
-}
-
-extern "C" fn noop1(
-    _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    _arg0: f64,
-) -> f64 {
-    js_undefined()
 }
 
 fn install_method(
@@ -689,26 +682,7 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
         }
         "MessageChannel" => {}
         "BroadcastChannel" => {
-            set_field(proto, "name", js_undefined());
-            install_method(
-                proto,
-                "close",
-                crate::fn_info!(#[realm(realm_decl! { BroadcastChannel.prototype.close, constructible = true; BroadcastChannel.prototype.ref, constructible = true; BroadcastChannel.prototype.unref, constructible = true; })] export crate::messaging::noop0, 0; with_declared(0)),
-                0,
-            );
-            install_method(
-                proto,
-                "postMessage",
-                crate::fn_info!(#[realm(BroadcastChannel.prototype.postMessage, constructible = true)] export crate::messaging::noop1, 1; with_declared(1)),
-                1,
-            );
-            install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-            install_method(
-                proto,
-                "unref",
-                crate::fn_info!(noop0, 0; with_declared(0)),
-                0,
-            );
+            broadcast_operations::install_core_methods(proto);
             set_field(proto, "onmessage", js_null());
             set_field(proto, "onmessageerror", js_null());
         }
@@ -764,40 +738,35 @@ pub(crate) extern "C" fn js_message_channel_constructor_call_error(
 }
 
 #[no_mangle]
+pub extern "C" fn js_broadcast_channel_new_counted(name: f64, argc: u32) -> f64 {
+    if argc == 0 {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"name\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    js_broadcast_channel_new(name)
+}
+
+#[no_mangle]
 pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
     if let Some(factory) = worker_threads_broadcast_channel_factory() {
         return factory(name);
     }
-    let obj = object::js_object_alloc(0, 0);
-    set_object_prototype(obj, constructor_prototype("BroadcastChannel"));
-    set_field(
-        obj,
-        "constructor",
-        get_global_constructor("BroadcastChannel"),
-    );
-    // #6949(b): `js_string_coerce` allocates for every shape except an
-    // already-heap STRING_TAG value, so it can collect and EVACUATE — and
-    // `obj`, allocated a few lines up, is a raw Rust local: neither a GC root
-    // nor a shadow slot. Every `set_field`/`install_method` below writes
-    // through it. Root it across the coercion and re-read.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let (name_ptr, obj) = obj_handle
-        .across_mut::<object::ObjectHeader, _>(|| crate::builtins::js_string_coerce(name));
-    let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
-    set_field(obj, "name", name_value);
-    install_method(obj, "close", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-    install_method(
-        obj,
-        "postMessage",
-        crate::fn_info!(noop1, 1; with_declared(1)),
-        1,
-    );
-    install_method(obj, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-    install_method(obj, "unref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-    set_field(obj, "onmessage", js_null());
-    set_field(obj, "onmessageerror", js_null());
-    boxed_object(obj)
+    let name = scope.root_nanbox_f64(crate::builtins::js_template_string_coerce_box(name));
+    let object = scope.root_raw_mut_ptr(broadcast_channel_object_with_id(0, name.get_nanbox_f64()));
+    let constructor = scope.root_nanbox_f64(get_global_constructor("BroadcastChannel"));
+    for (name, value) in [
+        ("constructor", constructor.get_nanbox_f64()),
+        ("onmessage", js_null()),
+        ("onmessageerror", js_null()),
+    ] {
+        let value = scope.root_nanbox_f64(value);
+        let name = key(name);
+        object::js_object_set_field_by_name(object.get_raw_mut_ptr(), name, value.get_nanbox_f64());
+    }
+    boxed_object(object.get_raw_mut_ptr())
 }
 
 pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(

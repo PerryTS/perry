@@ -17,7 +17,7 @@ use std::time::Duration;
 
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-files/test_tty_write_stream_size.ts"
+    "/../../test-parity/node-suite/tty/test_tty_write_stream_size.ts"
 ));
 
 fn compile(dir: &Path) -> PathBuf {

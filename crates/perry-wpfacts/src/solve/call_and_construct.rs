@@ -49,7 +49,10 @@ impl Model {
             });
             return self.call_tok(call, TOP, this_tok);
         }
-        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
+        if self.native_call(call, t, this_tok) {
+            return;
+        }
+        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn(_)) {
             if let Some(d) = self.diagnostic.as_mut() {
                 let n = d.cause_node;
                 d.unknown_calls.entry(call).or_insert((n, t == TOP));
@@ -88,7 +91,7 @@ impl Model {
             return;
         }
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => unreachable!(),
+            TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
@@ -639,7 +642,10 @@ impl Model {
                 // E12: a constructor function returning an object.
                 self.ctor_ret_objects(call, t, c.ret);
             }
-            TokKind::Top | TokKind::BuiltinFn => {
+            // A method of an intrinsic prototype is no constructor
+            // (TypeError): nothing flows.
+            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
                 }
@@ -868,7 +874,7 @@ impl Model {
             self.mark_use(t, crate::model::MARK_READ);
             let r = match key {
                 Key::Named(a) => self.marker_load(t, Some(a)),
-                Key::Any => self.reach_of(t),
+                Key::Any(_) => self.reach_of(t),
             };
             self.mark_use(r, crate::model::MARK_READ);
             return;
@@ -891,7 +897,7 @@ impl Model {
             }
             let m = match key {
                 Key::Named(a) => self.marker_load(t, Some(a)),
-                Key::Any => self.reach_of(t),
+                Key::Any(_) => self.reach_of(t),
             };
             self.mark_escape_why(m, &|mm: &Self| match key {
                 Key::Named(a)
@@ -901,7 +907,7 @@ impl Model {
                 }
                 Key::Named(_) if mm.reach_marker.contains(&t) => "method: of a reach".into(),
                 Key::Named(_) => "method: of a marker that is no own parameter".into(),
-                Key::Any => "method: computed key".into(),
+                Key::Any(_) => "method: computed key".into(),
             });
             // That method is an unknown function, as a plain call through a
             // marker is (`call_tok`): the arguments escape, the result is
@@ -915,9 +921,11 @@ impl Model {
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,
             (Key::Named(a), None) => self.field(t, a),
-            (Key::Any, _) => self.all_fields(t),
+            (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);
+        // Rule R1: a native function value's shared field.
+        self.builtin_field_use(t, key, crate::model::R1Wait::Call(call, t));
         // A key only another unit's subclass defines runs that subclass's
         // method (DECISIONS 97).
         if let (Key::Named(a), Some(_)) = (key, virt) {

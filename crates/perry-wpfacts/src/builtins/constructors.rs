@@ -176,6 +176,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::Function => {
+            if !function_ctor_runs_code(m, call, 0, true) {
+                return;
+            }
             set_dyn_eval(m, "E14 new Function(...)");
             unknown_method(m, call, "E14 dynamic code");
         }
@@ -220,7 +223,7 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
                 m.cons(
                     src,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: fields,
                     },
                 );

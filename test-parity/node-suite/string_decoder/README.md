@@ -1,7 +1,7 @@
 # node:string_decoder parity suite
 
 Granular Node compatibility cases for `node:string_decoder`, curated from the
-broad `test-files/test_parity_string_decoder.ts` smoke test plus Node/Deno
+broad `test-parity/node-suite/string_decoder/test_parity_string_decoder.ts` smoke test plus Node/Deno
 StringDecoder behavior around incremental multibyte decoding.
 
 Cases are intentionally small and deterministic so each failure maps to one API

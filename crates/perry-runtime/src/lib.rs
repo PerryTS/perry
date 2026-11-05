@@ -148,9 +148,13 @@ pub mod color_parse;
 #[cfg(perry_contract_checks)]
 pub(crate) mod contracts;
 pub mod date;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dgram_reactor;
+// A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+#[cfg(target_os = "wasi")]
+#[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
@@ -1439,7 +1443,7 @@ mod node_test_hook_slots;
 pub mod temporal_hook_slots;
 mod temporal_layout;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 mod dgram_registry_owner;
 
 mod wasm_hook_slots;

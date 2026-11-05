@@ -250,9 +250,15 @@ impl<'a> Gen<'a> {
         match key {
             Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
             // The key's values decide: an index or any key (`StoreIndexed`).
-            Key::Any => self
-                .m
-                .cons(key_value, Cons::StoreIndexed { o: recv, src, site }),
+            Key::Any(shape) => self.m.cons(
+                key_value,
+                Cons::StoreIndexed {
+                    o: recv,
+                    src,
+                    site,
+                    shape,
+                },
+            ),
         }
     }
 
@@ -274,7 +280,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn key_of(&mut self, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
-            _ => Key::Any,
+            _ => Key::any(),
         }
     }
 
@@ -289,10 +295,56 @@ impl<'a> Gen<'a> {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
                     Key::Named(self.m.atom(s))
                 }
-                _ => Key::Any,
+                _ => Key::any(),
             },
             _ => self.key_of(index),
         }
+    }
+
+    /// `E.prototype.K` (`object` is `E.prototype`, `property` is `K`):
+    /// `E`'s node, the `E.prototype` read (its read site as any read's) and
+    /// `K`'s atom. `None`: another shape.
+    fn proto_member(
+        &mut self,
+        fx: &Fx,
+        object: &Expr,
+        property: &str,
+    ) -> Option<(NodeId, NodeId, Atom)> {
+        let Expr::PropertyGet {
+            object: inner,
+            property: p,
+            byte_offset,
+            ..
+        } = object
+        else {
+            return None;
+        };
+        if p != "prototype" || matches!(inner.as_ref(), Expr::PrivateGuard { .. }) {
+            return None;
+        }
+        let mi = fx.module;
+        let e = match self.ns_member(mi, inner, p, false) {
+            Some(e) => e,
+            None => self.expr(fx, inner),
+        };
+        let pa = self.member_atom(inner, p);
+        if *byte_offset != 0 {
+            self.read_sites.push(ReadSite {
+                module: mi,
+                byte_offset: *byte_offset,
+                key: pa,
+                recv: e,
+                is_call: false,
+                value_call: false,
+                func: fx.f,
+            });
+        }
+        let o = self.load(e, Key::Named(pa));
+        if self.diagnostic.is_some() {
+            self.diagnostic_expr(fx, object, o);
+        }
+        let a = self.member_atom(object, property);
+        Some((e, o, a))
     }
 
     pub(crate) fn load(&mut self, recv: NodeId, key: Key) -> NodeId {
@@ -698,13 +750,28 @@ impl<'a> Gen<'a> {
                 ),
             },
             Expr::Logical { op, left, right } => {
+                let plan = match op {
+                    LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),
+                    LogicalOp::Or => match left.as_ref() {
+                        Expr::Unary {
+                            op: UnaryOp::Not,
+                            operand,
+                        } => self.own_guard_plan(operand, crate::gen::Region::Expr(right)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
                 let l = self.expr(fx, left);
+                let own = self.own_guard_arm(plan, l);
                 let r = self.expr(fx, right);
+                self.own_guard_done(own);
                 let out = self.tmp("logical");
-                // `l ?? r` is `l` when it is not nullish.
+                // `l ?? r` is `l` when it is not nullish; `l && r` is `l`
+                // when it is falsy.
                 match op {
                     LogicalOp::Coalesce => self.m.cons(l, Cons::NotNullish { dst: out }),
-                    _ => self.m.edge(l, out),
+                    LogicalOp::And => self.m.cons(l, Cons::Falsy { dst: out }),
+                    LogicalOp::Or => self.m.edge(l, out),
                 }
                 // The right operand is the result only when the left one
                 // selects it.
@@ -728,8 +795,11 @@ impl<'a> Gen<'a> {
                 then_expr,
                 else_expr,
             } => {
+                let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let own = self.own_guard_arm(plan, t);
                 let a = self.expr(fx, then_expr);
+                self.own_guard_done(own);
                 let b = self.expr(fx, else_expr);
                 let out = self.tmp("cond");
                 self.m.cons(
@@ -813,6 +883,25 @@ impl<'a> Gen<'a> {
                 byte_offset,
                 ..
             } => {
+                // `E.prototype.K`: the read of `K` runs per value of `E`
+                // (`Cons::ProtoKey`), so that a builtin namespace's prototype
+                // member is the native it names.
+                if let Some((e, o, a)) = self.proto_member(fx, object, property) {
+                    if *byte_offset != 0 {
+                        self.read_sites.push(ReadSite {
+                            module: mi,
+                            byte_offset: *byte_offset,
+                            key: a,
+                            recv: o,
+                            is_call: false,
+                            value_call: false,
+                            func: fx.f,
+                        });
+                    }
+                    let dst = self.tmp("load");
+                    self.m.cons(e, Cons::ProtoKey { key: a, dst });
+                    return dst;
+                }
                 let o = match self.ns_member(mi, object, property, false) {
                     Some(o) => o,
                     None => self.expr(fx, object),
@@ -900,7 +989,12 @@ impl<'a> Gen<'a> {
                         }
                     }
                 } else {
-                    let key = self.key_of(key);
+                    // A key built from literal parts writes only names
+                    // matching them (`Model::key_shape`).
+                    let key = match self.key_of(key) {
+                        Key::Any(_) => Key::Any(self.m.key_shape(key)),
+                        k => k,
+                    };
                     // A receiver other than the target gets the own data store.
                     for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
@@ -910,7 +1004,15 @@ impl<'a> Gen<'a> {
                         match key {
                             Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
                             // The key's values decide: an index or any key.
-                            Key::Any => self.m.cons(k, Cons::StoreIndexed { o, src: v, site }),
+                            Key::Any(shape) => self.m.cons(
+                                k,
+                                Cons::StoreIndexed {
+                                    o,
+                                    src: v,
+                                    site,
+                                    shape,
+                                },
+                            ),
                         }
                     }
                 }
@@ -972,11 +1074,27 @@ impl<'a> Gen<'a> {
                 );
                 match self.read_key(index) {
                     Key::Named(a) => self.load(o, Key::Named(a)),
-                    Key::Any => {
+                    Key::Any(_) => {
                         let dst = self.tmp("idxload");
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
-                        self.m.cons(o, Cons::IdxLoad { idx, dst });
+                        let shape = self.m.key_shape(index);
+                        match self.own_reads.remove(&(e as *const Expr as usize)) {
+                            // Behind an own-property test (`gen/own_guard.rs`).
+                            Some(bad) => {
+                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape });
+                                self.m.cons(
+                                    bad,
+                                    Cons::OwnGate {
+                                        obj: o,
+                                        idx,
+                                        dst,
+                                        shape,
+                                    },
+                                );
+                            }
+                            None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
+                        }
                         dst
                     }
                 }
@@ -1021,7 +1139,12 @@ impl<'a> Gen<'a> {
                         self.store_elem(fx, e, o, key, i, v, "[]=");
                     }
                 } else {
-                    let key = self.key_of(index);
+                    // A key built from literal parts writes only names
+                    // matching them (`Model::key_shape`).
+                    let key = match self.key_of(index) {
+                        Key::Any(_) => Key::Any(self.m.key_shape(index)),
+                        k => k,
+                    };
                     self.store_elem(fx, e, o, key, i, v, "[]=");
                 }
                 v
@@ -1273,7 +1396,10 @@ impl<'a> Gen<'a> {
 
             // -------------------------------------------- classes / new
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 // A chunked literal birth: its chunk calls receive the object
                 // being born, whose chunked slots they initialize.
@@ -1282,7 +1408,19 @@ impl<'a> Gen<'a> {
                     let x = self.tmp("literal chunk object");
                     self.chunk_objects.push(x);
                 }
-                let a = self.evaluate_all(fx, args);
+                // The appended capture forwards are snapshot reads.
+                let caps = args.len().saturating_sub(*cap_args_appended as usize);
+                let a: Vec<NodeId> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        if i >= caps {
+                            self.snapshot_read(fx, e)
+                        } else {
+                            self.expr(fx, e)
+                        }
+                    })
+                    .collect();
                 let x = if chunked {
                     self.chunk_objects.pop()
                 } else {
@@ -1382,7 +1520,7 @@ impl<'a> Gen<'a> {
                 let c = self.class_value(mi, class_name);
                 let _ = self.expr(fx, key);
                 let v = self.expr(fx, value);
-                self.store(fx, c, Key::Any, v, "static[sym]".into(), None, false);
+                self.store(fx, c, Key::any(), v, "static[sym]".into(), None, false);
                 v
             }
             Expr::RegisterClassParentDynamic {
@@ -1401,7 +1539,7 @@ impl<'a> Gen<'a> {
                 captures,
             } => {
                 for (i, c) in captures.iter().enumerate() {
-                    let v = self.expr(fx, c);
+                    let v = self.snapshot_read(fx, c);
                     let env = self.class_env(mi, class_name, i);
                     self.m.edge(v, env);
                 }
@@ -1415,7 +1553,7 @@ impl<'a> Gen<'a> {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
                 for (i, c) in captures.iter().enumerate() {
-                    let v = self.expr(fx, c);
+                    let v = self.snapshot_read(fx, c);
                     let env = self.class_env(mi, &name, i);
                     self.m.edge(v, env);
                     if env_class.is_none() {
@@ -1526,7 +1664,7 @@ impl<'a> Gen<'a> {
                     // the binding: the binding holds the cell (DECISIONS 50).
                     let l = self.local(mi, *id);
                     if self.cell_locals.contains(&(mi, *id)) {
-                        self.store(fx, l, Key::Any, cv, "owner[0]=".into(), None, false);
+                        self.store(fx, l, Key::any(), cv, "owner[0]=".into(), None, false);
                     } else {
                         self.m.edge(cv, l);
                     }
@@ -1549,10 +1687,10 @@ impl<'a> Gen<'a> {
                 }
                 for (_, v) in computed_statics {
                     let vn = self.expr(fx, v);
-                    self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
+                    self.store(fx, cv, Key::any(), vn, "static[k]".into(), None, false);
                 }
                 for (i, a) in captured_args.iter().enumerate() {
-                    let v = self.expr(fx, a);
+                    let v = self.snapshot_read(fx, a);
                     let env = self.class_env(mi, template, i);
                     self.m.edge(v, env);
                 }

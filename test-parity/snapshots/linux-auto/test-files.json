@@ -15,56 +15,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_buffer_b4_pool_retention": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_bun_plugin": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_crypto": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_date": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_date_fns_format": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_decorators_legacy_metadata": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_decorators_replacement_unsupported": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_decorators_target_prototype_9467": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -85,13 +36,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_enum": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_fastify_in_process": {
       "status": "parity_fail",
       "issue": null,
@@ -106,35 +50,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_fs": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_10343_writehead_framing": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_10427_webcrypto_method_identity": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_10476_builtin_named_guarded_receivers": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_10482_object_prototype_dunder_proto": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -169,56 +85,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_11394_builtin_proto_method_patch": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_11759_class_decl_fresh_per_evaluation": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_11791_private_proxy": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_11826_module_tdz_cycle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_11931_literal_capacity_function_attrs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_12227_function_sites": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_13645_forof_iterproto_next": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_13645_forof_proto_iterator_replaced": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -232,84 +99,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_9442_process_exit_abandons_async_fs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_9442_process_exit_abandons_async_fs_cjs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_9815_primitive_computed_properties": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_array_push_integrity": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_buffer_pool_identity": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_bun_sql_9604": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_byname_exotic_probe_gate": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_class_value_native_rss": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_classsem_sizefix_shared_body": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_closure_birth_tables": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_constructor_entry_boundary": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_constructor_key_order": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -323,22 +113,8 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_crypto_hash_chain_11516": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_element_receiver_regions": {
       "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_error_class_expression_methods": {
-      "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -365,27 +141,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_function_layout": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_function_own_state": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_function_prototype_own_keys": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_genmodel_fixed_state": {
       "status": "parity_fail",
       "issue": null,
@@ -393,105 +148,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_globals_abortsignal_navigator_2582_2923": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_honestptr_kind_entries": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_alpn_secure": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_e2e_streams": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_session_isolation": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_flow_control": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_frame_errors": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_goaway_recv": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_goaway_send": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_goaway_server": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_refused_stream": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_session_lifecycle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http_response_events": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http_response_keys": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_imported_static_prototype_oblique_loader": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -505,27 +162,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_intl_rtf_auto_instanceof_6960": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_iterator_next_foreign_prototype": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_method_site_builtin_receivers": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_mongodb_from_source": {
       "status": "parity_fail",
       "issue": null,
@@ -533,98 +169,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_native_init_user_proto_accessor": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_native_module_timers_readline_promises": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_native_namespace_enumeration_nskeys.cjs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_native_payload_cb-sqlite": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_native_payload_zlib_one_shots": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_native_payload_zlib_paths": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_net_constructor_class_identity": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_nskeys_native_enumeration": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_object_literal_repeated_keys": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_object_tolocalestring_primitive_receiver": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_extern_wrappers": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_funcref": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_memory": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_module_wrappers": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -666,77 +211,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_serverresponse_payload": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_shape_answered_named_store": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_sp_live_super_defaults": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_streambirth2": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_streambirth2_gc": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_streambirth2_hooks": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_streambirth2_options": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_turnloop_http_lifecycle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_turnloop_http_server": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_turnloop_p3_io_phase_order": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_turnloop_ws_server": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -750,20 +225,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_v8_2_3680plus": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_v8_heap_snapshot_4916": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_wmap_ephemeron": {
       "status": "parity_fail",
       "issue": null,
@@ -771,42 +232,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_wpfacts_dyn_proto_setter": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gc_native_purge_reclaim": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gc_shared_allocation_fast_path": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_hono_bundle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_http_server_unref_5011": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_inherited_store_chain_traps": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -946,13 +372,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_issue_2153_http_typed_feedback_dispatch": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_issue_2656_weakref_finalization_gc": {
       "status": "parity_fail",
       "issue": null,
@@ -1074,13 +493,6 @@
     },
     "test_issue_4449_thread_promise_void": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_issue_4826_array_headers": {
-      "status": "node_fail",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -1352,35 +764,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_math": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_message_channel_global": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_native_payload_zlib_bomb": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_node_http_basic": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_node_http_post_body": {
       "status": "node_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1408,21 +792,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_buffer": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_commander": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_crypto": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1457,34 +827,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_module": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_net": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_process": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_querystring": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_request_subclass_stream_body": {
       "status": "parity_fail",
       "issue": null,
@@ -1492,28 +834,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_sqlite_sqltagstore": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_stream_web": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_test": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_util": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1590,13 +911,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_ramda_user_import": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_reflect_metadata": {
       "status": "parity_fail",
       "issue": null,
@@ -1606,13 +920,6 @@
     },
     "test_require": {
       "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_runtime_static_layouts": {
-      "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -1634,20 +941,6 @@
     },
     "test_three_like_native_class_descriptors": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_timer": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_tls_connect": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -1697,13 +990,6 @@
     },
     "test_ui_text_alignment": {
       "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_v8_self_contained": {
-      "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",

@@ -166,14 +166,19 @@ pub(crate) fn collect(
                     keys.push(0);
                     attrs.push(*attr);
                     let slot = i + 1;
-                    if let Some(m) = method.filter(|_| slot < 32) {
-                        rep |= 3u64 << (2 * slot);
+                    if let Some(m) = method {
+                        // Slots 0..32 are lanes of the shape's `rep` word; a
+                        // method past it has its ConstFn lane in the body list
+                        // alone (the runtime derives the same lane from it).
+                        if slot < 32 {
+                            rep |= 3u64 << (2 * slot);
+                        }
                         let body = format!(
                             "{}__eclo",
                             crate::symbol_names::method(&prefix, &c.name, &m.name)
                         );
                         constfn.push(ConstFnBirth {
-                            slot: slot as u8,
+                            slot: slot as u32,
                             symbol: crate::fn_info::info_symbol(&body),
                         });
                     }
@@ -183,14 +188,17 @@ pub(crate) fn collect(
                     keys.push(0);
                     attrs.push(*attr);
                     let slot = string_count + i + 1;
-                    if let Some(m) = member.filter(|_| slot < 32) {
-                        rep |= 3u64 << (2 * slot);
+                    if let Some(m) = member {
+                        // As for string keys: a lane past word 0 is the body list alone.
+                        if slot < 32 {
+                            rep |= 3u64 << (2 * slot);
+                        }
                         let body = format!(
                             "{}__eclo",
                             crate::symbol_names::method(&prefix, &c.name, &m.function.name)
                         );
                         constfn.push(ConstFnBirth {
-                            slot: slot as u8,
+                            slot: slot as u32,
                             symbol: crate::fn_info::info_symbol(&body),
                         });
                     }
@@ -259,16 +267,31 @@ pub(crate) fn symbol_key_spelling(key: &str) -> Option<String> {
 #[path = "static_prototype_tests.rs"]
 mod tests;
 
+/// The instance method of `c` keyed by the known symbol spelled `spelling`
+/// ([`symbol_key_spelling`]): the body its static prototype's slot holds.
+pub(crate) fn declared_symbol_method<'c>(
+    c: &'c perry_hir::Class,
+    spelling: &str,
+) -> Option<&'c perry_hir::ClassComputedMember> {
+    if !spelling.starts_with('\u{1}') {
+        return None;
+    }
+    c.computed_members.iter().rev().find(|m| {
+        !m.is_static
+            && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method)
+            && m.known_symbol().and_then(symbol_key_spelling).as_deref() == Some(spelling)
+    })
+}
+
 /// Every intermediate shape proves absence and the next prototype link.
+/// A known-symbol key (`\u{1}` spelling) is proven like a string method: its
+/// holder's ConstFn lane holds the declared member's body.
 /// The final holder shape proves the compiler's body candidate.
 pub(crate) fn chain(
     ctx: &crate::expr::FnCtx<'_>,
     class: &str,
     method: &str,
 ) -> Option<Vec<(u32, u32)>> {
-    if method.starts_with('\u{1}') {
-        return None;
-    }
     let mut name = class.to_string();
     let mut result = Vec::new();
     let mut seen = HashSet::new();
@@ -295,9 +318,10 @@ pub(crate) fn chain(
                 .constfn
                 .iter()
                 .any(|entry| entry.slot as usize == slot)
-                && c.methods
+                && (c.methods
                     .iter()
-                    .any(|m| m.name == method && !m.is_async && !m.is_generator))
+                    .any(|m| m.name == method && !m.is_async && !m.is_generator)
+                    || declared_symbol_method(c, method).is_some()))
             .then_some(result)
             .filter(|_| slot != 0);
         }

@@ -199,6 +199,7 @@ impl LlBlock {
         }) {
             return;
         }
+        self.counter.bump_call_epoch();
         for slot in self.counter.stable_packed_revalidation_slots() {
             self.store(crate::types::I1, "1", &slot);
         }
@@ -218,6 +219,11 @@ impl LlBlock {
                 self.store(crate::types::I64, "0", &slot);
             }
         }
+    }
+
+    /// The function's call epoch (`RegCounter::call_epoch`).
+    pub(crate) fn call_epoch(&self) -> u64 {
+        self.counter.call_epoch()
     }
 
     pub fn next_reg(&self) -> String {
@@ -1660,3 +1666,7 @@ fn latch_meta(tag: Option<crate::inst::LoopTag>) -> Option<Box<crate::inst::Bran
         })
     })
 }
+
+mod owned;
+pub(crate) use owned::OwnedBlock;
+pub(crate) use reg_counter::OwnedCounter;

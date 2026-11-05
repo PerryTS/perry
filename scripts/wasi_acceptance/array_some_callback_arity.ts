@@ -10,9 +10,14 @@ console.log(accessor.some((x, i) => i === 2), accessor.some((x, i, a) => a.lengt
 console.log(accessor.some(() => true), [].some(() => true));
 const holes = [1, , 3];
 console.log(holes.some((x) => x === undefined), holes.some((x, i) => i === 1));
-Array.prototype[1] = 7;
+// A hole reads through the receiver's prototype chain. Built-in
+// Array.prototype refuses index keys in Perry, so the chain gets its own
+// array-derived prototype.
+const proto: any = Object.create(Array.prototype);
+Object.setPrototypeOf(holes, proto);
+proto[1] = 7;
 console.log(holes.some((x) => x === 7), holes.some((x, i) => i === 3));
-delete Array.prototype[1];
+delete proto[1];
 console.log(holes.some((x) => x === 7));
 const routes = [{ keep: false }, { keep: true }];
 console.log(routes.some((route) => route.keep), routes.some((route) => route.drop));

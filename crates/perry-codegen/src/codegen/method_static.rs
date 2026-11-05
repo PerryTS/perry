@@ -305,6 +305,8 @@ pub(in crate::codegen) fn compile_static_method(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         // A static method's `this` is the class constructor (bound above to
         // the class-ref slot). `class_stack` carries the class name so
@@ -349,6 +351,7 @@ pub(in crate::codegen) fn compile_static_method(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),

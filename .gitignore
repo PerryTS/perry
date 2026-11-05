@@ -125,6 +125,8 @@ benchmarks/suite/*.o
 # Compiled output binaries (catch-all for extensionless files in root)
 # Named binaries from example/benchmark compilation
 worker
+# Subject and fixture directories are not compiled worker binaries.
+!test-parity/**/worker/
 controls
 /main
 /cli
@@ -270,3 +272,6 @@ android-build/app/src/main/jniLibs/
 /*.log
 
 /.blaze/
+
+npm/perry-ui-*/
+npm/perry-wasm-host-*/

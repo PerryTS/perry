@@ -19,7 +19,7 @@
 //!
 //! The expected output below is Perry's (`test-parity/expected/`): node runs
 //! the array forms unrefused. Lines D-I are `node v26.5.1` running the same
-//! source (`test-files/test_gap_iterator_prototype_next_patch.ts`) without
+//! source (`test-parity/language/iterator/test_gap_iterator_prototype_next_patch.ts`) without
 //! section A. The discriminating lines are:
 //!
 //! * `D-set s1,s2` / `D-map-spread [["z",105]]` / `E-string A,B` — every one of these is a runtime element-COPY fast arm
@@ -51,7 +51,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-const SOURCE: &str = include_str!("../../../test-files/test_gap_iterator_prototype_next_patch.ts");
+const SOURCE: &str = include_str!(
+    "../../../test-parity/language/iterator/test_gap_iterator_prototype_next_patch.ts"
+);
 
 const EXPECTED: &str = "A-refused TypeError,TypeError,TypeError,TypeError,TypeError true\n\
 A-forof 1,2,3\n\

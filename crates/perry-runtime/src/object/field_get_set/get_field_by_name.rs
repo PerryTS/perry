@@ -18,6 +18,9 @@ fn handle_proto_inherited_field(
     handle_id: usize,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
+    if let Some(v) = crate::object::http_handle_prototype::inherited_field(handle_id, key) {
+        return Some(v);
+    }
     crate::object::prototype_chain::object_static_prototype(handle_id)?;
     let v = crate::object::prototype_chain::resolve_inherited_field(handle_id, key)?;
     if v.bits() == crate::value::TAG_UNDEFINED {
@@ -1511,11 +1514,14 @@ fn get_field_by_name_past_data_probe(
                         (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                     let key_len = (*key).byte_len as usize;
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    if key_bytes == b"constructor" {
-                        return JSValue::from_bits(crate::object::null_stub_value().to_bits());
+                    if let Some(value) = crate::object::http_handle_prototype::field(raw, key) {
+                        return value;
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
                         let bits = dispatch(raw as i64, key_ptr, key_len);
+                        if key_bytes == b"constructor" {
+                            return crate::object::http_handle_prototype::constructor_or_stub(bits);
+                        }
                         // Wall 10 — fall back to a `setPrototypeOf(handle, proto)`
                         // member (Express's augmented `res`/`req`) when the native
                         // dispatch doesn't know the key. See

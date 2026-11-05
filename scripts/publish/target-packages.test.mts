@@ -28,6 +28,8 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import {
   ALL_PACKAGES,
   EXT_PACKAGES,
+  UI_PACKAGES,
+  WASM_HOST_PACKAGES,
   EXT_TRIPLES,
   PLATFORM_PACKAGES,
   REPO_ROOT,
@@ -38,7 +40,8 @@ import {
   npmPackageDir,
   targetPackageName,
 } from './constants.mts'
-import { isStrippableExtArchive, isStrippableUiArchive, stageExt, stageTarget } from './stage-target.mts'
+import { archiveKind, stageHost } from './archive-kind.mts'
+import { isStrippableHostArchive, isStrippableUiArchive, stageExt, stageTarget, stageKind } from './stage-target.mts'
 
 const VERSION = '0.5.1700'
 const REVISION = 'a'.repeat(40)
@@ -80,7 +83,7 @@ function withTemp(fn: (dir: string) => void): void {
 }
 
 test('ALL_PACKAGES: hosts, then ext packages, then targets, then the wrapper', () => {
-  assert.deepEqual(ALL_PACKAGES, [...PLATFORM_PACKAGES, ...EXT_PACKAGES, ...TARGET_PACKAGES, WRAPPER_PACKAGE])
+  assert.deepEqual(ALL_PACKAGES, [...PLATFORM_PACKAGES, ...EXT_PACKAGES, ...UI_PACKAGES, ...WASM_HOST_PACKAGES, ...TARGET_PACKAGES, WRAPPER_PACKAGE])
   assert.deepEqual(EXT_TRIPLES, [
     'aarch64-apple-darwin',
     'x86_64-apple-darwin',
@@ -140,7 +143,7 @@ test('the size budget covers every target and ext tarball', () => {
   const src = readFileSync(path.join(REPO_ROOT, 'scripts/publish/prepare-ci-packages.mts'), 'utf8')
   assert.match(src, /for \(const name of ALL_PACKAGES\)/)
   assert.match(src, /size > budget/)
-  for (const name of [...TARGET_PACKAGES, ...EXT_PACKAGES]) assert.ok(ALL_PACKAGES.includes(name))
+  for (const name of [...TARGET_PACKAGES, ...EXT_PACKAGES, ...UI_PACKAGES, ...WASM_HOST_PACKAGES]) assert.ok(ALL_PACKAGES.includes(name))
 })
 
 test('stageTarget: package.json has no os/cpu/bin/deps; target.json restates the bundle', () => {
@@ -230,11 +233,19 @@ test('stageTarget: a tampered, missing, unlisted or foreign bundle file is refus
   })
 })
 
-test('isStrippableExtArchive: ext archives of every host', () => {
-  assert.equal(isStrippableExtArchive('x86_64-unknown-linux-musl', 'libperry_ext_http.a'), true)
-  assert.equal(isStrippableExtArchive('x86_64-pc-windows-msvc', 'perry_ext_http.lib'), true)
-  assert.equal(isStrippableExtArchive('aarch64-apple-darwin', 'libperry_ext_http.a'), true)
-  assert.equal(isStrippableExtArchive('x86_64-unknown-linux-gnu', 'libperry_runtime.a'), false)
+test('isStrippableHostArchive: ext archives of every host', () => {
+  assert.equal(isStrippableHostArchive('x86_64-unknown-linux-musl', 'libperry_ext_http.a'), true)
+  assert.equal(isStrippableHostArchive('x86_64-pc-windows-msvc', 'perry_ext_http.lib'), true)
+  assert.equal(isStrippableHostArchive('aarch64-apple-darwin', 'libperry_ext_http.a'), true)
+  assert.equal(isStrippableHostArchive('x86_64-unknown-linux-gnu', 'libperry_runtime.a'), false)
+  // Every optional host kind is stripped before its manifest is hashed.
+  assert.equal(isStrippableHostArchive('x86_64-unknown-linux-gnu', 'libperry_ui_gtk4.a'), true)
+  assert.equal(isStrippableHostArchive('x86_64-pc-windows-msvc', 'perry_ui_windows.lib'), true)
+  assert.equal(isStrippableHostArchive('x86_64-pc-windows-msvc', 'perry_wasm_host.lib'), true)
+  assert.equal(isStrippableHostArchive('aarch64-unknown-linux-gnu', 'libperry_wasm_host.a'), true)
+  assert.equal(isStrippableHostArchive('aarch64-apple-darwin', 'libperry_ui_macos.a'), true)
+  assert.equal(isStrippableHostArchive('aarch64-apple-darwin', 'libperry_wasm_host.a'), true)
+  assert.equal(isStrippableHostArchive('x86_64-unknown-linux-gnu', 'libperry_stdlib.a'), false)
 })
 
 test('stageExt: every ext archive of the release archive, hashed into target.json', () => {
@@ -242,7 +253,8 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
     const triple = 'x86_64-unknown-linux-gnu'
     const src = path.join(dir, 'release')
     mkdirSync(src)
-    for (const name of ['perry', 'libperry_runtime.a', 'libperry_ext_http.a', 'libperry_ext_ws.a']) {
+    const shipped = ['libperry_ext_http.a', 'libperry_ext_ws.a']
+    for (const name of ['perry', 'libperry_runtime.a', 'libperry_stdlib.a', 'libperry_ui_gtk4.a', 'libperry_wasm_host.a', ...shipped]) {
       writeFileSync(path.join(src, name), `${name} bytes`)
     }
     const pkg = path.join(dir, 'pkg')
@@ -262,7 +274,7 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
     assert.equal(targetJson.source_revision, REVISION)
     assert.deepEqual(
       targetJson.files,
-      ['libperry_ext_http.a', 'libperry_ext_ws.a'].map(name => ({
+      [...shipped].sort().map(name => ({
         path: `lib/${name}`,
         sha256: sha256(`${name} bytes!`),
         size: Buffer.byteLength(`${name} bytes!`),
@@ -270,12 +282,14 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
     )
     assert.equal(readFileSync(path.join(src, 'libperry_ext_http.a'), 'utf8'), 'libperry_ext_http.a bytes', 'the release archive is not touched')
     assert.ok(!existsSync(path.join(pkg, 'lib/libperry_runtime.a')), 'core archives stay in the host package')
+    assert.ok(!existsSync(path.join(pkg, 'lib/libperry_stdlib.a')), 'core archives stay in the host package')
     assert.match(readFileSync(path.join(pkg, 'README.md'), 'utf8'), /perry target add --ext/)
     rmSync(path.join(src, 'libperry_ext_http.a'))
     rmSync(path.join(src, 'libperry_ext_ws.a'))
+    // UI and wasm_host without any ext archive: a broken release archive.
     assert.throws(
       () => stageExt({ sourceDir: src, packageDir: pkg, triple, version: VERSION, revision: REVISION }),
-      /has no libperry_ext_\* archives/,
+      /has no ext archives/,
     )
   })
 })
@@ -286,22 +300,31 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
 
 // The kind, and whether the release archive carries ext archives (every
 // release leg builds them: libperry_ext_*.a on Unix, perry_ext_*.lib on Windows).
-const PLATFORM_ARTIFACTS: Array<[string, 'unix' | 'win', boolean]> = [
-  ['perry-macos-aarch64', 'unix', true],
-  ['perry-macos-x86_64', 'unix', true],
-  ['perry-linux-x86_64', 'unix', true],
-  ['perry-linux-aarch64', 'unix', true],
-  ['perry-linux-x86_64-musl', 'unix', true],
-  ['perry-linux-aarch64-musl', 'unix', true],
-  ['perry-windows-x86_64', 'win', true],
-  ['perry-windows-aarch64', 'win', true],
+// The last column is the host triple (stage-npm.sh's PLATFORMS).
+const PLATFORM_ARTIFACTS: Array<[string, 'unix' | 'win', boolean, string]> = [
+  ['perry-macos-aarch64', 'unix', true, 'aarch64-apple-darwin'],
+  ['perry-macos-x86_64', 'unix', true, 'x86_64-apple-darwin'],
+  ['perry-linux-x86_64', 'unix', true, 'x86_64-unknown-linux-gnu'],
+  ['perry-linux-aarch64', 'unix', true, 'aarch64-unknown-linux-gnu'],
+  ['perry-linux-x86_64-musl', 'unix', true, 'x86_64-unknown-linux-musl'],
+  ['perry-linux-aarch64-musl', 'unix', true, 'aarch64-unknown-linux-musl'],
+  ['perry-windows-x86_64', 'win', true, 'x86_64-pc-windows-msvc'],
+  ['perry-windows-aarch64', 'win', true, 'aarch64-pc-windows-msvc'],
 ]
+
+/** The optional archives in each build artifact (no UI on musl). */
+function optionalArchives(artifact: string, kind: 'unix' | 'win'): string[] {
+  if (kind === 'win') return ['perry_ui_windows.lib', 'perry_wasm_host.lib']
+  if (artifact.startsWith('perry-macos-')) return ['libperry_ui_macos.a', 'libperry_wasm_host.a']
+  if (artifact.endsWith('-musl')) return ['libperry_wasm_host.a']
+  return ['libperry_ui_gtk4.a', 'libperry_wasm_host.a']
+}
 
 function fixtureRepo(dir: string): { repo: string; artifacts: string } {
   const repo = path.join(dir, 'repo')
   mkdirSync(path.join(repo, 'scripts/publish'), { recursive: true })
   cpSync(path.join(REPO_ROOT, 'scripts/stage-npm.sh'), path.join(repo, 'scripts/stage-npm.sh'))
-  for (const file of ['constants.mts', 'stage-target.mts']) {
+  for (const file of ['constants.mts', 'stage-target.mts', 'archive-kind.mts']) {
     cpSync(path.join(REPO_ROOT, 'scripts/publish', file), path.join(repo, 'scripts/publish', file))
   }
   // The fixture archives are not real ar files: a no-op stand-in for the strip step
@@ -310,6 +333,9 @@ function fixtureRepo(dir: string): { repo: string; artifacts: string } {
   // Templates and the wrapper's launcher only: no staged output of this tree.
   for (const file of [
     'npm/packaged-triples.json',
+    'npm/archive-kinds.rules',
+    'npm/perry-ui/package.json.tmpl',
+    'npm/perry-wasm-host/package.json.tmpl',
     'npm/perry/bin/perry.js',
     'npm/perry-target/package.json.tmpl',
     'npm/perry-ext/package.json.tmpl',
@@ -324,8 +350,9 @@ function fixtureRepo(dir: string): { repo: string; artifacts: string } {
     const out = path.join(artifacts, artifact)
     mkdirSync(out, { recursive: true })
     const files = kind === 'win'
-      ? ['perry.exe', 'LLVM-C.dll', 'perry_runtime.lib', 'perry_runtime.lib.gc-effects']
-      : ['perry', 'libperry_runtime.a', 'libperry_runtime.a.gc-effects']
+      ? ['perry.exe', 'LLVM-C.dll', 'perry_runtime.lib', 'perry_runtime.lib.gc-effects', 'perry_stdlib.lib']
+      : ['perry', 'libperry_runtime.a', 'libperry_runtime.a.gc-effects', 'libperry_stdlib.a']
+    files.push(...optionalArchives(artifact, kind))
     if (ext) {
       files.push(...(kind === 'win' ? ['perry_ext_http.lib', 'perry_ext_zlib.lib'] : ['libperry_ext_http.a', 'libperry_ext_zlib.a']))
     }
@@ -367,16 +394,37 @@ test('stage-npm.sh: stages every target package from its bundle', () => {
       const pkg = path.join(repo, 'npm', `perry-ext-${triple}`)
       const targetJson = JSON.parse(readFileSync(path.join(pkg, 'target.json'), 'utf8'))
       assert.equal(targetJson.target_triple, triple)
+      const artifact = PLATFORM_ARTIFACTS.find(row => row[3] === triple)
+      assert.ok(artifact, triple)
+      const ext = triple.includes('windows')
+        ? ['perry_ext_http.lib', 'perry_ext_zlib.lib']
+        : ['libperry_ext_http.a', 'libperry_ext_zlib.a']
       assert.deepEqual(
         targetJson.files.map((f: { path: string }) => f.path),
-        triple.includes('windows')
-          ? ['lib/perry_ext_http.lib', 'lib/perry_ext_zlib.lib']
-          : ['lib/libperry_ext_http.a', 'lib/libperry_ext_zlib.a'],
+        [...ext].sort().map(name => `lib/${name}`),
       )
       assert.equal(JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8')).name, extPackageName(triple))
+      for (const name of optionalArchives(artifact[0], artifact[1])) {
+        const kind = archiveKind(name)
+        const dir = path.join(repo, 'npm', `perry-${kind}-${triple}`)
+        const manifest = JSON.parse(readFileSync(path.join(dir, 'target.json'), 'utf8'))
+        assert.deepEqual(manifest.files.map((f: {path: string}) => f.path), [`lib/${name}`])
+        const owners = ['ext', 'ui', 'wasm-host'].filter(k => existsSync(path.join(repo, 'npm', `perry-${k}-${triple}`, 'lib', name)))
+        assert.deepEqual(owners, [kind], `${triple}/${name} has exactly one owner`)
+      }
     }
-    // The host packages keep no ext archive.
-    assert.ok(!existsSync(path.join(repo, 'npm/perry-linux-x64/lib/libperry_ext_http.a')))
+    // The host packages keep the runtime and stdlib, and no ext, UI or wasm_host archive.
+    for (const [suffix, kind] of [['linux-x64', 'unix'], ['linux-x64-musl', 'unix'], ['darwin-arm64', 'unix'], ['win32-x64', 'win']] as const) {
+      const lib = path.join(repo, 'npm', `perry-${suffix}`, 'lib')
+      const names = readdirSync(lib).sort()
+      assert.deepEqual(
+        names,
+        kind === 'win'
+          ? ['perry_runtime.lib', 'perry_runtime.lib.gc-effects', 'perry_stdlib.lib']
+          : ['libperry_runtime.a', 'libperry_runtime.a.gc-effects', 'libperry_stdlib.a'],
+        suffix,
+      )
+    }
   })
 })
 
@@ -387,7 +435,7 @@ test('stage-npm.sh: a listed ext host whose release archive has no ext archives 
     rmSync(path.join(artifacts, 'perry-linux-aarch64', 'libperry_ext_zlib.a'))
     const run = stageNpm(repo, artifacts)
     assert.notEqual(run.status, 0)
-    assert.match(run.output, /perry-ext-aarch64-unknown-linux-gnu: .* has no libperry_ext_\* archives/)
+    assert.match(run.output, /perry-ext-aarch64-unknown-linux-gnu: .* has no ext archives/)
   })
 })
 
@@ -472,5 +520,26 @@ test('stageTarget: the UI archive is stripped before its hash is recorded (real 
     assert.deepEqual(readFileSync(path.join(pkg, 'lib', 'libperry_runtime.a')), readFileSync(path.join(src, 'libperry_runtime.a')))
     // The extracted bundle itself is left as built.
     assert.equal(sha256(readFileSync(path.join(src, 'libperry_ui_android.a'))), sha256(archive))
+  })
+})
+
+
+test('one classifier assigns host, UI, wasm-host, ext and cross archives', () => {
+  const cases = {
+    'libperry_runtime.a': 'host', 'perry_stdlib.lib': 'host',
+    'libperry_runtime.a.gc-effects': 'host',
+    'libperry_ui_macos.a': 'ui', 'perry_ui_windows.lib': 'ui',
+    'libperry_ui_gtk4.a.zst': 'ui',
+    'libperry_wasm_host.a': 'wasm-host', 'perry_wasm_host.lib': 'wasm-host',
+    'libperry_ext_bcrypt.a': 'ext', 'perry_ext_http.lib': 'ext',
+    'libperry_runtime_ios.a': 'target', 'libperry_ui_ios_sim.a': 'target',
+  }
+  for (const [name, kind] of Object.entries(cases)) assert.equal(archiveKind(name), kind, name)
+  withTemp(dir => {
+    const source = path.join(dir, 'source'), dest = path.join(dir, 'host')
+    mkdirSync(source)
+    for (const name of ['perry', 'LLVM-C.dll', 'xwin.exe', ...Object.keys(cases)]) writeFileSync(path.join(source, name), name)
+    stageHost(source, dest)
+    assert.deepEqual(readdirSync(dest).sort(), ['LLVM-C.dll', 'libperry_runtime.a', 'libperry_runtime.a.gc-effects', 'perry', 'perry_stdlib.lib'])
   })
 })

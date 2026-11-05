@@ -217,10 +217,15 @@ impl Model {
         if matches!(
             self.toks[t as usize],
             TokKind::ObjectProto
-                | TokKind::BuiltinFn
+                | TokKind::BuiltinFn(_)
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
+            // Handed to unknown code (not reached along a chain): the
+            // program fields rule R1 gave it may be read there.
+            if !self.chain_escape {
+                self.builtin_fields_sink(t, Some(reason));
+            }
             // Unknown code given `process` (or the global object) may write
             // the array `process.argv` holds.
             if matches!(
@@ -738,10 +743,10 @@ impl Model {
             )
         });
         self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::Any, ChainAct::Store(w));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
         let r = self.node_l("escaped-load");
         self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
     }
 
     /// A named property `n` of function `t` whose properties left
@@ -940,10 +945,10 @@ impl Model {
             )
         });
         self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::Any, ChainAct::Store(w));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
         let r = self.node_l("escaped-load");
         self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
         match self.toks[t as usize].clone() {
             TokKind::Func(f, _) => {
                 let fi = self.funcs[f as usize].clone();

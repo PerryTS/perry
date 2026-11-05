@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 perry-hir.workspace = true
+perry-realm-table.workspace = true
 
 [dev-dependencies]
 perry-parser.workspace = true

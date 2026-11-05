@@ -691,7 +691,7 @@ jobs:
           # on both edges, return-in-try, rethrow) and the GC probe that
           # throws across a collection point.
           for SRC in test-files/test_gap_7302_invoke_eh_paths.ts \
-                     test-files/test_gap_7302_gc_throw_across_collection.ts; do
+                     test-parity/language/error/test_gap_7302_gc_throw_across_collection.ts; do
             NAME=$(basename "$SRC" .ts)
             "$BIN" "$SRC" -o "/tmp/$NAME"
 
@@ -766,7 +766,7 @@ jobs:
           # the frames the panic=abort + force-unwind-tables contract exists
           # for; a runtime built without the tables aborts here with the
           # self-check's message instead of stranding the throw silently.
-          SRC=test-files/test_gap_7302_throw_across_helper_frames.ts
+          SRC=test-parity/language/control-flow/test_gap_7302_throw_across_helper_frames.ts
           target/perry-dev/perry "$SRC" -o /tmp/eh_helpers
           node --experimental-strip-types --no-warnings "$SRC" > /tmp/eh_helpers.node
           /tmp/eh_helpers > /tmp/eh_helpers.perry

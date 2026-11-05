@@ -259,6 +259,7 @@ unsafe fn prop_http_server(handle: i64, property_name: &str) -> Option<f64> {
             "statusCode"
                 | "statusMessage"
                 | "headersSent"
+                | "writable"
                 | "writableEnded"
                 | "writableFinished"
                 | "finished"

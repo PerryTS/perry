@@ -178,7 +178,6 @@ pub(crate) struct DeferredRecord {
 #[allow(clippy::vec_box)]
 pub(crate) struct Env {
     serial: u64,
-    owner: std::thread::ThreadId,
     /// The handle stack. `slots[..handle_top]` are the live handles (GC
     /// roots); `slots[handle_top..]` are released handles that still read
     /// until a new handle overwrites them or a collection drops them.
@@ -220,8 +219,13 @@ pub(crate) struct Env {
     cleanup_order: u64,
     external_memory: i64,
     pending_exception_bits: Option<u64>,
+    /// The last call's status and message: two stores per call. The
+    /// NUL-terminated copy `napi_get_last_error_info` hands out is made there,
+    /// its only reader, and only when the message changed.
     last_status: NapiStatus,
     last_message: &'static str,
+    /// The message `last_error_message` holds a copy of.
+    copied_message: &'static str,
     last_error_message: CString,
     error_info: NapiExtendedErrorInfo,
 }
@@ -230,7 +234,6 @@ impl Env {
     fn new(serial: u64) -> Self {
         let mut env = Self {
             serial,
-            owner: std::thread::current().id(),
             slots: Vec::new(),
             handle_top: 0,
             scopes: Vec::new(),
@@ -263,6 +266,7 @@ impl Env {
             pending_exception_bits: None,
             last_status: NapiStatus::Ok,
             last_message: "napi_ok",
+            copied_message: "napi_ok",
             last_error_message: CString::new("napi_ok").unwrap(),
             error_info: NapiExtendedErrorInfo {
                 error_message: std::ptr::null(),
@@ -275,21 +279,24 @@ impl Env {
         env
     }
 
+    /// Publish the last status as `napi_extended_error_info`. A message is
+    /// named by its address: the copy is redone only when the call recorded a
+    /// different message (an equal text at another address copies once more,
+    /// which is still correct).
     fn refresh_error_info(&mut self) {
+        if !std::ptr::eq(self.copied_message, self.last_message) {
+            self.copied_message = self.last_message;
+            self.last_error_message =
+                CString::new(self.last_message).expect("static N-API error has no NUL");
+        }
         self.error_info.error_message = self.last_error_message.as_ptr();
         self.error_info.error_code = self.last_status;
     }
 
+    #[inline]
     fn set_status(&mut self, status: NapiStatus, message: &'static str) -> NapiStatus {
-        // Nearly every call reports the `napi_ok` it reported last time; only
-        // a changed status or message needs a new NUL-terminated copy, so a
-        // successful call no longer allocates for its bookkeeping.
-        if self.last_status != status || self.last_message != message {
-            self.last_status = status;
-            self.last_message = message;
-            self.last_error_message = CString::new(message).expect("static N-API error has no NUL");
-        }
-        self.refresh_error_info();
+        self.last_status = status;
+        self.last_message = message;
         status
     }
 
@@ -475,6 +482,8 @@ pub fn current_env() -> NapiEnv {
     })
 }
 
+// The environment lives in this thread's TLS, so pointer identity with it
+// proves both that `env` is live and that this is its thread.
 pub(crate) fn with_env<R>(env: NapiEnv, f: impl FnOnce(&Env) -> R) -> Option<R> {
     if env.is_null() {
         return None;
@@ -482,8 +491,7 @@ pub(crate) fn with_env<R>(env: NapiEnv, f: impl FnOnce(&Env) -> R) -> Option<R> 
     NODE_API_ENV.with(|cell| {
         let borrowed = cell.borrow();
         let current = borrowed.as_deref()?;
-        if !std::ptr::eq(current, env.cast::<Env>()) || current.owner != std::thread::current().id()
-        {
+        if !std::ptr::eq(current, env.cast::<Env>()) {
             return None;
         }
         Some(f(current))
@@ -499,12 +507,19 @@ pub(crate) fn with_env_mut<R>(env: NapiEnv, f: impl FnOnce(&mut Env) -> R) -> Op
     NODE_API_ENV.with(|cell| {
         let mut borrowed = cell.borrow_mut();
         let current = borrowed.as_deref_mut()?;
-        if !std::ptr::eq(current, env.cast::<Env>()) || current.owner != std::thread::current().id()
-        {
+        if !std::ptr::eq(current, env.cast::<Env>()) {
             return None;
         }
         Some(f(current))
     })
+}
+
+/// One environment entry for a whole call: `f` does the call's work and
+/// returns its status (via [`Env::set_status`]), recorded in the same borrow.
+/// Like [`with_env_mut`], `f` must not allocate in Perry's GC heap.
+#[inline]
+pub(crate) fn enter(env: NapiEnv, f: impl FnOnce(&mut Env) -> NapiStatus) -> NapiStatus {
+    with_env_mut(env, f).unwrap_or(NapiStatus::InvalidArg)
 }
 
 pub(crate) fn value_bits(env: NapiEnv, value: NapiValue) -> Result<u64, NapiStatus> {

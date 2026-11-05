@@ -1317,10 +1317,22 @@ pub fn run_with_parse_cache(
     // the runtime creates itself (a CommonJS `require('net')` goes through
     // `createRequire`, not codegen). A `tls` import counts as `net`
     // (`well_known_iteration_set`): `tls.connect` is perry-ext-net's.
-    let program_modules = optimized_libs::well_known_iteration_set(&ctx);
+    // A `child_process` import links perry-ext-net without calling its hook
+    // here: the runtime installs it at the first pipe socket.
+    let program_modules = optimized_libs::program_module_set(&ctx);
     let mut native_provider_installs: Vec<String> = ctx
         .native_routing
         .wrapper_install_hooks(program_modules.iter().map(String::as_str));
+    // `net`'s hook is `node:net` alone; a program that reaches TLS also
+    // registers perry-ext-net's `tls.connect` and its sockets' TLS members,
+    // so a net-only program links no TLS.
+    if native_provider_installs
+        .iter()
+        .any(|hook| hook == "js_ext_net_nm_install")
+        && optimized_libs::reaches_tls(&ctx)
+    {
+        native_provider_installs.push("js_ext_net_tls_install".to_string());
+    }
     // A program that names `dns` arms the router for the lookup/resolve
     // exports a CommonJS `require('node:dns')` reaches through the dynamic
     // native module dispatch (`js_dns_install_exports`); one that does not
@@ -3696,6 +3708,18 @@ pub fn run_with_parse_cache(
         }
     }
     let program_providers = std::sync::Arc::new(program_providers);
+    // A module the program links without importing it (`net` for a program
+    // that reaches `child_process`, whose stdio pipes are net sockets:
+    // `optimized_libs::well_known_iteration_set`) carries its own stdlib
+    // requirement, as an import of it would (`perry_hir::requires_stdlib`):
+    // perry-ext-net resolves against perry-stdlib (perry-ffi's promise shims,
+    // the TLS client preflight).
+    if optimized_libs::well_known_iteration_set(&ctx)
+        .iter()
+        .any(|module| perry_hir::requires_stdlib(module))
+    {
+        ctx.needs_stdlib = true;
+    }
 
     // A standalone WASI build links against the wasm32 runtime after
     // codegen and has no native link set.
@@ -7466,6 +7490,14 @@ pub fn run_with_parse_cache(
             )?;
             obj_cleanup_paths.push(installer.clone());
             obj_paths.push(installer);
+            for input in
+                super::link::wasi::addon_link_inputs(flavour, &ctx, &object_output_dir, verbose)?
+            {
+                if input.starts_with(&object_output_dir) {
+                    obj_cleanup_paths.push(input.clone());
+                }
+                obj_paths.push(input);
+            }
             obj_cleanup_paths.push(seed_path.clone());
             obj_paths.push(seed_path);
             if is_staticlib {

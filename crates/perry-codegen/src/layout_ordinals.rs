@@ -398,7 +398,7 @@ pub fn identity_input(shape: &crate::BirthShape, identity: u32) -> OrdinalInput 
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ModulePlan {
     module: String,
     plan: std::sync::Arc<ProgramLayoutOrdinals>,
@@ -600,4 +600,21 @@ mod template_word_tests {
         assert_eq!(plan.descriptor_template_word("ambiguous"), None);
         assert_eq!(plan.descriptor_template_word("opaque"), None);
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState(ModulePlan);
+pub(crate) fn callable_state() -> CallableState {
+    CallableState(MODULE.with(|m| m.borrow().clone()))
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE.with(|m| *m.borrow_mut() = self.0.clone());
+    }
+}
+pub(crate) fn take_callable_requests() -> std::collections::BTreeSet<u32> {
+    MODULE.with(|m| std::mem::take(&mut m.borrow_mut().emitted_requests))
+}
+pub(crate) fn merge_callable_requests(requests: std::collections::BTreeSet<u32>) {
+    MODULE.with(|m| m.borrow_mut().emitted_requests.extend(requests));
 }

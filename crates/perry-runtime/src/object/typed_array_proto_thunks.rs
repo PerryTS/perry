@@ -678,7 +678,7 @@ impl<'s> RootedUint8Buffer<'s> {
 /// scan. `js_array_map` has carried the same root since gh #6206 / #6081; this
 /// dispatcher had it on one of its three entries.
 ///
-/// `test-files/test_gap_gc_uint8_buffer_callback_rooting.ts` reproduces it on
+/// `test-parity/language/typed-array/test_gap_gc_uint8_buffer_callback_rooting.ts` reproduces it on
 /// the SHIPPED DEFAULT (`TypeError: value is not a function`, exit 1) and,
 /// under `PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_SEED=7
 /// PERRY_GC_PROTECT_FROMSPACE=1`, faults precisely — on the FIRST scheduled

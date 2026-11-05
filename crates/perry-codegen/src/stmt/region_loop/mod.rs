@@ -125,6 +125,17 @@ fn pays(ctx: &FnCtx<'_>, kind: &str, nodes: usize, bare: usize) -> bool {
     nodes <= limit.saturating_mul(bare.max(1))
 }
 
+/// A region over exactly one bare access whose key the layout record serves
+/// (`layout_read::admitted`) buys nothing: the record arm alone is cheaper
+/// than the region guard in front of the same access.
+fn one_record_access(ctx: &FnCtx<'_>, p: &Plan) -> bool {
+    p.bare.len() == 1
+        && p
+            .bare_keys
+            .iter()
+            .all(|k| crate::expr::layout_read::admitted(ctx, k).is_some())
+}
+
 /// `PERRY_REGION_SPILL=0` (compile time): no spill-reading copies. The
 /// runtime is then told every key is stored, which is exactly the condition
 /// under which it never publishes a spill word, so no copy is needed.
@@ -453,7 +464,7 @@ fn begin_with(
         .filter_map(|r| static_class_name(ctx, *r, None).map(|c| (*r, c)))
         .collect();
     let first = plan(ctx, body, cands.clone(), &wide, Some((cond, update)), None)
-        .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len()));
+        .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len()) && !one_record_access(ctx, p));
     let inner: Option<(usize, Plan)> = None;
     // The guard is emitted now, in the context the plan was made in: a
     // receiver wider than a learned word must still name its class.
@@ -667,7 +678,9 @@ fn body_region_plan(
             wide.insert(Recv::Local(*id), c);
         }
         if let Some(p) = plan(ctx, tail, cands, &wide, None, None)
-            .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
+            .filter(|p| {
+                pays(ctx, "body", body_nodes(tail), p.bare.len()) && !one_record_access(ctx, p)
+            })
         {
             return Some((i + 1, p));
         }
@@ -1472,10 +1485,20 @@ mod layout_comparison_tests;
 #[cfg(test)]
 mod layout_string_length_tests;
 
+#[cfg(test)]
+mod one_access_tests;
+
 impl Receiver {
     /// The header form predicted for this receiver's layouts: the base of its
     /// slot accesses.
     pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
         crate::target_layout::HeaderForm::Meta
     }
+}
+
+pub(crate) fn callable_const_globals() -> HashSet<u32> {
+    CONST_MODULE_GLOBALS.with(|s| s.borrow().clone())
+}
+pub(crate) fn install_callable_const_globals(globals: HashSet<u32>) {
+    CONST_MODULE_GLOBALS.with(|s| *s.borrow_mut() = globals);
 }

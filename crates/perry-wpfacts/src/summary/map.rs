@@ -27,6 +27,7 @@ pub fn map_cons(
     use Cons::*;
     match *c {
         Load { key, dst } => Load { key, dst: n(dst) },
+        ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -96,6 +97,7 @@ pub fn map_cons(
         },
         Defined { dst } => Defined { dst: n(dst) },
         NotNullish { dst } => NotNullish { dst: n(dst) },
+        Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -199,19 +201,53 @@ pub fn map_cons(
         ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
-        IdxLoad { idx, dst } => IdxLoad {
+        IdxLoad { idx, dst, shape } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
+            shape,
         },
-        IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
-        IdxMCall { idx, call } => IdxMCall {
+        IdxKey { obj, dst, shape } => IdxKey {
+            obj,
+            dst: n(dst),
+            shape,
+        },
+        IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
+            idx: n(idx),
+            dst: n(dst),
+            shape,
+        },
+        IdxOwnKey { obj, dst, shape } => IdxOwnKey {
+            obj,
+            dst: n(dst),
+            shape,
+        },
+        OwnTest { dst, at } => OwnTest { dst: n(dst), at },
+        OwnGate {
+            obj,
+            idx,
+            dst,
+            shape,
+        } => OwnGate {
+            obj: n(obj),
+            idx: n(idx),
+            dst: n(dst),
+            shape,
+        },
+        IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),
             call: k(call),
+            shape,
         },
-        IdxKeyCall { obj, prim, call } => IdxKeyCall {
+        IdxKeyCall {
+            obj,
+            prim,
+            call,
+            shape,
+        } => IdxKeyCall {
             obj,
             prim,
             call: k(call),
+            shape,
         },
         ForInBody { obj, call } => ForInBody {
             obj: n(obj),
@@ -232,10 +268,16 @@ pub fn map_cons(
             src: n(src),
             site,
         },
-        StoreIndexed { o, src, site } => StoreIndexed {
+        StoreIndexed {
+            o,
+            src,
+            site,
+            shape,
+        } => StoreIndexed {
             o: n(o),
             src: n(src),
             site,
+            shape,
         },
         AccessorKeyed { holder, f, setter } => AccessorKeyed {
             holder: n(holder),
@@ -263,6 +305,7 @@ pub fn map_cons(
         },
         SpreadFrom { src, site } => SpreadFrom { src, site },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
+        NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
         HolderStep { key, pass, stop } => HolderStep {
             key,
@@ -329,6 +372,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
     matches!(
         c,
         Load { .. }
+            | ProtoKey { .. }
             | OwnValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
@@ -345,6 +389,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | TopIfAny { .. }
             | Guard { .. }
             | NotNullish { .. }
+            | Falsy { .. }
             | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }
@@ -355,6 +400,10 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Implicit { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
+            | IdxOwnLoad { .. }
+            | IdxOwnKey { .. }
+            | OwnGate { .. }
+            | OwnTest { .. }
             | IdxMCall { .. }
             | IdxKeyCall { .. }
             | ForInBody { .. }
@@ -384,10 +433,14 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
     use Cons::*;
     match *c {
         Load { dst, .. }
+        | ProtoKey { dst, .. }
         | OwnValues { dst }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
+        | IdxOwnLoad { dst, .. }
+        | IdxOwnKey { dst, .. }
+        | OwnTest { dst, .. }
         | Arith { dst }
         | ArrayLenArg { dst }
         | IterNext { dst }

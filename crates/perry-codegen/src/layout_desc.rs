@@ -101,7 +101,7 @@ pub(crate) struct FamilyLayout {
     pub array_named: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ModuleFamilies {
     adds: HashMap<String, FamilyAdd>,
     layouts: Vec<FamilyLayout>,
@@ -499,10 +499,11 @@ fn shadow_name_bucket(key: u64, mask: usize) -> usize {
 
 /// The program's immutable shadow-name descriptor. Its spelling index and
 /// admission masks are emitted by the entry module, never learned at run time.
-/// Bit 0 of each fingerprint marks receiver names.
+/// Bit 0 of each fingerprint marks receiver names. Every target emits it: the
+/// runtime's empty default is weak everywhere (wasm32 included), and without
+/// this table no prototype slot store sets the shadow bit.
 pub(crate) fn emit_shadow_names(llmod: &mut LlModule, strings: &mut StringPool, output_type: &str) {
-    if output_type == "dylib" || output_type == "staticlib" || llmod.target_triple.contains("wasm")
-    {
+    if output_type == "dylib" || output_type == "staticlib" {
         return;
     }
     let mut names = crate::proto_constants::shadow_names();
@@ -1098,19 +1099,44 @@ pub(crate) fn emit_module_layouts(
     }
     // Case 2c: the family descriptors this module allocates from but another
     // module defines.
-    let local: std::collections::BTreeSet<u32> = hir
+    let owned_families: std::collections::BTreeSet<u32> = hir
         .classes
         .iter()
-        .filter(|c| layouts.families.contains_key(&c.id))
+        .filter(|c| layouts.families.contains_key(&c.id) && layouts.owns_family(c.id, &hir.name))
         .map(|c| c.id)
         .collect();
+    let mut external_declarations: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     for (cid, variant) in FAMILY_DESC_USES.with(|u| std::mem::take(&mut *u.borrow_mut())) {
-        if !local.contains(&cid) {
+        if !owned_families.contains(&cid) {
             let suffix = variant.map(|v| format!("_v{v}")).unwrap_or_default();
-            llmod.add_raw_global(format!(
+            external_declarations.insert(format!(
                 "@perry_layout_class_{cid}{suffix} = external global {DESC_TY}"
             ));
         }
+    }
+    // A copy of a class another module owns still registers its declaration
+    // (`codegen::class_declarations`), which names the owner's symbols.
+    for c in &hir.classes {
+        let Some(fam) = layouts.families.get(&c.id) else {
+            continue;
+        };
+        if owned_families.contains(&c.id) {
+            continue;
+        }
+        external_declarations.insert(format!(
+            "@perry_layout_class_{} = external global {DESC_TY}",
+            c.id
+        ));
+        if !fam.variants.is_empty() {
+            external_declarations.insert(format!(
+                "@perry_family_variants_{} = external constant {{ i32, i32, [0 x {{ i64, ptr }}] }}",
+                c.id
+            ));
+        }
+    }
+    for decl in external_declarations {
+        llmod.add_raw_global(decl);
     }
     // Case 2c: one descriptor per static class family defined here, with the
     // slots `layout_families::assign_slots` gave its keys.
@@ -1118,6 +1144,9 @@ pub(crate) fn emit_module_layouts(
         let Some(fam): Option<&ClassFamilyLayout> = layouts.families.get(&class.id) else {
             continue;
         };
+        if !owned_families.contains(&class.id) {
+            continue;
+        }
         let mut named = Vec::with_capacity(fam.keys.len());
         for (k, slot) in &fam.keys {
             match atom(llmod, strings, &mut atoms, k.spelling()) {
@@ -1492,5 +1521,40 @@ impl FamilyAdd {
     /// slots.
     pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
         crate::target_layout::HeaderForm::Meta
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_families: ModuleFamilies,
+    colours: BTreeMap<String, (u32, u32)>,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_families: MODULE_FAMILIES.with(|s| s.borrow().clone()),
+        colours: COLOURS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_FAMILIES.with(|s| *s.borrow_mut() = self.module_families.clone());
+        COLOURS.with(|s| *s.borrow_mut() = self.colours.clone());
+        FAMILY_DESC_USES.with(|s| s.borrow_mut().clear());
+    }
+}
+pub(crate) struct CallableEffects {
+    numeric_reads: std::collections::HashSet<usize>,
+    family_desc_uses: std::collections::BTreeSet<(u32, Option<usize>)>,
+}
+pub(crate) fn take_callable_effects() -> CallableEffects {
+    CallableEffects {
+        numeric_reads: MODULE_FAMILIES.with(|s| std::mem::take(&mut s.borrow_mut().numeric_reads)),
+        family_desc_uses: FAMILY_DESC_USES.with(|s| std::mem::take(&mut *s.borrow_mut())),
+    }
+}
+impl CallableEffects {
+    pub(crate) fn merge(self) {
+        MODULE_FAMILIES.with(|s| s.borrow_mut().numeric_reads.extend(self.numeric_reads));
+        FAMILY_DESC_USES.with(|s| s.borrow_mut().extend(self.family_desc_uses));
     }
 }

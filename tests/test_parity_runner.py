@@ -98,11 +98,12 @@ class Discovery(unittest.TestCase):
 
     def test_test_files_ids_match_legacy(self):
         ids = [case_id for case_id, _ in parity.select(ROOT, ["test-files"])]
-        self.assertGreater(len(ids), 1000)
+        self.assertTrue((ROOT / "test-files").is_dir())
         self.assertEqual(sorted(ids), self.legacy_ids("all"))
 
-    def test_node_suite_ids_match_legacy(self):
-        ids = [case_id for case_id, _ in parity.select(ROOT, ["node-suite"])]
+    def test_node_suite_ts_ids_match_legacy(self):
+        ids = [case_id for case_id, path in parity.select(ROOT, ["node-suite"])
+               if path.suffix == ".ts"]
         self.assertGreater(len(ids), 1000)
         self.assertEqual(sorted(ids), self.legacy_ids("node-suite"))
 
@@ -160,6 +161,29 @@ class Discovery(unittest.TestCase):
                                                 "perry/thread/c", "typescript/enum/x/b"])
             self.assertEqual(parity.subject_of("typescript/enum/x/b"), "typescript/enum")
 
+    def test_subjects_preserve_legacy_module_formats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp)).resolve()
+            names = ["test_gap_ts.ts", "test_gap_cts.cts", "test_gap_mts.mts", "test_gap_cjs.cjs"]
+            legacy = ["test_gap_ts", "test_gap_cts", "test_gap_mts", "test_gap_cjs.cjs"]
+            for name in names:
+                write(root / "test-files" / name)
+            self.assertEqual(sorted(cid for cid, _ in parity.select(root, ["test-files"])),
+                             sorted(legacy))
+            for subject_root in parity.SUBJECT_ROOTS:
+                subject = root / "test-parity" / subject_root / "formats"
+                for name in names:
+                    write(subject / name)
+                    write(subject / "fixtures" / name)
+                write(subject / "helper.cjs")
+                write(subject / "test_helper.js")
+                selected = parity.select(root, [f"{subject_root}/formats"], filters=["test_gap_"])
+                self.assertEqual([cid for cid, _ in selected],
+                                 sorted(f"{subject_root}/formats/{cid}" for cid in legacy))
+                self.assertEqual(len(parity.select(root, [f"{subject_root}/formats"])), 4)
+                for cid, path in selected:
+                    self.assertEqual(parity.case_id(root, path), cid)
+
     def test_subject_of(self):
         self.assertEqual(parity.subject_of("test_gap_x"), "test-files")
         self.assertEqual(parity.subject_of("node-suite/fs/promises/a"), "node-suite/fs")
@@ -200,6 +224,28 @@ class GapLane(Repo):
         self.assertEqual(self.statuses(after), {
             mapping.get(cid, cid): status for cid, status in self.statuses(before).items()
         })
+
+    def test_worker_subject_paths_are_trackable(self):
+        shutil.copyfile(ROOT / ".gitignore", self.root / ".gitignore")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                       cwd=self.root, env=env, check=True, capture_output=True, timeout=10)
+        paths = {
+            "worker": True,
+            "examples/worker/source.ts": True,
+            "test-parity/perry/worker/test_gap_worker_not_compiled.ts": False,
+            "test-parity/expected/perry/worker/test_gap_worker_not_compiled.txt": False,
+            "test-parity/perry/worker/worker": True,
+        }
+        for relative, ignored in paths.items():
+            write(self.root / relative)
+            with self.subTest(path=relative):
+                result = subprocess.run(
+                    ["git", "-c", f"core.excludesFile={os.devnull}",
+                     "check-ignore", "--no-index", "--quiet", relative],
+                    cwd=self.root, env=env, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0 if ignored else 1, result.stderr)
 
     def test_gap_snapshot_artifact_includes_subject_snapshots(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
@@ -404,6 +450,80 @@ class Accept(Repo):
         two = self.report("two.json", {"test_a": "pass"})
         self.assertEqual(self.accept(one, two, "--mode", "fast"), 2)
         self.assertFalse((self.root / "test-parity/snapshots").exists())
+
+
+class SourcePatterns(Repo):
+    def source_cli(self, *args):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts/gc_corpus_sources.py"),
+             "--root", str(self.root), *args], capture_output=True, text=True, timeout=10)
+
+    def test_patterns_preserve_order_repeats_and_subject_sources(self):
+        write(self.root / "test-files/test_gap_gc_a.ts")
+        write(self.root / "test-parity/language/object/test_gap_gc_b.ts")
+        write(self.root / "test-parity/language/class/test_gap_class_c.ts")
+        write(self.root / "test-parity/language/object/fixtures/test_gap_gc_fake.ts")
+        result = self.source_cli("--pattern", "test_gap_gc_*.ts",
+                                 "--pattern", "test_gap_class*.ts",
+                                 "--pattern", "test_gap_gc_a.ts")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "test_gap_gc_a\ttest-files/test_gap_gc_a.ts",
+            "test_gap_gc_b\ttest-parity/language/object/test_gap_gc_b.ts",
+            "test_gap_class_c\ttest-parity/language/class/test_gap_class_c.ts",
+            "test_gap_gc_a\ttest-files/test_gap_gc_a.ts",
+        ])
+        self.assertEqual(result.stderr, "")
+
+
+    def test_missing_pattern_fails_before_emitting_sources(self):
+        write(self.root / "test-files/test_gap_gc_a.ts")
+        before = {path.relative_to(self.root): path.read_bytes()
+                  for path in self.root.rglob("*") if path.is_file()}
+        result = self.source_cli("--pattern", "test_gap_gc_*.ts",
+                                 "--pattern", "test_gap_missing*.ts")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr,
+                         "::error::pattern 'test_gap_missing*.ts' matched nothing; it is stale. "
+                         "Remove it or fix it.\n")
+        self.assertEqual(before, {path.relative_to(self.root): path.read_bytes()
+                                  for path in self.root.rglob("*") if path.is_file()})
+
+
+    def test_optional_registration_patterns_can_be_empty(self):
+        result = self.source_cli("--pattern", "test_gap_repsel_*.ts",
+                                 "--pattern", "test_gap_specabi_*.ts",
+                                 "--allow-empty-patterns")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+
+
+class ArchivePreflight(Repo):
+    def test_no_auto_archive_guard_follows_case_basename(self):
+        stem = "test_gap_11301_namespace_member_values"
+        locations = [
+            (stem, f"test-files/{stem}.ts"),
+            (f"typescript/namespace/{stem}", f"test-parity/typescript/namespace/{stem}.cts"),
+            (f"node-suite/globals/{stem}", f"test-parity/node-suite/globals/{stem}.ts"),
+            ("node-suite/http/test_regular", "test-parity/node-suite/http/test_regular.ts"),
+        ]
+        for cid, relative in locations:
+            path = write(self.root / relative)
+            with self.subTest(case_id=cid):
+                with self.assertRaises(parity.HarnessError) as error:
+                    parity.check_toolchain(self.root, "fast", [(cid, path)])
+                for stem in ("perry_ext_http", "perry_ext_net", "perry_ext_ws"):
+                    self.assertIn(stem, str(error.exception))
+
+    def test_regular_archive_requirements_stay_unchanged(self):
+        for cid, relative in [
+                ("test_regular", "test-files/test_regular.ts"),
+                ("language/object/test_regular", "test-parity/language/object/test_regular.ts"),
+                ("node-suite/crypto/test_regular", "test-parity/node-suite/crypto/test_regular.ts")]:
+            path = write(self.root / relative)
+            with self.subTest(case_id=cid):
+                _, runtime = parity.check_toolchain(self.root, "fast", [(cid, path)])
+                self.assertEqual(runtime, self.root / "rt")
 
 
 class Lanes(unittest.TestCase):

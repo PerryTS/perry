@@ -31,12 +31,189 @@ use perry_hir::Expr;
 
 use super::FnCtx;
 
+/// The receiver of a run of case2c accesses. `this` names the
+/// receiver of the frame being lowered (an inline constructor body is a frame
+/// of its own); a local names the value it holds until it is written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RunReceiver {
+    This(usize),
+    Local(perry_hir::types::LocalId),
+}
+
+/// The run receiver `object` names, if any.
+pub(crate) fn run_receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<RunReceiver> {
+    match object {
+        Expr::This => Some(RunReceiver::This(ctx.inline_ctor_return.len())),
+        Expr::LocalGet(id) => Some(RunReceiver::Local(*id)),
+        _ => None,
+    }
+}
+
+/// A receiver run in flight (`FnCtx::recv_run`). The run's first
+/// access (its head) is the ordinary 2c site; at its merge `ok` is true
+/// exactly when that access took the hit path, and `rec` is then the
+/// receiver's layout record. Every later access of the same receiver, with no
+/// call and no other store in between (`call_epoch`, `RunTransparency`),
+/// tests its key's bit in `rec` and the slot's hole, and nothing else: the
+/// receiver's layout cannot have changed, since only a call or a store can
+/// change it. Any miss takes the ordinary site and clears `ok` for the rest
+/// of the run. Nothing outlives the lowering of the run: no state is kept at
+/// run time beyond these SSA values.
+#[derive(Clone, Debug)]
+pub(crate) struct RecvRun {
+    receiver: RunReceiver,
+    ok: String,
+    rec: String,
+    /// A store of the run proved the object carries no metadata record.
+    meta_ok: bool,
+    epoch: u64,
+    block: usize,
+}
+
+/// What lowering an expression does to the receiver run in flight
+/// (`dispatch::lower_expr`, on both sides of the expression).
+pub(crate) enum RunTransparency {
+    /// Runs no user code and writes no object except through a call (which
+    /// ends the run at its emission) or a 2c access of its own.
+    Transparent,
+    /// A by-name store: the run goes on only when the store was a 2c member
+    /// (`FnCtx::recv_run_store_member`).
+    Store,
+    /// Writes a local: ends the run on that local.
+    LocalWrite(perry_hir::types::LocalId),
+    /// Anything else ends the run, before and after it.
+    Opaque,
+}
+
+pub(crate) fn run_transparency(e: &Expr) -> RunTransparency {
+    match e {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::LocalGet(_)
+        | Expr::This
+        | Expr::Binary { .. }
+        | Expr::Compare { .. }
+        | Expr::Unary { .. }
+        | Expr::PropertyGet { .. }
+        | Expr::Sequence(_) => RunTransparency::Transparent,
+        Expr::PropertySet { .. } | Expr::PutValueSet { .. } => RunTransparency::Store,
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => RunTransparency::LocalWrite(*id),
+        _ => RunTransparency::Opaque,
+    }
+}
+
+/// End the receiver run in flight.
+pub(crate) fn end_run(ctx: &mut FnCtx<'_>) {
+    ctx.recv_run = None;
+}
+
+/// [`run_transparency`] before lowering `e`.
+pub(crate) fn run_enter(ctx: &mut FnCtx<'_>, t: &RunTransparency) {
+    match t {
+        RunTransparency::Opaque => end_run(ctx),
+        RunTransparency::Store => ctx.recv_run_store_member = false,
+        _ => {}
+    }
+}
+
+/// [`run_transparency`] after lowering `e`.
+pub(crate) fn run_exit(ctx: &mut FnCtx<'_>, t: &RunTransparency) {
+    match t {
+        RunTransparency::Opaque => end_run(ctx),
+        RunTransparency::Store => {
+            if !std::mem::take(&mut ctx.recv_run_store_member) {
+                end_run(ctx);
+            }
+        }
+        RunTransparency::LocalWrite(id) => {
+            if ctx
+                .recv_run
+                .as_ref()
+                .is_some_and(|r| r.receiver == RunReceiver::Local(*id))
+            {
+                end_run(ctx);
+            }
+        }
+        RunTransparency::Transparent => {}
+    }
+}
+
+/// The run of `receiver` that continues at the current block, if any.
+fn live_run(ctx: &mut FnCtx<'_>, receiver: RunReceiver) -> Option<RecvRun> {
+    let run = ctx.recv_run.clone()?;
+    if run.receiver != receiver || run.epoch != ctx.block().call_epoch() {
+        return None;
+    }
+    if run.block != ctx.current_block
+        && !ctx
+            .func
+            .proof_dominates_block_end(&run.ok, ctx.current_block)
+    {
+        return None;
+    }
+    Some(run)
+}
+
+/// The run an access leaves behind, completed at its merge ([`finish_run`]).
+struct RunOut {
+    receiver: RunReceiver,
+    rec: String,
+    head: bool,
+    meta_ok: bool,
+}
+
+/// At an access's merge (the current block), whose hit ended in `hit_label`
+/// and whose ordinary site ended in `site_label`: the run that follows.
+fn finish_run(ctx: &mut FnCtx<'_>, out: RunOut, hit_label: &str, site_label: &str) {
+    let blk = ctx.block();
+    let ok = blk.phi(
+        crate::types::I1,
+        &[("true", hit_label), ("false", site_label)],
+    );
+    let rec = if out.head {
+        blk.phi(PTR, &[(out.rec.as_str(), hit_label), ("null", site_label)])
+    } else {
+        out.rec
+    };
+    let epoch = ctx.block().call_epoch();
+    ctx.recv_run = Some(RecvRun {
+        receiver: out.receiver,
+        ok,
+        rec,
+        meta_ok: out.meta_ok,
+        epoch,
+        block: ctx.current_block,
+    });
+}
+
+/// The test of `bit` in the record `rec`'s mask at `mask_offset`.
+fn emit_record_bit(
+    blk: &mut crate::block::LlBlock,
+    rec: &str,
+    bit: u32,
+    mask_offset: usize,
+) -> String {
+    let mask_at = blk.gep(
+        I8,
+        rec,
+        &[(I64, &(mask_offset + 8 * (bit / 64) as usize).to_string())],
+    );
+    let mask_word = blk.load(I64, &mask_at);
+    let bit_value = blk.and(I64, &mask_word, &((1u64 << (bit % 64)) as i64).to_string());
+    blk.icmp_ne(I64, &bit_value, "0")
+}
+
 /// An emitted 2c arm: its hit value and the block it was produced in. The
 /// current block, on return from [`begin`], is the miss path.
 pub(crate) struct LayoutRead {
     hit_value: String,
     hit_label: String,
     merge_idx: usize,
+    run: Option<RunOut>,
 }
 
 /// The (mask bit, slot) when `property` is read through the 2c arm.
@@ -55,19 +232,8 @@ pub(crate) fn admitted(ctx: &FnCtx<'_>, property: &str) -> Option<(u32, u32)> {
 /// The record mask word of `bit` for the receiver whose biased payload is
 /// `biased`, in the current block, branching to `miss_label` when the
 /// receiver's layout word names no record. Leaves the current block at the
-/// mask test's true edge and returns the loaded mask word's test result.
-fn emit_mask_test(
-    ctx: &mut FnCtx<'_>,
-    biased: &str,
-    bit: u32,
-    miss_label: &str,
-    mask_offset: usize,
-) -> String {
-    emit_mask_test_record(ctx, biased, bit, miss_label, mask_offset).0
-}
-
-/// [`emit_mask_test`], also returning the record's address (valid in the
-/// block it leaves).
+/// mask test's true edge's predecessor and returns the test result and the
+/// record's address (valid in the block it leaves).
 fn emit_mask_test_record(
     ctx: &mut FnCtx<'_>,
     biased: &str,
@@ -122,57 +288,87 @@ fn emit_mask_test_record(
         &crate::runtime_abi::SHAPE_RECORD_SIZE.to_string(),
     );
     let rec = blk.gep(I8, &base, &[(I64, &offset)]);
-    let mask_at = blk.gep(
-        I8,
-        &rec,
-        &[(I64, &(mask_offset + 8 * (bit / 64) as usize).to_string())],
-    );
-    let mask_word = blk.load(I64, &mask_at);
-    let bit_value = blk.and(I64, &mask_word, &((1u64 << (bit % 64)) as i64).to_string());
-    (blk.icmp_ne(I64, &bit_value, "0"), rec)
+    (emit_record_bit(blk, &rec, bit, mask_offset), rec)
 }
 
 /// Emit the 2c arm for `receiver_bits.property` if the key is coloured.
 /// On `Some`, the caller lowers its ordinary site in the current block (the
-/// miss path) and passes its value to [`finish`].
+/// miss path) and passes its value to [`finish`]. A read of `receiver`'s run
+/// in flight ([`RecvRun`]) is the run's follower: its bit and its hole.
 pub(crate) fn begin(
     ctx: &mut FnCtx<'_>,
     receiver_bits: &str,
     property: &str,
+    receiver: Option<RunReceiver>,
 ) -> Option<LayoutRead> {
     let (bit, slot) = admitted(ctx, property)?;
-    crate::expr::note_site("case2c");
     let header =
         crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
-    let word_idx = ctx.new_block("l2c.word");
+    let follow = receiver.and_then(|r| live_run(ctx, r));
     let load_idx = ctx.new_block("l2c.load");
     let hit_idx = ctx.new_block("l2c.hit");
     let miss_idx = ctx.new_block("l2c.miss");
     let merge_idx = ctx.new_block("l2c.merge");
-    let word_label = ctx.block_label(word_idx);
     let load_label = ctx.block_label(load_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
 
-    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
-    ctx.block()
-        .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
-
-    ctx.current_block = word_idx;
-    let holds = emit_mask_test(
-        ctx,
-        &recv.biased,
-        bit,
-        &miss_label,
-        crate::runtime_abi::SHAPE_RECORD_COLOUR_MASK,
-    );
-    ctx.block().cond_br(&holds, &load_label, &miss_label);
+    let (biased, run) = match follow {
+        Some(run) => {
+            crate::expr::note_site("case2c-run-follow");
+            let check_idx = ctx.new_block("l2c.follow");
+            let check_label = ctx.block_label(check_idx);
+            ctx.block().cond_br(&run.ok, &check_label, &miss_label);
+            ctx.current_block = check_idx;
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+            let holds = emit_record_bit(
+                ctx.block(),
+                &run.rec,
+                bit,
+                crate::runtime_abi::SHAPE_RECORD_COLOUR_MASK,
+            );
+            ctx.block().cond_br(&holds, &load_label, &miss_label);
+            let out = RunOut {
+                receiver: run.receiver,
+                rec: run.rec,
+                head: false,
+                meta_ok: run.meta_ok,
+            };
+            (recv.biased, Some(out))
+        }
+        None => {
+            crate::expr::note_site("case2c");
+            let word_idx = ctx.new_block("l2c.word");
+            let word_label = ctx.block_label(word_idx);
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+            ctx.current_block = word_idx;
+            let (holds, rec) = emit_mask_test_record(
+                ctx,
+                &recv.biased,
+                bit,
+                &miss_label,
+                crate::runtime_abi::SHAPE_RECORD_COLOUR_MASK,
+            );
+            ctx.block().cond_br(&holds, &load_label, &miss_label);
+            let out = receiver.map(|receiver| RunOut {
+                receiver,
+                rec,
+                head: true,
+                meta_ok: false,
+            });
+            (recv.biased, out)
+        }
+    };
 
     ctx.current_block = load_idx;
     let blk = ctx.block();
     let value_ptr = crate::expr::receiver_range::emit_field_ptr(
         blk,
-        &recv.biased,
+        &biased,
         (header + 8 * slot as u64) as i64,
     );
     let value = blk.load(I64, &value_ptr);
@@ -191,6 +387,7 @@ pub(crate) fn begin(
         hit_value,
         hit_label: hit_label_now,
         merge_idx,
+        run,
     })
 }
 
@@ -201,19 +398,24 @@ pub(crate) fn finish(ctx: &mut FnCtx<'_>, arm: LayoutRead, generic: &str) -> Str
     let generic_label = ctx.block_label(ctx.current_block);
     ctx.block().br(&merge_label);
     ctx.current_block = arm.merge_idx;
-    ctx.block().phi(
+    let value = ctx.block().phi(
         DOUBLE,
         &[
             (arm.hit_value.as_str(), arm.hit_label.as_str()),
             (generic, generic_label.as_str()),
         ],
-    )
+    );
+    if let Some(out) = arm.run {
+        finish_run(ctx, out, &arm.hit_label, &generic_label);
+    }
+    value
 }
 
 /// An emitted 2c store arm (see [`begin_store`]).
 pub(crate) struct LayoutStore {
     hit_label: String,
     merge_idx: usize,
+    run: Option<RunOut>,
 }
 
 /// The store form of the 2c site for a coloured key: the receiver's layout
@@ -223,7 +425,9 @@ pub(crate) struct LayoutStore {
 /// the slot is present; then the assignment is one store plus the write
 /// barrier's bookkeeping. On `Some`, the caller lowers its ordinary store
 /// site in the current block (the miss path) and passes its value to
-/// [`finish_store`].
+/// [`finish_store`]. A store of `receiver`'s run in flight ([`RecvRun`]) is
+/// the run's follower: its bit (and lane), the metadata word once per run,
+/// and its hole.
 pub(crate) fn begin_store(
     ctx: &mut FnCtx<'_>,
     receiver_bits: &str,
@@ -231,39 +435,79 @@ pub(crate) fn begin_store(
     value_double: &str,
     value_bits: &str,
     value_is_scalar: bool,
+    receiver: Option<RunReceiver>,
 ) -> Option<LayoutStore> {
     let (bit, slot) = admitted(ctx, property)?;
-    crate::expr::note_site("case2c-store");
     let header =
         crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
-    let word_idx = ctx.new_block("l2s.word");
-    let meta_idx = ctx.new_block("l2s.meta");
+    let follow = receiver.and_then(|r| live_run(ctx, r));
     let load_idx = ctx.new_block("l2s.load");
     let hit_idx = ctx.new_block("l2s.hit");
     let miss_idx = ctx.new_block("l2s.miss");
     let merge_idx = ctx.new_block("l2s.merge");
-    let word_label = ctx.block_label(word_idx);
-    let meta_label = ctx.block_label(meta_idx);
     let load_label = ctx.block_label(load_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
-    ctx.block()
-        .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+    let (biased, rec, holds, need_meta, run) = match follow {
+        Some(run) => {
+            crate::expr::note_site("case2c-run-follow");
+            let check_idx = ctx.new_block("l2s.follow");
+            let check_label = ctx.block_label(check_idx);
+            ctx.block().cond_br(&run.ok, &check_label, &miss_label);
+            ctx.current_block = check_idx;
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+            let holds = emit_record_bit(
+                ctx.block(),
+                &run.rec,
+                bit,
+                crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK,
+            );
+            let need_meta = !run.meta_ok;
+            let out = RunOut {
+                receiver: run.receiver,
+                rec: run.rec.clone(),
+                head: false,
+                meta_ok: true,
+            };
+            (recv.biased, run.rec, holds, need_meta, Some(out))
+        }
+        None => {
+            crate::expr::note_site("case2c-store");
+            let word_idx = ctx.new_block("l2s.word");
+            let word_label = ctx.block_label(word_idx);
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+            ctx.current_block = word_idx;
+            let (holds, rec) = emit_mask_test_record(
+                ctx,
+                &recv.biased,
+                bit,
+                &miss_label,
+                crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK,
+            );
+            let out = receiver.map(|receiver| RunOut {
+                receiver,
+                rec: rec.clone(),
+                head: true,
+                meta_ok: true,
+            });
+            (recv.biased, rec, holds, true, out)
+        }
+    };
+    let meta_idx = need_meta.then(|| ctx.new_block("l2s.meta"));
+    let after_lane = match meta_idx {
+        Some(idx) => ctx.block_label(idx),
+        None => load_label.clone(),
+    };
 
-    ctx.current_block = word_idx;
-    let (holds, rec) = emit_mask_test_record(
-        ctx,
-        &recv.biased,
-        bit,
-        &miss_label,
-        crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK,
-    );
     if slot >= crate::runtime_abi::SHAPE_REP_SLOTS {
         // A slot past the lane word is `Any`: the mask is the whole proof.
-        ctx.block().cond_br(&holds, &meta_label, &miss_label);
+        ctx.block().cond_br(&holds, &after_lane, &miss_label);
     } else {
         // The mask admits an `Any` or an `F64` lane. A plain double fits
         // either; anything else needs the record's lane for this slot to be
@@ -281,7 +525,7 @@ pub(crate) fn begin_store(
             blk,
             &stored_bits,
         );
-        blk.cond_br(&plain, &meta_label, &rep_label);
+        blk.cond_br(&plain, &after_lane, &rep_label);
 
         ctx.current_block = rep_idx;
         let blk = ctx.block();
@@ -294,23 +538,25 @@ pub(crate) fn begin_store(
         let lane = blk.lshr(I64, &rep, &(2 * slot).to_string());
         let lane = blk.and(I64, &lane, "3");
         let any = blk.icmp_eq(I64, &lane, "0");
-        blk.cond_br(&any, &meta_label, &miss_label);
+        blk.cond_br(&any, &after_lane, &miss_label);
     }
 
     // `ObjectHeader.meta` is the header's last word.
-    ctx.current_block = meta_idx;
-    let blk = ctx.block();
-    let meta_ptr =
-        crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, (header - 8) as i64);
-    let meta = blk.load(I64, &meta_ptr);
-    let plain = blk.icmp_eq(I64, &meta, "0");
-    blk.cond_br(&plain, &load_label, &miss_label);
+    if let Some(meta_idx) = meta_idx {
+        ctx.current_block = meta_idx;
+        let blk = ctx.block();
+        let meta_ptr =
+            crate::expr::receiver_range::emit_field_ptr(blk, &biased, (header - 8) as i64);
+        let meta = blk.load(I64, &meta_ptr);
+        let plain = blk.icmp_eq(I64, &meta, "0");
+        blk.cond_br(&plain, &load_label, &miss_label);
+    }
 
     ctx.current_block = load_idx;
     let blk = ctx.block();
     let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
         blk,
-        &recv.biased,
+        &biased,
         (header + 8 * slot as u64) as i64,
     );
     let current = blk.load(I64, &slot_ptr);
@@ -322,7 +568,7 @@ pub(crate) fn begin_store(
     // bits exactly as the store site's hit does.
     ctx.block().store(DOUBLE, value_double, &slot_ptr);
     if !value_is_scalar {
-        let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &recv.biased);
+        let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &biased);
         crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
             ctx,
             &handle,
@@ -338,6 +584,7 @@ pub(crate) fn begin_store(
     Some(LayoutStore {
         hit_label: hit_end,
         merge_idx,
+        run,
     })
 }
 
@@ -860,6 +1107,7 @@ pub(crate) fn begin_family_init_store(
     Some(LayoutStore {
         hit_label: hit_end,
         merge_idx,
+        run: None,
     })
 }
 
@@ -875,11 +1123,15 @@ pub(crate) fn finish_store(
     let generic_label = ctx.block_label(ctx.current_block);
     ctx.block().br(&merge_label);
     ctx.current_block = arm.merge_idx;
-    ctx.block().phi(
+    let value = ctx.block().phi(
         DOUBLE,
         &[
             (value_double, arm.hit_label.as_str()),
             (generic, generic_label.as_str()),
         ],
-    )
+    );
+    if let Some(out) = arm.run {
+        finish_run(ctx, out, &arm.hit_label, &generic_label);
+    }
+    value
 }

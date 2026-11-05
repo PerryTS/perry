@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// What an own-property test's gate node (`Cons::OwnGate`) holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnGateAt {
+    /// The callee `H` of `H.call(o, k)` or the member `o.hasOwnProperty`:
+    /// `Object.prototype.hasOwnProperty` / `propertyIsEnumerable` pass (and
+    /// gate on their own `call` field: a written one runs instead of
+    /// `Function.prototype.call`); any other token opens.
+    OwnFn,
+    /// A program function whose body derives the own-test predicate.
+    Helper,
+    /// Propagate a predicate refutation marker, never a program value.
+    Refuted,
+    /// The `Object` constructor of `Object.hasOwn(o, k)`: it gates on its
+    /// `hasOwn` field (the program may replace the static); any other token
+    /// opens.
+    ObjectCtor,
+    /// A value that holds no token unless the test ran other code (the
+    /// test's result, a written `call` or `hasOwn` field): any token opens.
+    Value,
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -25,6 +46,11 @@ pub enum Cons {
         /// 149b) another function's marker or ⊤.
         to: Tok,
     },
+    /// dst ⊇ read(read(t, `prototype`), key) for every t in the node
+    /// (`E.prototype.key`): a builtin namespace whose prototype's own
+    /// member `key` is final reads the native it names
+    /// (`Model::proto_key`).
+    ProtoKey { key: Atom, dst: NodeId },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
@@ -130,6 +156,12 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// The left operand of `l && r`: its falsy part flows into `dst` (the
+    /// result is `l` only when it is falsy, and every object is truthy):
+    /// its primitive kinds that have a falsy value, ⊤ as those kinds only,
+    /// and its parameter or argument markers (a caller's value). No object
+    /// or function token. A rule of the program text, like `NotNullish`.
+    Falsy { dst: NodeId },
     /// The argument of a defaulted parameter: its values but `undefined`
     /// flow into the parameter's local `dst` (the default replaces
     /// `undefined`, a `Guard` on the argument). A rule of the program text,
@@ -262,20 +294,67 @@ pub enum Cons {
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
-    IdxLoad { idx: NodeId, dst: NodeId },
+    IdxLoad {
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup. It is never taken to be
     /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
     /// an unknown string key; only the named forms read it).
-    IdxKey { obj: Tok, dst: NodeId },
+    IdxKey {
+        obj: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
+    /// `IdxLoad` of a read that runs only after an own-property test of the
+    /// same object and key (`gen/own_guard.rs`): a program object's own
+    /// fields under the key (`IdxOwnKey`), never its prototype chain; any
+    /// other value reads as `IdxLoad`. `OwnGate` adds the ordinary `IdxLoad`
+    /// once the test may be something else.
+    IdxOwnLoad {
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
+    /// The node is the key of an own-only read of object token `obj`
+    /// (`IdxOwnLoad`): a primitive key reads `obj`'s own fields it may name;
+    /// a token (an object, whose ToPropertyKey runs program code at the test
+    /// and again at the read, or ⊤) runs the full lookup (`IdxKey`'s).
+    IdxOwnKey {
+        obj: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
+    /// The body-derived own-test predicate: nonmatching callee values or
+    /// replaceable builtin fields refute `dst` outside the value lattice. The same
+    /// predicate serves direct guards and helper-body evidence.
+    OwnTest { dst: NodeId, at: OwnGateAt },
+    /// A refutation marker restores the ordinary read `obj[idx]`.
+    OwnGate {
+        obj: NodeId,
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
     /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
-    IdxMCall { idx: NodeId, call: CallId },
+    IdxMCall {
+        idx: NodeId,
+        call: CallId,
+        shape: KeyShapeId,
+    },
     /// The node is the key of `o[k](...)` for receiver token `obj`: a
     /// string, symbol or object key calls `Key::Any`'s methods.
     /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds.
-    IdxKeyCall { obj: Tok, prim: u16, call: CallId },
+    IdxKeyCall {
+        obj: Tok,
+        prim: u16,
+        call: CallId,
+        shape: KeyShapeId,
+    },
     /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
     /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
     /// through the template call `call` (one argument: the key).
@@ -308,6 +387,7 @@ pub enum Cons {
         o: NodeId,
         src: NodeId,
         site: SiteId,
+        shape: KeyShapeId,
     },
     /// The node is the key of a definition whose descriptor's get (set) is
     /// `f`, on the objects of `holder`: a run's one key installs it under
@@ -365,6 +445,10 @@ pub enum Cons {
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
     ThisInst { call: CallId, ft: Tok },
+    /// The node is the receiver of `call` into named native `f`
+    /// (`f.call(x)`): each value runs the native with it as `this`
+    /// (`Model::native_this`).
+    NativeThis { call: CallId, f: Tok },
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
@@ -397,6 +481,7 @@ impl Cons {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Load { .. } => "load",
+            Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::IndexHole => "indexhole",
             Cons::CjsPublish { .. } => "cjspublish",
@@ -418,6 +503,7 @@ impl Cons {
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
@@ -453,6 +539,10 @@ impl Cons {
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::IdxOwnLoad { .. } => "idxownload",
+            Cons::IdxOwnKey { .. } => "idxownkey",
+            Cons::OwnGate { .. } => "owngate",
+            Cons::OwnTest { .. } => "owntest",
             Cons::IdxMCall { .. } => "idxmcall",
             Cons::IdxKeyCall { .. } => "idxkeycall",
             Cons::ForInBody { .. } => "forinbody",
@@ -469,6 +559,7 @@ impl Cons {
             Cons::Spread { .. } => "spread",
             Cons::SpreadFrom { .. } => "spreadfrom",
             Cons::ThisInst { .. } => "thisinst",
+            Cons::NativeThis { .. } => "nativethis",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",

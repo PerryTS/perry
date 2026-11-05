@@ -657,3 +657,51 @@ fn constfn_verifier_valid_stale_deprecated_and_lifecycle() {
         );
     }
 }
+
+/// THR4: a ConstFn lane is not capped at the 32 lanes of the `rep` word. A
+/// 41-slot object learns a lane at slot 40 (`learn_object_constfn_lanes`), the
+/// verifier checks its body, and a store of another closure into slot 40
+/// generalizes exactly that lane while keeping the others.
+#[test]
+fn constfn_lane_past_word_zero_is_learned_verified_and_generalized() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let a = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let b = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_b, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let bits = |c: *mut crate::closure::ClosureHeader| {
+            f64::from_bits(crate::JSValue::object_ptr(c.cast()).bits())
+        };
+        let obj = crate::object::js_object_alloc(0, 64);
+        for i in 0..41 {
+            crate::object::js_object_set_field_by_name(obj, key(&format!("m{i}")), bits(a));
+        }
+        assert!(super::shapes::learn_object_constfn_lanes(obj, |_, _| true));
+        let record = super::shapes::object_shape_record(obj).unwrap();
+        assert!(record.constfn_info(40).is_some(), "slot 40 earns a ConstFn lane");
+        assert!(record.constfn_info(32).is_some());
+        assert!(record.constfn_info(3).is_some());
+        assert!(record.constfn_info(41).is_none());
+        super::field_rep_store::assert_field_rep_lanes(obj, Some(record), 41);
+        // A store of another body into slot 40 drops that lane and no other.
+        crate::object::js_object_set_field_by_name(obj, key("m40"), bits(b));
+        let after = super::shapes::object_shape_record(obj).unwrap();
+        assert!(after.constfn_info(40).is_none(), "the stored-over lane is gone");
+        assert!(after.constfn_info(39).is_some());
+        assert!(after.constfn_info(32).is_some());
+        assert!(after.constfn_info(3).is_some());
+        super::field_rep_store::assert_field_rep_lanes(obj, Some(after), 41);
+        // A same-body store keeps the lane.
+        crate::object::js_object_set_field_by_name(obj, key("m39"), bits(a));
+        assert!(super::shapes::object_shape_record(obj)
+            .unwrap()
+            .constfn_info(39)
+            .is_some());
+    }
+}

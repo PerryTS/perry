@@ -181,6 +181,7 @@ impl Model {
             ret,
             args_all,
             has_arguments: true,
+            own_test: crate::model::OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
@@ -188,6 +189,7 @@ impl Model {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
@@ -458,7 +460,7 @@ impl Model {
                     self.store_into(t, Key::Named(a), v, site);
                 }
             }
-            None => self.store_into(t, Key::Any, top, site),
+            None => self.store_into(t, Key::any(), top, site),
         }
         // What the receiver reaches (its fields, transitively), as for an
         // argument (gen.rs `stand_in_fn_of`).
@@ -468,14 +470,14 @@ impl Model {
             self.cons(
                 h,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );
             self.cons(
                 q,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );

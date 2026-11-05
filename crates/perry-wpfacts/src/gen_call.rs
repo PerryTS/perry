@@ -123,6 +123,7 @@ impl<'a> Gen<'a> {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
+                self.own_test_recv = Some(o);
                 let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
@@ -153,9 +154,17 @@ impl<'a> Gen<'a> {
                     Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
-                    Key::Any => {
+                    Key::Any(_) => {
                         let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
-                        self.m.cons(o, Cons::IdxMCall { idx: i, call });
+                        let shape = self.m.key_shape(index);
+                        self.m.cons(
+                            o,
+                            Cons::IdxMCall {
+                                idx: i,
+                                call,
+                                shape,
+                            },
+                        );
                         ret
                     }
                 }
@@ -185,6 +194,7 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
+                self.own_test_recv = Some(c);
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.
@@ -260,7 +270,23 @@ impl<'a> Gen<'a> {
             // functions (decision 23): the name carries the function id.
             .map(|n| format!("{n}#{func_id}"))
             .unwrap_or_else(|| format!("closure{func_id}"));
-        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
+        let Expr::Closure {
+            is_async,
+            is_generator,
+            ..
+        } = canonical
+        else {
+            unreachable!()
+        };
+        let module = self.modules[mi as usize].1;
+        let kind = perry_hir::fn_proto::FnProtoKind::of_closure(
+            module,
+            *func_id,
+            *is_async,
+            *is_generator,
+            body,
+        );
+        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true, Some(kind));
         let info = self.m.funcs[f as usize].clone();
         // An arrow captures the enclosing `this` only when its body (or an
         // arrow nested in it) reads `this` or `super` (design §14.2 rule
@@ -329,7 +355,9 @@ impl<'a> Gen<'a> {
                 .add_top(ret, |_| "async/generator closure result".into());
         }
         self.order_ok = true;
+        let own = self.own_helper_shape(params, body, *is_async || *is_generator);
         self.stmts(cfx, body);
+        self.own_helper_finish(f, own);
         (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }
@@ -551,7 +579,7 @@ impl<'a> Gen<'a> {
                     ("js_object_literal_define" | "js_object_set_method_by_name", Some(k)) => {
                         Key::Named(self.m.atom(&k))
                     }
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 if let Key::Named(a) = key {
                     if let Some(tm) = birth_tm {
@@ -625,7 +653,7 @@ impl<'a> Gen<'a> {
                 let (Some(o), Some(s)) = (arg(0), arg(1)) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let vals = self.load(s, Key::Any);
+                let vals = self.load(s, Key::any());
                 if let Some(tm) = birth_tm {
                     self.m.tmpls[tm as usize].birth_keys.clear();
                     self.m.tmpls[tm as usize].definite.clear();
@@ -634,7 +662,7 @@ impl<'a> Gen<'a> {
                 self.store(
                     fx,
                     o,
-                    Key::Any,
+                    Key::any(),
                     vals,
                     name.to_string(),
                     birth_tm,
@@ -758,7 +786,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     mp,
                     Cons::Store {
-                        key: Key::Any,
+                        key: Key::any(),
                         src: v,
                         site,
                     },
@@ -769,7 +797,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -777,7 +805,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::ALL);
                 out
             }

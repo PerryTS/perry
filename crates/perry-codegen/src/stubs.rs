@@ -385,7 +385,7 @@ pub fn static_shape_seed_ll_with_plan(
                 .iter()
                 .map(|body| {
                     assert!(
-                        body.slot < 32 && prior.is_none_or(|slot| body.slot > slot),
+                        prior.is_none_or(|slot| body.slot > slot),
                         "ConstFn seed entries must be sorted and unique"
                     );
                     assert!(
@@ -395,7 +395,9 @@ pub fn static_shape_seed_ll_with_plan(
                         "invalid ConstFn body info symbol"
                     );
                     prior = Some(body.slot);
-                    mask |= 1 << body.slot;
+                    if body.slot < 32 {
+                        mask |= 1 << body.slot;
+                    }
                     format!(
                         "{{ i32, ptr }} {{ i32 {}, ptr @{} }}",
                         body.slot, body.symbol

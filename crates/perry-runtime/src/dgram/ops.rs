@@ -598,16 +598,25 @@ pub(crate) fn source_membership_impl(socket: f64, args: &[f64], syscall: &'stati
         .and_then(string_to_rust)
         .and_then(|s| s.parse::<Ipv4Addr>().ok())
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
-    let sock_ref = socket2::SockRef::from(&*udp);
-    let result = if syscall.starts_with("drop") {
-        sock_ref.leave_ssm_v4(&source_v4, &group_v4, &iface)
-    } else {
-        sock_ref.join_ssm_v4(&source_v4, &group_v4, &iface)
-    };
-    if result.is_err() {
-        throw_socket_errno(syscall, "EINVAL");
+    #[cfg(target_os = "wasi")]
+    {
+        // wasi:sockets/udp has no multicast membership at all.
+        let _ = (udp, source_v4, group_v4, iface);
+        throw_socket_errno(syscall, "ENOTSUP");
     }
-    undefined_value()
+    #[cfg(not(target_os = "wasi"))]
+    {
+        let sock_ref = socket2::SockRef::from(&*udp);
+        let result = if syscall.starts_with("drop") {
+            sock_ref.leave_ssm_v4(&source_v4, &group_v4, &iface)
+        } else {
+            sock_ref.join_ssm_v4(&source_v4, &group_v4, &iface)
+        };
+        if result.is_err() {
+            throw_socket_errno(syscall, "EINVAL");
+        }
+        undefined_value()
+    }
 }
 
 pub(crate) fn set_broadcast_impl(socket: f64, args: &[f64]) -> f64 {
@@ -691,13 +700,22 @@ pub(crate) fn set_multicast_interface_impl(socket: f64, args: &[f64]) -> f64 {
         let iface = interface_address
             .parse::<Ipv4Addr>()
             .unwrap_or_else(|_| throw_socket_errno("setMulticastInterface", "EINVAL"));
-        let result = live_udp(socket).ok_or(()).and_then(|udp| {
-            socket2::SockRef::from(&*udp)
-                .set_multicast_if_v4(&iface)
-                .map_err(|_| ())
-        });
-        if result.is_err() {
-            throw_socket_errno("setMulticastInterface", "EINVAL");
+        // wasi:sockets/udp has no multicast interface option.
+        #[cfg(target_os = "wasi")]
+        {
+            let _ = iface;
+            throw_socket_errno("setMulticastInterface", "ENOTSUP");
+        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let result = live_udp(socket).ok_or(()).and_then(|udp| {
+                socket2::SockRef::from(&*udp)
+                    .set_multicast_if_v4(&iface)
+                    .map_err(|_| ())
+            });
+            if result.is_err() {
+                throw_socket_errno("setMulticastInterface", "EINVAL");
+            }
         }
     }
     undefined_value()

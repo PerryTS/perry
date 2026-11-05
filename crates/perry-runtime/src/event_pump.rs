@@ -668,10 +668,15 @@ fn next_wake_sources_ms() -> [f64; 4] {
     let transport = crate::turnloop_net::next_wake_ms();
     #[cfg(not(target_os = "wasi"))]
     let transport = -1.0;
+    // A WASI guest polls its UDP sockets (wasi_net/dgram.rs).
+    #[cfg(target_os = "wasi")]
+    let datagram = crate::module_hooks::dgram_next_wake_ms();
+    #[cfg(not(target_os = "wasi"))]
+    let datagram = -1.0;
     [
         js_timer_next_deadline(),
         transport,
-        -1.0,
+        datagram,
         crate::stdlib_pump::stdlib_next_wake_ms(),
     ]
 }
@@ -811,10 +816,10 @@ pub extern "C" fn js_wait_for_event() {
     // now, not on every free (`wasm_discard.rs`).
     #[cfg(wasm_discard)]
     crate::wasm_discard::idle();
-    // A WASI guest has no helper threads: a preview 1 guest parks in one
-    // `poll_oneoff` that also wakes on socket readiness, host signals and
-    // stdin; a WASIp2 guest that reads stdin parks in a `poll` on fd 0 (#13953).
-    // Both fall back to the timed condvar park when there is nothing to wait on.
+    // A WASI guest has no helper threads: it parks in one host poll that wakes
+    // on socket readiness (TCP and UDP), stdin and, on preview 1, host signals
+    // (`wasi_net::park`); the timed condvar park is left for when there is
+    // nothing to wait on.
     #[cfg(target_os = "wasi")]
     if crate::turnloop_net::park(Duration::from_millis(budget_ms)) {
         spin_streak_reset();

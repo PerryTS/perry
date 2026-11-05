@@ -146,7 +146,6 @@ wrapper_symbols! {
     fn js_net_socket_remove_listener(handle: i64, event_ptr: i64, cb: i64) -> i64;
     fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
     fn js_net_socket_set_type_of_service(handle: i64, value: f64) -> i64;
-    fn js_net_socket_upgrade_tls(handle: i64, servername_ptr: i64, verify: f64) -> *mut perry_runtime::Promise;
     fn js_net_socket_write(handle: i64, chunk_bits: i64);
     fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64;
 }

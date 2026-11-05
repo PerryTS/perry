@@ -1,0 +1,1 @@
+Whole-program facts: the left operand of `&&` reaches the result only when it is falsy, so an object, a function or an unknown value on the left no longer flows into `l && r` (an unknown value passes as its falsy primitive kinds only); `||` and `??` are unchanged.

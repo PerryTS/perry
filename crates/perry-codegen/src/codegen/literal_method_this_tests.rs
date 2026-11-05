@@ -435,6 +435,7 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
     declared.fields.clear();
     declared.constructor = None;
     let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
         &[(literal.id, &literal), (declared.id, &declared)],
         &crate::strings::StringPool::new(),
         "empty_roles",
@@ -460,13 +461,16 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
 }
 
 #[test]
-fn member_names_carry_the_compilers_utf8_fact() {
+fn member_names_do_not_alias_wtf8_diagnostic_spellings() {
     let mut class = anon_shape(0x32b0, "Utf8Names", 92, 80);
     let template = class.constructor.clone().unwrap();
     let mut pool = crate::strings::StringPool::new();
     pool.intern("plain");
     let lone = pool.intern_wtf8(&[0xED, 0xA0, 0x80]);
     let lone_key = pool.entry(lone).value.clone();
+    assert!(pool.lookup(&lone_key).is_none());
+    let literal = pool.intern(&lone_key);
+    assert_ne!(literal, lone);
     let getter = |id: u32, name: &str| {
         let mut f = template.clone();
         f.id = id;
@@ -475,6 +479,7 @@ fn member_names_carry_the_compilers_utf8_fact() {
     };
     class.getters = vec![getter(200, "plain"), getter(201, &lone_key)];
     let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
         &[(class.id, &class)],
         &pool,
         "utf8_names",
@@ -484,8 +489,10 @@ fn member_names_carry_the_compilers_utf8_fact() {
     );
     let members = &records[0].globals[0];
     let plain = members.find("i32 200, i32 0, i8 1, i8 4, i16 -1");
-    let wtf8 = members.find("i32 201, i32 0, i8 1, i8 0, i16 -1");
-    assert!(plain.is_some() && wtf8.is_some(), "{members}");
+    let diagnostic_literal = members.find("i32 201, i32 0, i8 1, i8 4, i16 -1");
+    assert!(plain.is_some() && diagnostic_literal.is_some(), "{members}");
+    assert!(members.contains(&format!("ptr @{}", pool.entry(literal).bytes_global)));
+    assert!(!members.contains(&format!("ptr @{}", pool.entry(lone).bytes_global)));
 }
 
 /// The runtime dedupes a pooled declaration's member names by pointer
@@ -519,6 +526,7 @@ fn equal_member_names_of_a_declaration_share_one_emitted_global() {
             pool.intern(n);
         }
         let records = super::class_declarations::class_declaration_globals(
+            &perry_hir::Module::new("class_declarations.ts"),
             &[(class.id, &class)],
             &pool,
             prefix,

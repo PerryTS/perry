@@ -497,6 +497,15 @@ pub(crate) struct RootedAcc {
 }
 
 impl RootedAcc {
+    /// `true` when the accumulator lives in a root slot: every [`advance`]
+    /// stores its result there, so arms of a branch may each advance it and
+    /// the merge reads the slot.
+    ///
+    /// [`advance`]: RootedAcc::advance
+    pub(crate) fn is_rooted(&self) -> bool {
+        self.slot.is_some()
+    }
+
     /// The accumulator as a call argument.
     ///
     /// `pub(crate)` for the one shape that needs it: a call whose argument 0 is

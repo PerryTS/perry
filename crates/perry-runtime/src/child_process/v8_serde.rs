@@ -584,7 +584,7 @@ impl Serializer {
 
     /// Walk an object's own enumerable fields allocation-free, mirroring the
     /// JSON stringifier: names live in `keys_array`, values are positional
-    /// (inline slots up to `max(field_count, 8)`, the rest via overflow).
+    /// (inline slots up to the object's allocation, the rest via overflow).
     unsafe fn write_object_fields(&mut self, obj: *const ObjectHeader) -> u64 {
         let keys_arr_view = crate::object::object_keys(obj);
         let keys_arr = keys_arr_view.arr();
@@ -592,8 +592,7 @@ impl Serializer {
             return 0;
         }
         let keys_len = keys_arr_view.count();
-        let num_fields = crate::object::object_live_slot_count(obj);
-        let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+        let alloc_limit = crate::object::object_inline_capacity(obj);
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
         let fields_ptr =
             crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;

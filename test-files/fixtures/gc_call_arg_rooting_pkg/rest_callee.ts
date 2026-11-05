@@ -1,5 +1,5 @@
 // #7154 fixture: the CROSS-MODULE callee with a trailing `...rest` for
-// `test-files/test_gap_gc_rest_argument_rooting.ts`.
+// `test-parity/language/function/test_gap_gc_rest_argument_rooting.ts`.
 //
 // It lives in its own module for the same reason
 // `gc_call_arg_rooting_pkg/callee.ts` does — the defect under test is in

@@ -712,7 +712,7 @@ unsafe fn record_class_object_template(
     let count = d.logical_key_count as usize;
     if final_shape == LayoutWord(0)
         || d.hole_count != 0
-        || d.rep != crate::object::field_rep::REP_ANY
+        || d.rep != crate::object::field_rep::REP_ANY || d.has_tail_constfn()
         || d.live_inline_slot_count < d.logical_key_count
         || count > (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR)
         || count >= 1 << 16
@@ -871,7 +871,7 @@ pub(crate) unsafe fn class_object_add_internal(
         if to == LayoutWord(0)
             || to == from
             || d.hole_count != 0
-            || d.rep != crate::object::field_rep::REP_ANY
+            || d.rep != crate::object::field_rep::REP_ANY || d.has_tail_constfn()
             || d.live_inline_slot_count <= slot
             || !crate::string::js_string_key_matches_bytes(d.keys_view().get(slot), bytes)
             || *fields.add(slot as usize) != value.get_nanbox_f64().to_bits()
@@ -1077,7 +1077,7 @@ pub(crate) unsafe fn record_prototype_template(
     if final_shape == LayoutWord(0)
         || d.proto_id != proto_id
         || d.hole_count != 0
-        || d.rep != crate::object::field_rep::REP_ANY
+        || d.rep != crate::object::field_rep::REP_ANY || d.has_tail_constfn()
         || d.live_inline_slot_count < d.logical_key_count
         || count > (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR)
         || meta.is_null()

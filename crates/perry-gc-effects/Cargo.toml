@@ -34,6 +34,9 @@ analyzer = [
     "dep:regex",
     "dep:walkdir",
     "dep:llvm-sys",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:perry-runtime-manifest",
 ]
 
 [dependencies]
@@ -45,6 +48,10 @@ rustc-demangle = { version = "0.1", optional = true }
 perry-perex = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
+# Effect declarations of realm natives (the `effects` check).
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+perry-runtime-manifest = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 llvm-sys = { version = "221", optional = true }

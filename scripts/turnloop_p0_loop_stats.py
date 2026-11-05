@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """turnloop P0 loop-statistics gate.
 
-Compiles each `test-files/test_turnloop_p0_*.ts` probe with a prebuilt Perry
+Compiles each `test-parity/node-suite/timers/test_turnloop_p0_*.ts` probe with a prebuilt Perry
 compiler and archives, checks its stdout against the pinned Node oracle, and
 reads the `PERRY_LOOP_STATS=1` exit line to assert that the primary agent
 reached its deadlines by waiting, not spinning:
@@ -74,7 +74,7 @@ def main() -> int:
     failures = []
     with tempfile.TemporaryDirectory(prefix="perry-turnloop-p0-") as out:
         for probe, (expiries, min_turns) in PROBES.items():
-            source = ROOT / f"test-files/test_turnloop_p0_{probe}.ts"
+            source = ROOT / f"test-parity/node-suite/timers/test_turnloop_p0_{probe}.ts"
             binary = Path(out) / probe
             compiled = subprocess.run(
                 [str(perry), str(source), "--no-cache", "-o", str(binary)],

@@ -478,13 +478,20 @@ fn lower_property_site(
     // receiver tests the receiver layout's colour bit and loads the colour
     // slot (`expr/layout_read.rs`); everything else, and every miss, is the
     // site below.
+    // A read with a class family arm keeps it: the arm's hit bypasses the 2c
+    // arm, so the read neither heads nor follows a receiver run
+    // (`layout_read::RecvRun`). Any other read of a run receiver with a
+    // coloured key is the run's head or follower.
     let family = global_reference
         .is_none()
         .then(|| crate::expr::class_family_read::begin(ctx, object, property, &obj_box))
         .flatten();
+    let run_receiver = crate::expr::layout_read::run_receiver(ctx, object)
+        .filter(|_| family.is_none())
+        .filter(|_| crate::expr::layout_read::admitted(ctx, property).is_some());
     let arm = if global_reference.is_none() {
         let bits = ctx.block().bitcast_double_to_i64(&obj_box);
-        crate::expr::layout_read::begin(ctx, &bits, property)
+        crate::expr::layout_read::begin(ctx, &bits, property, run_receiver)
     } else {
         None
     };
@@ -506,7 +513,7 @@ fn lower_property_site(
 }
 
 /// [`lower_property_site`] after the receiver is evaluated: the ordinary site.
-fn lower_property_site_tail(
+pub(crate) fn lower_property_site_tail(
     ctx: &mut FnCtx<'_>,
     property: &str,
     global_reference: Option<bool>,

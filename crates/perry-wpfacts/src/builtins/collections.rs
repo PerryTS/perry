@@ -1,6 +1,7 @@
 //! Builtin summaries: the function protocol, iterators, arrays and other
 //! builtin data structures.
 
+use super::effects;
 use super::*;
 
 // ------------------------------------------------- function protocol
@@ -409,7 +410,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     m.cons(
                         r,
                         Cons::Load {
-                            key: Key::Any,
+                            key: Key::any(),
                             dst: inner,
                         },
                     );
@@ -459,14 +460,12 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
 /// the builtin's result (a constructor other than `%Array%` only takes the
 /// verdicts that need an Array away, `derive::exact_array`).
 pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) {
-    let sc = match m.tmpls[tm as usize].species {
-        Some(n) => n,
-        None => {
-            let n = m.node_l("array-species");
-            m.tmpls[tm as usize].species = Some(n);
-            n
-        }
-    };
+    let cn = species_ctor(m, src);
+    species_link(m, tm, cn);
+}
+
+/// The receivers' `constructor`, read off the receivers in `src`.
+fn species_ctor(m: &mut Model, src: NodeId) -> NodeId {
     let k = m.atom("constructor");
     let cn = m.node_l("array-species-constructor");
     m.cons(
@@ -476,6 +475,29 @@ pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) {
             dst: cn,
         },
     );
+    cn
+}
+
+/// Template `tm`'s species node takes constructor node `cn` and its
+/// `@@species`. Only this links out of a constructor node, so an edge
+/// already there means the link is made (the same load twice adds nothing).
+fn species_link(m: &mut Model, tm: TmplId, cn: NodeId) {
+    let sc = match m.tmpls[tm as usize].species {
+        Some(n) => n,
+        None => {
+            let n = m.node_l("array-species");
+            m.tmpls[tm as usize].species = Some(n);
+            n
+        }
+    };
+    let node = &m.nodes[cn as usize];
+    let linked = match &node.succ_set {
+        Some(s) => s.contains(&sc),
+        None => node.succ.contains(&sc),
+    };
+    if linked {
+        return;
+    }
     m.edge(cn, sc);
     let sp = m.atom("@@__perry_wk_species");
     m.cons(
@@ -488,12 +510,41 @@ pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) {
 }
 
 /// `out` (a call's array) is made from receiver `t` with ArraySpeciesCreate
-/// (`array_species`).
+/// (`array_species`). What `t.constructor` reads depends on `t` alone: one
+/// constructor node per receiver token, made on first use, linked to each
+/// call's template.
 fn species_from(m: &mut Model, out: Tok, t: Tok) {
     let tm = m.tmpl_of(out).expect("site template");
-    let src = m.node_l("array-species-receiver");
-    m.add_tok(src, t);
-    array_species(m, tm, src);
+    let cn = match m.species_ctor.get(&t) {
+        Some(&n) => n,
+        None => {
+            let src = m.node_l("array-species-receiver");
+            m.add_tok(src, t);
+            let cn = species_ctor(m, src);
+            m.species_ctor.insert(t, cn);
+            cn
+        }
+    };
+    species_link(m, tm, cn);
+}
+
+/// What iterating `t` yields: each index below the length, `undefined` at
+/// a hole (`Model::hole`). It depends on `t` alone: one node per token,
+/// made by the first call that iterates `t`; each call reads it through
+/// its own edge.
+fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
+    if let Some(&n) = m.arr_iterated.get(&t) {
+        return n;
+    }
+    let n = m.node_l("arr-iterated");
+    m.arr_iterated.insert(t, n);
+    let elems = m.field_any(t);
+    m.edge(elems, n);
+    if m.is_arr(t) {
+        let h = m.hole(t);
+        m.edge(h, n);
+    }
+    n
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
@@ -510,14 +561,6 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
-    // What its iterators yield: each index below the length, `undefined`
-    // at a hole (`Model::hole`).
-    let iterated = m.node_l("arr-iterated");
-    m.edge(elems, iterated);
-    if m.is_arr(t) {
-        let h = m.hole(t);
-        m.edge(h, iterated);
-    }
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
@@ -529,6 +572,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     match name {
         // `[Symbol.iterator]()`: a fresh iterator over the elements.
         Some(WK_ITERATOR) => {
+            let iterated = arr_iterated(m, t);
             let it = iter_over(m, call, iterated);
             ret_tok(m, call, it);
         }
@@ -555,7 +599,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
         // on every iterable).
         Some("next" | "return" | "throw") => {}
-        Some("push" | "unshift") => {
+        Some("unshift") => {
             for &a in &c.args {
                 m.edge(a, elems);
             }
@@ -563,7 +607,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 m.cons(
                     s,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: elems,
                     },
                 );
@@ -593,7 +637,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_tok(m, call, t);
         }
         // In place: the receiver itself.
-        Some("reverse" | "copyWithin") => ret_tok(m, call, t),
+        Some("copyWithin") => ret_tok(m, call, t),
         // A new array, born at this call site, holding the receiver's
         // elements and what the call adds. It is not the receiver: a write
         // into the copy never reaches the source (`args.slice()` then
@@ -618,7 +662,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     m.cons(
                         a,
                         Cons::Load {
-                            key: Key::Any,
+                            key: Key::any(),
                             dst: ofa,
                         },
                     );
@@ -628,14 +672,16 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 m.cons(
                     elems,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: ofa,
                     },
                 );
             }
             ret_tok(m, call, out);
         }
-        Some("sort" | "toSorted") => {
+        // toSorted has no interpreted declaration; its comparator's result
+        // is converted (ToNumber).
+        Some("toSorted") => {
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
@@ -647,18 +693,20 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     },
                 );
             }
-            if name == Some("toSorted") {
-                let out = site_tmpl(m, call, "Array");
-                let ofa = m.field_any(out);
-                m.edge(elems, ofa);
-                ret_tok(m, call, out);
-            } else {
-                ret_tok(m, call, t);
-            }
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            ret_tok(m, call, out);
         }
+        // `forEach` is declared, kept here: its declaration passes the
+        // callback a Map/Set receiver's key as the second argument
+        // (`prim(num) | elems(this)`), an array's is a number. `map` and
+        // `filter` are declared, kept here: the runtime builds their result
+        // by ArraySpeciesCreate (`js_array_map` / `js_array_filter` read
+        // the receiver's `constructor` and `@@species`); the interpreter
+        // refuses their species declarations.
         Some(
-            "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex" | "findLast"
-            | "findLastIndex" | "flatMap",
+            "forEach" | "map" | "filter" | "findIndex" | "findLast" | "findLastIndex" | "flatMap",
         ) => {
             let Some(&cb) = c.args.first() else {
                 return;
@@ -674,7 +722,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                         m.cons(
                             r,
                             Cons::Load {
-                                key: Key::Any,
+                                key: Key::any(),
                                 dst: ofa,
                             },
                         );
@@ -689,12 +737,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     m.edge(elems, ofa);
                     ret_tok(m, call, out);
                 }
-                Some("find" | "findLast") => {
+                Some("findLast") => {
                     m.edge(elems, c.ret);
                     ret_prim(m, call, prim::UNDEF);
                 }
                 Some("forEach") => ret_prim(m, call, prim::UNDEF),
-                Some("some" | "every") => ret_prim(m, call, prim::BOOL),
                 _ => ret_prim(m, call, prim::NUM),
             }
         }
@@ -711,10 +758,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             m.edge(r, acc);
             m.edge(acc, c.ret);
         }
-        Some("indexOf" | "lastIndexOf" | "includes" | "findIndexOf") => {
+        Some("lastIndexOf" | "findIndexOf") => {
             ret_prim(m, call, prim::NUM | prim::BOOL);
         }
-        Some("join" | "toString" | "toLocaleString") => {
+        Some("toString" | "toLocaleString") => {
             let why = m.reason("array join (element ToString)");
             m.cons(
                 elems,
@@ -731,27 +778,34 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_tok(m, call, it);
         }
         Some("values") => {
+            let iterated = arr_iterated(m, t);
             let it = iter_over(m, call, iterated);
             ret_tok(m, call, it);
         }
         Some("entries") => {
+            let iterated = arr_iterated(m, t);
             let pairs = entry_pairs(m, call, iterated, true);
             let it = iter_over(m, call, pairs);
             ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        // A name `Array.prototype` does not define is no method of the
-        // array: `Object.prototype`'s run through the chain, any other is
-        // absent (`split`, `valueOf` through ToPrimitive, a class's method
-        // name on a value that may also be an array).
-        Some(n) => undescribed_method(
-            m,
-            Family::Array,
-            t,
-            n,
-            call,
-            &format!("argument of unmodeled array method {n}"),
-        ),
+        // A method the runtime declares the effects of (and no arm above
+        // models): its declaration runs (`effects::run_native`). A name
+        // `Array.prototype` does not define is no method of the array:
+        // `Object.prototype`'s run through the chain, any other is absent
+        // (`split`, `valueOf` through ToPrimitive, a class's method name on
+        // a value that may also be an array).
+        Some(n) => match effects::declared(Family::Array, n) {
+            Some(e) => effects::run_native(m, e, t, call),
+            None => undescribed_method(
+                m,
+                Family::Array,
+                t,
+                n,
+                call,
+                &format!("argument of unmodeled array method {n}"),
+            ),
+        },
     }
 }
 

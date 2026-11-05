@@ -189,7 +189,53 @@ fn known_symbol_members_are_birth_keys_after_the_strings() {
     );
     assert_eq!(shape.key_count, 6);
     // Method slots carry a ConstFn lane; the accessor slot (4) does not.
-    let mut lanes: Vec<u8> = shape.constfn.iter().map(|c| c.slot).collect();
+    let mut lanes: Vec<u32> = shape.constfn.iter().map(|c| c.slot).collect();
     lanes.sort();
     assert_eq!(lanes, vec![1, 2, 3, 5]);
+}
+#[test]
+fn known_symbol_member_past_slot_31_gets_a_constfn_birth() {
+    let methods: String = (0..40).map(|i| format!("m{i}() {{ return {i}; }} ")).collect();
+    let hir = module(
+        "/sym40",
+        &format!("class C {{ {methods} *[Symbol.iterator]() {{ yield 1; }} }}"),
+        310,
+    );
+    let ids = hir.classes.iter().map(|c| (c.name.clone(), c.id)).collect();
+    let result = collect(&hir, "sym40", &ids, &ProgramLayouts::default());
+    assert_eq!(result.len(), 1);
+    let shape = &result[0].shape;
+    // Slot 0 `constructor`, 1..=40 the string methods, 41 `[Symbol.iterator]`.
+    let slots: Vec<u32> = shape.constfn.iter().map(|e| e.slot).collect();
+    assert_eq!(slots, (1..=41).collect::<Vec<u32>>());
+    let special: u64 = (1..32).fold(0, |rep, slot| rep | (3u64 << (2 * slot)));
+    assert_eq!(shape.rep, special);
+}
+#[test]
+fn methods_past_slot_31_get_constfn_births() {
+    let methods: String = (0..100).map(|i| format!("m{i}() {{ return {i}; }} ")).collect();
+    let base = module(
+        "/base",
+        "export class Base { constructor() { this.base = 1; } }",
+        100,
+    );
+    let leaf = module(
+        "/leaf",
+        &format!("import {{Base}} from '/base'; class Leaf extends Base {{ constructor() {{ super(); this.leaf = 2; }} {methods} }}"),
+        200,
+    );
+    let layouts = compute(
+        [("/base", &base), ("/leaf", &leaf)].into_iter(),
+        true,
+        &BTreeMap::new(),
+    );
+    let result = births(&leaf, &layouts);
+    assert_eq!(result.len(), 1);
+    let shape = &result[0].shape;
+    // Slot 0 is `constructor`, slots 1..=100 the methods: every one has a body.
+    let slots: Vec<u32> = shape.constfn.iter().map(|e| e.slot).collect();
+    assert_eq!(slots, (1..=100).collect::<Vec<u32>>());
+    // Word 0 carries the lanes 1..32 and nothing past it.
+    let special: u64 = (1..32).fold(0, |rep, slot| rep | (3u64 << (2 * slot)));
+    assert_eq!(shape.rep, special);
 }

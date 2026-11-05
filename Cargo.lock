@@ -5109,7 +5109,9 @@ dependencies = [
  "perry-gc-effects",
  "perry-hir",
  "perry-parser",
+ "perry-realm-table",
  "perry-runtime-manifest",
+ "perry-transform",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -5461,8 +5463,10 @@ dependencies = [
  "llvm-sys",
  "object 0.37.3",
  "perry-perex",
+ "perry-runtime-manifest",
  "regex",
  "rustc-demangle",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
@@ -5541,6 +5545,16 @@ version = "0.5.1663"
 dependencies = [
  "perex",
  "regex",
+]
+
+[[package]]
+name = "perry-realm-table"
+version = "0.5.1663"
+dependencies = [
+ "perry-hir",
+ "perry-runtime-manifest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6022,6 +6036,7 @@ version = "0.5.1663"
 dependencies = [
  "perry-hir",
  "perry-parser",
+ "perry-realm-table",
  "perry-transform",
 ]
 

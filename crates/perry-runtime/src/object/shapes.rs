@@ -275,6 +275,66 @@ impl ShapeDescriptor {
         }
     }
 
+    /// Is `slot` a ConstFn lane (see `ShapeRecord::lane_is_constfn`)?
+    #[inline]
+    pub(crate) fn lane_is_constfn(&self, slot: u32) -> bool {
+        if slot < super::field_rep::REP_SLOTS {
+            self.special_constfn_mask & (1u32 << slot) != 0
+        } else {
+            shapes_store::tail_constfn_slot(self.constfn_infos(), slot)
+        }
+    }
+
+    /// The 2-bit lane of `slot` (any slot, no cap): word 0 below 32, and
+    /// SPECIAL exactly for a body-list entry past it (no tail producer of an
+    /// F64 lane exists yet).
+    #[inline]
+    pub(crate) fn lane(&self, slot: u32) -> u64 {
+        if slot < super::field_rep::REP_SLOTS {
+            super::field_rep::slot_rep(self.rep, slot)
+        } else if self.lane_is_constfn(slot) {
+            super::field_rep::REP_SPECIAL
+        } else {
+            super::field_rep::REP_ANY
+        }
+    }
+
+    /// A ConstFn lane at slot >= 32 exists.
+    #[inline(never)]
+    pub(crate) fn has_tail_constfn(&self) -> bool {
+        shapes_store::has_tail_infos(self.constfn_infos())
+    }
+
+    /// Any ConstFn lane at all (word 0 or tail).
+    #[inline]
+    pub(crate) fn has_constfn_lane(&self) -> bool {
+        self.special_constfn_mask != 0 || self.has_tail_constfn()
+    }
+
+    /// Learned deprecation word `word` past word 0 (see
+    /// `ShapeRecord::tail_deprecation`).
+    pub(crate) fn tail_deprecation(&self, word: usize) -> u32 {
+        if self.extras == 0 {
+            return 0;
+        }
+        // SAFETY: a live descriptor borrows the record-owned extension.
+        let extras = unsafe { &*(self.extras as usize as *const shapes_store::ShapeExtras) };
+        extras
+            .tail_to_any
+            .get(word)
+            .map_or(0, |w| w.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    /// Any learned deprecation, word 0 or tail.
+    #[inline(never)]
+    pub(crate) fn deprecation_pending(&self) -> bool {
+        self.deprecation_targets() != (0, 0) || self.tail_deprecation_any()
+    }
+
+    fn tail_deprecation_any(&self) -> bool {
+        (0..shapes_store::tail_words(self.constfn_infos())).any(|w| self.tail_deprecation(w) != 0)
+    }
+
     #[inline]
     pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
         if self.extras == 0 {
@@ -570,12 +630,38 @@ impl ShapeRecordRef {
     pub(crate) fn constfn_info(self, slot: u32) -> Option<u64> {
         // SAFETY: a live slab record (type docs).
         unsafe {
-            (*self.0.as_ptr())
-                .constfn_infos()
-                .iter()
-                .find(|entry| u32::from(entry.slot) == slot)
-                .map(|entry| entry.info)
+            let infos = (*self.0.as_ptr()).constfn_infos();
+            infos
+                .binary_search_by_key(&slot, |entry| entry.slot)
+                .ok()
+                .map(|i| infos[i].info)
         }
+    }
+
+    /// The 2-bit lane of `slot` (any slot, no cap); see `ShapeDescriptor::lane`.
+    #[inline]
+    pub(crate) fn lane(self, slot: u32) -> u64 {
+        if slot < super::field_rep::REP_SLOTS {
+            super::field_rep::slot_rep(self.rep(), slot)
+        } else if self.lane_is_constfn(slot) {
+            super::field_rep::REP_SPECIAL
+        } else {
+            super::field_rep::REP_ANY
+        }
+    }
+
+    /// A ConstFn lane at slot >= 32 exists.
+    #[inline]
+    pub(crate) fn has_tail_constfn(self) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).has_tail_constfn() }
+    }
+
+    /// Is `slot` a ConstFn lane of this shape (any slot, no cap)?
+    #[inline]
+    pub(crate) fn lane_is_constfn(self, slot: u32) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).lane_is_constfn(slot) }
     }
 
     #[inline]
@@ -587,7 +673,7 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn has_special_deprecation(self) -> bool {
         // SAFETY: a live slab record (type docs).
-        unsafe { (*self.0.as_ptr()).deprecation_targets().1 != 0 }
+        unsafe { (*self.0.as_ptr()).deprecation_pending() }
     }
 
     /// Mark `slot` deprecated (`F64` -> `10`, `field_rep`): the lineage has
@@ -2105,7 +2191,7 @@ fn shape_descriptor_intern_with_special_mode(
 ) -> Result<LayoutWord, ShapeDescriptorError> {
     let shape_keys: ShapeKeys = keys.into();
     let keys = shape_keys.arr();
-    let Some(mask) = shapes_store::constfn_mask(infos) else {
+    let Some(mask) = shapes_store::constfn_mask(infos, live_inline_slot_count) else {
         return Err(ShapeDescriptorError::InvalidFacts);
     };
     if !shapes_store::brands_are_sorted(brands) {
@@ -2119,7 +2205,7 @@ fn shape_descriptor_intern_with_special_mode(
     // A requested ConstFn id is only legal through the body-aware static
     // birth/seed entry points; generic dynamic callers fail closed.
     if mask != super::field_rep::special_lane_slots(rep)
-        || (requested.is_some() && mask != 0 && !static_constfn)
+        || (requested.is_some() && !infos.is_empty() && !static_constfn)
     {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
@@ -3624,9 +3710,7 @@ fn region_loop_pack(
         // numeric writes to other lanes and read-only SPECIAL keys are safe.
         if !spilled
             && stored_mask & (1 << i) != 0
-            && n_at < super::field_rep::REP_SLOTS as usize
-            && super::field_rep::slot_rep(descriptor.rep, n_at as u32)
-                == super::field_rep::REP_SPECIAL
+            && descriptor.lane(n_at as u32) == super::field_rep::REP_SPECIAL
         {
             return Err(Rep);
         }
@@ -3652,8 +3736,7 @@ fn region_loop_pack(
         }
         if !spilled
             && boxed_mask & (1 << i) != 0
-            && (n_at as u32) < super::field_rep::REP_SLOTS
-            && super::field_rep::slot_rep(descriptor.rep, n_at as u32) != super::field_rep::REP_ANY
+            && descriptor.lane(n_at as u32) != super::field_rep::REP_ANY
         {
             return Err(F64Stored);
         }
@@ -4709,7 +4792,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
         return false;
     };
     if current.hole_count != 0
-        || current.deprecation_targets() != (0, 0)
+        || current.deprecation_pending()
         || super::field_rep::has_deprecated(current.rep)
     {
         return false;
@@ -4718,8 +4801,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     let read = |slot: u32| std::ptr::read(base.add(slot as usize * 8) as *const u64);
     let lanes = current
         .live_inline_slot_count
-        .min(current.logical_key_count)
-        .min(super::field_rep::REP_SLOTS);
+        .min(current.logical_key_count);
     let mut infos: Vec<shapes_store::ConstFnSlotInfo> = Vec::new();
     let mut added = false;
     for slot in 0..lanes {
@@ -4735,10 +4817,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
                 if super::field_rep::slot_rep(current.rep, slot) == super::field_rep::REP_ANY
                     && claims(slot, bits) =>
             {
-                infos.push(shapes_store::ConstFnSlotInfo {
-                    slot: slot as u8,
-                    info,
-                });
+                infos.push(shapes_store::ConstFnSlotInfo { slot, info });
                 added = true;
             }
             _ => {}
@@ -4749,14 +4828,14 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     }
     // The other lanes keep their representation; every ConstFn lane is SPECIAL.
     let mut rep = current.rep;
-    for slot in 0..lanes {
+    for slot in 0..lanes.min(super::field_rep::REP_SLOTS) {
         if super::field_rep::slot_rep(rep, slot) == super::field_rep::REP_SPECIAL {
             rep = super::field_rep::with_slot_rep(rep, slot, super::field_rep::REP_ANY);
         }
     }
-    let rep = infos.iter().fold(rep, |rep, i| {
-        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
-    });
+    let rep = infos
+        .iter()
+        .fold(rep, |rep, i| super::field_rep::with_special_lane(rep, i.slot));
     let keys = current.keys as usize as *const ArrayHeader;
     let summary = receiver_extra_summary(obj)
         | if keys.is_null() {
@@ -4813,10 +4892,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
     let Some(current) = object_shape_descriptor(obj) else {
         return transition_object_shape_semantics(obj);
     };
-    if current.special_constfn_mask == 0
-        || current.hole_count != 0
-        || current.deprecation_targets() != (0, 0)
-    {
+    if !current.has_constfn_lane() || current.hole_count != 0 || current.deprecation_pending() {
         return transition_object_shape_semantics(obj);
     }
     let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
@@ -4825,9 +4901,9 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         .iter()
         .copied()
         .filter(|i| {
-            u32::from(i.slot) < current.live_inline_slot_count
+            i.slot < current.live_inline_slot_count
                 && super::field_rep_store::constfn_store_info(std::ptr::read(
-                    base.add(usize::from(i.slot) * 8) as *const u64,
+                    base.add(i.slot as usize * 8) as *const u64,
                 )) == Some(i.info)
         })
         .collect();
@@ -4835,7 +4911,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         return transition_object_shape_semantics(obj);
     }
     let rep = infos.iter().fold(super::field_rep::REP_ANY, |rep, i| {
-        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
+        super::field_rep::with_special_lane(rep, i.slot)
     });
     let keys = current.keys as usize as *const ArrayHeader;
     let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5286,7 +5362,7 @@ pub(crate) fn shape_is_keyless_birth_of(
     // SAFETY: a present record of this agent, read immediately.
     unsafe {
         let r = &*record;
-        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.special_constfn_mask() == 0
+        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.constfn_infos().is_empty()
     }
 }
 
@@ -5350,7 +5426,7 @@ fn filled_birth(
             && (attributed || r.semantic_generation == 0)
             && r.hole_count == 0
             && (attributed || r.summary() == 0)
-            && r.special_constfn_mask() == 0
+            && r.constfn_infos().is_empty()
             && r.keys != 0
     }
 }

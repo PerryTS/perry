@@ -9,7 +9,9 @@ pub(crate) fn lower_symbol_property_get_ic(
     obj_box: &str,
     sym_box: &str,
 ) -> String {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple)
+    {
         return keyed_slow(ctx, obj_box, sym_box, "0", true);
     }
 
@@ -76,7 +78,13 @@ fn emit_keyed_probe_impl(
     can_memoize: bool,
     slow: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
 ) -> String {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+    // Every operand is a NaN-boxed word or the agent's directory, and the
+    // memo is 24 `u64` words (`KeyedSiteMemo`) on every target; wasm32 calls
+    // reach the leaves through their real wasm32 signatures
+    // (`wasm32::abi_adapt`). Other 32-bit targets have no lowering yet.
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple)
+    {
         return slow(ctx, "null");
     }
     let dir = crate::expr::agent_ptr::emit_agent_ptr_or(

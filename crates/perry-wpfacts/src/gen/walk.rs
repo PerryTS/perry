@@ -603,7 +603,9 @@ impl<'a> Gen<'a> {
             self.stmts(&fx, &body);
             return;
         }
+        let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.stmts(&fx, &f.body);
+        self.own_helper_finish(fxi, own);
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
@@ -713,7 +715,7 @@ impl<'a> Gen<'a> {
                     self.m.cons(
                         thisn,
                         Cons::Store {
-                            key: Key::Any,
+                            key: Key::any(),
                             src: v,
                             site,
                         },
@@ -997,12 +999,15 @@ impl<'a> Gen<'a> {
                 then_branch,
                 else_branch,
             } => {
+                let plan = self.own_guard_plan(condition, Region::Stmts(then_branch));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let own = self.own_guard_arm(plan, t);
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
                 self.stmts(&then_fx, then_branch);
+                self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
@@ -1048,7 +1053,7 @@ impl<'a> Gen<'a> {
             | Stmt::ReleaseBoxes(_) => {}
             Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
-                    let n = self.local(fx.module, *id);
+                    let n = self.dead_zone(fx.module, *id);
                     self.m.add_prim(n, prim::UNDEF);
                 }
             }

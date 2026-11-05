@@ -30,7 +30,7 @@ impl<'a> Gen<'a> {
             // DECISIONS 162: the callers' argument, stored by their units.
             _ if self.cell_flow_toks.contains(&t) && self.m.own_param_members(t).is_some() => true,
             // A global builtin is the same object in every unit (§17.16 (a)).
-            TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) if self.stand_in_cc.contains_key(&tm) => {
                 !self
                     .unit_in
@@ -91,7 +91,7 @@ impl<'a> Gen<'a> {
     /// stand-in, a builtin, an unknown value.
     fn forwarded_tok(&self, t: Tok) -> bool {
         match self.m.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) => {
                 self.stand_in_cc.contains_key(&tm)
                     && !self

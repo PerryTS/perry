@@ -1497,6 +1497,49 @@ pub extern "C-unwind" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader
 }
 
 fn js_iterator_to_array_impl(iter_f64: f64) -> *mut ArrayHeader {
+    drain_iterator_into(std::ptr::null_mut(), iter_f64)
+}
+
+/// `js_array_spread_append_iterator(dest, iterator)`: the drain of a spread
+/// operand whose `[Symbol.iterator]()` the call site already called (a class
+/// instance whose prototype chain the site proved holds the declared
+/// generator member, `proto_constants::emit_iterator_call`). GetIterator's
+/// remaining step (the result must be an object), then IteratorStepValue until
+/// done, each value appended to `dest` in place. Returns the (possibly moved)
+/// `dest`.
+#[cfg(panic = "abort")]
+#[no_mangle]
+pub extern "C" fn js_array_spread_append_iterator(
+    dest: *mut ArrayHeader,
+    iter: f64,
+) -> *mut ArrayHeader {
+    spread_append_iterator(dest, iter)
+}
+
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_array_spread_append_iterator(
+    dest: *mut ArrayHeader,
+    iter: f64,
+) -> *mut ArrayHeader {
+    spread_append_iterator(dest, iter)
+}
+
+fn spread_append_iterator(dest: *mut ArrayHeader, iter: f64) -> *mut ArrayHeader {
+    if !object_like_iterator_result(iter) {
+        let msg = b"Result of the Symbol.iterator method is not an object";
+        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(msg_str);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    drain_iterator_into(dest, iter)
+}
+
+/// Append every value `iter` produces to `dest` (IteratorStepValue until
+/// done) and return the (possibly moved) `dest`; a null `dest` drains into a
+/// fresh array. The one drain behind `js_iterator_to_array` and
+/// `js_array_spread_append_iterator`.
+fn drain_iterator_into(dest: *mut ArrayHeader, iter_f64: f64) -> *mut ArrayHeader {
     use crate::value::js_nanbox_get_pointer;
 
     // #7475: EVERY value this loop carries across a `.next()` call is a
@@ -1531,7 +1574,7 @@ fn js_iterator_to_array_impl(iter_f64: f64) -> *mut ArrayHeader {
     // so the null check reads back through the handle rather than gating it.
     let iter_h = scope.root_nanbox_f64(iter_f64);
 
-    let arr = js_array_alloc(8); // start with capacity 8
+    let arr = if dest.is_null() { js_array_alloc(8) } else { dest }; // a fresh array starts with capacity 8
     let result_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64));
     let read_result = || js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
 

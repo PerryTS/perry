@@ -50,7 +50,7 @@ pub struct TypedMasks {
 /// resolves it to the one `JsFunctionInfo` for that body in every agent.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ConstFnBirth {
-    pub slot: u8,
+    pub slot: u32,
     pub symbol: String,
 }
 
@@ -165,7 +165,15 @@ impl BirthShape {
             eat(&[4]);
             eat(&(self.constfn.len() as u32).to_le_bytes());
             for entry in &self.constfn {
-                eat(&[entry.slot]);
+                // One byte below 255 keeps every existing content hash (and so
+                // every static id); a larger slot escapes through 255.
+                match u8::try_from(entry.slot) {
+                    Ok(b) if b != 255 => eat(&[b]),
+                    _ => {
+                        eat(&[255]);
+                        eat(&entry.slot.to_le_bytes());
+                    }
+                }
                 eat(&(entry.symbol.len() as u32).to_le_bytes());
                 eat(entry.symbol.as_bytes());
             }
@@ -710,8 +718,8 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
         let mut entries = Vec::new();
         for text in bodies.split(',') {
             let (slot, encoded) = text.split_once('@')?;
-            let slot: u8 = slot.parse().ok()?;
-            if slot >= 32 || encoded.is_empty() || encoded.len() % 2 != 0 {
+            let slot: u32 = slot.parse().ok()?;
+            if slot >= key_count || encoded.is_empty() || encoded.len() % 2 != 0 {
                 return None;
             }
             if entries
@@ -731,7 +739,8 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
             {
                 return None;
             }
-            if (rep >> (u32::from(slot) * 2)) & 3 != 3 {
+            // A body past word 0 has no bit in `rep`: the entry is its lane.
+            if slot < 32 && (rep >> (slot * 2)) & 3 != 3 {
                 return None;
             }
             entries.push(ConstFnBirth { slot, symbol });
@@ -746,6 +755,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
     }
     let covered = constfn
         .iter()
+        .filter(|entry| entry.slot < 32)
         .fold(0u32, |mask, entry| mask | (1 << entry.slot));
     if special != covered {
         return None;
@@ -866,6 +876,7 @@ pub(crate) fn compatible_final_layouts(
                 let ordinary_rep = shape
                     .constfn
                     .iter()
+                    .filter(|entry| entry.slot < 32)
                     .fold(shape.rep, |rep, entry| rep & !(3u64 << (2 * entry.slot)));
                 let ordinary_rep = if shape.private.is_empty() {
                     ordinary_rep
@@ -1042,4 +1053,49 @@ pub(crate) fn static_prototype_identity(cid: u32) -> Option<(u32, BirthShape)> {
 pub(crate) fn static_prototype_layout(cid: u32) -> Option<(u32, BirthShape)> {
     static_prototype_identity(cid)
         .map(|(id, shape)| (crate::layout_ordinals::static_word(id), shape))
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_content_ids: HashMap<BirthShape, u32>,
+    module_keys_class_ids: HashMap<String, u32>,
+    module_final_ids: HashMap<BirthShape, u32>,
+    module_static_ids: HashMap<String, (u32, BirthShape)>,
+    module_program_ids: ProgramClassShapeIds,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_content_ids: MODULE_CONTENT_IDS.with(|s| s.borrow().clone()),
+        module_keys_class_ids: MODULE_KEYS_CLASS_IDS.with(|s| s.borrow().clone()),
+        module_final_ids: MODULE_FINAL_IDS.with(|s| s.borrow().clone()),
+        module_static_ids: MODULE_STATIC_IDS.with(|s| s.borrow().clone()),
+        module_program_ids: MODULE_PROGRAM_IDS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CONTENT_IDS.with(|s| *s.borrow_mut() = self.module_content_ids.clone());
+        MODULE_KEYS_CLASS_IDS.with(|s| *s.borrow_mut() = self.module_keys_class_ids.clone());
+        MODULE_FINAL_IDS.with(|s| *s.borrow_mut() = self.module_final_ids.clone());
+        MODULE_STATIC_IDS.with(|s| *s.borrow_mut() = self.module_static_ids.clone());
+        MODULE_PROGRAM_IDS.with(|s| *s.borrow_mut() = self.module_program_ids.clone());
+        MODULE_FINAL_USES.with(|s| s.borrow_mut().clear());
+        MODULE_SEEDS.with(|s| s.borrow_mut().clear());
+    }
+}
+pub(crate) struct CallableEffects {
+    module_final_uses: BTreeMap<u32, BirthShape>,
+    module_seeds: BTreeMap<u32, BirthShape>,
+}
+pub(crate) fn take_callable_effects() -> CallableEffects {
+    CallableEffects {
+        module_final_uses: MODULE_FINAL_USES.with(|s| std::mem::take(&mut *s.borrow_mut())),
+        module_seeds: MODULE_SEEDS.with(|s| std::mem::take(&mut *s.borrow_mut())),
+    }
+}
+impl CallableEffects {
+    pub(crate) fn merge(self) {
+        MODULE_FINAL_USES.with(|s| s.borrow_mut().extend(self.module_final_uses));
+        MODULE_SEEDS.with(|s| s.borrow_mut().extend(self.module_seeds));
+    }
 }

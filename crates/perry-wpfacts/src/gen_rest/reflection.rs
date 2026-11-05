@@ -50,15 +50,22 @@ impl<'a> Gen<'a> {
                 );
                 let key = match key.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 // DECISIONS 217: a computed key is `o[k]`'s (`IdxLoad`: the
                 // key's values decide what it names). Under `__proto__`
                 // Object.prototype's getter runs on the receiver.
                 let out = match key {
-                    Key::Any => {
+                    Key::Any(_) => {
                         let dst = self.tmp("reflect.get");
-                        self.m.cons(t, Cons::IdxLoad { idx: k, dst });
+                        self.m.cons(
+                            t,
+                            Cons::IdxLoad {
+                                idx: k,
+                                dst,
+                                shape: 0,
+                            },
+                        );
                         dst
                     }
                     _ => self.load(t, key),
@@ -88,7 +95,7 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, receiver);
                 let key = match key.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 self.store(fx, t, key, v, "Reflect.set".into(), None, false);
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);

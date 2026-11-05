@@ -13,9 +13,11 @@ JavaScript semantics, `typescript/<feature>/` for TypeScript-only syntax,
 (`docs/src/testing/test-structure.md`). `test-files/test_gap_*` takes no new
 files; `lint` refuses one.
 
-Each of those trees is discovered recursively, so
-each `.ts` file there must be an independently runnable case; helpers go in a
-`fixtures/` directory, which the runner skips.
+Each subject tree is discovered recursively. Runnable formats are `.ts`,
+`.cts`, `.mts` and `test_*.cjs`; each must be independently runnable. Keep the
+extension when moving a case so Node retains its module mode. Case ids omit
+TypeScript-family suffixes but retain `.cjs`. Helpers go in a `fixtures/`
+directory, which the runner skips in every format.
 
 When Perry intentionally differs from Node, commit the Perry output as
 `test-parity/expected/<test-name>.txt`; add an `expected-exit` file when the

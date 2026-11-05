@@ -95,7 +95,8 @@ pub struct Summary {
     /// The `this` term (slot, absolute node or `NO_NODE`: an arrow, or a
     /// `this` a closure captured, keeps the shared node).
     pub this: NodeId,
-    pub seeds: Vec<(u32, Vec<Tok>, u16)>,
+    /// Value seeds and the independent own-test refutation marker.
+    pub seeds: Vec<(u32, Vec<Tok>, u16, bool)>,
     pub edges: Vec<(NodeId, NodeId)>,
     pub cons: Vec<(NodeId, Cons)>,
     /// (template call, the call with terms in place of nodes).
@@ -248,7 +249,10 @@ impl Model {
                 | Cons::Guard { dst, .. }
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
-                | Cons::NotUndefined { dst } => Some(dst),
+                | Cons::Falsy { dst }
+                | Cons::NotUndefined { dst }
+                // The gate of an own-only read runs where the read does.
+                | Cons::OwnGate { dst, .. } => Some(dst),
                 // Two outputs: both must be observation nodes.
                 Cons::Plus { str, num } => {
                     return !(self.nodes[str as usize].obs && self.nodes[num as usize].obs);
@@ -263,6 +267,7 @@ impl Model {
         let call = match *c {
             Cons::Call { call }
             | Cons::CallThis { call, .. }
+            | Cons::NativeThis { call, .. }
             | Cons::New { call }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
@@ -706,13 +711,14 @@ impl Model {
             self.sum.composed.insert((kmap[i as usize], g));
             self.activate(g, "composed");
         }
-        for &(slot, ref toks, prim) in &s.seeds {
+        for &(slot, ref toks, prim, refuted) in &s.seeds {
             // The summary's own slot is where the instance's seed came from
             // (the dump follows it to the ⊤'s origin).
             let saved = (self.cur_src, self.cur_why);
             self.cur_src = s.orig.get(slot as usize).copied().unwrap_or(NO_NODE);
             self.cur_why = u32::MAX;
             self.add(base[slot as usize], toks, prim);
+            if refuted { self.refute_own_test(base[slot as usize]); }
             (self.cur_src, self.cur_why) = saved;
         }
         // Closures born here carry this instance's nodes for their outer

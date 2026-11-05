@@ -14,7 +14,7 @@ impl ShapeRecord {
         brands: &[u64],
     ) -> ShapeRecord {
         assert_eq!(self.extras, 0, "special facts replace a fresh record only");
-        let mask = constfn_mask(infos).expect("invalid ConstFn slot list");
+        let mask = constfn_mask(infos, self.live_inline_slot_count).expect("invalid ConstFn slot list");
         assert!(crate::object::field_rep::is_valid_with_special(rep, mask));
         assert_eq!(mask & !crate::object::field_rep::special_lane_slots(rep), 0);
         assert!(

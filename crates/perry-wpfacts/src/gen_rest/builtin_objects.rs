@@ -183,7 +183,7 @@ impl<'a> Gen<'a> {
                 let n = self.tok_node(t);
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
-                    let descs = self.load(pv, Key::Any);
+                    let descs = self.load(pv, Key::any());
                     self.define_property(fx, n, None, descs, r, false);
                 }
                 n
@@ -253,7 +253,7 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, reviver);
                 let v = self.json_value(mi);
                 let s = self.prim_node(prim::STR);
-                let vals = self.load(v, Key::Any);
+                let vals = self.load(v, Key::any());
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
                 // The reviver's results replace values in the parsed tree.
@@ -407,8 +407,8 @@ impl<'a> Gen<'a> {
                 );
                 let o = self.expr(fx, options);
                 let rb = self.m.reason("B3 transfer list");
-                let tl = self.load(o, Key::Any);
-                let items = self.load(tl, Key::Any);
+                let tl = self.load(o, Key::any());
+                let items = self.load(tl, Key::any());
                 self.m.cons(
                     items,
                     Cons::Hard {

@@ -3182,6 +3182,7 @@ fn lower_module(
         compiler_private_async_i1_control_locals,
         scope_map: Default::default(),
         string_accumulator_locals: Default::default(),
+        contents_stable_bindings: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
@@ -3405,6 +3406,7 @@ fn lower_module(
     cross_module.scope_map =
         crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
     cross_module.string_accumulator_locals = crate::collectors::string_accumulator_locals(hir);
+    cross_module.contents_stable_bindings = crate::collectors::contents_stable_bindings(hir);
     cross_module.capture_type_proofs =
         crate::collectors::typed_locals::capture_proofs(hir, &module_boxed_vars, &module_globals);
     cross_module.definite_init = crate::collectors::definite_init::collect(hir);
@@ -3846,18 +3848,23 @@ fn lower_module(
             // on `demoted`, `fill(values: Float64Array, nodes: number)` loses
             // `fill$spec_ta7x10000_i32` entirely, because writing an element
             // reads as "mutation" of the typed-array parameter.
-            let body_calls = crate::collectors::body_contains_call(&f.body);
+            //
+            // Both halves are the definition of a contents-stable binding
+            // (`collectors::contents_stable_bindings`), shared with the
+            // let-binding proofs: a parameter is an entry-aliased binding, so
+            // it is stable only when no write reaches it (through it, an
+            // alias or an escape) and the body runs no unknown code and stores
+            // through no foreign root. A primitive keeps only the rebinding
+            // half: no callee can reach the caller's copy.
             let guard_blocked: Vec<bool> = f
                 .params
                 .iter()
                 .map(|p| {
-                    crate::collectors::has_any_mutation(&f.body, p.id)
-                        || (body_calls
-                            && spec_return_proof::is_reference_like(
-                                &cross_module.type_aliases,
-                                &p.ty,
-                                0,
-                            ))
+                    if spec_return_proof::is_reference_like(&cross_module.type_aliases, &p.ty, 0) {
+                        !cross_module.contents_stable_bindings.contains(&p.id)
+                    } else {
+                        crate::collectors::has_any_mutation(&f.body, p.id)
+                    }
                 })
                 .collect();
             let declaration_guards = param_guard::declaration_guards(
@@ -4123,50 +4130,60 @@ fn lower_module(
     // 30-second heartbeat the only proof that lowering is advancing.
     let function_bodies_started = Instant::now();
     let function_bodies_progress_step = (hir.functions.len() / 20).max(1);
-    for (function_index, f) in hir.functions.iter().enumerate() {
-        let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
-            Some(typed_abi::TypedFunctionTrampolineKind::F64)
-        } else if cross_module.typed_i32_functions.contains(&f.id) {
-            Some(typed_abi::TypedFunctionTrampolineKind::I32)
-        } else if cross_module.typed_i1_functions.contains(&f.id) {
-            Some(typed_abi::TypedFunctionTrampolineKind::I1)
-        } else if cross_module.typed_string_functions.contains(&f.id) {
-            Some(typed_abi::TypedFunctionTrampolineKind::StringRef)
-        } else {
-            None
-        };
-        compile_function(
-            &mut llmod,
-            f,
-            &func_names,
-            &mut strings,
-            &class_table,
-            &method_names,
-            &module_globals,
-            &module_global_types,
-            &opts.import_function_prefixes,
-            &enum_table,
-            &static_field_globals,
-            &class_ids,
-            &func_signatures,
-            &func_synthetic_arguments,
-            &module_boxed_vars,
-            &closure_rest_params,
-            &cross_module,
-            typed_public_trampoline,
-            None,
-        )
-        .with_context(|| format!("lowering function '{}'", f.name))?;
-        let done = function_index + 1;
-        if done == hir.functions.len() || done % function_bodies_progress_step == 0 {
-            progress.items(
-                "top-level function bodies",
-                done,
-                hir.functions.len(),
-                function_bodies_started,
-            );
-        }
-    }
+    // An all-boxed specialized wrapper compares its already-lowered clone
+    // with its generic body. Keep that dependent phase on the owning module.
+    callable_workers::lower(
+        &mut llmod,
+        &mut strings,
+        &hir.functions,
+        cross_module.spec_abi_functions.is_empty(),
+        |llmod, strings, f| {
+            let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
+                Some(typed_abi::TypedFunctionTrampolineKind::F64)
+            } else if cross_module.typed_i32_functions.contains(&f.id) {
+                Some(typed_abi::TypedFunctionTrampolineKind::I32)
+            } else if cross_module.typed_i1_functions.contains(&f.id) {
+                Some(typed_abi::TypedFunctionTrampolineKind::I1)
+            } else if cross_module.typed_string_functions.contains(&f.id) {
+                Some(typed_abi::TypedFunctionTrampolineKind::StringRef)
+            } else {
+                None
+            };
+            compile_function(
+                llmod,
+                f,
+                &func_names,
+                strings,
+                &class_table,
+                &method_names,
+                &module_globals,
+                &module_global_types,
+                &opts.import_function_prefixes,
+                &enum_table,
+                &static_field_globals,
+                &class_ids,
+                &func_signatures,
+                &func_synthetic_arguments,
+                &module_boxed_vars,
+                &closure_rest_params,
+                &cross_module,
+                typed_public_trampoline,
+                None,
+            )
+            .with_context(|| format!("lowering function '{}'", f.name))?;
+            Ok(())
+        },
+        |done| {
+            if done == hir.functions.len() || done % function_bodies_progress_step == 0 {
+                progress.items(
+                    "top-level function bodies",
+                    done,
+                    hir.functions.len(),
+                    function_bodies_started,
+                );
+            }
+        },
+    )?;
 
     // Closes #460: emit forwarding wrappers for `export { local as exported }`
     // renames where the exported name differs from the function's local HIR
@@ -4721,3 +4738,6 @@ fn try_native_construction(
 
 #[cfg(test)]
 mod memory_ownership_tests;
+
+pub(crate) mod callable_reloc;
+mod callable_workers;

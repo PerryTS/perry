@@ -352,6 +352,7 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
         peer_port,
     );
     im.http_version = "2.0".to_string();
+    im.http2_compat = true;
     im.socket_value = crate::server::http2_server::socket_of_session(session_handle);
     let request_handle = crate::server::request::alloc_incoming_message(im);
     let response_handle = crate::server::response::alloc_server_response_for_turnloop(

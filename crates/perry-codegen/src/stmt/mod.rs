@@ -28,6 +28,8 @@ mod class_field_loop_tests;
 mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
+#[cfg(test)]
+mod contents_stable_ir_tests;
 mod counter_range;
 pub(crate) mod eh_actions;
 mod element_shape_carried;
@@ -410,6 +412,20 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
+    // A receiver run is straight-line code; it never enters or
+    // leaves a branch, a loop or a handler.
+    let straight = matches!(stmt, Stmt::Expr(_) | Stmt::Let { .. } | Stmt::Return(_));
+    if !straight {
+        crate::expr::layout_read::end_run(ctx);
+    }
+    let lowered = lower_stmt_family(ctx, stmt);
+    if !straight {
+        crate::expr::layout_read::end_run(ctx);
+    }
+    lowered
+}
+
+fn lower_stmt_family(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     // Object model step 2c: a constructor body's run of family stores ends
     // at any statement that is not a `this.k = v` store
     // (`expr::layout_read::family_run_plan`), on both sides of it: a store

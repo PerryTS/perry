@@ -1,6 +1,6 @@
 # `node:http2` conformance fixtures
 
-Fourteen gap fixtures under `test-files/test_gap_http2_*.ts`, plus the shared
+Fourteen gap fixtures under `test-parity/node-suite/http2/test_gap_http2_*.ts`, plus the shared
 wire codec `test-files/_helpers/h2_wire.ts`, that pin what Perry's `node:http2`
 has to do — measured against **Node 26.5.1**, the `.node-version` pin, never
 against Perry's current output.

@@ -4181,8 +4181,6 @@ jobs:
           # - test_ui_*: need `--target macos` / `ios-simulator` to pull
           #   in libperry_ui_*; the no-target compile path doesn't link
           #   the platform widgets.
-          # - test_timer: hangs on the runtime event loop under the
-          #   no-arg compile path.
           #
           # The 11-entry Buffer/typed-array `ci-env` skip family that
           # previously lived here (test_gap_buffer_ops, test_buffer_*,
@@ -4253,7 +4251,6 @@ jobs:
             test_issue_1495_image_systemname \
             test_issue_1867_audio_playback \
             test_issue_2022_canvas_draw_image \
-            test_timer \
             test_phase2v3_3_show_toast_set_text \
             test_issue_351_media_playback \
             test_issue_442_inline_button_bg \
@@ -4268,52 +4265,20 @@ jobs:
             test_issue_10155_textfield_singleline \
             test_issue_11661_textfield_baseline \
             test_issue_764_state_at_module_init \
-            test_ramda_user_import \
             test_take_screenshot \
             test_issue_842_side_effect_dynamic_import \
             test_jose_signverify_roundtrip \
             test_jwt_sign_dynamic_alg \
-            test_parity_assert \
-            test_parity_async_hooks \
-            test_parity_buffer \
-            test_parity_child_process \
-            test_parity_cluster \
-            test_parity_crypto \
-            test_parity_dgram \
-            test_parity_diagnostics_channel \
             test_parity_decimal \
-            test_parity_dns \
-            test_parity_dns_promises \
             test_parity_dotenv \
             test_parity_events \
             test_parity_fs \
             test_parity_fs_promises \
-            test_parity_http \
-            test_parity_http2 \
-            test_parity_https \
             test_parity_lodash \
-            test_parity_module \
             test_parity_moment \
-            test_parity_net \
-            test_parity_perf_hooks \
-            test_parity_process \
-            test_parity_querystring \
-            test_parity_readline \
-            test_parity_readline_promises \
-            test_parity_stream \
-            test_parity_stream_consumers \
-            test_parity_stream_promises \
-            test_parity_stream_web \
-            test_parity_sys \
             test_parity_test \
-            test_parity_timers \
-            test_parity_timers_promises \
-            test_parity_tls \
-            test_parity_url \
-            test_parity_util \
             test_parity_validator \
-            test_parity_worker_threads \
-            test_parity_zlib "
+            "
 
           rm -rf "$LOGS_DIR"
           mkdir -p "$LOGS_DIR"

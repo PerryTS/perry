@@ -1482,4 +1482,5 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_message_channel_new", DOUBLE, &[]);
     module.declare_function("js_message_port_constructor_error", DOUBLE, &[]);
     module.declare_function("js_broadcast_channel_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_broadcast_channel_new_counted", DOUBLE, &[DOUBLE, I32]);
 }

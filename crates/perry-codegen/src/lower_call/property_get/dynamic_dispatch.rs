@@ -493,12 +493,15 @@ fn lower_instance_method_call(
             // Object model step 3: the receiver's class id selects the
             // constant body, a branch over the compile-time set of cased
             // classes. 0 = no compiled body: the site's generic arm.
-            let selected = if let Some((_, nullable)) = &proven {
-                crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable)
+            // `arms`: the implementors a selection names (one per switch arm);
+            // `None` for a proven site, whose switch lists every class.
+            let (selected, arms) = if let Some((_, nullable)) = &proven {
+                (crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable), None)
             } else if cased.contains(&true) {
-                select::select(ctx, &recv, property, &implementors, &cased)
+                let (selected, arms) = select::select(ctx, &recv, property, &implementors, &cased);
+                (selected, Some(arms))
             } else {
-                "0".to_string()
+                ("0".to_string(), Some(Vec::new()))
             };
             // #11910: a receiver no compiled body claims reads its method
             // through the split method site before the arguments.
@@ -538,7 +541,7 @@ fn lower_instance_method_call(
             let case_idxs: Vec<(usize, usize)> = implementors
                 .iter()
                 .enumerate()
-                .filter(|&(i, _)| cased[i])
+                .filter(|&(i, _)| cased[i] && arms.as_ref().map_or(true, |a| a.contains(&i)))
                 .map(|(i, _)| (i, ctx.new_block(&format!("idispatch.case{i}"))))
                 .collect();
             let switch = match &proven {
@@ -1195,7 +1198,7 @@ fn lower_instance_method_call(
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
-                let selected = select::select_with_word(
+                let (selected, arms) = select::select_with_word(
                     ctx,
                     &recv,
                     property,
@@ -1221,7 +1224,7 @@ fn lower_instance_method_call(
                 } else {
                     None
                 };
-                Some((selected, word, lookup))
+                Some((selected, word, lookup, arms))
             } else {
                 None
             };
@@ -1717,11 +1720,12 @@ fn lower_instance_method_call(
                 }
                 let selected_value = selection
                     .as_ref()
-                    .and_then(|(_, _, lookup)| lookup.as_ref())
+                    .and_then(|(_, _, lookup, _)| lookup.as_ref())
                     .map(|(_, root)| roots.reread_emitted(ctx, *root));
-                let certificate = selection.as_ref().map(|(selected, word, lookup)| {
+                let certificate = selection.as_ref().map(|(selected, word, lookup, arms)| {
                     crate::lower_call::method_override::ConstantMethodSelection {
                         selected,
+                        arms,
                         receiver_word: (!static_split).then_some(word.as_str()),
                         lookup: lookup
                             .as_ref()

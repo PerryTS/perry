@@ -392,8 +392,12 @@ fn final_record_names_receiver(
         && d.hole_count == 0
         && d.summary == 0
         && d.rep == rep
-        && d.deprecation_targets() == (0, 0)
-        && d.special_constfn_mask == infos.iter().fold(0, |mask, i| mask | (1 << i.slot))
+        && !d.deprecation_pending()
+        && d.special_constfn_mask
+            == infos
+                .iter()
+                .filter(|i| i.slot < super::field_rep::REP_SLOTS)
+                .fold(0, |mask, i| mask | (1 << i.slot))
         && d.constfn_infos() == infos
 }
 
@@ -430,10 +434,10 @@ unsafe fn finalized_constfn_facts(
         || current.proto_id != shapes::class_proto_id(class_id)
         || (!rebuilt
             && current.rep
-                != infos.iter().fold(rep, |r, i| {
-                    super::field_rep::with_slot_rep(r, i.slot as u32, super::field_rep::REP_ANY)
-                }))
-        || current.special_constfn_mask != 0
+                != infos
+                    .iter()
+                    .fold(rep, |r, i| super::field_rep::without_lane(r, i.slot)))
+        || current.has_constfn_lane()
     {
         return None;
     }
@@ -481,8 +485,10 @@ unsafe fn finalized_constfn_facts(
         }
     }
     for entry in infos {
-        if entry.slot as u32 >= count
-            || super::field_rep::slot_rep(rep, entry.slot as u32) != super::field_rep::REP_SPECIAL
+        // A body past word 0 has no bit in `rep`: the list entry is its lane.
+        if entry.slot >= count
+            || (entry.slot < super::field_rep::REP_SLOTS
+                && super::field_rep::slot_rep(rep, entry.slot) != super::field_rep::REP_SPECIAL)
         {
             return None;
         }
@@ -545,7 +551,7 @@ fn parse_constfn_static_entries(
     entries: *const ConstFnStaticEntry,
     entry_count: u32,
 ) -> Option<Vec<shapes::ConstFnSlotInfo>> {
-    if entries.is_null() || entry_count == 0 || entry_count > super::field_rep::REP_SLOTS {
+    if entries.is_null() || entry_count == 0 {
         return None;
     }
     // SAFETY: compiler-owned static data of `entry_count` ABI entries.
@@ -553,8 +559,7 @@ fn parse_constfn_static_entries(
     let mut infos = Vec::with_capacity(entries.len());
     let mut previous = None;
     for entry in entries {
-        if entry.slot >= super::field_rep::REP_SLOTS
-            || previous.is_some_and(|slot| entry.slot <= slot)
+        if previous.is_some_and(|slot| entry.slot <= slot)
             || entry.info.is_null()
         {
             return None;
@@ -565,7 +570,7 @@ fn parse_constfn_static_entries(
             return None;
         }
         infos.push(shapes::ConstFnSlotInfo {
-            slot: entry.slot as u8,
+            slot: entry.slot,
             info: entry.info as usize as u64,
         });
         previous = Some(entry.slot);

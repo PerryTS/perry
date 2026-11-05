@@ -54,6 +54,13 @@ impl Model {
                 false => self.field_any(t),
             };
             self.edge(any, n);
+            // A Number-valued key can name this field, including NaN,
+            // Infinity and exponent forms. Other named fields never read
+            // numeric-only writes. The range is a value fact, not a type.
+            if self.is_num_atom(a) && self.atoms[a as usize] != NUM_KEY {
+                let numeric = self.numeric_field(t);
+                self.edge(numeric, n);
+            }
             if let Some(srcs) = self.star_from.get(&t).cloned() {
                 for s in srcs {
                     self.star_key(t, s, a, n);
@@ -62,6 +69,7 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
+        self.field_shaped(t, a, n);
         if let Some(&nf) = self.num_fields.get(&t) {
             if self.is_num_atom(a) {
                 self.edge(n, nf);
@@ -101,7 +109,10 @@ impl Model {
                 self.spread_source(tm, site, keys);
             }
         }
-        if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
+        if matches!(self.toks[d as usize], TokKind::BuiltinFn(_)) {
+            return self.spread_into_builtin_fn(s, d, site);
+        }
+        if d == TOP {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
                 self.top_tok_node
@@ -111,13 +122,7 @@ impl Model {
             self.sink_node(all, r);
             return;
         }
-        let opaque = match &self.toks[s as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
-                true
-            }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
-            _ => false,
-        };
+        let opaque = !self.own_props_modelled(s);
         // Any key of the source may be an index of an Array target.
         self.mark_hole(d);
         let fa_d = self.any_key_node(d);
@@ -138,11 +143,60 @@ impl Model {
         }
         let fa_s = self.field_any(s);
         self.edge(fa_s, fa_d);
+        // Numeric-only source properties keep their range through a copy.
+        let numeric_s = self.numeric_field(s);
+        let numeric_d = self.numeric_field(d);
+        self.edge(numeric_s, numeric_d);
         // Getters of `s` (own and on the chain) run; their results have no
         // known key here.
         let act = ChainAct::Load(fa_d);
         self.any_walk_holders.entry(s).or_default().push((s, act));
-        self.accessor_hit(s, s, Key::Any, act);
+        self.accessor_hit(s, s, Key::any(), act);
+    }
+
+    /// `Object.assign(d, s)` into builtin function value `d`: each own key
+    /// of `s`, now and later (`spread_to`), is a store into `d` under that
+    /// key (`store_into`: an R1 field or `store_builtin_fn`, rule R2). A
+    /// value under a computed key of `s` is a store under a computed key
+    /// once one arrives (`TopIfAny`); an unmodeled source, or one with an
+    /// accessor (a getter's result is copied under its key), is one.
+    fn spread_into_builtin_fn(&mut self, s: Tok, d: Tok, site: SiteId) {
+        let known = s != TOP && self.own_props_modelled(s) && !self.accessor_keys.contains_key(&s);
+        if !known {
+            let all = match s {
+                TOP => self.top_tok_node,
+                _ => self.all_fields(s),
+            };
+            return self.store_builtin_fn(Key::any(), all, site);
+        }
+        self.spread_to.entry(s).or_default().push((d, site));
+        for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
+            if self.is_private_atom(a) {
+                continue;
+            }
+            let f = self.field(s, a);
+            self.store_into(d, Key::Named(a), f, site);
+        }
+        let fa_s = self.field_any(s);
+        let dn = self.node_l("spread-bf");
+        self.add_tok(dn, d);
+        let h = self.node_l("spread-bf-computed");
+        self.cons(
+            fa_s,
+            Cons::TopIfAny {
+                dst: h,
+                from: dn,
+                reason: None,
+            },
+        );
+        self.cons(
+            h,
+            Cons::Store {
+                key: Key::any(),
+                src: fa_s,
+                site,
+            },
+        );
     }
 
     /// DECISIONS 241: the join's values of function token `t`'s own
@@ -155,6 +209,38 @@ impl Model {
             Some(TokKind::Func(f, _)) => self.fn_joined.get(f).cloned(),
             _ => None,
         }
+    }
+
+    /// Values stored under an unknown Number key, plus arbitrary-key
+    /// writes that may name a number. This is the NUM_KEY range in the
+    /// ordinary field space, not a concrete own key: do not publish it as
+    /// a layout key or a definite key copied by a spread.
+    pub(super) fn numeric_field(&mut self, t: Tok) -> NodeId {
+        let a = self.atom(NUM_KEY);
+        let n = match self.fields.get(&(t, a)).copied() {
+            Some(n) => n,
+            None => {
+                let n = self.node_named("numericfield", || format!("numericfield({t})"));
+                self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+                self.nodes[n as usize].frame = self.fam_home(t);
+                self.nodes[n as usize].of_marker = self.is_marker(t);
+                self.fields.insert((t, a), n);
+                self.rel(|| format!("fieldnode {n} {t} {a}"));
+                n
+            }
+        };
+        let any = self.field_any(t);
+        self.edge(any, n);
+        if self.is_elem_array(t) {
+            // Array algorithms and iteration consume these properties too.
+            self.edge(n, any);
+        }
+        let all = self.all_fields(t);
+        self.edge(n, all);
+        if let Some(&numeric) = self.num_fields.get(&t) {
+            self.edge(n, numeric);
+        }
+        n
     }
 
     pub fn field_any(&mut self, t: Tok) -> NodeId {
@@ -264,15 +350,38 @@ impl Model {
         n
     }
 
+    /// Are the own properties of every object `t` denotes in the model, so
+    /// that a copy of them (`spread_into`, `own_values_of`) reads its
+    /// fields: the named fields, the any-key field and the numeric field,
+    /// each fed by everything that defines a property on it? A program
+    /// object's are: every store, `defineProperty` and accessor goes through
+    /// the field funnel. A builtin object's are when its template is a
+    /// container the model fills (`builtins::own_values_filled`): its birth
+    /// puts every value the runtime gives it under its any key, and the
+    /// runtime gives it no own accessor. Every other builtin object (Date,
+    /// RegExp, typed arrays, collections, markers …), a builtin namespace or
+    /// function, a native prototype and ⊤ hold own properties the model does
+    /// not list. A stand-in (`site: u32::MAX`, another unit's array as this
+    /// unit sees it, DECISIONS 94) holds what other units wrote in a cell,
+    /// not in these fields.
+    pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
+        match &self.toks[t as usize] {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
+                false
+            }
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                TmplKind::BObj { what, site, .. } => {
+                    site != u32::MAX && builtins::own_values_filled(what)
+                }
+                _ => true,
+            },
+            _ => true,
+        }
+    }
+
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
-        let opaque = match &self.toks[t as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
-                true
-            }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
-            _ => false,
-        };
+        let opaque = !self.own_props_modelled(t);
         if opaque {
             self.add_top(dst, |_| "own values of an unmodeled object".into());
             self.add_prim(dst, prim::ALL);
@@ -286,7 +395,7 @@ impl Model {
         // Any-key lookups subscribe through the holder relation;
         // named-key replay in `visits` does not cover them.
         self.any_walk_holders.entry(t).or_default().push((t, act));
-        self.accessor_hit(t, t, Key::Any, act);
+        self.accessor_hit(t, t, Key::any(), act);
     }
 
     /// What class private field `a` (`Model::private_atom`) holds on any
@@ -389,6 +498,8 @@ impl Model {
         self.num_fields.insert(t, n);
         let fa = self.field_any(t);
         self.edge(fa, n);
+        let numeric = self.numeric_field(t);
+        self.edge(numeric, n);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.is_num_atom(a) {
                 let f = self.field(t, a);

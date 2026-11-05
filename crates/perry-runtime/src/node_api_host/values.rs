@@ -21,27 +21,41 @@ fn write_handle(env: NapiEnv, bits: u64, result: *mut NapiValue) -> NapiStatus {
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(handle) = add_handle(env, bits) else {
-        return NapiStatus::InvalidArg;
-    };
-    unsafe { *result = handle };
-    ok(env)
+    enter(env, |env| {
+        unsafe { *result = env.add_handle(bits) };
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
+/// A number, as `typeof` sees it. An INT32 word is a number: compiled code
+/// names a class by its function object (`js_class_value`), so the INT32
+/// class-id immediate is a runtime-internal key, never a value (#10461).
+#[inline]
 fn value_as_number(bits: u64) -> Option<f64> {
     let value = JSValue::from_bits(bits);
     if value.is_int32() {
-        // A compiled class constructor shares the INT32 encoding. It is a
-        // function, as `napi_typeof` reports, not its class id (#10461).
-        if crate::object::class_ref_id(f64::from_bits(bits)).is_some() {
-            return None;
-        }
         Some(value.as_int32() as f64)
     } else if value.is_number() {
         Some(value.as_number())
     } else {
         None
     }
+}
+
+/// The `napi_get_value_<number>` body: one environment entry reads the
+/// handle, classifies it and records the status.
+#[inline]
+fn get_number(env: NapiEnv, value: NapiValue, write: impl FnOnce(f64)) -> NapiStatus {
+    enter(env, |env| {
+        let Some(bits) = env.value_bits(value) else {
+            return env.set_status(NapiStatus::InvalidArg, "value is not a live handle");
+        };
+        let Some(number) = value_as_number(bits) else {
+            return env.set_status(NapiStatus::NumberExpected, "value must be a number");
+        };
+        write(number);
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
 fn value_as_bool(bits: u64) -> Option<bool> {
@@ -330,14 +344,7 @@ pub unsafe extern "C" fn napi_get_value_double(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = number;
-    ok(env)
+    get_number(env, value, |number| *result = number)
 }
 
 #[no_mangle]
@@ -349,14 +356,7 @@ pub unsafe extern "C" fn napi_get_value_int32(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = to_int32(number);
-    ok(env)
+    get_number(env, value, |number| *result = to_int32(number))
 }
 
 #[no_mangle]
@@ -368,14 +368,7 @@ pub unsafe extern "C" fn napi_get_value_uint32(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = to_int32(number) as u32;
-    ok(env)
+    get_number(env, value, |number| *result = to_int32(number) as u32)
 }
 
 #[no_mangle]
@@ -387,14 +380,7 @@ pub unsafe extern "C" fn napi_get_value_int64(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = number as i64;
-    ok(env)
+    get_number(env, value, |number| *result = number as i64)
 }
 
 #[no_mangle]
@@ -406,14 +392,16 @@ pub unsafe extern "C" fn napi_get_value_bool(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(boolean) = value_as_bool(bits) else {
-        return set_status(env, NapiStatus::BooleanExpected, "value must be a boolean");
-    };
-    *result = boolean;
-    ok(env)
+    enter(env, |env| {
+        let Some(bits) = env.value_bits(value) else {
+            return env.set_status(NapiStatus::InvalidArg, "value is not a live handle");
+        };
+        let Some(boolean) = value_as_bool(bits) else {
+            return env.set_status(NapiStatus::BooleanExpected, "value must be a boolean");
+        };
+        unsafe { *result = boolean };
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
 #[no_mangle]
@@ -431,9 +419,12 @@ pub unsafe extern "C" fn napi_typeof(
     let js = JSValue::from_bits(bits);
     let value_type = if js.is_null() {
         NapiValueType::Null
+    } else if js.is_int32() {
+        // A number, as `napi_get_value_double` reads it (`value_as_number`).
+        NapiValueType::Number
     } else {
         // Everything classifies exactly as the `typeof` operator does, so
-        // Perry's other callable representations (INT32-tagged class refs,
+        // Perry's other callable representations (class function objects,
         // class objects, callable proxies) are functions here too (#10461).
         // An external is an ordinary object (`napi_create_external`), so only
         // an object can be one: asking the metadata of a symbol, bigint or

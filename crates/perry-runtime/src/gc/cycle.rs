@@ -1534,13 +1534,28 @@ impl GcCycleState {
                     } else {
                         None
                     };
+                    // Whether this full owes the memory back NOW: somebody
+                    // asked for it (`gc()`, an emergency full) or memory
+                    // pressure / idle reclaim requested the pool drain below.
+                    // An ordinary full leaves freed pages to the allocator's
+                    // own delayed purge; see `run_allocator_purge`.
+                    let mut memory_owed = matches!(
+                        self.progress_kind,
+                        GcProgressKind::ExplicitSynchronous
+                            | GcProgressKind::ExplicitFull
+                            | GcProgressKind::EmergencyFull
+                    );
                     // #7875: a critical-pressure / allocation-failure request
                     // drains only after a FULL sweep has released all idle
                     // arena blocks, and before allocator pressure relief so
                     // the newly-deallocated mappings participate in the trim.
-                    if self.minor.is_none() {
-                        let drained: crate::arena::BlockPoolDrainStats =
-                            crate::arena::drain_block_pool_if_requested();
+                    let drained = if self.minor.is_none() {
+                        crate::arena::drain_block_pool_if_requested()
+                    } else {
+                        None
+                    };
+                    if let Some(drained) = drained {
+                        memory_owed = true;
                         if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                             trace.sweep.pool_drained_blocks = drained.blocks;
                             trace.sweep.pool_drained_bytes = drained.bytes;
@@ -1569,7 +1584,7 @@ impl GcCycleState {
                     // this a full collection frees objects the OS never gets
                     // back. Major-only, at the same point, outside the atomic
                     // tail.
-                    let purge = run_allocator_purge(self.minor.is_none());
+                    let purge = run_allocator_purge(self.minor.is_none(), memory_owed);
                     if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                         trace.record_allocator_purge_maintenance(
                             purge.status,

@@ -634,6 +634,8 @@ pub(super) fn compile_method(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
         in_static_member: false,
@@ -674,6 +676,7 @@ pub(super) fn compile_method(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1704,10 +1707,13 @@ pub(super) fn compile_method(
     // statement count.  Indexed clones are already admitted above and
     // pshape-argument clones do not carry an exact receiver proof.
     if is_pshape_clone && !is_index_clone && !method.is_async && !method.is_generator {
+        let callable_worker = llmod.callable_worker;
         let lowered = llmod
             .function_mut(lowered_function_index)
             .expect("just-lowered method function");
-        if super::helpers::guarded_specialization_admits_preinline(
+        if callable_worker {
+            lowered.defer_self_preinline(method.body.len());
+        } else if super::helpers::guarded_specialization_admits_preinline(
             lowered.estimated_ir_bytes(),
             method.body.len(),
         ) {

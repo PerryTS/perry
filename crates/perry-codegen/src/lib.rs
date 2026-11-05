@@ -339,7 +339,7 @@ pub mod symbol_names;
 
 /// Build-time runtime facts; WRT3a does not use them in emission.
 pub mod realm_manifest {
-    include!(concat!(env!("OUT_DIR"), "/realm_table.rs"));
+    pub use perry_realm_table::{REALM, REALM_MANIFEST_VERSION};
 
     #[test]
     fn temporal_reach_closes_the_generated_family_without_selecting_top() {

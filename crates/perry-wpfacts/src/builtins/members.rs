@@ -26,8 +26,8 @@ pub(super) enum Mem {
 }
 
 /// A family of builtin objects: which intrinsic prototype chain it has.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Family {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Family {
     /// A plain object (`Object.prototype` only).
     Object,
     Function,
@@ -421,9 +421,12 @@ pub(super) fn collection_member(what: &str, name: &str) -> Option<Mem> {
     }
 }
 
-/// [`locked_read`]'s `what` for a class constructor with no parent (a
-/// `Function`-family chain that is `Function.prototype` only).
-pub(super) const CLASS_CTOR: &str = "class constructor";
+/// [`locked_read`]'s `what` for a `Function`-family value whose chain is
+/// `Function.prototype` only: a parentless class constructor (a class is
+/// never an async or generator function), or a function the prototype-kind
+/// predicate (`perry_hir::fn_proto::FnProtoKind::Function`) says is born
+/// with `%Function.prototype%` (a plain function, arrow, method, accessor).
+pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 
 /// DEC 250: is a read of `name` on the intrinsic chain of a value of
 /// family `fam` (a collection of kind `what`) final, so that no write the
@@ -448,9 +451,10 @@ pub(super) const CLASS_CTOR: &str = "class constructor";
 /// makes every key final on a chain that passes no other prototype: a
 /// plain object's under any key, a number key (`NUM_KEY`) and a computed
 /// one (`STAR_KEY`, the `constructor` it may name aside) included; a
-/// parentless class constructor's (`CLASS_CTOR`: a class is never an
-/// async or generator function, so its chain is `Function.prototype`
-/// only). An array's chain refuses index adds on both of its prototypes
+/// function's whose chain is `Function.prototype` only (`FN_PROTO_ONLY`:
+/// a parentless class constructor, a plain function, arrow or method; not
+/// an async or generator function, whose own intrinsic prototype takes
+/// adds). An array's chain refuses index adds on both of its prototypes
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
@@ -459,7 +463,7 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
     }
     match fam {
         Family::Object => true,
-        Family::Function => what == Some(CLASS_CTOR),
+        Family::Function => what == Some(FN_PROTO_ONLY),
         Family::Array => name == crate::model::NUM_KEY || own(fam, name).is_some(),
         Family::Str
         | Family::Num
@@ -477,11 +481,7 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             };
             keys.contains(&name) && find(COLLECTION, name).is_some()
         }
-        Family::Iterator
-        | Family::Error
-        | Family::Box
-        | Family::Wrapper
-        | Family::Opaque => false,
+        Family::Iterator | Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
     }
 }
 
@@ -547,6 +547,7 @@ const ERROR_NAMESPACE: NsStatics = NsStatics {
     members: Some(&[
         ("captureStackTrace", FN),
         ("isError", FN),
+        ("prepareStackTrace", FN),
         ("stackTraceLimit", N),
     ]),
     prototype: NsProto::Function,

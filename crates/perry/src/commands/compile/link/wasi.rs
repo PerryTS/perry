@@ -8,9 +8,9 @@
 //! `wasi_snapshot_preview1`, carries no component-model adapter and so has no
 //! `cabi_realloc`, and is not wrapped into a component.
 //!
-//! The wasip1 runtime archive also carries perry-stdlib and the Node module
-//! crates (`perry-runtime-static`'s `wasi-node-modules`); the wasip2 archive
-//! does not.
+//! Both runtime archives also carry perry-stdlib and the Node module crates
+//! (`perry-runtime-static`'s `wasi-node-modules`); the linker keeps only what
+//! the program reaches.
 //!
 //! Deliberately separate from the native link path: no auto-optimize runtime
 //! rebuild, no link cache. Only compiled with the off-by-default `target-wasi`
@@ -22,6 +22,23 @@ use std::process::Command;
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::super::wasi_flavour::Flavour;
+
+#[path = "wasi_addon.rs"]
+mod addon;
+
+/// The objects and sysroot archives that link the program's approved
+/// Node-API addons into it (none without addons).
+pub(crate) fn addon_link_inputs(
+    flavour: Flavour,
+    ctx: &super::super::CompilationContext,
+    directory: &Path,
+    verbose: u8,
+) -> Result<Vec<PathBuf>> {
+    if ctx.native_addons.is_empty() {
+        return Ok(Vec::new());
+    }
+    addon::addon_link_inputs(flavour, ctx, &wasi_sdk(flavour)?, directory, verbose)
+}
 
 /// Linear-memory stack size. Perry's shadow stack and deep recursion need
 /// more than wasi-libc's 64 KiB default; placing the stack first also keeps
@@ -128,8 +145,8 @@ pub(super) fn link_args(
 /// native links. Omitting this object silently leaves optional runtime hooks
 /// empty (for example Unicode normalization and URL prototype accessors).
 ///
-/// Both flavours link the core runtime, so only the runtime features this
-/// program selects install.
+/// Both flavours link the core runtime and the perry-stdlib bundle, so only
+/// the runtime and stdlib features this program selects install.
 pub(crate) fn feature_installer(
     flavour: Flavour,
     ctx: &super::super::CompilationContext,
@@ -137,7 +154,7 @@ pub(crate) fn feature_installer(
     directory: &Path,
 ) -> Result<PathBuf> {
     use crate::commands::stdlib_installs::{
-        installer_callees, runtime_installer_callees, wasip1_stdlib_installs, FeatureInstalls,
+        installer_callees, runtime_installer_callees, wasi_stdlib_installs, FeatureInstalls,
     };
     let selected = super::super::optimized_libs::auto_optimized_cross_features(
         ctx,
@@ -148,16 +165,16 @@ pub(crate) fn feature_installer(
     .filter_map(|feature| feature.strip_prefix("perry-runtime/").map(str::to_string))
     .collect();
     let symbols = runtime_installer_callees(&FeatureInstalls::Selected(selected));
-    // Only wasip1 links perry-stdlib (the runtime archive's `wasi-node-modules`
-    // bundle); its installs are the program's own features plus the adapters.
-    let stdlib_symbols = (flavour == Flavour::P1 && ctx.needs_stdlib).then(|| {
+    // Both archives bundle perry-stdlib (`wasi-node-modules`); its installs are
+    // the program's own features plus the adapters.
+    let stdlib_symbols = ctx.needs_stdlib.then(|| {
         let mut features = crate::commands::stdlib_features::compute_required_features(
             &ctx.native_module_imports,
             ctx.uses_fetch || ctx.uses_global_webfetch,
             ctx.uses_crypto_builtins,
         );
         features.extend(ctx.extra_stdlib_features.iter().copied());
-        installer_callees(&wasip1_stdlib_installs(
+        installer_callees(&wasi_stdlib_installs(
             &features.iter().map(|f| f.to_string()).collect(),
         ))
     });
@@ -284,20 +301,12 @@ pub(crate) fn link_wasi(
         .with_context(|| format!("running {}", clang.display()))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let hint = if !stderr.contains("undefined symbol") {
-            String::new()
-        } else if flavour == Flavour::P1 {
-            "\n\nA symbol the wasip1 runtime does not provide: it bundles perry-stdlib's \
+        let hint = if stderr.contains("undefined symbol") {
+            "\n\nA symbol the WASI runtime does not provide: it bundles perry-stdlib's \
              http, fetch, zlib, crypto, events, streams and TLS modules, not the optional \
              ones (SQLite, ...)."
-                .to_string()
         } else {
-            format!(
-                "\n\nA symbol the runtime does not provide on WASI yet: most Node \
-                 APIs beyond the core runtime (http, fetch, zlib, …) live in \
-                 perry-stdlib, which is not available for --target {} (#11377).",
-                flavour.target()
-            )
+            ""
         };
         return Err(anyhow!("wasi link failed:\n{}{hint}", stderr.trim_end()));
     }

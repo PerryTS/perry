@@ -1308,6 +1308,31 @@ fn detect_optional_feature_usage_with_capabilities(
         {
             ctx.uses_dgram = true;
         }
+        // child_process the same way: its stdio pipes are net sockets.
+        let imports_child_process_or_create_require = hir_module.imports.iter().any(|import| {
+            if import.type_only || import.runtime_erased {
+                return false;
+            }
+            let bare = import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source);
+            bare == "child_process"
+                || (bare == "module"
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named { imported, .. }
+                                if imported == "createRequire"
+                        )
+                    }))
+        });
+        if imports_child_process_or_create_require
+            || hir_debug.contains("module: \"child_process\"")
+            || hir_debug.contains("NativeModuleRef(\"child_process\")")
+        {
+            ctx.uses_child_process = true;
+        }
         // `node:test` → gates `perry-runtime/mod-node-test` (the runner, and
         // with it the JSON serializer its snapshot assertions call). Like
         // dgram it is runtime-only, so `requires_stdlib` is false for it and
@@ -1329,6 +1354,9 @@ fn detect_optional_feature_usage_with_capabilities(
         }
         if debug_hir_uses_get_builtin_module(&hir_debug) {
             ctx.uses_get_builtin_module = true;
+        }
+        if hir_debug.contains("\"upgradeToTLS\"") {
+            ctx.uses_upgrade_to_tls = true;
         }
     }
 

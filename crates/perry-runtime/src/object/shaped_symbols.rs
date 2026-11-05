@@ -56,6 +56,43 @@ pub(crate) unsafe fn own_private(obj: *const ObjectHeader, symbol: usize) -> Opt
     (value != crate::value::TAG_HOLE).then_some(value)
 }
 
+/// Fill the hole of `symbol` on an object whose layout lists it: the key is
+/// listed optional with `entry` (so the hole is its absence), its slot is
+/// inline and still the hole, and no later key is present (filling it keeps
+/// the key order the list states). One slot store; the object stays on its
+/// layout. `false`, having changed nothing, otherwise.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+pub(crate) unsafe fn fill_listed_hole(
+    obj: *mut ObjectHeader,
+    symbol: usize,
+    bits: u64,
+    entry: u8,
+) -> bool {
+    if super::overflow::has_overflow(obj) {
+        return false;
+    }
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let Some(index) = position_in(keys, symbol) else {
+        return false;
+    };
+    if key_attrs::keys_entry(keys.arr(), index) != entry | key_attrs::ENTRY_OPTIONAL {
+        return false;
+    }
+    let slot = keys.storage_slot(index);
+    if slot >= object_inline_capacity(obj)
+        || (index..keys.count()).any(|i| {
+            object_key_field_at_with_keys(obj, keys.arr(), i, live).bits()
+                != crate::value::TAG_HOLE
+        })
+    {
+        return false;
+    }
+    super::store_object_field_slot(obj, slot as usize, bits);
+    true
+}
+
 /// Root all operands while publishing the shared layout and growing storage.
 /// Existing symbol keys share exactly the same indexed store as string keys.
 pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) -> bool {

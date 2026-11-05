@@ -124,7 +124,9 @@ unsafe extern "C" fn upgraded(
         np::lifecycle(parser.get(), &PARSER),
         Ok(np::Lifecycle::Closed)
     );
-    assert_eq!(net::write(socket.value(), b"READY", 0).unwrap(), 5);
+    // The kernel takes a small loopback write at once (libuv's
+    // `uv_try_write`): nothing stays queued, as Node's `writableLength`.
+    assert_eq!(net::write(socket.value(), b"READY", 0).unwrap(), 0);
     let callback = scope.root_addr(perry_ffi::alloc_closure(
         perry_ffi::js_function_info!(data, 1; with_flags(perry_ffi::FN_BUILTIN)),
         0,

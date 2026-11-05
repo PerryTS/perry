@@ -1287,6 +1287,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// Untyped string accumulators, module-wide
     /// (`collectors::string_accumulator_locals`).
     pub string_accumulator_locals: std::collections::HashSet<u32>,
+    /// Bindings whose object no code writes for their whole life
+    /// (`collectors::contents_stable_bindings`), module-wide.
+    pub contents_stable_bindings: std::collections::HashSet<u32>,
     /// Bindings assigned before any reader can run
     /// (`collectors::definite_init`), module-wide.
     pub definite_init: crate::collectors::DefiniteInit,

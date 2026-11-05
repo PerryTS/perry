@@ -18,8 +18,8 @@ pub(super) struct StaticMethodEntry {
     /// object for this method is at home in that evaluation's class object.
     pub(super) home: bool,
     pub(super) generator_owner: bool,
-    /// The kind of generator record the body births, if any.
-    pub(super) generator: Option<crate::codegen::helpers::GeneratorRecordKind>,
+    /// The method's intrinsic prototype (the shared predicate's).
+    pub(super) kind: perry_hir::fn_proto::FnProtoKind,
 }
 
 /// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
@@ -116,7 +116,7 @@ pub(super) fn emit_static_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        set_generator_kind(f, e.generator);
+        set_fn_proto_kind(f, e.kind);
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
     (format!("@{}", entry_name), info_ref)
@@ -222,7 +222,7 @@ pub(super) fn emit_class_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        set_generator_kind(f, e.generator);
+        set_fn_proto_kind(f, e.kind);
         f.set_non_constructor();
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
@@ -304,24 +304,31 @@ pub(super) fn source_needs_owner(
         })
 }
 
-/// A generator method's function object is a generator function of the kind
-/// its body births: `%AsyncGeneratorFunction.prototype%` for an async record.
-fn set_generator_kind(
+/// A method's function object is born with the intrinsic prototype the
+/// shared predicate names (`perry_hir::fn_proto::FnProtoKind`): an async
+/// method's is `%AsyncFunction.prototype%`, a generator method's
+/// `%GeneratorFunction.prototype%`, an async generator's
+/// `%AsyncGeneratorFunction.prototype%`.
+pub(super) fn set_fn_proto_kind(
     f: &mut crate::fn_info::FnInfoFacts,
-    kind: Option<crate::codegen::helpers::GeneratorRecordKind>,
+    kind: perry_hir::fn_proto::FnProtoKind,
 ) {
+    use perry_hir::fn_proto::FnProtoKind;
     match kind {
-        Some(crate::codegen::helpers::GeneratorRecordKind::Sync) => f.set_generator(),
-        Some(crate::codegen::helpers::GeneratorRecordKind::Async) => f.set_async_generator(),
-        None => {}
+        FnProtoKind::Function => {}
+        FnProtoKind::Async => f.set_async(),
+        FnProtoKind::Generator => f.set_generator(),
+        FnProtoKind::AsyncGenerator => f.set_async_generator(),
     }
 }
 
-pub(super) fn source_generator_kind(
+/// The predicate's kind of class member `id` of class `cid`.
+pub(super) fn source_fn_proto_kind(
+    module: &perry_hir::Module,
     classes: &[(u32, &perry_hir::Class)],
     cid: u32,
     id: u32,
-) -> Option<crate::codegen::helpers::GeneratorRecordKind> {
+) -> perry_hir::fn_proto::FnProtoKind {
     classes
         .iter()
         .find(|(c, _)| *c == cid)
@@ -332,7 +339,9 @@ pub(super) fn source_generator_kind(
                 .chain(class.static_methods.iter())
                 .chain(class.computed_members.iter().map(|m| &m.function))
                 .find(|f| f.id == id)
-                .and_then(|f| crate::codegen::helpers::body_generator_record_kind(&f.body))
+        })
+        .map_or(perry_hir::fn_proto::FnProtoKind::Function, |f| {
+            perry_hir::fn_proto::FnProtoKind::of_function(module, f)
         })
 }
 
@@ -356,7 +365,7 @@ mod tests {
                 has_synth_args: false,
                 home,
                 generator_owner: false,
-                generator: None,
+                kind: perry_hir::fn_proto::FnProtoKind::Function,
             },
         );
         chunker.finish();
@@ -421,24 +430,46 @@ mod tests {
     }
 }
 
-/// Computed instance generators need a callable entry as named ones do.
-pub(super) fn emit_computed_generator_entries(
+/// Whether a computed instance method's function object is born from its own
+/// `<method>__eclo` entry info: when that info carries what the bare code
+/// pointer cannot, the prototype kind (`FnProtoKind`: an async or generator
+/// method is not a `Function.prototype` function), the fixed generator state,
+/// or a known-symbol member (a declared prototype key).
+/// The class's member table (`class_declarations.rs`) names the entry exactly
+/// when this holds; `emit_computed_method_entries` defines it.
+pub(crate) fn computed_method_has_entry(
+    module: &perry_hir::Module,
+    m: &perry_hir::ClassComputedMember,
+    cid: u32,
+    fresh: &std::collections::HashSet<u32>,
+) -> bool {
+    !m.is_static
+        && m.kind == perry_hir::ClassComputedMemberKind::Method
+        && (crate::codegen::class_declarations::declared_symbol_member(m, cid, fresh).is_some()
+            || perry_hir::fn_proto::FnProtoKind::of_function(module, &m.function)
+                != perry_hir::fn_proto::FnProtoKind::Function
+            || crate::codegen::helpers::body_has_fixed_generator_state(&m.function.body))
+}
+
+/// Computed instance methods need a callable entry as named ones do whenever
+/// the member table names one, or the body needs its lexical owner.
+pub(super) fn emit_computed_method_entries(
     chunker: &mut InitChunker<'_>,
+    module: &perry_hir::Module,
     classes: &[(u32, &perry_hir::Class)],
     fresh: &std::collections::HashSet<u32>,
     prefix: &str,
 ) {
     for &(cid, class) in classes {
-        for m in class.computed_members.iter().filter(|m| {
-            !m.is_static
-                && (crate::codegen::helpers::body_needs_explicit_method_owner(
-                    &m.function.body,
-                    fresh.contains(&cid),
-                ) || (m.kind == perry_hir::ClassComputedMemberKind::Method
-                    && crate::codegen::class_declarations::declared_symbol_member(m, cid, fresh)
-                        .is_some()))
-        }) {
+        for m in class.computed_members.iter().filter(|m| !m.is_static) {
             let f = &m.function;
+            let owner = crate::codegen::helpers::body_needs_explicit_method_owner(
+                &f.body,
+                fresh.contains(&cid),
+            );
+            if !owner && !computed_method_has_entry(module, m, cid, fresh) {
+                continue;
+            }
             let llvm_name = crate::symbol_names::method(&prefix, &class.name, &f.name);
             emit_class_method_entry(
                 chunker,
@@ -453,11 +484,8 @@ pub(super) fn emit_computed_generator_entries(
                         .any(|p| p.is_rest && p.arguments_object.is_none()),
                     has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                     home: fresh.contains(&cid),
-                    generator_owner: crate::codegen::helpers::body_needs_explicit_method_owner(
-                        &f.body,
-                        fresh.contains(&cid),
-                    ),
-                    generator: crate::codegen::helpers::body_generator_record_kind(&f.body),
+                    generator_owner: owner,
+                    kind: perry_hir::fn_proto::FnProtoKind::of_function(module, f),
                 },
             );
         }

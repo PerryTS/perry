@@ -297,6 +297,41 @@ mod messaging_constructor_ownership_tests {
     use crate::value::{js_nanbox_get_pointer, JSValue};
 
     #[test]
+    fn generated_worker_bodies_dispatch_without_enabling_partial_vm_movement() {
+        crate::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let value = || {
+            crate::value::js_nanbox_pointer(
+                object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+            )
+        };
+        // A dispatcher-only call would miss the generated export-body regression.
+        let marker = scope.root_nanbox_f64(
+            js_native_export_776f726b65725f74687265616473_6d61726b4173556e7472616e7366657261626c65(
+                0,
+            ),
+        );
+        unsafe {
+            crate::closure::call_value(
+                marker.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                &[value(), 42.0],
+            );
+        }
+        assert!(crate::clone_markers::is_untransferable(value()));
+        let movement = scope.root_nanbox_f64(js_native_export_776f726b65725f74687265616473_6d6f76654d657373616765506f7274546f436f6e74657874(0));
+        assert!(crate::exception::catch_js_throw(|| unsafe {
+            crate::closure::call_value(
+                movement.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                &[value(), value()],
+            )
+        })
+        .is_err());
+    }
+
+    #[test]
     fn messaging_constructor_ownership_survives_global_reassignment() {
         crate::gc::gc_init();
         let scope = RuntimeHandleScope::new();

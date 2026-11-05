@@ -291,7 +291,7 @@ pub(crate) unsafe fn store_proven_own_slot(
         // and flag test): an own-key overwrite of `%Array.prototype%`'s
         // `join` must set its shadow bit like any other slot store.
         super::builtin_proto::note_value_store(obj, slot, false, "own store");
-        let rep = super::field_rep::slot_rep(record.rep(), slot as u32);
+        let rep = record.lane(slot as u32);
         let address = obj
             .cast::<u8>()
             .add(std::mem::size_of::<ObjectHeader>())

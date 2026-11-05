@@ -75,6 +75,7 @@
       "perry-native-registration",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime",
       "perry-runtime-manifest",
       "perry-runtime-static",
@@ -110,6 +111,7 @@
       "perry-http-client",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime-manifest",
       "perry-tls-session",
       "perry-transform",
@@ -301,6 +303,10 @@
     },
     "perry-perex": {
       "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-realm-table": {
+      "category": "compiler-core",
       "decision": "keep"
     },
     "perry-runtime": {

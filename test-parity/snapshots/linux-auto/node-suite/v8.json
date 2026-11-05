@@ -169,6 +169,20 @@
       "category": "untriaged",
       "reason": ""
     },
+    "node-suite/v8/test_gap_v8_2_3680plus": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/v8/test_gap_v8_heap_snapshot_4916": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
     "node-suite/v8/version-tag/flags-isolated": {
       "status": "parity_fail",
       "issue": null,

@@ -18,17 +18,20 @@ class Perry < Formula
     url "https://github.com/PerryTS/perry/archive/refs/tags/v0.2.173.tar.gz"
     sha256 "PLACEHOLDER"
     depends_on "rust" => :build
+    depends_on "node" => :build
   end
 
   def install
     if OS.mac?
       bin.install "perry"
-      lib.install Dir["libperry_*.a"]
+      lib.install Dir["libperry_*.a"] + Dir["libperry_*.a.gc-effects"]
     else
       system "cargo", "build", "--release"
-      system "cargo", "build", "--release", "-p", "perry-runtime", "-p", "perry-stdlib"
+      system "cargo", "build", "--release", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
+      system "cargo", "run", "--release", "-p", "perry-gc-effects", "--", "sidecars", "target/release"
       bin.install "target/release/perry"
-      lib.install Dir["target/release/libperry_*.a"]
+      system "node", "scripts/publish/archive-kind.mts", "--stage-host", "target/release", "host-staging"
+      lib.install Dir["host-staging/libperry_*.a"] + Dir["host-staging/libperry_*.a.gc-effects"]
     end
   end
 

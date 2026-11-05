@@ -287,7 +287,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
 
     // wpfacts slice 2: the facts prove the slot always holds a canonical
     // double (an `F64` birth lane that only Numbers are ever stored into).
-    if crate::expr::wpfacts_access::proves_raw_f64(ctx, expr) {
+    if crate::expr::wpfacts_access::proves_number(ctx, expr) {
         if let Some(v) = crate::expr::wpfacts_access::try_lower_get(ctx, object, property, 0)? {
             return Ok(Some(v));
         }

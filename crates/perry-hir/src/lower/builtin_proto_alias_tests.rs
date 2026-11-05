@@ -111,7 +111,7 @@ fn a_function_prototype_to_string_alias_stays_reflective() {
 /// `call`) answers with another method. Reflective, `t` stays the first
 /// argument of the outer `.call`; folded, it becomes the receiver and the
 /// argument list starts at the `thisArg`. Output parity:
-/// `test-files/test_gap_function_proto_intrinsic_call_on_relinked.ts`.
+/// `test-parity/language/function/test_gap_function_proto_intrinsic_call_on_relinked.ts`.
 #[test]
 fn function_prototype_intrinsics_stay_reflective() {
     let module = lower(

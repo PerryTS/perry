@@ -566,13 +566,13 @@ pub(super) fn lower_builtin_new<'a>(
             )))
         }
         "BroadcastChannel" => {
-            // #6986: `name` was held across the discard loop's lowering.
             let name = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
+            let argc = args.len().to_string();
             Ok(Some(blk.call(
                 DOUBLE,
-                "js_broadcast_channel_new",
-                &[(DOUBLE, &name)],
+                "js_broadcast_channel_new_counted",
+                &[(DOUBLE, &name), (I32, &argc)],
             )))
         }
         "Event" => {

@@ -303,6 +303,7 @@ fn lower_static_key_store(
                 value_is_scalar,
                 matches!(object, Expr::This),
                 run.as_ref(),
+                super::layout_read::run_receiver(ctx, object),
             );
             Ok(result)
         },

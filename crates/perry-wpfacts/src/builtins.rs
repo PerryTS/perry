@@ -9,16 +9,30 @@ use crate::model::*;
 
 mod collections;
 mod constructors;
+mod effects;
+#[cfg(test)]
+pub(crate) mod effects_for_tests {
+    pub(crate) use super::effects::interpretable;
+    /// `Array.prototype.<name>` is declared in forms the interpreter runs.
+    pub(crate) fn declared_array_method(name: &str) -> bool {
+        super::effects::declared(super::Family::Array, name).is_some()
+    }
+}
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
+#[cfg(test)]
+mod realm_declared;
+mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
+pub use undeclared::{native_fn_field, native_fn_holder, undeclared, Undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
-use members::{Family, Mem};
+pub use members::Family;
+use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
     native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
@@ -86,12 +100,57 @@ pub fn interpreted_code_runs(m: &mut Model) {
         return;
     }
     m.interp_runs = true;
+    // It reads any built-in object's program fields by name (rule R1).
+    m.builtin_fields_interp();
     let gt = m.tok(crate::model::TokKind::Builtin(BuiltinNs::GlobalThis));
     note_native_write(m, gt, None, "interpreted code may run");
     let r = m.reason("thrown where interpreted code can catch it");
     let thrown = m.thrown;
     m.thrown_reason = Some(r);
     m.sink_node(thrown, r);
+}
+
+/// Without the interpreter linked (`Model::interp_linked`: the driver's
+/// link decision, the one that installs the runtime's `dyn-eval`), a call or
+/// construct of the Function-constructor token runs no program code, so it
+/// gives nothing to unknown code. The Function constructor converts every
+/// argument to a string first (`toString`/`valueOf` run: the ToPrimitive
+/// protocol), then throws a TypeError (perry-runtime
+/// `js_function_ctor_from_strings_impl`). The other constructors the token
+/// stands for as a function's `constructor` (`%AsyncFunction%`,
+/// `%GeneratorFunction%`, `%AsyncGeneratorFunction%`) run nothing and return
+/// `undefined`, or under `new` an object of the runtime's. Six arguments or
+/// a spread may be the runtime's depd `wrapfunction` shape, which returns a
+/// runtime-made function: that call runs code (true), as does any call with
+/// the interpreter linked. `skip`: leading arguments that are not the
+/// constructor's (`Function.call`'s `this`).
+pub(crate) fn function_ctor_runs_code(
+    m: &mut Model,
+    call: CallId,
+    skip: usize,
+    construct: bool,
+) -> bool {
+    let c = &m.calls[call as usize];
+    if m.interp_linked || !c.spread.is_empty() || c.args.len().saturating_sub(skip) == 6 {
+        return true;
+    }
+    m.diagnostic_builtin(call, |_| "Function constructor without an interpreter".into());
+    let c = m.calls[call as usize].clone();
+    let r = m.reason("ToPrimitive");
+    for &a in c.args.iter().skip(skip) {
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    if construct {
+        m.add_top(c.ret, |_| "result: new of a function constructor".into());
+    }
+    m.add_prim(c.ret, prim::UNDEF);
+    false
 }
 
 fn unknown_method(m: &mut Model, call: CallId, why: &str) {
@@ -312,6 +371,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         ret,
         args_all,
         has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
         token: tok,
         ctor_of: None,
         lexical_this: true,
@@ -319,6 +379,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -358,6 +419,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         ret,
         args_all,
         has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
         token: tok,
         ctor_of: None,
         lexical_this: false,
@@ -365,6 +427,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -531,7 +594,15 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
             TmplKind::BObj { what, .. } => Some(*what),
             _ => None,
         },
-        TokKind::ClassObj(_) => Some(members::CLASS_CTOR),
+        TokKind::ClassObj(_) => Some(members::FN_PROTO_ONLY),
+        // A function the prototype-kind predicate says is born with
+        // `%Function.prototype%`; not a generator's step closure, which
+        // stands for the generator object (`FuncInfo::gen_step`).
+        TokKind::Func(f, _) => {
+            let fi = &m.funcs[*f as usize];
+            (fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step)
+                .then_some(members::FN_PROTO_ONLY)
+        }
         _ => None,
     };
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
@@ -580,8 +651,61 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     if m.explain {
         *m.bf_mints.entry(why).or_insert(0) += 1;
     }
-    let t = m.tok(TokKind::BuiltinFn);
-    t
+    m.tok(TokKind::BuiltinFn(Native::Any))
+}
+
+/// The native a read of named key `a` (`name`) on a value of family `fam`
+/// (a site builtin object of kind `what`) finds, where the read names it:
+/// a method of the family's own intrinsic prototype, on a family a receiver
+/// names exactly (`native_receiver`). An inherited `Object.prototype`
+/// method runs on a direct call through the chain, not the receiver's own
+/// model: it stays `Native::Any`, as every other mint does.
+fn member_native(fam: Family, what: Option<&'static str>, a: Atom, name: &str) -> Option<Native> {
+    let site = !matches!(
+        fam,
+        Family::Array
+            | Family::Function
+            | Family::Str
+            | Family::Num
+            | Family::Bool
+            | Family::Sym
+            | Family::BigInt
+    );
+    (matches!(members::own(fam, name), Some(Mem::Fn)) && (what.is_some() || !site)).then_some(
+        Native::Member {
+            fam,
+            what: if site { what } else { None },
+            key: a,
+        },
+    )
+}
+
+/// Does receiver token `r` have the family of native member `(fam, what)`,
+/// so that the member called on it runs `own_method(r, key)`, the model a
+/// call `r.key()` runs: an array for `Array.prototype`'s, a site builtin
+/// object of the same kind, a function value for `Function.prototype`'s.
+pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>, r: Tok) -> bool {
+    match &m.toks[r as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Arr { .. } => fam == Family::Array && what.is_none(),
+            TmplKind::BObj { what: w, .. } => what == Some(*w) && members::bobj_family(w) == fam,
+            _ => false,
+        },
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => fam == Family::Function,
+        _ => false,
+    }
+}
+
+/// The primitive kinds whose chain is family `fam`'s (`prim_families`).
+pub(crate) fn native_prims(fam: Family) -> u16 {
+    match fam {
+        Family::Str => prim::STR,
+        Family::Num => prim::NUM,
+        Family::Bool => prim::BOOL,
+        Family::Sym => prim::SYMBOL,
+        Family::BigInt => prim::BIGINT,
+        _ => 0,
+    }
 }
 
 /// The opaque member: what a key a store into ⊤ (or unmodeled code) may
@@ -644,6 +768,20 @@ pub(crate) fn is_collection(what: &str) -> bool {
     members::bobj_family(what) == Family::Collection
 }
 
+/// A builtin object whose template is a container the model fills
+/// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
+/// arrays, `Object.groupBy` and `Object.fromEntries` results, property
+/// descriptors): its birth stores every value the runtime gives its own
+/// enumerable properties under its any key, and none of them is an
+/// accessor. A copy of its own properties reads those fields
+/// (`Model::own_props_modelled`). A `primbox` is not: the result of an
+/// undescribed primitive, Date or typed-array method (`generic_result`,
+/// `prim_method_generic`) is born with an empty any key, its primitives
+/// given by the load rule (`loads.rs`, "a container of primitives").
+pub(crate) fn own_values_filled(what: &str) -> bool {
+    members::bobj_family(what) == Family::Box && what != "primbox"
+}
+
 fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     match &m.toks[t as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
@@ -659,7 +797,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
                 .then_some(Family::Object)
         }
         TokKind::NativeProto(_) => Some(Family::Object),
-        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => Some(Family::Function),
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
             (tm.parent.is_none() && tm.parent_value.is_none()).then_some(Family::Function)
@@ -811,13 +949,27 @@ fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl Fn
     }
 }
 
+/// A console method formats its arguments (`Protocol::Inspect`); a spread
+/// hands it the elements, which the call site iterated.
 fn console_args(m: &mut Model, call: CallId) {
-    implicit_args(
-        m,
-        call,
-        "console argument (formatted by the runtime)",
-        Protocol::Any,
-    );
+    let c = m.calls[call as usize].clone();
+    let r = m.reason("console argument (formatted by the runtime)");
+    let ek = m.elem_key();
+    let mut shown = c.args.clone();
+    for &s in &c.spread {
+        let dst = m.node_l("console-spread-elems");
+        m.cons(s, Cons::Load { key: ek, dst });
+        shown.push(dst);
+    }
+    for a in shown {
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Inspect,
+            },
+        );
+    }
     ret_prim(m, call, prim::UNDEF);
 }
 
@@ -953,7 +1105,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 m.cons(
                     o,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: fa,
                     },
                 );
@@ -1027,7 +1179,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             m.cons(
                 vals,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: fa,
                 },
             );
@@ -1156,7 +1308,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             m.cons(
                 vals,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: items,
                 },
             );
@@ -1221,6 +1373,8 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             }
             ret_prim(m, call, prim::UNDEF);
         }
+        // `Function.call(t, ...)` is the constructor's call on the rest.
+        (BuiltinNs::Function, "call") if !function_ctor_runs_code(m, call, 1, false) => {}
         (BuiltinNs::Function, "call" | "apply" | "bind") => {
             // `Function.call(...)`: the Function constructor runs (E14).
             set_dyn_eval(m, "E14 Function(...) value call");
@@ -1319,6 +1473,9 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Function => {
+            if !function_ctor_runs_code(m, call, 0, false) {
+                return;
+            }
             set_dyn_eval(m, "E14 Function(...) call");
             unknown_method(m, call, "E14 dynamic code");
         }

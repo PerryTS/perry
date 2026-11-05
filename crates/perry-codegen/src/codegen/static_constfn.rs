@@ -65,7 +65,7 @@ pub(crate) fn literal_final(
             }
             rep |= 3 << (slot * 2);
             constfn.push(ConstFnBirth {
-                slot: slot as u8,
+                slot: slot as u32,
                 symbol: crate::fn_info::info_symbol(&crate::fn_info::closure_body_symbol(
                     prefix, *func_id,
                 )),
@@ -83,7 +83,7 @@ pub(crate) fn literal_final(
             }
             rep |= 3 << (slot * 2);
             constfn.push(ConstFnBirth {
-                slot: slot as u8,
+                slot: slot as u32,
                 symbol: crate::fn_info::info_symbol(&body),
             });
         }
@@ -650,7 +650,7 @@ fn construction_final(
     }) {
         rep |= 3u64 << (2 * last.field_index);
         constfn.push(ConstFnBirth {
-            slot: last.field_index as u8,
+            slot: last.field_index,
             symbol: crate::fn_info::info_symbol(&last.target),
         });
     }
@@ -1198,5 +1198,30 @@ impl StaticMethodLane {
     /// from here, never from the type byte.
     pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
         crate::target_layout::HeaderForm::Meta
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_constructions: HashMap<u32, ConstructedObject>,
+    module_body_arities: HashMap<String, usize>,
+    module_function_values: HashMap<u32, (String, usize)>,
+    module_object_create_protos: crate::collectors::ObjectCreateProtos,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_constructions: MODULE_CONSTRUCTIONS.with(|s| s.borrow().clone()),
+        module_body_arities: MODULE_BODY_ARITIES.with(|s| s.borrow().clone()),
+        module_function_values: MODULE_FUNCTION_VALUES.with(|s| s.borrow().clone()),
+        module_object_create_protos: MODULE_OBJECT_CREATE_PROTOS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CONSTRUCTIONS.with(|s| *s.borrow_mut() = self.module_constructions.clone());
+        MODULE_BODY_ARITIES.with(|s| *s.borrow_mut() = self.module_body_arities.clone());
+        MODULE_FUNCTION_VALUES.with(|s| *s.borrow_mut() = self.module_function_values.clone());
+        MODULE_OBJECT_CREATE_PROTOS
+            .with(|s| *s.borrow_mut() = self.module_object_create_protos.clone());
     }
 }

@@ -484,7 +484,7 @@ impl<'a> Gen<'a> {
         self.m.cons(
             holder,
             Cons::Store {
-                key: Key::Any,
+                key: Key::any(),
                 src,
                 site: 0,
             },
@@ -1274,7 +1274,7 @@ impl<'a> Gen<'a> {
                     let src = self.effect_src(tm, a, c);
                     // `*`: a store under a computed key (DECISIONS 188).
                     let key = match self.m.atoms[a as usize] == crate::STAR_KEY {
-                        true => crate::model::Key::Any,
+                        true => crate::model::Key::any(),
                         false => crate::model::Key::Named(a),
                     };
                     self.m.store_into(t, key, src, site);

@@ -91,15 +91,24 @@ fn to_primitive_on_an_array_runs_object_prototype_members_through_the_chain() {
     assert!(proven(&pf, "b"), "{}", pf.dump_text());
 }
 
-/// Soundness: the members of the intrinsics stay opaque. A builtin method
-/// read as a value and called through `Function.prototype.call` hands the
-/// arguments to the runtime (`set.call(t, k, v)` stores), whether the name
-/// is the family's own or `Object.prototype`'s.
+/// A builtin method read as a value and called through
+/// `Function.prototype.call` is the native it was read from: on a receiver
+/// of its family it runs that native's model (`set.call(t, k, v)` stores
+/// into `t`, which stays local); on a receiver of another family, or when
+/// the member is inherited from `Object.prototype`, the arguments go to
+/// the runtime as before.
 #[test]
 fn described_members_keep_their_opaque_effects() {
     let pf = facts(&format!(
         "{CLASSES}
         const mp = new Map(); const f: any = mp.set; const tgt: any = new Map();
+        f.call(tgt, \"k\", new A());
+        console.log(new A().a);"
+    ));
+    assert!(tmpl(&pf, "A").escape.is_none(), "{}", pf.dump_text());
+    let pf = facts(&format!(
+        "{CLASSES}
+        const mp = new Map(); const f: any = mp.set; const tgt: any = {{ size: 0 }};
         f.call(tgt, \"k\", new A());
         console.log(new A().a);"
     ));

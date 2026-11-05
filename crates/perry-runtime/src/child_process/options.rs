@@ -256,6 +256,7 @@ pub(crate) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     out
 }
 
+#[cfg(not(unix))]
 pub(crate) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     match kind {
         CpStdio::Pipe => pipe_obj,
@@ -263,74 +264,101 @@ pub(crate) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     }
 }
 
-/// Apply stdio 0-2 and honor explicit descriptors beyond fd 2.
+/// The parent end of a child's stdio pipe slot.
+#[cfg(unix)]
+pub(crate) type CpParentPipe = std::os::fd::OwnedFd;
+#[cfg(not(unix))]
+pub(crate) type CpParentPipe = std::fs::File;
+
+/// A connected `AF_UNIX` stream pair, both ends close-on-exec: Node's pipe
+/// slots are sockets in the child too (`fstat` on fd 0/1/3 reports a socket).
+#[cfg(unix)]
+pub(crate) fn cp_socketpair() -> std::io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    use std::os::fd::AsRawFd;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut pair = [0; 2];
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let kind = libc::SOCK_STREAM;
+    // SAFETY: `pair` has room for the two descriptors socketpair writes.
+    if unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, pair.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: socketpair succeeded, so both descriptors are open and ours.
+    let (parent, child) = unsafe { (OwnedFd::from_raw_fd(pair[0]), OwnedFd::from_raw_fd(pair[1])) };
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    for end in [&parent, &child] {
+        // SAFETY: `end` is an open descriptor owned above.
+        if unsafe { libc::fcntl(end.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok((parent, child))
+}
+
+/// Apply every stdio slot to `command`. Unix: each `'pipe'` slot is a
+/// socketpair whose child end becomes the slot's descriptor; the parent ends
+/// come back as `(slot, end)` for every pipe slot, for the caller to wrap in
+/// `net.Socket`s once the spawn succeeded. Elsewhere 0-2 are `Stdio::piped()`
+/// and only the parent ends of pipe slots beyond fd 2 come back.
 pub(crate) fn cp_apply_live_stdio(
     command: &mut Command,
     stdio: &[CpStdio],
-) -> std::io::Result<Vec<(usize, std::fs::File)>> {
-    let to_stdio = |kind: CpStdio| match kind {
-        CpStdio::Pipe => Stdio::piped(),
-        CpStdio::Ignore => Stdio::null(),
-        CpStdio::Inherit => Stdio::inherit(),
-        CpStdio::Fd(fd) => cp_stdio_from_fd(fd),
-    };
-    command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
-    command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
-    command.stderr(to_stdio(stdio.get(2).copied().unwrap_or(CpStdio::Pipe)));
+) -> std::io::Result<Vec<(usize, CpParentPipe)>> {
+    let slot = |fd: usize| stdio.get(fd).copied().unwrap_or(CpStdio::Pipe);
 
     #[cfg(unix)]
     {
-        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::fd::AsRawFd;
         use std::os::unix::process::CommandExt;
 
-        let mut readers = Vec::new();
-        for (fd, kind) in stdio.iter().copied().enumerate().skip(3) {
-            match kind {
+        let mut parents = Vec::new();
+        for fd in 0..stdio.len().max(3) {
+            let kind = slot(fd);
+            if fd < 3 {
+                let child_stdio = match kind {
+                    CpStdio::Pipe => {
+                        let (parent, child) = cp_socketpair()?;
+                        parents.push((fd, parent));
+                        Stdio::from(child)
+                    }
+                    CpStdio::Ignore => Stdio::null(),
+                    CpStdio::Inherit => Stdio::inherit(),
+                    CpStdio::Fd(source) => cp_stdio_from_fd(source),
+                };
+                match fd {
+                    0 => command.stdin(child_stdio),
+                    1 => command.stdout(child_stdio),
+                    _ => command.stderr(child_stdio),
+                };
+                continue;
+            }
+            // The source descriptor dup2'd onto `fd` in the child. Owned ones
+            // move into the hook, so the parent's copy closes with `command`.
+            let source: Option<(i32, Option<std::os::fd::OwnedFd>)> = match kind {
                 CpStdio::Pipe => {
-                    let mut pipe = [0; 2];
-                    if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    let read = unsafe { std::fs::File::from_raw_fd(pipe[0]) };
-                    let write = unsafe { std::fs::File::from_raw_fd(pipe[1]) };
-                    if unsafe { libc::fcntl(read.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    let write_fd = write.as_raw_fd();
-                    if unsafe { libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    unsafe {
-                        command.pre_exec(move || {
-                            if libc::dup2(write.as_raw_fd(), fd as i32) < 0
-                                || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
-                            {
-                                return Err(std::io::Error::last_os_error());
-                            }
-                            Ok(())
-                        });
-                    }
-                    readers.push((fd, read));
+                    let (parent, child) = cp_socketpair()?;
+                    parents.push((fd, parent));
+                    Some((child.as_raw_fd(), Some(child)))
                 }
                 CpStdio::Ignore => {
                     let null = std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
                         .open("/dev/null")?;
-                    unsafe {
-                        command.pre_exec(move || {
-                            if libc::dup2(null.as_raw_fd(), fd as i32) < 0
-                                || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
-                            {
-                                return Err(std::io::Error::last_os_error());
-                            }
-                            Ok(())
-                        });
-                    }
+                    let null = std::os::fd::OwnedFd::from(null);
+                    Some((null.as_raw_fd(), Some(null)))
                 }
-                CpStdio::Fd(source) => unsafe {
+                CpStdio::Fd(source) => Some((source, None)),
+                CpStdio::Inherit => None,
+            };
+            if let Some((source, owned)) = source {
+                // SAFETY: the hook only calls async-signal-safe dup2/fcntl.
+                unsafe {
                     command.pre_exec(move || {
+                        let _ = &owned;
                         if libc::dup2(source, fd as i32) < 0
                             || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
                         {
@@ -338,11 +366,23 @@ pub(crate) fn cp_apply_live_stdio(
                         }
                         Ok(())
                     });
-                },
-                CpStdio::Inherit => {}
+                }
             }
         }
-        return Ok(readers);
+        return Ok(parents);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let to_stdio = |kind: CpStdio| match kind {
+            CpStdio::Pipe => Stdio::piped(),
+            CpStdio::Ignore => Stdio::null(),
+            CpStdio::Inherit => Stdio::inherit(),
+            CpStdio::Fd(fd) => cp_stdio_from_fd(fd),
+        };
+        command.stdin(to_stdio(slot(0)));
+        command.stdout(to_stdio(slot(1)));
+        command.stderr(to_stdio(slot(2)));
     }
 
     #[cfg(not(unix))]
@@ -635,6 +675,58 @@ mod posix_spawn_tests {
 #[cfg(test)]
 mod tests {
     use super::cp_should_use_node_interpreter;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_slot_is_a_close_on_exec_socket_pair() {
+        use std::io::{Read, Write};
+        use std::os::fd::AsRawFd;
+        let (parent, child) = super::cp_socketpair().expect("socketpair");
+        for end in [&parent, &child] {
+            // SAFETY: `end` is an open descriptor and `stat` is plain old data.
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::fstat(end.as_raw_fd(), &mut stat) }, 0);
+            assert_eq!(stat.st_mode & libc::S_IFMT, libc::S_IFSOCK);
+            // SAFETY: F_GETFD on an open descriptor.
+            let flags = unsafe { libc::fcntl(end.as_raw_fd(), libc::F_GETFD) };
+            assert_ne!(flags & libc::FD_CLOEXEC, 0, "both ends close on exec");
+        }
+        let mut parent = std::fs::File::from(parent);
+        let mut child = std::fs::File::from(child);
+        child.write_all(b"up").unwrap();
+        parent.write_all(b"down").unwrap();
+        let mut buf = [0; 4];
+        parent.read_exact(&mut buf[..2]).unwrap();
+        assert_eq!(&buf[..2], b"up");
+        child.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"down");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_pipe_slot_reaches_the_child_as_a_socket() {
+        use super::{cp_apply_live_stdio, CpStdio};
+        use std::io::Read;
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "for fd in 0 1 2 3; do [ -S /dev/fd/$fd ] || exit $((10 + fd)); done; printf ok >&3",
+        ]);
+        let parents = cp_apply_live_stdio(&mut command, &[CpStdio::Pipe; 4]).expect("stdio");
+        assert_eq!(
+            parents.iter().map(|(fd, _)| *fd).collect::<Vec<_>>(),
+            [0, 1, 2, 3],
+            "one parent end per pipe slot, stdio included"
+        );
+        let mut child = command.spawn().expect("spawn");
+        // The child ends live in `command`; drop them so slot 3 reads to EOF.
+        drop(command);
+        let mut out = String::new();
+        let slot3 = parents.into_iter().find(|(fd, _)| *fd == 3).unwrap().1;
+        std::fs::File::from(slot3).read_to_string(&mut out).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+        assert_eq!(out, "ok");
+    }
 
     #[test]
     fn self_exec_node_cli_eval_modes_use_node_interpreter() {

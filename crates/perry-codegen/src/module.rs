@@ -53,6 +53,7 @@ fn push_statepoint_declarations(ir: &mut String) {
 }
 
 pub struct LlModule {
+    pub(crate) callable_worker: bool,
     /// Per-compile module-state ownership, copied from CompileOptions.
     pub(crate) program_has_worker: bool,
     pub target_triple: String,
@@ -177,6 +178,7 @@ impl LlModule {
 
     pub fn new_with_fp_flags(target_triple: impl Into<String>, fp_flags: FpFlags) -> Self {
         Self {
+            callable_worker: false,
             target_triple: target_triple.into(),
             program_has_worker: false,
             declarations: Vec::new(),
@@ -1981,3 +1983,5 @@ fn llvm_metadata_string(text: &str) -> String {
     }
     out
 }
+
+mod callable;

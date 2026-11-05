@@ -403,6 +403,13 @@ impl CodegenBudget {
         grant
     }
 
+    /// Admit an extra lowering worker only when a CPU and its scratch memory
+    /// are immediately available. Never wait while holding a module grant.
+    pub(crate) fn try_acquire(&self, memory: u64) -> Option<BudgetGrant<'_>> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.try_take(&mut state, memory)
+    }
+
     #[cfg(test)]
     fn free(&self) -> (usize, u64, usize) {
         let state = self.state.lock().unwrap();

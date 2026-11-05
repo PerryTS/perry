@@ -20,6 +20,7 @@ prefix='' if causal else 'raw-'
 cache=R/(name+'.idx.pkl')
 t0=time.time()
 def say(*a): print(*a,flush=True)
+WARNED=set()
 if cache.exists():
  with cache.open('rb') as f: D=pickle.load(f)
 else:
@@ -44,7 +45,11 @@ else:
   elif k=='top-field': D['fields'][r['node']]=r['token']
   elif k=='unknown-call':D['unknown'][r['call']]=r
   elif k.startswith('birth-'):
-   target={'injection':'injections','edge':'edges','escape':'escapes','sink':'sinks','write':'writes','read':'reads','call':'calls','meta':'meta'}[k[6:]]
+   if k[6:] in ('arrival','opener'):continue # chain.py/openers.py records: the birth analysis does not read them
+   target={'injection':'injections','edge':'edges','escape':'escapes','sink':'sinks','write':'writes','read':'reads','call':'calls','meta':'meta'}.get(k[6:])
+   if target is None:
+    if k not in WARNED:WARNED.add(k);print('an.py: skipping unknown record kind',k,file=sys.stderr)
+    continue
    if target=='calls':D[target][r['id']]=r
    else:D[target].append(r)
  with cache.open('wb') as f:pickle.dump(D,f,protocol=5)

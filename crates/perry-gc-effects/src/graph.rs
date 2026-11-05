@@ -247,6 +247,8 @@ pub struct Classification {
     pub stats: Stats,
     reason: Vec<Vec<Option<String>>>,
     witness: Vec<Vec<Option<usize>>>,
+    /// Reach of JS entries and of the write barrier, for effect declarations.
+    pub effect_reach: crate::effects::EffectReach,
 }
 impl Classification {
     pub fn witness_path(&self, g: &Graph, name: &str, mode: Mode) -> Vec<String> {
@@ -618,6 +620,30 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     } else {
         HashSet::new()
     };
+    // Effect-declaration reach (crate::effects): not part of the classes.
+    let barrier_rules = kinds("barrier");
+    let barrier_seed = parallel_map(nn, |i| match_any(&barrier_rules, &spell[i]).map(|r| r.line));
+    let dead_barrier_rules = barrier_rules
+        .iter()
+        .filter(|r| !barrier_seed.contains(&Some(r.line)))
+        .map(|r| r.description())
+        .collect();
+    let named_kind =
+        |i: usize, kinds: &[&str]| named[i].is_some_and(|r| kinds.contains(&r.kind.as_str()));
+    let effect_reach = crate::effects::EffectReach::solve(
+        g,
+        &extra_pred,
+        |i| {
+            named_kind(i, &["js"])
+                || structural[i]
+                    .as_deref()
+                    .is_some_and(|s| !s.starts_with("unwind:"))
+        },
+        |i| barrier_seed[i].is_some(),
+        |i| named_kind(i, &["panic", "teardown"]),
+        |i| named_kind(i, &["panic", "teardown", "collector", "poll"]),
+        dead_barrier_rules,
+    );
     let mut node_of = BTreeMap::new();
     let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, n) in g.nodes.iter().enumerate() {
@@ -704,6 +730,7 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         stats,
         reason,
         witness,
+        effect_reach,
     })
 }
 

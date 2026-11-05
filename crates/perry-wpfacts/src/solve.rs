@@ -11,21 +11,25 @@
 mod copy;
 mod define;
 mod lookup;
+mod own_read;
 
 use crate::builtins;
 mod call_and_construct;
+mod native_value;
 mod shared;
 use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
 #[path = "solve/apply.rs"]
 mod apply;
+mod builtin_fields;
 
 #[path = "solve/store.rs"]
 mod store;
 
 mod escape;
 mod fields;
+mod shaped_keys;
 mod virt;
 
 impl Model {
@@ -75,6 +79,25 @@ impl Model {
                 self.nodes[n as usize].succ_set.as_ref(),
             )
         };
+        // Delta tokens are distinct; a slice may repeat one.
+        let distinct = crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
+        let mut fresh = std::mem::take(&mut self.fresh);
+        let mut seen = std::mem::take(&mut self.fresh_seen);
+        fresh.clear();
+        seen.clear();
+        // Is `t` already among the new members?
+        let is_fresh = |fresh: &[Tok], seen: &mut crate::pts::FxHashSet<Tok>, t: Tok| {
+            if distinct {
+                return false;
+            }
+            if fresh.len() <= 16 {
+                return fresh.contains(&t);
+            }
+            if seen.len() < fresh.len() {
+                seen.extend(fresh[seen.len()..].iter().copied());
+            }
+            seen.contains(&t)
+        };
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut top_new = false;
@@ -93,7 +116,8 @@ impl Model {
                 later.push(t);
                 continue;
             }
-            if node.pts.insert(t) {
+            if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
+                fresh.push(t);
                 node.delta.push_to(t, &targets);
                 changed = true;
                 self.pts_entries += 1;
@@ -104,11 +128,12 @@ impl Model {
         // to the marker, and the readers after the solve read it as ⊤. Left
         // out, it never floods the unit. Without ⊤ it is delivered as before.
         if !later.is_empty() {
-            if node.pts.contains_tok(TOP) {
+            if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
             } else {
                 for t in later {
-                    if node.pts.insert(t) {
+                    if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
+                        fresh.push(t);
                         node.delta.push_to(t, &targets);
                         changed = true;
                         self.pts_entries += 1;
@@ -116,6 +141,14 @@ impl Model {
                 }
             }
         }
+        // One step from the old set to the new one: a shared set is never
+        // copied in place (`SetTable::extend`).
+        if !fresh.is_empty() {
+            let old = std::mem::take(&mut node.pts);
+            node.pts = self.sets.extend(old, &fresh);
+        }
+        self.fresh = fresh;
+        self.fresh_seen = seen;
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
@@ -189,6 +222,26 @@ impl Model {
             "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
             self.work, p.step[0], p.step[1], p.step[2], p.step[3]
         );
+        let [sites, shaped, no_ctor] = self.key_shape_census;
+        eprintln!(
+            "perry: wpfacts key shapes sites={sites} shaped={shaped} no_constructor={no_ctor} distinct={}",
+            self.key_shapes.len().saturating_sub(1)
+        );
+        let [own, gated, obj_key] = self.own_read_census;
+        eprintln!("perry: wpfacts own reads generated={own} gated={gated} object_key={obj_key}");
+        let (logical, stored, distinct) = self.pts_storage();
+        eprintln!(
+            "perry: wpfacts sets logical={logical} stored={stored} distinct={distinct} copies={}",
+            self.sets.copies
+        );
+        let mut natives: Vec<_> = p.natives.iter().collect();
+        natives.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, (runs, sites)) in natives {
+            eprintln!(
+                "perry: wpfacts native-effects {name} runs={runs} sites={}",
+                sites.len()
+            );
+        }
         let mut ks: Vec<_> = p.kind.iter().collect();
         ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
         for (k, (n, w, rn, rw)) in ks.iter().take(25) {
@@ -242,7 +295,7 @@ impl Model {
         let big: usize = self
             .nodes
             .iter()
-            .filter(|n| matches!(n.pts, crate::pts::Pts::Big(_)))
+            .filter(|n| n.pts.is_hashed())
             .count();
         let mut hubs: Vec<(usize, usize)> = self
             .nodes
@@ -311,6 +364,7 @@ impl Model {
                     if !c.injecting {
                         let at = std::panic::Location::caller();
                         let gate = c.node_gate(n);
+                        c.inject_at = Some((n, gate));
                         c.injections.insert((
                             n,
                             at.file().into(),
@@ -355,6 +409,7 @@ impl Model {
             let d = self.diagnostic.as_mut().unwrap();
             let c = d.census.as_mut().unwrap();
             let gate = c.node_gate(n);
+            c.inject_at = Some((n, gate));
             c.injections.insert((
                 n,
                 at.file().into(),
@@ -445,6 +500,9 @@ impl Model {
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
+        if matches!(c, Cons::IdxOwnLoad { .. }) {
+            self.own_read_census[0] += 1;
+        }
         if self.diagnostic.is_some() {
             if let Cons::TopSink { reason } = c {
                 self.diagnostic_sink(n, reason);
@@ -458,6 +516,7 @@ impl Model {
                     | Cons::RetInto { .. }
                     | Cons::ArgInto { .. }
                     | Cons::ThisInst { .. }
+                    | Cons::NativeThis { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
                     | Cons::VisitHolders { .. }
@@ -474,6 +533,7 @@ impl Model {
         if self.aborted {
             return;
         }
+        self.own_refuted_cons(n, c);
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
@@ -504,6 +564,12 @@ impl Model {
     }
 
     pub fn solve(&mut self) {
+        self.solve_fixpoint();
+        // The interned sets stay with their nodes; their index is the solve's.
+        self.sets.clear();
+    }
+
+    fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
         self.mark_params();
         self.members_settled.get_mut().clear();
@@ -553,6 +619,11 @@ impl Model {
             if delta.is_empty() && dprim == 0 {
                 continue;
             }
+            // Sets change interned (`SetTable::extend`); one made outside
+            // this solve (an earlier solve, whose index is gone) is interned
+            // here, so covering below stays a pointer test.
+            let own = std::mem::take(&mut self.nodes[n as usize].pts);
+            self.nodes[n as usize].pts = self.sets.intern(own);
             delta.prepare();
             let delivery_overhead = delta.delivery_overhead();
             // Index loops (no clone of the lists): successors and
@@ -591,7 +662,7 @@ impl Model {
                 let (covered, checks) = if delta.is_empty() {
                     (true, 1)
                 } else {
-                    self.copy_coverage(n, s)
+                    self.copy_coverage(n, s, Tokens::Delivery(&delta, s))
                 };
                 let toks = if covered {
                     Tokens::Slice(&[])
@@ -711,7 +782,7 @@ impl Model {
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn | TokKind::Builtin(_) => {
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
                 self.add_tok(n, objproto)
             }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
@@ -1077,8 +1148,8 @@ impl Model {
             .iter()
             .map(|k| Key::Named(self.atom(k)))
             .collect();
-        if proto == Protocol::Json {
-            reads.push(Key::Any);
+        if proto.reads_all() {
+            reads.push(Key::any());
         }
         let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
         if !calls && reads.is_empty() {
@@ -1103,7 +1174,7 @@ impl Model {
                     }
                 }
             }
-            if proto == Protocol::Json {
+            if proto.reads_all() {
                 let r = self.reach_of(t);
                 self.mark_use(r, crate::model::MARK_TOUCH);
             }
@@ -1124,7 +1195,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            if proto == Protocol::Json {
+            if proto.reads_all() {
                 self.cons(dst, Cons::Implicit { reason, proto });
             }
             self.add_tok(recv, t);
@@ -1154,7 +1225,7 @@ impl Model {
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         match keys {
-            None => self.method_on(t, Key::Any, call),
+            None => self.method_on(t, Key::any(), call),
             Some(ks) => {
                 for a in ks {
                     self.method_on(t, Key::Named(a), call);
@@ -1178,6 +1249,9 @@ impl Model {
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
+            Cons::ProtoKey { key, dst } => {
+                format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
+            }
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
@@ -1228,6 +1302,7 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
@@ -1330,10 +1405,16 @@ impl Model {
             Cons::Arith { dst } => format!("arith {n} {dst}"),
             Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
-            Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
-            Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
-            Cons::IdxMCall { idx, call } => format!("idxmcall {n} {idx} {call}"),
-            Cons::IdxKeyCall { obj, prim, call } => format!("idxkeycall {n} {obj} {prim} {call}"),
+            Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
+            Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
+            Cons::IdxOwnLoad { idx, dst, .. } => format!("idxownload {n} {idx} {dst}"),
+            Cons::IdxOwnKey { obj, dst, .. } => format!("idxownkey {n} {obj} {dst}"),
+            Cons::OwnTest { dst, at } => format!("owntest {n} {dst} {at:?}"),
+            Cons::OwnGate { obj, idx, dst, .. } => {
+                format!("owngate {n} {obj} {idx} {dst}")
+            }
+            Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
+            Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
             Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
             Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
             Cons::DefineKeyed {
@@ -1342,7 +1423,7 @@ impl Model {
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
             Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
-            Cons::StoreIndexed { o, src, site } => format!("storeindexed {n} {o} {src} {site}"),
+            Cons::StoreIndexed { o, src, site, .. } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
             }
@@ -1353,6 +1434,7 @@ impl Model {
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
             Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
+            Cons::NativeThis { call, f } => format!("nativethis {n} {call} {f}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
             Cons::HolderStep { key, pass, stop } => {
                 format!("holderstep {n} {} {pass} {stop}", self.key_name(*key))

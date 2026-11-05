@@ -88,6 +88,11 @@ pub(crate) struct FieldProof {
     /// Every class's birth lane at the slot is `F64` and the field only ever
     /// holds Numbers: the slot always holds a canonical double.
     pub raw_f64: bool,
+    /// The field only ever holds Numbers (F2 is exactly Number), the read is
+    /// guard-free and the receiver is a heap object: the read is a Number,
+    /// and the slot's word is that Number's raw double (a Number has one
+    /// encoding), on a boxed slot as on an `F64` lane.
+    pub number: bool,
     /// Some class's birth lane at the slot is `F64`: a store keeps the
     /// raw-slot discipline.
     pub any_f64_lane: bool,
@@ -314,16 +319,28 @@ fn tested_in_block(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 }
 
 /// A number-context read (`lower_raw_f64_class_field_get_for_number_context`,
-/// `expr_produces_canonical_raw_f64`): the facts prove the slot always holds
-/// a canonical double.
-pub(crate) fn proves_raw_f64(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+/// `expr_produces_canonical_raw_f64`, `is_numeric_expr`): the facts prove the
+/// field only ever holds Numbers, so [`try_lower_get`] yields the slot's
+/// word, which is the Number's canonical double.
+pub(crate) fn proves_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::PropertyGet {
         object, property, ..
     } = expr
     else {
         return false;
     };
-    prove(ctx, object, property, Access::Get).is_some_and(|p| p.raw_f64)
+    prove(ctx, object, property, Access::Get).is_some_and(|p| p.number)
+}
+
+/// The receiver is not a heap object: a scalar-replaced local, or `this` of
+/// a constructor inlined into one. Its reads take the scalar slot route in
+/// `property_get`, not [`try_lower_get`], so the proof does not select them.
+fn scalar_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    match object {
+        Expr::LocalGet(id) => ctx.scalar_replaced.contains_key(id),
+        Expr::This => !ctx.scalar_ctor_target.is_empty(),
+        _ => false,
+    }
 }
 
 /// The local class of class id `cid` (its own name, not an alias).
@@ -501,6 +518,10 @@ pub(crate) fn prove(
         ta_stable: ta_stable && !guarded,
         ta_kind: if guarded { None } else { ta_kind.flatten() },
         raw_f64: all_f64 && kind_mask == K_NUM && !guarded,
+        number: kind_mask == K_NUM
+            && !guarded
+            && !maybe_absent
+            && (all_f64 || !scalar_receiver(ctx, object)),
         any_f64_lane: any_f64,
         binding,
         checked,
@@ -531,7 +552,7 @@ fn site_id(ctx: &mut FnCtx<'_>, property: &str) -> u64 {
 /// Record the elision (design 6.1): `<PERRY_FACTS_DUMP>.elisions`.
 fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof) {
     let line = format!(
-        "E {site:#018x} {what} fn={} .{property} recv={} classes={:?} slot={} nullable={} kind_mask={:#x} raw_f64={} proof={} facts={}\n",
+        "E {site:#018x} {what} fn={} .{property} recv={} classes={:?} slot={} nullable={} kind_mask={:#x} raw_f64={} number={} proof={} facts={}\n",
         ctx.func.name,
         p.binding,
         p.class_names,
@@ -543,6 +564,7 @@ fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof
         p.nullable as u8,
         p.kind_mask,
         p.raw_f64 as u8,
+        p.number as u8,
         match (p.checked, p.interp_guard) {
             (true, _) => "checked",
             (false, true) => "guarded",
@@ -790,9 +812,12 @@ pub(crate) fn try_lower_get(
         let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
         let val = ctx.block().load(DOUBLE, &field_ptr);
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
+        // A Number has one encoding in every JS value (the raw double), so
+        // a read the facts prove is a Number is the loaded word: no tag
+        // test, no select, no branch.
         val
     };
-    let numeric = p.raw_f64;
+    let numeric = p.number;
     let (semantic, rep) = if numeric {
         (SemanticKind::JsNumber, NativeRep::F64)
     } else {
@@ -841,6 +866,13 @@ pub(crate) fn try_lower_get(
 /// object reached interpreted code by a prototype member); the receiver is
 /// an object (`checked` or `nullable`); its class id is one of the proof's
 /// (`checked`; the ids are constants of the compile, nothing is learned).
+///
+/// A checked site whose key the layout record serves tries the record arm
+/// (`layout_read::begin`) first: it hits every receiver whose layout holds
+/// the key, class instances, literals and parsed objects alike. The class-id
+/// arm runs only on its miss (a class whose key is not at its colour slot),
+/// and the ordinary site, on the already evaluated receiver, on the class-id
+/// arm's miss.
 fn lower_guarded_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -855,6 +887,12 @@ fn lower_guarded_get(
         "case1-wpfacts-guarded"
     });
     let recv_box = lower_expr(ctx, object)?;
+    let record_arm = if p.checked {
+        let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+        crate::expr::layout_read::begin(ctx, &bits, property, None)
+    } else {
+        None
+    };
     let hit_idx = ctx.new_block("wpf.gget.hit");
     let miss_idx = ctx.new_block("wpf.gget.miss");
     let done_idx = ctx.new_block("wpf.gget.done");
@@ -961,16 +999,28 @@ fn lower_guarded_get(
     }
     let fast_end = ctx.block().label.clone();
     ctx.current_block = miss_idx;
-    let generic = Expr::PropertyGet {
-        byte_end: 0,
-        object: Box::new(object.clone()),
-        property: property.to_string(),
-        byte_offset,
+    let slow = if record_arm.is_some() {
+        // The record arm has missed: the ordinary site, without a second
+        // record arm and without lowering the receiver again.
+        crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+        super::property_get::generic_dispatch::lower_property_site_tail(
+            ctx,
+            property,
+            None,
+            recv_box.clone(),
+        )?
+    } else {
+        let generic = Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(object.clone()),
+            property: property.to_string(),
+            byte_offset,
+        };
+        let was_off = std::mem::replace(&mut ctx.wpfacts_off, true);
+        let slow = lower_expr(ctx, &generic);
+        ctx.wpfacts_off = was_off;
+        slow?
     };
-    let was_off = std::mem::replace(&mut ctx.wpfacts_off, true);
-    let slow = lower_expr(ctx, &generic);
-    ctx.wpfacts_off = was_off;
-    let slow = slow?;
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
@@ -978,7 +1028,10 @@ fn lower_guarded_get(
         .block()
         .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]);
     record(ctx, site, "get", property, &p);
-    Ok(value)
+    Ok(match record_arm {
+        Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
+        None => value,
+    })
 }
 
 /// The proof of an elided store, with its site id (the store emission lives

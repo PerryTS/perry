@@ -504,14 +504,14 @@ impl<'a> Gen<'a> {
         self.m.cons(
             holder,
             Cons::Load {
-                key: crate::model::Key::Any,
+                key: crate::model::Key::any(),
                 dst: q,
             },
         );
         self.m.cons(
             q,
             Cons::Load {
-                key: crate::model::Key::Any,
+                key: crate::model::Key::any(),
                 dst: q,
             },
         );
@@ -562,14 +562,14 @@ impl<'a> Gen<'a> {
                         self.m.nodes[n as usize].frame = run;
                         let key = match sk {
                             Some(s) => crate::model::Key::Named(self.m.atom(s)),
-                            None => crate::model::Key::Any,
+                            None => crate::model::Key::any(),
                         };
                         self.m.cons(cur, Cons::Load { key, dst: n });
                         n
                     }
                 };
                 let keys: Vec<crate::model::Key> = match l {
-                    None => vec![crate::model::Key::Any],
+                    None => vec![crate::model::Key::any()],
                     Some(ks) => ks
                         .iter()
                         .map(|s| crate::model::Key::Named(self.m.atom(s)))
@@ -585,7 +585,7 @@ impl<'a> Gen<'a> {
         }
         self.m.edge(q, ret);
         let keys: Vec<crate::model::Key> = match then {
-            None => vec![crate::model::Key::Any],
+            None => vec![crate::model::Key::any()],
             Some(ks) if ks.is_empty() => return,
             Some(ks) => ks
                 .iter()
@@ -715,6 +715,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: c.variadic,
+            own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
@@ -722,6 +723,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
@@ -847,7 +849,7 @@ impl<'a> Gen<'a> {
             // them: a literal reached through a key it does not own.
             for (k, _) in c.reach_keys.get(i).into_iter().flatten() {
                 let key = match k.as_str() {
-                    crate::STAR_KEY => crate::model::Key::Any,
+                    crate::STAR_KEY => crate::model::Key::any(),
                     k => crate::model::Key::Named(self.m.atom(k)),
                 };
                 self.m.cons(p, Cons::Miss { key });
@@ -918,7 +920,7 @@ impl<'a> Gen<'a> {
                             .iter()
                             .map(|k| crate::model::Key::Named(self.m.atom(k)))
                             .collect(),
-                        _ => vec![crate::model::Key::Any],
+                        _ => vec![crate::model::Key::any()],
                     };
                     for key in keys {
                         self.m.cons(
@@ -954,7 +956,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     an,
                     Cons::Store {
-                        key: crate::model::Key::Any,
+                        key: crate::model::Key::any(),
                         src: p,
                         site,
                     },
@@ -969,7 +971,7 @@ impl<'a> Gen<'a> {
             // facts as one per parameter. A read only runs nothing here.
             // Per key the callee read it under (§18.4): what `p.k` reaches
             // is the argument's `k`; a computed key reaches all of it.
-            let mut buckets = vec![(crate::model::Key::Any, ru)];
+            let mut buckets = vec![(crate::model::Key::any(), ru)];
             for (k, u) in c.reach_keys.get(i).into_iter().flatten() {
                 buckets.push((crate::model::Key::Named(self.m.atom(k)), *u));
             }
@@ -978,7 +980,7 @@ impl<'a> Gen<'a> {
                     if let Some(d) = self.m.diagnostic.as_mut() {
                         let k = match key {
                             crate::model::Key::Named(a) => self.m.atoms[a as usize].clone(),
-                            crate::model::Key::Any => String::new(),
+                            crate::model::Key::Any(_) => String::new(),
                         };
                         d.stand_in_params
                             .push((p, c.name.clone(), i as u32, Some(k)));
@@ -1006,7 +1008,7 @@ impl<'a> Gen<'a> {
                             self.m.cons(
                                 q,
                                 Cons::Load {
-                                    key: crate::model::Key::Any,
+                                    key: crate::model::Key::any(),
                                     dst: q,
                                 },
                             );
@@ -1065,7 +1067,7 @@ impl<'a> Gen<'a> {
             let site = self.m.anon_post_site("store by another unit's function");
             let key = match &fl.key {
                 Some(k) => crate::model::Key::Named(self.m.atom(k)),
-                None => crate::model::Key::Any,
+                None => crate::model::Key::any(),
             };
             self.m.cons(q, Cons::Store { key, src, site });
         }
