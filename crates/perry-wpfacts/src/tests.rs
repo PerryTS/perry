@@ -1,9 +1,9 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod absent_key;
-mod annexb_accessors;
 mod accessor_keys;
 mod accessor_receiver;
+mod annexb_accessors;
 mod arguments_object;
 mod array_ctor;
 mod array_elements;
@@ -1858,5 +1858,5 @@ mod shared_sets;
 
 mod builtin_missing_member;
 
-mod uri_coercion;
 mod annexb_alias;
+mod uri_coercion;
