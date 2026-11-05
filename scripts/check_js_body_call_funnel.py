@@ -372,8 +372,8 @@ def raw_throw_violations(root: Path):
     as calls, preventing a renamed import from bypassing the funnel.
     """
     out = []
-    bases = list(RUNTIME_ROOTS) + sorted(
-        p.relative_to(root).as_posix() for p in root.glob("crates/perry-ext-*/src")
+    bases = ["crates/perry-runtime", "crates/perry-stdlib"] + sorted(
+        p.relative_to(root).as_posix() for p in root.glob("crates/perry-ext-*")
     )
     for base in bases:
         for path in sorted((root / base).rglob("*.rs")):
@@ -409,6 +409,7 @@ def self_test() -> int:
     cases = {
         # (file, text, expect_red)
         "raw_runtime": ("crates/perry-runtime/src/x.rs", 'fn f() { crate::exception::js_throw(1.0) }', True),
+        "raw_example": ("crates/perry-runtime/examples/x.rs", 'fn f() { js_throw(1.0) }', True),
         "raw_stdlib": ("crates/perry-stdlib/src/x.rs", 'fn f() { js_throw(1.0) }', True),
         "raw_ext_decl": ("crates/perry-ext-zz/src/x.rs", 'extern "C" { fn js_throw(v: f64) -> !; }', True),
         "raw_alias": ("crates/perry-ext-zz/src/x.rs", 'extern "C" { #[link_name = "js_throw"] fn hidden(v: f64) -> !; }', True),
