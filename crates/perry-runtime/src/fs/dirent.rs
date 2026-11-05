@@ -501,7 +501,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
             // (or ENOTDIR/EACCES); callers such as Next.js's recursiveReadDir
             // branch on `err.code`, so an empty array would read as an empty
             // directory that exists.
-            Err(err) => crate::exception::js_throw(crate::fs::errors::build_fs_error_value(
+            Err(err) => crate::exception::throw_core(crate::fs::errors::fs_error(
                 &err, "scandir", &path_str,
             )),
         }
