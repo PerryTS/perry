@@ -1,0 +1,18 @@
+[perry] dynamic Function refused (AOT, dyn-eval feature off) — 1 arg(s); body[..160]="return 1"
+call threw TypeError toString calls 1
+[perry] dynamic Function refused (AOT, dyn-eval feature off) — 2 arg(s); body[..160]="return 1"
+call two args threw TypeError toString calls 2
+[perry] dynamic Function refused (AOT, dyn-eval feature off) — 1 arg(s); body[..160]="return 1"
+construct threw TypeError toString calls 1
+[perry] dynamic Function refused (AOT, dyn-eval feature off) — 1 arg(s); body[..160]="return 1"
+as a method threw TypeError toString calls 1
+symbol argument threw TypeError toString calls 0
+[perry] dynamic Function refused (AOT, dyn-eval feature off) — 0 arg(s); body[..160]=""
+call no args threw TypeError toString calls 0
+depd shape returned function toString calls 0
+async call threw TypeError toString calls 0
+async construct threw TypeError toString calls 0
+generator call returned undefined toString calls 0
+generator construct returned object toString calls 0
+async generator call returned undefined toString calls 0
+async generator construct returned object toString calls 0

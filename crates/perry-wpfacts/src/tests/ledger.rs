@@ -417,12 +417,14 @@ verdict_test!(
 );
 
 // Interpreted code: `Function.call` runs the Function constructor (E14).
+// A spread may be the runtime's depd shape, which makes a function also
+// without an interpreter (`builtins::function_ctor_runs_code`).
 cause_test!(
     dynamic_code,
     "dynamic-code",
     "property",
     "x",
-    r#"const r: any = (Function as any).call(null, "return 1"); console.log(r.x);"#
+    r#"const p = ["return 1"]; const r: any = (Function as any).call(null, ...p); console.log(r.x);"#
 );
 
 /// B-codes mark a typed array hard, and a typed array is no fact unit, so
