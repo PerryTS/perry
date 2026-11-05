@@ -147,10 +147,9 @@ fn value_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
 /// Build a `WebAssembly.<name>Error`-shaped error object: an ordinary
 /// `ErrorHeader` (so `instanceof Error`, `.message`, `.stack` all work)
 /// whose `.name` is `CompileError` / `LinkError` / `RuntimeError`.
-fn wasm_error_with_message(name: &'static [u8], message: &str) -> f64 {
+fn wasm_error_with_message(name: &'static [u8], message: &str) -> crate::error::CoreError {
     let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_name_message_bytes(name, message_ptr);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::named_bytes(name, message_ptr)
 }
 
 /// The user-facing constructor path: coerce an arbitrary message VALUE the
@@ -166,7 +165,7 @@ fn wasm_error_from_message_value(name: &'static [u8], message: f64) -> f64 {
     crate::value::js_nanbox_pointer(err as i64)
 }
 
-fn wasm_unsupported_error(name: &'static [u8], api: &str) -> f64 {
+fn wasm_unsupported_error(name: &'static [u8], api: &str) -> crate::error::CoreError {
     wasm_error_with_message(name, &format!("{api}: {WASM_UNSUPPORTED_HINT}"))
 }
 
@@ -174,7 +173,7 @@ fn wasm_unsupported_error(name: &'static [u8], api: &str) -> f64 {
 /// unsupported message. This is the graceful-failure result of every async
 /// entry point below.
 fn wasm_unsupported_rejection(api: &str) -> f64 {
-    let error = wasm_unsupported_error(b"CompileError", api);
+    let error = wasm_unsupported_error(b"CompileError", api).value();
     let promise = crate::promise::js_promise_rejected(error);
     crate::value::js_nanbox_pointer(promise as i64)
 }
@@ -459,7 +458,7 @@ extern "C" fn webassembly_module_ctor_thunk(
     match engine() {
         // Real wasmi compile; throws CompileError itself on invalid bytes.
         Some(engine) => (engine.module_new)(bytes),
-        None => crate::exception::js_throw(wasm_unsupported_error(
+        None => crate::exception::throw_core(wasm_unsupported_error(
             b"CompileError",
             "WebAssembly.Module",
         )),
@@ -478,7 +477,7 @@ extern "C" fn webassembly_instance_ctor_thunk(
     match engine() {
         Some(engine) => (engine.instance_new)(module, imports, this.as_f64()),
         None => {
-            crate::exception::js_throw(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"))
+            crate::exception::throw_core(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"))
         }
     }
 }
@@ -494,7 +493,7 @@ extern "C" fn webassembly_table_ctor_thunk(
     match engine() {
         Some(engine) => (engine.table_new)(descriptor, this.as_f64()),
         None => {
-            crate::exception::js_throw(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"))
+            crate::exception::throw_core(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"))
         }
     }
 }
@@ -510,7 +509,7 @@ extern "C" fn webassembly_global_ctor_thunk(
     }
     match engine() {
         Some(engine) => (engine.global_new)(descriptor, initial, this.as_f64()),
-        None => crate::exception::js_throw(wasm_unsupported_error(
+        None => crate::exception::throw_core(wasm_unsupported_error(
             b"RuntimeError",
             "WebAssembly.Global",
         )),

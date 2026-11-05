@@ -54,7 +54,7 @@ fn table_context<'scope>(
 }
 
 fn table_receiver_error(api: &str) -> ! {
-    crate::exception::js_throw(wasm_type_error_value(&format!(
+    crate::exception::throw_core(wasm_type_error(&format!(
         "WebAssembly.Table.{api}(): Receiver is not a WebAssembly.Table"
     )))
 }
@@ -209,7 +209,7 @@ pub(super) extern "C" fn js_webassembly_table_set(this: f64, index: f64, value: 
             crate::array::js_array_set_f64(values_ptr, index as u32, value);
         }
     } else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table.set(): value is not a WebAssembly function",
         ));
     }
