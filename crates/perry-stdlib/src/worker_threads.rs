@@ -66,6 +66,7 @@ pub use channel_pump::{
 // Same for the BroadcastChannel constructor and the main-thread pump entry
 // points, which moved into sibling modules to keep this file under the
 // 2000-line lint cap.
+pub(crate) use broadcast_channel::dispatch_broadcast_channel_operation;
 pub use broadcast_channel::js_worker_threads_broadcast_channel_new;
 pub use entry_table::{js_worker_threads_register_entry, js_worker_threads_worker_new_by_spec};
 pub use thread_values::{

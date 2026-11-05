@@ -1,27 +1,8 @@
-//! Same-process `BroadcastChannel` surface.
-//!
-//! Split out of `worker_threads.rs` to keep that file under the 2000-line lint
-//! cap (`scripts/check_file_size.sh`). Items are moved verbatim; the
-//! `#[no_mangle]` constructor is re-exported from the parent module so
-//! `crate::worker_threads::js_worker_threads_broadcast_channel_new` (and the
-//! `pub use worker_threads::*` glob in `lib.rs`) keeps resolving it.
+//! BroadcastChannel operations backed by the current agent's channel state.
 
 use super::*;
 
-unsafe extern "C" fn broadcast_post_message(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    args: *const f64,
-    len: usize,
-) -> f64 {
-    if len == 0 {
-        perry_runtime::fs::validate::throw_type_error_with_code(
-            "The \"message\" argument must be specified",
-            "ERR_MISSING_ARGS",
-        );
-    }
-    let value = unsafe { *args };
-    let channel_id = port_id_from_closure(closure);
+fn broadcast_post_message(channel_id: u64, value: f64) -> f64 {
     let channel_name = BROADCAST_CHANNELS.with(|channels| {
         channels
             .borrow()
@@ -43,11 +24,7 @@ unsafe extern "C" fn broadcast_post_message(
     js_undefined()
 }
 
-extern "C" fn broadcast_close(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-) -> f64 {
-    let channel_id = port_id_from_closure(closure);
+fn broadcast_close(channel_id: u64) -> f64 {
     BROADCAST_CHANNELS.with(|channels| {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
             state.closed = true;
@@ -58,15 +35,31 @@ extern "C" fn broadcast_close(
     js_undefined()
 }
 
-extern "C" fn broadcast_ref_or_unref(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-) -> f64 {
-    let channel_id = port_id_from_closure(closure);
-    BROADCAST_CHANNELS.with(|channels| match channels.borrow().get(&channel_id) {
-        Some(state) => f64::from_bits(state.object_bits),
-        None => js_undefined(),
-    })
+pub(crate) unsafe extern "C" fn dispatch_broadcast_channel_operation(
+    operation: perry_runtime::messaging::BroadcastChannelOperation,
+    id: u64,
+    receiver: f64,
+    data: f64,
+    result: *mut f64,
+) -> bool {
+    use perry_runtime::messaging::BroadcastChannelOperation;
+    if !BROADCAST_CHANNELS.with(|channels| {
+        channels
+            .borrow()
+            .get(&id)
+            .is_some_and(|state| state.object_bits == receiver.to_bits())
+    }) {
+        return false;
+    }
+    let value = match operation {
+        BroadcastChannelOperation::PostMessage => broadcast_post_message(id, data),
+        BroadcastChannelOperation::Close => broadcast_close(id),
+        _ => js_undefined(),
+    };
+    unsafe {
+        *result = value;
+    }
+    true
 }
 
 extern "C" fn broadcast_add_event_listener(
@@ -141,9 +134,10 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
         *n += 1;
         id
     });
-    let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
-    let prototype = constructor_prototype("BroadcastChannel");
-    set_object_prototype(obj.get_raw_mut_ptr(), prototype);
+    let obj = scope.root_raw_mut_ptr(perry_runtime::messaging::broadcast_channel_object_with_id(
+        id,
+        name_value.get_nanbox_f64(),
+    ));
     let set = |name: &str, value: f64| {
         let value = scope.root_nanbox_f64(value);
         let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -154,34 +148,6 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
         );
     };
     set("constructor", get_global_constructor("BroadcastChannel"));
-    set(
-        "postMessage",
-        port_bound_closure(
-            perry_runtime::fn_info!(native_args broadcast_post_message, 1),
-            id,
-        ),
-    );
-    set(
-        "close",
-        port_bound_closure(
-            perry_runtime::fn_info!(broadcast_close, 0; with_declared(0)),
-            id,
-        ),
-    );
-    set(
-        "ref",
-        port_bound_closure(
-            perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
-            id,
-        ),
-    );
-    set(
-        "unref",
-        port_bound_closure(
-            perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
-            id,
-        ),
-    );
     set(
         "addEventListener",
         port_bound_closure(
@@ -198,7 +164,6 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     );
     set("onmessage", js_null());
     set("onmessageerror", js_null());
-    set("name", name_value.get_nanbox_f64());
     let object_bits = object_value(obj.get_raw_mut_ptr()).to_bits();
     BROADCAST_CHANNELS.with(|channels| {
         channels.borrow_mut().insert(
@@ -253,6 +218,84 @@ mod tests {
         BROADCAST_CHANNELS.with(|channels| {
             let removed = channels.borrow_mut().remove(&before.0).unwrap();
             assert_eq!(removed.object_bits, value.get_nanbox_f64().to_bits());
+        });
+    }
+
+    #[test]
+    fn provider_checks_existing_state_identity_and_mutates_only_its_receiver() {
+        use perry_runtime::messaging::BroadcastChannelOperation::{Close, PostMessage, Validate};
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let first_id = NEXT_BROADCAST_ID.with(|id| *id.borrow());
+        let first = scope.root_nanbox_f64(js_worker_threads_broadcast_channel_new(string_value(
+            "provider",
+        )));
+        let second = scope.root_nanbox_f64(js_worker_threads_broadcast_channel_new(string_value(
+            "provider",
+        )));
+        let impostor =
+            scope.root_raw_mut_ptr(perry_runtime::messaging::broadcast_channel_object_with_id(
+                first_id,
+                string_value("provider"),
+            ));
+        let mut result = 37.0;
+        assert!(!unsafe {
+            dispatch_broadcast_channel_operation(
+                Validate,
+                first_id,
+                object_value(impostor.get_raw_mut_ptr()),
+                js_undefined(),
+                &mut result,
+            )
+        });
+        assert_eq!(result, 37.0);
+        assert!(unsafe {
+            dispatch_broadcast_channel_operation(
+                PostMessage,
+                first_id,
+                first.get_nanbox_f64(),
+                7.0,
+                &mut result,
+            )
+        });
+        assert_eq!(
+            BROADCAST_CHANNELS.with(|channels| channels
+                .borrow()
+                .get(&(first_id + 1))
+                .unwrap()
+                .inbox
+                .len()),
+            1
+        );
+        assert!(unsafe {
+            dispatch_broadcast_channel_operation(
+                Close,
+                first_id + 1,
+                second.get_nanbox_f64(),
+                js_undefined(),
+                &mut result,
+            )
+        });
+        BROADCAST_CHANNELS.with(|channels| {
+            let channels = channels.borrow();
+            assert!(!channels.get(&first_id).unwrap().closed);
+            let closed = channels.get(&(first_id + 1)).unwrap();
+            assert!(
+                closed.closed && closed.inbox.is_empty() && closed.message_event_cbs.is_empty()
+            );
+        });
+        assert!(unsafe {
+            dispatch_broadcast_channel_operation(
+                Validate,
+                first_id + 1,
+                second.get_nanbox_f64(),
+                js_undefined(),
+                &mut result,
+            )
+        });
+        BROADCAST_CHANNELS.with(|channels| {
+            let mut channels = channels.borrow_mut();
+            channels.remove(&first_id);
+            channels.remove(&(first_id + 1));
         });
     }
 }

@@ -16,6 +16,15 @@ Names use implicit string conversion, including a string hint for object
 conversion. Symbols (including an object's conversion result) throw before a
 channel is registered. A throwing conversion propagates its original value.
 
+`BroadcastChannel.prototype` owns the read-only `name` getter and the core
+`postMessage`, `close`, `ref` and `unref` methods. Borrowing one channel's method
+operates on the actual receiver, including a transparent proxy or an object
+inheriting from a genuine channel;
+other receivers throw `TypeError` with `ERR_INVALID_THIS`. Closing a channel does
+not discard its name. Receiver validation precedes message-argument validation,
+and a closed channel rejects a supplied message before cloning it. Listener and
+handler APIs are separate from this core-operation surface.
+
 ## Message events
 
 `MessageEvent` extends `Event`. Its constructor accepts `data`, `origin`,
