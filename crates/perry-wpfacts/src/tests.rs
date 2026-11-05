@@ -25,6 +25,7 @@ mod body_identity;
 mod bound_in_summary;
 mod builtin_members;
 mod builtin_program_fields;
+mod builtin_spread;
 mod call_shadow;
 mod callable_contract;
 mod callback_origin;

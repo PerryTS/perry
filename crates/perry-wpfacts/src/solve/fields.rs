@@ -119,13 +119,7 @@ impl Model {
             self.sink_node(all, r);
             return;
         }
-        let opaque = match &self.toks[s as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
-                true
-            }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
-            _ => false,
-        };
+        let opaque = !self.own_props_modelled(s);
         // Any key of the source may be an index of an Array target.
         self.mark_hole(d);
         let fa_d = self.any_key_node(d);
@@ -308,15 +302,38 @@ impl Model {
         n
     }
 
+    /// Are the own properties of every object `t` denotes in the model, so
+    /// that a copy of them (`spread_into`, `own_values_of`) reads its
+    /// fields: the named fields, the any-key field and the numeric field,
+    /// each fed by everything that defines a property on it? A program
+    /// object's are: every store, `defineProperty` and accessor goes through
+    /// the field funnel. A builtin object's are when its template is a
+    /// container the model fills (`builtins::own_values_filled`): its birth
+    /// puts every value the runtime gives it under its any key, and the
+    /// runtime gives it no own accessor. Every other builtin object (Date,
+    /// RegExp, typed arrays, collections, markers …), a builtin namespace or
+    /// function, a native prototype and ⊤ hold own properties the model does
+    /// not list. A stand-in (`site: u32::MAX`, another unit's array as this
+    /// unit sees it, DECISIONS 94) holds what other units wrote in a cell,
+    /// not in these fields.
+    pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
+        match &self.toks[t as usize] {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
+                false
+            }
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                TmplKind::BObj { what, site, .. } => {
+                    site != u32::MAX && builtins::own_values_filled(what)
+                }
+                _ => true,
+            },
+            _ => true,
+        }
+    }
+
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
-        let opaque = match &self.toks[t as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
-                true
-            }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
-            _ => false,
-        };
+        let opaque = !self.own_props_modelled(t);
         if opaque {
             self.add_top(dst, |_| "own values of an unmodeled object".into());
             self.add_prim(dst, prim::ALL);
