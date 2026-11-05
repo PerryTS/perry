@@ -274,8 +274,8 @@ fn throw_trace_callback_not_function() -> ! {
     let msg = b"The \"callback\" argument must be of type function.";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     register_error_code(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(boxed_ptr(err))
+    let err = crate::error::CoreError::type_error(s);
+    crate::exception::throw_core(err)
 }
 
 pub(crate) extern "C" fn diag_trace_callback(
