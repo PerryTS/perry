@@ -97,7 +97,7 @@ pub(crate) use emitter::{
     cp_method_kill, cp_method_on, cp_method_pipe, cp_method_read, cp_method_ref,
     cp_method_remove_all_listeners, cp_method_remove_listener, cp_method_send,
     cp_method_set_encoding, cp_method_stdin_end, cp_method_stdin_write, cp_method_this0,
-    cp_method_unref, cp_readable_end, cp_register, js_fork_child,
+    cp_method_unref, cp_readable_end, cp_register, cp_stdin_finish, js_fork_child,
 };
 
 // builder.rs — heap object construction + shape ids.
