@@ -1,0 +1,1 @@
+Native Map `has`, `delete`, and `clear` no longer run an arbitrary JavaScript operand protocol during whole-program fact analysis. Ordinary method lookup preserves own overrides, getters, unknown receivers, and argument-expression effects.
