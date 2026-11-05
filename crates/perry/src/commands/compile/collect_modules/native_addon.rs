@@ -243,6 +243,7 @@ pub(super) fn collect_node_addon_request(
                 package_dir,
                 entry_relative,
                 ship_package_payload: false,
+                #[cfg(feature = "target-wasi")]
                 wasm_archives: Vec::new(),
             });
         return Ok(Some(logical_id));
@@ -292,6 +293,7 @@ pub(super) fn collect_node_addon_request(
             package_dir: package_root,
             entry_relative,
             ship_package_payload: true,
+            #[cfg(feature = "target-wasi")]
             wasm_archives: Vec::new(),
         });
     Ok(Some(logical_id))
@@ -305,7 +307,7 @@ pub(super) fn collect_linked_wasm_addon(
     ctx: &mut CompilationContext,
     package_root: &std::path::Path,
     entry: &str,
-    archives: Vec<PathBuf>,
+    _archives: Vec<PathBuf>,
 ) -> Result<()> {
     let (actual_package, version) = package_identity_from_package_json(package_root)
         .unwrap_or_else(|| (package_root.display().to_string(), "0.0.0".to_string()));
@@ -328,7 +330,8 @@ pub(super) fn collect_linked_wasm_addon(
             package_dir: package_root.to_path_buf(),
             entry_relative,
             ship_package_payload: false,
-            wasm_archives: archives,
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: _archives,
         });
     Ok(())
 }
