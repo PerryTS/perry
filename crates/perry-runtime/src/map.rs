@@ -3810,7 +3810,7 @@ mod tests {
         js_map_set_string_i32(big, key_a, 6);
         assert_eq!(
             js_map_get_string_key(big, key_a).to_bits(),
-            crate::value::JSValue::int32(6).bits()
+            6.0f64.to_bits()
         );
     }
 
