@@ -1067,7 +1067,7 @@ fn judge_sites_in_body(
 }
 
 /// What the call-site judge reads module-wide.
-struct JudgeEnv<'a> {
+pub(crate) struct JudgeEnv<'a> {
     ta: &'a HashMap<u32, SpecTaBinding>,
     number_arrays: &'a HashSet<u32>,
     definite: &'a super::DefiniteInit,
