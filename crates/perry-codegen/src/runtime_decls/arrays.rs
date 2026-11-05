@@ -241,6 +241,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64],
     );
+    // perry-runtime: `gc::barrier_store::js_slot_store_obligations`, an
+    // inline slot store's string alias demotion and gated slot barrier.
+    module.declare_function("js_slot_store_obligations", VOID, &[I64, I64, I64]);
     // perry-runtime: `gc::barrier_store::js_write_barrier_birth_slots` — the
     // barriers of one literal birth's slot stores, behind one parent gate.
     module.declare_function("js_write_barrier_birth_slots", VOID, &[I64, I64, I32, I32]);

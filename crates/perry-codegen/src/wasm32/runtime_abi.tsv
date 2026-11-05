@@ -3525,6 +3525,7 @@ js_register_stream_handle_kind_probe	void	ptr
 js_register_stream_handle_probe	void	ptr
 js_register_text_id_handler	void	ptr
 js_register_tls_handle_kind_probe	void	ptr
+js_register_web_stream_constructors	void	ptr,ptr,ptr
 js_register_widget_hidden_handler	void	ptr
 js_register_worker_threads_environment_data	void	ptr,ptr
 js_register_worker_threads_message_port_dispatch	void	ptr
@@ -3781,9 +3782,8 @@ js_sharp_to_format	i64
 js_sharp_trim	i64	i64
 js_sharp_webp	i64	i64,f64
 js_sharp_width	f64	i64
-js_short_packed_spread_values	i32s	f64,ptr
 js_sleep_ms	void	f64
-js_spread_tail_fallback_args	i64	ptr,usize,f64
+js_slot_store_obligations	void	i64,i64,i64
 js_sqlite_begin_transaction	i32s	i64
 js_sqlite_close	i32s	i64
 js_sqlite_commit	i32s	i64
@@ -5239,6 +5239,7 @@ perry_runtime_widget_init	void
 perry_safe_area_insets_make	f64	f64,f64,f64,f64
 perry_set_wake_callback	void	ptr,ptr
 perry_shape_dir_cell	ptr	
+perry_store_or_put	f64	ptr,i64,i64,i64,f64,i32s
 perry_string_header_abi_revision	i32u	
 perry_stub_warn_ffi	void	ptr,ptr,ptr
 perry_tui_state_setter_trampoline	f64	ptr,i64,f64

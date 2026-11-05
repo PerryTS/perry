@@ -286,12 +286,12 @@ fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
         bl[l]
             .0
             .iter()
-            .any(|i| i.contains("call void @js_write_barrier_slot_validated_parent("))
+            .any(|i| i.contains("call void @js_slot_store_obligations("))
     });
     assert!(
         barrier_in_f,
         "a bare store of an `any` value in F-body must carry the remembered-set \
-         / incremental-mark barrier; F-body blocks: {f:?}"
+         / incremental-mark barrier (the store's obligations call); F-body blocks: {f:?}"
     );
 }
 

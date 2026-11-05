@@ -452,3 +452,63 @@ fn birth_slots_barrier_remembers_value_slots_and_skips_raw_lanes() {
     );
     reset_remembered_set();
 }
+
+/// THR9: the store site's out-of-line obligations: an old parent's young
+/// edge is remembered exactly as the validated-parent entry remembers it, a
+/// young arena parent outside an incremental cycle takes no record (the gate
+/// the site used to emit inline), and a heap string aliased into the slot is
+/// demoted to shared whatever the parent's generation.
+#[test]
+fn slot_store_obligations_remember_old_parents_and_demote_heap_strings() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let child_bits = ptr_bits(young);
+    unsafe {
+        *fields = child_bits;
+    }
+    let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+    assert!(!old_page_dirty_for(dirty_page));
+    unsafe {
+        crate::gc::barrier_store::js_slot_store_obligations(
+            old_obj as u64,
+            fields as u64,
+            child_bits,
+        );
+    }
+    assert_eq!(
+        remembered_dirty_page_count(),
+        1,
+        "old->young store through the obligations entry must dirty the slot page"
+    );
+    assert!(old_page_dirty_for(dirty_page));
+
+    reset_remembered_set();
+    let young_parent = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let s = crate::string::js_string_from_bytes(b"obligations".as_ptr(), 11);
+    unsafe {
+        (*s).refcount = 1;
+        crate::gc::barrier_store::js_slot_store_obligations(
+            young_parent as u64,
+            (young_parent + 8) as u64,
+            child_bits,
+        );
+        assert_eq!((*s).refcount, 1, "a non-string value leaves strings alone");
+    }
+    assert_eq!(
+        remembered_dirty_page_count(),
+        0,
+        "a young arena parent is fully traced by every minor and needs no record"
+    );
+    unsafe {
+        crate::gc::barrier_store::js_slot_store_obligations(
+            young_parent as u64,
+            (young_parent + 8) as u64,
+            string_bits(s as usize),
+        );
+        assert_eq!((*s).refcount, 0, "a heap string aliased into a slot is shared");
+    }
+    reset_remembered_set();
+}
