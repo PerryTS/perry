@@ -48,6 +48,7 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    #[cfg(debug_assertions)]
     crate::object::field_get_set::field_ops::debug_assert_one_number_encoding(value.to_bits());
     #[cfg(perry_contract_checks)]
     crate::contracts::generic_store(obj, key, value);
