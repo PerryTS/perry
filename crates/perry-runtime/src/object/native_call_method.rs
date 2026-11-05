@@ -2377,47 +2377,6 @@ pub(crate) unsafe fn native_call_method_tower(
             method_name.len(),
         );
     }
-    // Issue #687: INT32-NaN-boxed value whose payload is a registered
-    // class id — i.e. a `ClassRef` produced by `Expr::ClassRef` codegen.
-    // Effect's `Schema.NonNegative.pipe(int()).annotations({...})` chains
-    // produce a ClassRef out of the first `.pipe()` (via the codegen-side
-    // defensive no-op in `lower_call.rs::Expr::ClassRef`) and the chained
-    // `.annotations(...)` reaches us with that ClassRef as the receiver.
-    // Treat it as a chainable no-op: return the receiver so further
-    // `.method(...)` calls stay typed-class-shaped during module init.
-    // The result isn't semantically equivalent to Effect's transformed
-    // schema, but it advances Schema.ts__init past sites that previously
-    // threw `(number).<method> is not a function`. Paired with the
-    // codegen-side fix in `lower_call.rs` for the simpler
-    // `ClassRef.method()` shape.
-    if jsval().is_int32() {
-        let payload = jsval().as_int32() as u32;
-        if payload != 0 {
-            let registered = REGISTERED_CLASS_IDS
-                .read()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|set| set.contains(&payload));
-            if registered {
-                // The class's prototype method, called with an undefined
-                // `this`: the property `C.prototype` holds for the name.
-                if let Some(result) =
-                    class_holder::call_class_ref_method(payload, method_name, &arg_handles)
-                {
-                    return result;
-                }
-                if matches!(method_name, "pipe" | "annotations") {
-                    return object();
-                }
-                crate::error::js_throw_type_error_not_a_function(
-                    std::ptr::null(),
-                    0,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-        }
-    }
     // #9675: the BARE-heap-pointer recovery that used to sit here is gone. It
     // reboxed any word whose magnitude looked like a heap address, which is what
     // let a genuine subnormal double be dispatched as an object. Both halves of
