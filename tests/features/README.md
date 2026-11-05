@@ -4,6 +4,8 @@ This directory contains a small compatibility radar for TypeScript and modern
 JavaScript language features. Each probe is a standalone `.ts` file that Node
 runs with `--experimental-strip-types`; Perry compiles the same file to a
 native binary and the generator records whether stdout matches.
+`feature_matrix.toml` registers the probes in this directory; their paths are
+relative to `tests/features/`.
 
 Regenerate the committed matrix after adding probes or intentionally changing
 language behavior:

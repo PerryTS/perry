@@ -28,6 +28,19 @@ runtime keeps internal is a unit test in the wrong suite. `crates/*/tests/`
 suites run on a pull request only when the diff selects them, so coverage that
 must gate every change belongs beside the code or in `test-parity/`.
 
+## External suite organization
+
+The shared [testing index](../../../tests/README.md) describes the target
+external layout: `tests/{parity,compat,features,integration,tooling,coverage,fixtures}`.
+Coverage tooling and the feature matrix live there; the remaining suites move
+with their executable callers, registrations and CI selection. Physical
+centralization does not merge their oracles or replace Cargo and specialized
+runners. Rust unit tests remain beside implementation, and native Cargo
+integration suites remain in their owning crate's `tests/` directory.
+
+The parity paths below remain current until their separate root relocation;
+logical case IDs and snapshots must not change when that directory moves.
+
 ## Layout
 
 ```text

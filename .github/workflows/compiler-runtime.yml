@@ -1448,7 +1448,7 @@ jobs:
           if [[ -f .feature-matrix/feature_matrix.md ]]; then
             cat .feature-matrix/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
           else
-            cat test-features/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
+            cat tests/features/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload feature matrix artifacts
         if: always()

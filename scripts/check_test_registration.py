@@ -320,12 +320,12 @@ MECHANISMS: tuple[Mechanism, ...] = (
             "generated from this manifest, so an unlisted probe is absent from "
             "the matrix as well as from the run."
         ),
-        candidates=("test-features/probes/**/*.ts",),
-        registry="test-features/feature_matrix.toml",
+        candidates=("tests/features/probes/**/*.ts",),
+        registry="tests/features/feature_matrix.toml",
         runner="scripts/gen_feature_matrix.py (feature-matrix.yml)",
-        key=lambda rel: rel[len("test-features/") :],
-        registered=lambda t: _read_toml_paths(t, "test-features/feature_matrix.toml", "path"),
-        entry_to_path=lambda e: "test-features/%s" % e,
+        key=lambda rel: rel[len("tests/features/") :],
+        registered=lambda t: _read_toml_paths(t, "tests/features/feature_matrix.toml", "path"),
+        entry_to_path=lambda e: "tests/features/%s" % e,
         min_candidates=20,
         exclusions={
             "probes/type_only_imports/model.ts": (
@@ -575,7 +575,7 @@ def run(tree: Tree, mechanisms: Iterable[Mechanism] = MECHANISMS) -> tuple[list[
 # ---------------------------------------------------------------------------
 _PLANT = {
     "gc-repsel-corpus": "test-files/test_gap_gc_selftest_planted_witness.ts",
-    "feature-matrix-probes": "test-features/probes/closures/selftest-planted.ts",
+    "feature-matrix-probes": "tests/features/probes/closures/selftest-planted.ts",
     "compiler-output-workloads": "benchmarks/compiler_output/fixtures/selftest_planted.ts",
     "wasip1-host-cases": "test-wasi/p1-host/cases/selftest_planted.ts",
     "rust-test-modules": "crates/perry-codegen/tests/native_proof_regressions/selftest_planted.rs",
@@ -774,11 +774,11 @@ def _self_test(root: Path) -> int:
     check("glob `*` matches in-segment", _fnmatch_path("test-files/a.ts", "test-files/*.ts"))
     check(
         "glob `**` crosses /",
-        _fnmatch_path("test-features/probes/x/y.ts", "test-features/probes/**/*.ts"),
+        _fnmatch_path("tests/features/probes/x/y.ts", "tests/features/probes/**/*.ts"),
     )
     check(
         "glob `**` matches zero segments",
-        _fnmatch_path("test-features/probes/y.ts", "test-features/probes/**/*.ts"),
+        _fnmatch_path("tests/features/probes/y.ts", "tests/features/probes/**/*.ts"),
     )
 
     if failures:

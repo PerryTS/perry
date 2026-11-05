@@ -12,7 +12,7 @@ import collections
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TEST_FILES = ROOT / "test-files"
 
 INVENTORY_FILES = {

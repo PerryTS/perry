@@ -1,4 +1,4 @@
-# Registry for the TypeScript feature probes under test-features/probes/.
+# Registry for the TypeScript feature probes under tests/features/probes/.
 #
 # ***A NEW PROBE MUST BE REGISTERED HERE OR IT WILL NOT RUN.***
 # scripts/gen_feature_matrix.py reads this file, not the directory, so a probe

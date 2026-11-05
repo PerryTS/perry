@@ -58,9 +58,7 @@ ir-corpus/
 # Re-include the test source directories
 !test-files/
 !tests/
-!test-features/
 !test-parity/
-!test-coverage/
 !test-wasi/
 # But ignore compiled test binaries (no extension) inside them
 test-files/test_*
@@ -206,6 +204,8 @@ menu-demo.ts
 
 # Private files
 private-*
+# Feature probes with private-field syntax are sources, not scratch executables.
+!tests/features/probes/**/private-*.ts
 
 # Claude Code
 .claude/worktrees/

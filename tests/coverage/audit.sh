@@ -6,13 +6,13 @@
 # generates a coverage report.
 #
 # Usage:
-#   ./test-coverage/audit.sh              # Print report to stdout
-#   ./test-coverage/audit.sh --markdown   # Generate COVERAGE.md
+#   ./tests/coverage/audit.sh              # Print report to stdout
+#   ./tests/coverage/audit.sh --markdown   # Generate COVERAGE.md
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MARKDOWN_MODE=0
 if [[ "${1:-}" == "--markdown" ]]; then
   MARKDOWN_MODE=1

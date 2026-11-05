@@ -346,6 +346,11 @@ jobs:
       - name: Cargo test scope regression tests
         run: python3 -m unittest discover -s tests -p 'test_ci_test_scope.py' -v
 
+      - name: External test layout regression tests
+        run: |
+          python3 tests/tooling/test_coverage_layout.py -v
+          python3 tests/tooling/test_feature_layout.py -v
+
       - name: Docs catalog toolchain tests
         run: python3 docs/scripts/test_i18n_toolchain.py
 
