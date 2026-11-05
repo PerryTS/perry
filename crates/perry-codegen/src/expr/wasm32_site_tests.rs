@@ -59,3 +59,55 @@ fn wasm32_method_and_keyed_sites_match_lp64() {
     let object = crate::linker::compile_ll_to_object(&wasm, Some("wasm32-wasip2")).unwrap();
     assert!(object.starts_with(b"\0asm"));
 }
+
+/// WTC10 (F3b part 1): a class-nominated read of a family's own slot takes
+/// the case-2c arm on wasm32 as on LP64 (layout word @4, slots at 16).
+const FAMILY_SRC: &str = r#"
+class P {
+    x: number;
+    y: number;
+    constructor(x: number, y: number) { this.x = x; this.y = y; }
+}
+export function sum(ps: P[]): number {
+    let acc = 0;
+    for (let i = 0; i < ps.length; i++) { const p = ps[i]; acc += p.x + p.y; }
+    return acc;
+}
+const ps: P[] = [];
+for (let i = 0; i < 4; i++) ps.push(new P(i, i + 1));
+console.log(sum(ps));
+"#;
+
+fn compile_with_families(target: &str) -> String {
+    let ast = perry_parser::parse_typescript(FAMILY_SRC, "wasm32_family.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "wasm32_family", "wasm32_family.ts").unwrap();
+    let mut opts = crate::temp_root_coverage::entry_opts();
+    opts.emit_ir_only = true;
+    opts.target = Some(target.into());
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [("wasm32_family.ts", &hir)],
+        true,
+        &Default::default(),
+    ));
+    assert!(
+        !opts.program_layouts.families.is_empty(),
+        "fixture must give P a family"
+    );
+    String::from_utf8(crate::compile_module(&hir, opts).unwrap()).unwrap()
+}
+
+#[test]
+fn wasm32_class_family_read_matches_lp64() {
+    let native = compile_with_families("x86_64-unknown-linux-gnu");
+    let wasm = compile_with_families("wasm32-wasip2");
+    assert!(
+        native.contains("class_family.word"),
+        "native lost the 2c class read"
+    );
+    assert!(
+        wasm.contains("class_family.word"),
+        "wasm32 does not use the 2c class read"
+    );
+    let object = crate::linker::compile_ll_to_object(&wasm, Some("wasm32-wasip2")).unwrap();
+    assert!(object.starts_with(b"\0asm"));
+}
