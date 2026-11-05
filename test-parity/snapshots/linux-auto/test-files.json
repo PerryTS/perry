@@ -218,13 +218,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_9442_process_exit_abandons_async_fs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_9442_process_exit_abandons_async_fs_cjs": {
       "status": "parity_fail",
       "issue": null,
@@ -1373,13 +1366,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_process": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_request_subclass_stream_body": {
       "status": "parity_fail",
       "issue": null,
@@ -1388,13 +1374,6 @@
       "reason": ""
     },
     "test_parity_sqlite_sqltagstore": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_stream_web": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1522,13 +1501,6 @@
     },
     "test_three_like_native_class_descriptors": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_timer": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",

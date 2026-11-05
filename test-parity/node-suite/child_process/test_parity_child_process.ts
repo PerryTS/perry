@@ -2,7 +2,7 @@
 // Module: node:child_process
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_child_process.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/child_process/test_parity_child_process.ts` to verify.
 
 import * as child_process from "node:child_process";
 import { promisify } from "node:util";

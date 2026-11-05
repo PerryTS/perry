@@ -14,6 +14,20 @@
       "added": "2026-11-03",
       "category": "untriaged",
       "reason": ""
+    },
+    "node-suite/process/test_gap_9442_process_exit_abandons_async_fs": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/process/test_parity_process": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
     }
   }
 }

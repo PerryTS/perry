@@ -2,7 +2,7 @@
 // Module: node:async_hooks
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_async_hooks.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/async_hooks/test_parity_async_hooks.ts` to verify.
 
 import * as async_hooks from "node:async_hooks";
 

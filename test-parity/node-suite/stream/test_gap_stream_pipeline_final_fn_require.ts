@@ -2,7 +2,7 @@
 // req("stream/promises"): the final function must run and the promise must
 // resolve with its return value, whichever way the export is read (esbuild output calls it as
 // `(0, import_promises.pipeline)(body, limit, handler)`).
-import helper from "./gap_stream_pipeline_final_fn_require_helper.cjs";
+import helper from "./fixtures/gap_stream_pipeline_final_fn_require_helper.cjs";
 "use strict";
 const { stream, bare, prefixed } = helper;
 const { pipeline: destructured } = bare;

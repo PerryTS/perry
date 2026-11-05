@@ -4,7 +4,7 @@
 // value for toWeb returned a `{ getReader, cancel }` stub, so Next.js's
 // `nodeReadableToWebReadableStream(prelude).tee()` / `for await` threw and
 // dynamic pages sent an empty reply.
-import * as ops from "./stream_to_web_cjs/ops.cjs";
+import * as ops from "./fixtures/stream_to_web_cjs/ops.cjs";
 
 const dec = new TextDecoder();
 // The program uses web streams itself (as Next.js does).

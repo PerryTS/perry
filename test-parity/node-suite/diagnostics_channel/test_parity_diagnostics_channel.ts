@@ -2,7 +2,7 @@
 // Module: node:diagnostics_channel
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_diagnostics_channel.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/diagnostics_channel/test_parity_diagnostics_channel.ts` to verify.
 
 import * as diagnostics_channel from "node:diagnostics_channel";
 

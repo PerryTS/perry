@@ -28,7 +28,7 @@ import {
   CjsWritable,
   CjsReadable,
   CjsDuplex,
-} from "./gap_10448_stream_subclass_heritage_helper.cjs";
+} from "./fixtures/gap_10448_stream_subclass_heritage_helper.cjs";
 
 const AliasTransform = Transform;
 
