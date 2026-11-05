@@ -1204,7 +1204,8 @@ fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
 
 #[inline(always)]
 fn boxed_i32_value(value: i32) -> f64 {
-    f64::from_bits(crate::value::JSValue::int32(value).bits())
+    // A Number has one encoding: the raw double (exact for every i32).
+    value as f64
 }
 
 // The `_i32`/`_u32`/`_f32`/`_bool` specializations delegate to `js_set_add`,
@@ -2718,15 +2719,21 @@ mod tests {
     }
 
     #[test]
-    fn test_set_i32_specialized_helpers_use_int32_keys() {
+    fn test_set_i32_specialized_helpers_use_number_keys() {
         let set = js_set_alloc(4);
         js_set_add_i32(set, 42);
         js_set_add_i32(set, 42);
         assert_eq!(js_set_size(set), 1);
         assert_eq!(js_set_has_i32(set, 42), 1);
         assert_eq!(js_set_has_i32(set, -7), 0);
+        // A Number has one encoding: the stored entry is the raw double.
+        let entries = js_set_to_array(set);
+        assert_eq!(
+            crate::array::js_array_get_f64(entries, 0).to_bits(),
+            42.0f64.to_bits()
+        );
 
-        let boxed = f64::from_bits(crate::value::JSValue::int32(42).bits());
+        let boxed = 42.0f64;
         assert_eq!(js_set_has(set, boxed), 1);
         assert_eq!(js_set_delete_i32(set, 42), 1);
         assert_eq!(js_set_has(set, boxed), 0);
