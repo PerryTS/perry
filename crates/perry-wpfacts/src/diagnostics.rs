@@ -76,12 +76,32 @@ pub(crate) struct BirthCensus {
     /// The first write that opened each native-write gate (holder, key or
     /// `u32::MAX` for every key), in the order the solver opened them.
     pub openers: BTreeMap<(Tok, u32), Opener>,
-    pub opener_seq: u32,
+    /// One clock for every census event that may cause a later one: gate
+    /// openers, first ⊤ arrivals, first escapes. A cause chain follows
+    /// strictly smaller numbers, so it ends at a seed, never in a loop.
+    pub seq: u32,
+    /// Each node's first ⊤ arrival (`birth-arrival`).
+    pub arrivals: BTreeMap<NodeId, Arrival>,
+    /// The node an injection (`add_top`/`add_tok`) is seeding, with the
+    /// gate it replays: its arrival names no copy source.
+    pub inject_at: Option<(NodeId, Option<(Tok, Atom)>)>,
     /// The store (site, receiver node) whose rule is running.
     pub store_ctx: Option<(u32, Option<NodeId>)>,
     /// A store into a builtin function value whose decision waits for the
     /// worklist (`settle_bf_written`): its node's site.
     pub bf_sites: BTreeMap<NodeId, u32>,
+}
+
+/// A node's first ⊤ (`birth-arrival`): the copy source it came from, or the
+/// rule context of the injection that seeded it.
+pub(crate) struct Arrival {
+    pub seq: u32,
+    pub src: NodeId,
+    pub cause: NodeId,
+    pub call: u32,
+    pub parent: Tok,
+    pub injected: bool,
+    pub gate: Option<(Tok, Atom)>,
 }
 
 /// The write that first opened a gate (`birth-opener`).
@@ -97,6 +117,10 @@ pub(crate) struct Opener {
 }
 
 impl BirthCensus {
+    pub fn tick(&mut self) -> u32 {
+        self.seq += 1;
+        self.seq
+    }
     pub fn node_gate(&mut self, n: NodeId) -> Option<(Tok, Atom)> {
         self.active_gate.or_else(|| {
             let (t, a, call, id) = self.pending_gate?;
@@ -146,11 +170,11 @@ impl Model {
             return;
         }
         let (site, recv) = store.or(c.store_ctx).unwrap_or((u32::MAX, None));
-        c.opener_seq += 1;
+        let seq = c.tick();
         c.openers.insert(
             key,
             Opener {
-                seq: c.opener_seq,
+                seq,
                 what: what.into(),
                 site,
                 recv: recv.unwrap_or(NO_NODE),
@@ -228,6 +252,8 @@ pub(crate) struct EscFirst {
     pub cause: Cause,
     pub call: Option<CallId>,
     pub node: Option<NodeId>,
+    /// The census clock when this escape began (census only).
+    pub seq: Option<u32>,
 }
 
 #[derive(Default)]
@@ -258,6 +284,24 @@ struct Site {
 impl Model {
     pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
         if let Some(d) = &mut self.diagnostic {
+            if let Some(c) = &mut d.census {
+                if !c.arrivals.contains_key(&dst) {
+                    let inj = c.inject_at.take().filter(|(n, _)| *n == dst);
+                    let seq = c.tick();
+                    c.arrivals.insert(
+                        dst,
+                        Arrival {
+                            seq,
+                            src: if inj.is_some() { NO_NODE } else { src },
+                            cause: d.cause_node.unwrap_or(NO_NODE),
+                            call: d.cur_call.unwrap_or(u32::MAX),
+                            parent: d.escaping.last().copied().unwrap_or(u32::MAX),
+                            injected: inj.is_some(),
+                            gate: inj.and_then(|(_, g)| g),
+                        },
+                    );
+                }
+            }
             d.pred.entry(dst).or_insert_with(|| {
                 (
                     src,
@@ -498,11 +542,13 @@ impl Model {
                 c.active_gate,
             ));
         }
+        let seq = if was { None } else { d.census.as_mut().map(|c| c.tick()) };
         let cand = (!was).then(|| EscFirst {
             reason,
             cause,
             call: d.cur_call,
             node: d.cause_node,
+            seq,
         });
         d.escaping.push(t);
         cand
@@ -1079,8 +1125,8 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 opt(src_call(Some(*c))), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
         }
         for (t, e) in &d.esc_first {
-            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{}}}",
-                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node)));
+            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{}}}",
+                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node), opt(e.seq)));
         }
         for (t, (w, n)) in &d.esc_why {
             if let Some(&(f, i)) = m.param_marker.get(t) {
@@ -1187,6 +1233,11 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         }
         for (n, file, line, why, source, call, escape, owner, gate) in &c.injections {
             out.push(format!("{{\"record\":\"birth-injection\",\"node\":{n},\"injector\":{},\"line\":{line},\"why\":{},\"source\":{source},\"call\":{call},\"escape\":{escape},\"owner\":{owner},\"gate\":{}}}", quote(file),quote(why),birth_gate(m,*gate)));
+        }
+        for (n, a) in &c.arrivals {
+            out.push(format!("{{\"record\":\"birth-arrival\",\"node\":{n},\"seq\":{},\"source\":{},\"cause\":{},\"call\":{},\"parent\":{},\"injected\":{},\"gate\":{}}}",
+                a.seq, opt((a.src != NO_NODE).then_some(a.src)), opt((a.cause != NO_NODE).then_some(a.cause)), opt((a.call != u32::MAX).then_some(a.call)),
+                opt((a.parent != u32::MAX).then_some(a.parent)), a.injected, birth_gate(m, a.gate)));
         }
         for (a, b) in &c.top_edges {
             out.push(format!(

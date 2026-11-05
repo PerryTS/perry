@@ -311,6 +311,7 @@ impl Model {
                     if !c.injecting {
                         let at = std::panic::Location::caller();
                         let gate = c.node_gate(n);
+                        c.inject_at = Some((n, gate));
                         c.injections.insert((
                             n,
                             at.file().into(),
@@ -355,6 +356,7 @@ impl Model {
             let d = self.diagnostic.as_mut().unwrap();
             let c = d.census.as_mut().unwrap();
             let gate = c.node_gate(n);
+            c.inject_at = Some((n, gate));
             c.injections.insert((
                 n,
                 at.file().into(),
