@@ -69,6 +69,7 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
+        self.field_shaped(t, a, n);
         if let Some(&nf) = self.num_fields.get(&t) {
             if self.is_num_atom(a) {
                 self.edge(n, nf);
@@ -153,7 +154,7 @@ impl Model {
         // known key here.
         let act = ChainAct::Load(fa_d);
         self.any_walk_holders.entry(s).or_default().push((s, act));
-        self.accessor_hit(s, s, Key::Any, act);
+        self.accessor_hit(s, s, Key::any(), act);
     }
 
     /// DECISIONS 241: the join's values of function token `t`'s own
@@ -329,7 +330,7 @@ impl Model {
         // Any-key lookups subscribe through the holder relation;
         // named-key replay in `visits` does not cover them.
         self.any_walk_holders.entry(t).or_default().push((t, act));
-        self.accessor_hit(t, t, Key::Any, act);
+        self.accessor_hit(t, t, Key::any(), act);
     }
 
     /// What class private field `a` (`Model::private_atom`) holds on any

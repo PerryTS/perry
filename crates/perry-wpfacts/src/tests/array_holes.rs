@@ -124,7 +124,7 @@ fn index_length_and_computed_stores_may_leave_a_hole() {
         m.solve();
         assert!(!holds_undef(&m, d), "{k}: dense before the store");
         let key = match k {
-            "*any" => Key::Any,
+            "*any" => Key::any(),
             _ => Key::Named(m.atom(k)),
         };
         store(&mut m, t, key);

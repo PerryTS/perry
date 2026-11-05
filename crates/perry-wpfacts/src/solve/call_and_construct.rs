@@ -874,7 +874,7 @@ impl Model {
             self.mark_use(t, crate::model::MARK_READ);
             let r = match key {
                 Key::Named(a) => self.marker_load(t, Some(a)),
-                Key::Any => self.reach_of(t),
+                Key::Any(_) => self.reach_of(t),
             };
             self.mark_use(r, crate::model::MARK_READ);
             return;
@@ -897,7 +897,7 @@ impl Model {
             }
             let m = match key {
                 Key::Named(a) => self.marker_load(t, Some(a)),
-                Key::Any => self.reach_of(t),
+                Key::Any(_) => self.reach_of(t),
             };
             self.mark_escape_why(m, &|mm: &Self| match key {
                 Key::Named(a)
@@ -907,7 +907,7 @@ impl Model {
                 }
                 Key::Named(_) if mm.reach_marker.contains(&t) => "method: of a reach".into(),
                 Key::Named(_) => "method: of a marker that is no own parameter".into(),
-                Key::Any => "method: computed key".into(),
+                Key::Any(_) => "method: computed key".into(),
             });
             // That method is an unknown function, as a plain call through a
             // marker is (`call_tok`): the arguments escape, the result is
@@ -921,7 +921,7 @@ impl Model {
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,
             (Key::Named(a), None) => self.field(t, a),
-            (Key::Any, _) => self.all_fields(t),
+            (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);
         // A key only another unit's subclass defines runs that subclass's

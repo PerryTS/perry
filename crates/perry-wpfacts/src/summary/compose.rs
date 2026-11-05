@@ -240,7 +240,7 @@ pub(super) fn expand(
         s.cons.push((
             sp,
             Cons::Load {
-                key: Key::Any,
+                key: Key::any(),
                 dst: elems,
             },
         ));

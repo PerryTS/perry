@@ -54,7 +54,7 @@ impl Model {
         let hits = match key {
             // A computed store's key is decided when the solve is done (its
             // site may record the key node only after this store applied).
-            Some(Key::Any) if site.is_some() => {
+            Some(Key::Any(_)) if site.is_some() => {
                 let s = site.unwrap();
                 if !self.array_keyed_stores.iter().any(|&(x, _)| x == s) {
                     let on = self.tok_name(t);
@@ -63,7 +63,7 @@ impl Model {
                 }
                 false
             }
-            None | Some(Key::Any) => true,
+            None | Some(Key::Any(_)) => true,
             Some(Key::Named(a)) => matches!(
                 self.atoms[a as usize].as_str(),
                 crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
@@ -333,7 +333,7 @@ impl Model {
     pub fn key_name(&self, k: Key) -> String {
         match k {
             Key::Named(a) => esc_key(&self.atoms[a as usize]),
-            Key::Any => "*".to_string(),
+            Key::Any(_) => "*".to_string(),
         }
     }
 

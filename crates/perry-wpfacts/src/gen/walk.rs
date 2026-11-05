@@ -713,7 +713,7 @@ impl<'a> Gen<'a> {
                     self.m.cons(
                         thisn,
                         Cons::Store {
-                            key: Key::Any,
+                            key: Key::any(),
                             src: v,
                             site,
                         },

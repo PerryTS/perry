@@ -271,7 +271,7 @@ impl<'a> Gen<'a> {
                         proto: Protocol::Any,
                     },
                 );
-                let el = self.load(r, Key::Any);
+                let el = self.load(r, Key::any());
                 let num = self.prim_node(prim::NUM);
                 let mut outs = vec![el];
                 for a in args {
@@ -328,7 +328,7 @@ impl<'a> Gen<'a> {
             Expr::MapGet { map, key } => {
                 let m = self.expr(fx, map);
                 let _ = self.expr(fx, key);
-                let out = self.load(m, Key::Any);
+                let out = self.load(m, Key::any());
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -337,7 +337,7 @@ impl<'a> Gen<'a> {
             | Expr::SetValueAt { set: map, idx } => {
                 let m = self.expr(fx, map);
                 let _ = self.expr(fx, idx);
-                let out = self.load(m, Key::Any);
+                let out = self.load(m, Key::any());
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -357,7 +357,7 @@ impl<'a> Gen<'a> {
             Expr::ObjectFromEntries(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
-                let inner = self.load(it, Key::Any);
+                let inner = self.load(it, Key::any());
                 let (t, n) = self.bobj(mi, "fromEntries");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
@@ -365,12 +365,12 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectValues(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
+                let el = self.load(v, Key::any());
                 self.new_arr_from(mi, "values", &[el])
             }
             Expr::ObjectEntries(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
+                let el = self.load(v, Key::any());
                 let s = self.prim_node(prim::STR);
                 let pair = self.new_arr_from(mi, "entry", &[el, s]);
                 self.new_arr_from(mi, "entries", &[pair])
@@ -410,7 +410,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayFromArrayLikeHoley(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
+                let el = self.load(v, Key::any());
                 self.m.add_prim(el, prim::UNDEF);
                 self.new_arr_from(mi, "fromLike", &[el])
             }

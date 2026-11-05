@@ -76,7 +76,7 @@ impl Model {
                 let key = match k {
                     Some(k) if k == NUM_KEY => self.elem_key(),
                     Some(k) => Key::Named(self.atom(k)),
-                    None => Key::Any,
+                    None => Key::any(),
                 };
                 let v = self.node_l("shared-store");
                 self.add_top(v, |_| "stored by another unit into a shared object".into());

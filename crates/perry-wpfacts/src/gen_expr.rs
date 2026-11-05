@@ -250,9 +250,15 @@ impl<'a> Gen<'a> {
         match key {
             Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
             // The key's values decide: an index or any key (`StoreIndexed`).
-            Key::Any => self
-                .m
-                .cons(key_value, Cons::StoreIndexed { o: recv, src, site }),
+            Key::Any(shape) => self.m.cons(
+                key_value,
+                Cons::StoreIndexed {
+                    o: recv,
+                    src,
+                    site,
+                    shape,
+                },
+            ),
         }
     }
 
@@ -274,7 +280,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn key_of(&mut self, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
-            _ => Key::Any,
+            _ => Key::any(),
         }
     }
 
@@ -289,7 +295,7 @@ impl<'a> Gen<'a> {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
                     Key::Named(self.m.atom(s))
                 }
-                _ => Key::Any,
+                _ => Key::any(),
             },
             _ => self.key_of(index),
         }
@@ -902,7 +908,12 @@ impl<'a> Gen<'a> {
                         }
                     }
                 } else {
-                    let key = self.key_of(key);
+                    // A key built from literal parts writes only names
+                    // matching them (`Model::key_shape`).
+                    let key = match self.key_of(key) {
+                        Key::Any(_) => Key::Any(self.m.key_shape(key)),
+                        k => k,
+                    };
                     // A receiver other than the target gets the own data store.
                     for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
@@ -912,7 +923,15 @@ impl<'a> Gen<'a> {
                         match key {
                             Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
                             // The key's values decide: an index or any key.
-                            Key::Any => self.m.cons(k, Cons::StoreIndexed { o, src: v, site }),
+                            Key::Any(shape) => self.m.cons(
+                                k,
+                                Cons::StoreIndexed {
+                                    o,
+                                    src: v,
+                                    site,
+                                    shape,
+                                },
+                            ),
                         }
                     }
                 }
@@ -974,11 +993,12 @@ impl<'a> Gen<'a> {
                 );
                 match self.read_key(index) {
                     Key::Named(a) => self.load(o, Key::Named(a)),
-                    Key::Any => {
+                    Key::Any(_) => {
                         let dst = self.tmp("idxload");
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
-                        self.m.cons(o, Cons::IdxLoad { idx, dst });
+                        let shape = self.m.key_shape(index);
+                        self.m.cons(o, Cons::IdxLoad { idx, dst, shape });
                         dst
                     }
                 }
@@ -1023,7 +1043,12 @@ impl<'a> Gen<'a> {
                         self.store_elem(fx, e, o, key, i, v, "[]=");
                     }
                 } else {
-                    let key = self.key_of(index);
+                    // A key built from literal parts writes only names
+                    // matching them (`Model::key_shape`).
+                    let key = match self.key_of(index) {
+                        Key::Any(_) => Key::Any(self.m.key_shape(index)),
+                        k => k,
+                    };
                     self.store_elem(fx, e, o, key, i, v, "[]=");
                 }
                 v
@@ -1399,7 +1424,7 @@ impl<'a> Gen<'a> {
                 let c = self.class_value(mi, class_name);
                 let _ = self.expr(fx, key);
                 let v = self.expr(fx, value);
-                self.store(fx, c, Key::Any, v, "static[sym]".into(), None, false);
+                self.store(fx, c, Key::any(), v, "static[sym]".into(), None, false);
                 v
             }
             Expr::RegisterClassParentDynamic {
@@ -1543,7 +1568,7 @@ impl<'a> Gen<'a> {
                     // the binding: the binding holds the cell (DECISIONS 50).
                     let l = self.local(mi, *id);
                     if self.cell_locals.contains(&(mi, *id)) {
-                        self.store(fx, l, Key::Any, cv, "owner[0]=".into(), None, false);
+                        self.store(fx, l, Key::any(), cv, "owner[0]=".into(), None, false);
                     } else {
                         self.m.edge(cv, l);
                     }
@@ -1566,7 +1591,7 @@ impl<'a> Gen<'a> {
                 }
                 for (_, v) in computed_statics {
                     let vn = self.expr(fx, v);
-                    self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
+                    self.store(fx, cv, Key::any(), vn, "static[k]".into(), None, false);
                 }
                 for (i, a) in captured_args.iter().enumerate() {
                     let v = self.snapshot_read(fx, a);

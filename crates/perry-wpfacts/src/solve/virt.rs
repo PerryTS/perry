@@ -459,7 +459,7 @@ impl Model {
                     self.store_into(t, Key::Named(a), v, site);
                 }
             }
-            None => self.store_into(t, Key::Any, top, site),
+            None => self.store_into(t, Key::any(), top, site),
         }
         // What the receiver reaches (its fields, transitively), as for an
         // argument (gen.rs `stand_in_fn_of`).
@@ -469,14 +469,14 @@ impl Model {
             self.cons(
                 h,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );
             self.cons(
                 q,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );

@@ -596,7 +596,7 @@ impl Model {
                     }
                     let f = match key {
                         Key::Named(a) => self.field(q, a),
-                        Key::Any => self.all_fields(q),
+                        Key::Any(_) => self.key_fields(q, key),
                     };
                     self.edge(f, dst);
                     self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
@@ -627,7 +627,7 @@ impl Model {
                             .push((origin, act));
                     }
                     if q != TOP && self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()) {
-                        self.accessor_hit(origin, q, Key::Any, act);
+                        self.accessor_hit(origin, q, Key::any(), act);
                     }
                 }
             }
@@ -723,7 +723,7 @@ impl Model {
                         // A birth's `Key::Any` is the literal's elements
                         // (summary/build.rs): the element slot, never an
                         // array's named-key node.
-                        Key::Any => self.field_any(t),
+                        Key::Any(_) => self.field_any(t),
                     };
                     self.edge(src, f);
                 }
@@ -760,7 +760,7 @@ impl Model {
                             self.add_top(fa, |_| "accessor of unknown function value".into());
                             let site = self.anon_post_site("unknown accessor");
                             let k = if self.atoms[key as usize] == crate::STAR_KEY {
-                                Key::Any
+                                Key::any()
                             } else {
                                 Key::Named(key)
                             };
@@ -1000,13 +1000,13 @@ impl Model {
                 }
             }
             // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
-            Cons::IdxLoad { idx, dst } if self.key_nodes.contains_key(&idx) => {
+            Cons::IdxLoad { idx, dst, .. } if self.key_nodes.contains_key(&idx) => {
                 let a = self.key_nodes[&idx];
                 for &t in toks {
                     self.load_from(t, t, Key::Named(a), dst);
                 }
             }
-            Cons::IdxLoad { idx, dst } => {
+            Cons::IdxLoad { idx, dst, shape } => {
                 for &t in toks {
                     if t == TOP {
                         self.add_tok(dst, TOP);
@@ -1024,14 +1024,14 @@ impl Model {
                     self.add_prim(dst, prim::UNDEF);
                     if self.idx_done.insert((idx, t, dst, 0)) {
                         self.plain_key(t, ChainAct::Load(dst));
-                        self.cons(idx, Cons::IdxKey { obj: t, dst });
+                        self.cons(idx, Cons::IdxKey { obj: t, dst, shape });
                     }
                 }
             }
-            Cons::IdxKey { obj, dst } => {
+            Cons::IdxKey { obj, dst, shape } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
-                    self.load_from(obj, obj, Key::Any, dst);
+                    self.load_from(obj, obj, Key::Any(shape), dst);
                 }
                 // ToPropertyKey of a Number or BigInt is a numeric string: the
                 // own fields a number key may name (DECISIONS 217); the chain
@@ -1067,7 +1067,7 @@ impl Model {
                     }
                 }
             }
-            Cons::IdxMCall { idx, call } => {
+            Cons::IdxMCall { idx, call, shape } => {
                 // Primitive receivers (`MCall`'s rule): a number key calls
                 // a key a store into ⊤ wrote on their prototype.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
@@ -1080,6 +1080,7 @@ impl Model {
                                 obj: TOP,
                                 prim: p,
                                 call,
+                                shape,
                             },
                         );
                     }
@@ -1088,12 +1089,12 @@ impl Model {
                     // ⊤ and a parameter marker take any key (the call
                     // escapes; the marker's reader replays the call).
                     if t == TOP || (self.is_marker(t) && !self.virt_protos.contains_key(&t)) {
-                        self.method_on(t, Key::Any, call);
+                        self.method_on(t, Key::any(), call);
                         continue;
                     }
                     if self.idx_done.insert((idx, t, call, 0)) {
                         self.mark_use(t, crate::model::MARK_ESCAPE);
-                        let own = self.all_fields(t);
+                        let own = self.key_fields(t, Key::Any(shape));
                         self.bind_via(own, call, t);
                         self.plain_key(t, ChainAct::Call(call));
                         self.cons(
@@ -1102,6 +1103,7 @@ impl Model {
                                 obj: t,
                                 prim: 0,
                                 call,
+                                shape,
                             },
                         );
                     }
@@ -1111,6 +1113,7 @@ impl Model {
                 obj,
                 prim: recv_prim,
                 call,
+                shape,
             } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 // One rule per receiver: a token, or (⊤) primitive kinds.
@@ -1120,8 +1123,9 @@ impl Model {
                 };
                 if named && self.idx_done.insert((n, obj, call, rule)) {
                     match obj {
-                        TOP => self.with_b(|m| builtins::prim_method(m, recv_prim, Key::Any, call)),
-                        _ => self.method_on(obj, Key::Any, call),
+                        TOP => self
+                            .with_b(|m| builtins::prim_method(m, recv_prim, Key::Any(shape), call)),
+                        _ => self.method_on(obj, Key::Any(shape), call),
                     }
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
@@ -1191,11 +1195,16 @@ impl Model {
             }
             Cons::StoreKeyed { o, src, site } => {
                 if let Some(k) = self.keyed_once(n, src, 1) {
-                    let key = k.map_or(Key::Any, Key::Named);
+                    let key = k.map_or(Key::any(), Key::Named);
                     self.cons(o, Cons::Store { key, src, site });
                 }
             }
-            Cons::StoreIndexed { o, src, site } => {
+            Cons::StoreIndexed {
+                o,
+                src,
+                site,
+                shape,
+            } => {
                 // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
                 // its ToString, a numeric name, `numeric_key`) writes an
                 // holder's numeric properties, never a nonnumeric name;
@@ -1212,7 +1221,7 @@ impl Model {
                     self.cons(
                         o,
                         Cons::Store {
-                            key: Key::Any,
+                            key: Key::Any(shape),
                             src,
                             site,
                         },

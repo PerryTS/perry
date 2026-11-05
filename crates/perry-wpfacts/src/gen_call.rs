@@ -153,9 +153,17 @@ impl<'a> Gen<'a> {
                     Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
-                    Key::Any => {
+                    Key::Any(_) => {
                         let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
-                        self.m.cons(o, Cons::IdxMCall { idx: i, call });
+                        let shape = self.m.key_shape(index);
+                        self.m.cons(
+                            o,
+                            Cons::IdxMCall {
+                                idx: i,
+                                call,
+                                shape,
+                            },
+                        );
                         ret
                     }
                 }
@@ -567,7 +575,7 @@ impl<'a> Gen<'a> {
                     ("js_object_literal_define" | "js_object_set_method_by_name", Some(k)) => {
                         Key::Named(self.m.atom(&k))
                     }
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 if let Key::Named(a) = key {
                     if let Some(tm) = birth_tm {
@@ -641,7 +649,7 @@ impl<'a> Gen<'a> {
                 let (Some(o), Some(s)) = (arg(0), arg(1)) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let vals = self.load(s, Key::Any);
+                let vals = self.load(s, Key::any());
                 if let Some(tm) = birth_tm {
                     self.m.tmpls[tm as usize].birth_keys.clear();
                     self.m.tmpls[tm as usize].definite.clear();
@@ -650,7 +658,7 @@ impl<'a> Gen<'a> {
                 self.store(
                     fx,
                     o,
-                    Key::Any,
+                    Key::any(),
                     vals,
                     name.to_string(),
                     birth_tm,
@@ -774,7 +782,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     mp,
                     Cons::Store {
-                        key: Key::Any,
+                        key: Key::any(),
                         src: v,
                         site,
                     },
@@ -785,7 +793,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -793,7 +801,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::ALL);
                 out
             }

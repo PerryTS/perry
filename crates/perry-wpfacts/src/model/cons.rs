@@ -268,20 +268,37 @@ pub enum Cons {
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
-    IdxLoad { idx: NodeId, dst: NodeId },
+    IdxLoad {
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup. It is never taken to be
     /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
     /// an unknown string key; only the named forms read it).
-    IdxKey { obj: Tok, dst: NodeId },
+    IdxKey {
+        obj: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
     /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
-    IdxMCall { idx: NodeId, call: CallId },
+    IdxMCall {
+        idx: NodeId,
+        call: CallId,
+        shape: KeyShapeId,
+    },
     /// The node is the key of `o[k](...)` for receiver token `obj`: a
     /// string, symbol or object key calls `Key::Any`'s methods.
     /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds.
-    IdxKeyCall { obj: Tok, prim: u16, call: CallId },
+    IdxKeyCall {
+        obj: Tok,
+        prim: u16,
+        call: CallId,
+        shape: KeyShapeId,
+    },
     /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
     /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
     /// through the template call `call` (one argument: the key).
@@ -314,6 +331,7 @@ pub enum Cons {
         o: NodeId,
         src: NodeId,
         site: SiteId,
+        shape: KeyShapeId,
     },
     /// The node is the key of a definition whose descriptor's get (set) is
     /// `f`, on the objects of `holder`: a run's one key installs it under

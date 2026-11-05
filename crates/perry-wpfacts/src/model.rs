@@ -589,11 +589,38 @@ pub struct ThisContract {
     pub values: Vec<NodeId>,
 }
 
-/// A property key: a named atom, or any key (computed).
+/// A property key: a named atom, or a computed key (`Any`). A computed
+/// key built from literal parts (`o[type + "s"]`, a template with literal
+/// text) carries its shape (`KeyShapeId`, `Model::key_shapes`): it names
+/// only members whose name matches (`Model::key_may_name`). Shape 0 is no
+/// shape: any key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     Named(Atom),
-    Any,
+    Any(KeyShapeId),
+}
+
+/// An interned key shape (`Model::key_shapes`); 0: any string.
+pub type KeyShapeId = u32;
+
+impl Key {
+    /// A computed key of no known shape.
+    pub const fn any() -> Key {
+        Key::Any(0)
+    }
+
+    pub fn is_any(self) -> bool {
+        matches!(self, Key::Any(_))
+    }
+
+    /// The key without its shape: where a computed key is looked up as one
+    /// key (accessor groups, contracts), every shape is that key.
+    pub fn unshaped(self) -> Key {
+        match self {
+            Key::Any(_) => Key::any(),
+            k => k,
+        }
+    }
 }
 
 /// A lookup that passed a native prototype not defining its key.
@@ -1282,6 +1309,21 @@ pub struct Model {
     /// FVA 4.3b: a for-in body run's copy of its key variable -> the run's one
     /// key (the variable holds nothing else).
     pub key_nodes: FxHashMap<NodeId, Atom>,
+    /// Interned computed-key shapes (`model/key_shape.rs`; 0 is none).
+    pub key_shapes: Vec<KeyShape>,
+    pub key_shape_ids: FxHashMap<KeyShape, KeyShapeId>,
+    /// Computed-key sites generated, those with a shape, and those whose
+    /// shape excludes `constructor` (the profile's `key shapes` line).
+    pub key_shape_census: [u64; 3],
+    /// A shaped key's own-field read of an object: the fields whose name the
+    /// shape admits and every write under a computed key
+    /// (`solve/shaped_keys.rs`).
+    pub shaped_reads: FxHashMap<(Tok, KeyShapeId), NodeId>,
+    /// A shaped key's store into an object: it reaches only the fields
+    /// whose name the shape admits, and computed-key reads.
+    pub shaped_stores: FxHashMap<(Tok, KeyShapeId), NodeId>,
+    /// The shaped reads and stores of each object, for fields made later.
+    pub shaped_of: FxHashMap<Tok, Vec<(KeyShapeId, NodeId, bool)>>,
     /// For-in bodies run per key: (call, body token, the literal), checked
     /// again once the worklist is empty (`settle_for_in`).
     pub for_in_runs: Vec<(CallId, Tok, Tok)>,
@@ -1860,8 +1902,11 @@ pub const FN_RUN: u32 = 1 << 31;
 /// a stop check at the start prototype, unlike a receiver's own walk).
 pub const SUPER_BIT: Tok = 1 << 31;
 
+#[path = "model/key_shape.rs"]
+mod key_shape;
 #[path = "model/operations.rs"]
 mod operations;
+pub use key_shape::KeyShape;
 
 /// A property key as one whitespace-free token for the dump and the
 /// relations (`scripts/wpfacts_recompute.py` `unesc` is the inverse):

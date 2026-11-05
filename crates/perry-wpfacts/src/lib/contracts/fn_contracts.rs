@@ -137,7 +137,7 @@ pub(crate) fn fn_contract_of(
             for &k in g.m.param_reads.get(&mk).into_iter().flatten() {
                 let k = match k {
                     model::Key::Named(a) => g.m.atoms[a as usize].clone(),
-                    model::Key::Any => crate::STAR_KEY.to_string(),
+                    model::Key::Any(_) => crate::STAR_KEY.to_string(),
                 };
                 if !v.iter().any(|(x, _)| *x == k) {
                     v.push((k, 0));
@@ -318,7 +318,7 @@ pub(crate) fn fn_contract_of(
                     via: via.map(|v| g.m.atoms[v as usize].clone()),
                     key: match a {
                         model::Key::Named(a) => Some(g.m.atoms[a as usize].clone()),
-                        model::Key::Any => None,
+                        model::Key::Any(_) => None,
                     },
                     from,
                     from_reach,

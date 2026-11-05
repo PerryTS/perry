@@ -200,19 +200,31 @@ pub fn map_cons(
         ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
-        IdxLoad { idx, dst } => IdxLoad {
+        IdxLoad { idx, dst, shape } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
+            shape,
         },
-        IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
-        IdxMCall { idx, call } => IdxMCall {
+        IdxKey { obj, dst, shape } => IdxKey {
+            obj,
+            dst: n(dst),
+            shape,
+        },
+        IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),
             call: k(call),
+            shape,
         },
-        IdxKeyCall { obj, prim, call } => IdxKeyCall {
+        IdxKeyCall {
+            obj,
+            prim,
+            call,
+            shape,
+        } => IdxKeyCall {
             obj,
             prim,
             call: k(call),
+            shape,
         },
         ForInBody { obj, call } => ForInBody {
             obj: n(obj),
@@ -233,10 +245,16 @@ pub fn map_cons(
             src: n(src),
             site,
         },
-        StoreIndexed { o, src, site } => StoreIndexed {
+        StoreIndexed {
+            o,
+            src,
+            site,
+            shape,
+        } => StoreIndexed {
             o: n(o),
             src: n(src),
             site,
+            shape,
         },
         AccessorKeyed { holder, f, setter } => AccessorKeyed {
             holder: n(holder),
