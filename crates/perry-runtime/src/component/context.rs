@@ -126,8 +126,8 @@ pub(super) fn finish_disposal(owner: f64, status: i32) {
     ) {
         let scope = RuntimeHandleScope::new();
         let owner = scope.root_nanbox_f64(owner);
-        let error = scope.root_nanbox_f64(undefined());
-        let cleanup = crate::exception::catch_js_throw(|| {
+        let mut error = None;
+        let cleanup = crate::exception::catch_thrown(|| {
             if super::persistent::enabled(owner.get_nanbox_f64()) {
                 super::persistent::imports::clear(owner.get_nanbox_f64());
             } else {
@@ -136,7 +136,7 @@ pub(super) fn finish_disposal(owner: f64, status: i32) {
             super::host_resource::payload::dispose_owner(owner.get_nanbox_f64())
         });
         if let Err(thrown) = cleanup {
-            error.set_nanbox_f64(thrown);
+            error = Some(thrown.root(&scope));
         }
         unsafe {
             (*get(owner.get_nanbox_f64())).alive = false;
@@ -150,7 +150,7 @@ pub(super) fn finish_disposal(owner: f64, status: i32) {
             );
         }
         if cleanup.is_err() {
-            crate::exception::js_throw(error.get_nanbox_f64());
+            crate::exception::rethrow_caught(error.as_ref().unwrap().caught());
         }
     }
 }

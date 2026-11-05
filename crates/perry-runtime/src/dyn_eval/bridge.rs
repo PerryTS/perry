@@ -144,12 +144,12 @@ pub(crate) fn to_rust_string(v: f64) -> String {
 
 fn throw_error_kind(kind: u32, message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_kind_with_options(
+    let err = crate::error::CoreError::kind_with_options(
         kind,
         msg,
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn throw_type_error(message: &str) -> ! {
@@ -172,20 +172,19 @@ pub(crate) fn throw_eval_error(message: &str) -> ! {
     throw_error_kind(crate::error::ERROR_KIND_EVAL_ERROR, message)
 }
 
-fn wasm_codegen_error(api: &str) -> f64 {
+fn wasm_codegen_error(api: &str) -> crate::error::CoreError {
     let message = format!("{api}(): Wasm code generation disallowed by embedder");
     let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_name_message_bytes(b"CompileError", message);
-    crate::value::js_nanbox_pointer(error as i64)
+    crate::error::CoreError::named_bytes(b"CompileError", message)
 }
 
 pub(crate) fn wasm_codegen_rejection(api: &str) -> f64 {
-    let promise = crate::promise::js_promise_rejected(wasm_codegen_error(api));
+    let promise = crate::promise::js_promise_rejected(wasm_codegen_error(api).value());
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
 pub(crate) fn throw_wasm_codegen_error(api: &str) -> ! {
-    crate::exception::js_throw(wasm_codegen_error(api))
+    crate::exception::throw_core(wasm_codegen_error(api))
 }
 
 /// The diagnostic contract of #6559: anything outside the interpreter subset

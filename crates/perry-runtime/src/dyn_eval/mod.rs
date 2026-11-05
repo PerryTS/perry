@@ -311,15 +311,15 @@ pub(crate) fn interp_restore(savepoint: u64) {
 pub(crate) fn interp_entry<R>(f: impl FnOnce() -> R) -> R {
     let saved = interp_savepoint();
     crate::dyn_eval_hooks::interp_active_enter();
-    let r = crate::exception::catch_js_throw(f);
+    let r = crate::exception::catch_thrown(f);
     crate::dyn_eval_hooks::interp_active_leave();
     match r {
         Ok(r) => r,
         Err(err) => {
-            // The exception value is a plain f64 here; nothing below
-            // allocates before `js_throw` roots it again.
+            // The caught value is unrooted here; nothing below
+            // allocates before the rethrow roots it again.
             interp_restore(saved);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }

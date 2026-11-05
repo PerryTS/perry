@@ -74,7 +74,7 @@ extern "C" fn types(
     let mut schema = Vec::new();
     let mut display = Value::Null;
     let mut display_bytes = Vec::new();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let ctx = context::get(owner.get_nanbox_f64());
         if unsafe { !(*ctx).alive || (*ctx).host.is_null() }
             || !persistent::enabled(owner.get_nanbox_f64())
@@ -174,7 +174,7 @@ extern "C" fn create(
     let index = crate::closure::js_closure_get_capture_f64(closure, 1) as u64;
     let schema = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 2));
     let mut parsed = Value::Null;
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         parsed = serde_json::from_str(&string(schema.get_nanbox_f64()))
             .unwrap_or_else(|_| fail("Invalid private factory schema"));
         persistent::operations::create(owner.get_nanbox_f64(), index, &parsed)

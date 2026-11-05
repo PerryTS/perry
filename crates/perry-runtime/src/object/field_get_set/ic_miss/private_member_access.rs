@@ -486,9 +486,9 @@ fn throw_private_type_error(msg: &str) -> ! {
         msg.as_ptr(),
         msg.len() as u32,
     ));
-    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
-    let v = crate::value::JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(v))
+    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::CoreError::type_error(s));
+    let v = err;
+    crate::exception::throw_core(v)
 }
 
 #[cfg(test)]

@@ -75,7 +75,7 @@ fn invoke(owner: f64) -> f64 {
     let retirement = callback::Frame::new(&scope, component.get_nanbox_f64());
     let mut output = Vec::new();
     let mut status = OK;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let context = context::get(component.get_nanbox_f64());
         if unsafe { (*context).host.is_null() || !(*context).alive } {
             fail("Component is not initialized or has been disposed");
@@ -107,18 +107,20 @@ fn invoke(owner: f64) -> f64 {
         }
         undefined()
     });
-    let result_value = scope.root_nanbox_f64(*result.as_ref().unwrap_or_else(|e| e));
-    let disposed = crate::exception::catch_js_throw(|| {
+    let result = match result {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
+    };
+    let disposed = crate::exception::catch_thrown(|| {
         if status == RELEASED_ERROR {
             context::finish_disposal(component.get_nanbox_f64(), status);
         }
         retirement.rethrow();
         undefined()
     });
-    let result = if result.is_err() {
-        Err(result_value.get_nanbox_f64())
-    } else {
-        disposed.map(|_| result_value.get_nanbox_f64())
+    let result = match result {
+        Err(error) => Err(error.caught()),
+        Ok(value) => disposed.map(|_| value.get_nanbox_f64()),
     };
     drop(output);
     cleanup::finish_call(component.get_nanbox_f64(), result)
@@ -135,7 +137,7 @@ fn step(owner: f64) -> bool {
     ));
     let mut output = Vec::new();
     let mut interface = String::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         if !operation(owner.get_nanbox_f64()).invoked {
             let component = payload::state_get(owner.get_nanbox_f64(), &OPERATION, b"component");
             let context = context::get(component);
@@ -219,7 +221,7 @@ fn step(owner: f64) -> bool {
     let done = match result {
         Ok(done) => done,
         Err(error) => {
-            remember(owner.get_nanbox_f64(), error);
+            remember(owner.get_nanbox_f64(), error.value());
             true
         }
     };
@@ -280,13 +282,13 @@ extern "C" fn pump() -> i32 {
         return 0;
     }
     let scope = RuntimeHandleScope::new();
-    let first_error = scope.root_nanbox_f64(undefined());
+    let mut first_error = None;
     let mut threw = false;
     let mut completed = 0i32;
     // Detached items remain pinned while any callback collects the heap.
     let pending = PENDING.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     for link in pending {
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             unsafe { payload::link_event_owner(link) }.map_or(true, step)
         });
         match result {
@@ -294,7 +296,7 @@ extern "C" fn pump() -> i32 {
             result => {
                 if let Err(error) = result {
                     if !threw {
-                        first_error.set_nanbox_f64(error);
+                        first_error = Some(error.root(&scope));
                         threw = true;
                     }
                     if let Some(owner) = unsafe { payload::link_event_owner(link) } {
@@ -308,7 +310,7 @@ extern "C" fn pump() -> i32 {
     }
     PUMPING.with(|busy| busy.set(false));
     if threw {
-        crate::exception::js_throw(first_error.get_nanbox_f64());
+        crate::exception::rethrow_caught(first_error.as_ref().unwrap().caught());
     }
     completed
 }

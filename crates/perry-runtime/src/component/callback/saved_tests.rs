@@ -103,7 +103,7 @@ fn check_saved(observed: bool) {
                 );
                 crate::exception::js_throw(73.0);
             }),
-            Err(73.0)
+            Err(crate::exception::test_caught(73.0))
         );
     }
     assert_eq!(als::get_store(token.token()), Some(17.0));

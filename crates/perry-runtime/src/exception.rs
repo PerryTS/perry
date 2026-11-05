@@ -35,11 +35,10 @@ pub(crate) use marks::CatchStack;
 pub use marks::{caller_frame_mark, frame_mark};
 mod native_call;
 pub(crate) use native_call::catch_native_callback;
-mod throw_leaf;
+pub(crate) mod throw_leaf;
 use throw_leaf::ThrowKind;
 pub use throw_leaf::{
-    rethrow_caught, throw_core, throw_open, throw_program_value, Caught, CoreError,
-    RootedCaught,
+    rethrow_caught, throw_core, throw_open, throw_program_value, Caught, CoreError, RootedCaught,
 };
 
 struct ExceptionState {
@@ -1089,4 +1088,9 @@ mod catch_enter_tests {
         );
         assert_eq!(js_get_exception(), 0.0);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_caught(value: f64) -> Caught {
+    catch_thrown(|| throw_program_value(value)).unwrap_err()
 }
