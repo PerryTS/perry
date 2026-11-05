@@ -115,7 +115,8 @@ fn described_members_keep_their_opaque_effects() {
     assert!(tmpl(&pf, "A").escape.is_some(), "{}", pf.dump_text());
     let pf = facts(&format!(
         "{CLASSES}
-        const mp = new Map(); const h: any = mp.hasOwnProperty;
+        // Date.getTime is described as a native; its model does not accept a B receiver.
+        const h: any = new Date().getTime;
         h.call(new B(), \"k\");
         console.log(new B().b);"
     ));
@@ -385,7 +386,11 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
     // decides the global field itself.
     // DEC 250 Q2: `Object.prototype` takes no new key, so only a global
     // object handed to unknown code (a program-written `gc`) loses it.
-    for (src, want) in [(body("", ""), true), (body(w, ""), false), (body("", w), false)] {
+    for (src, want) in [
+        (body("", ""), true),
+        (body(w, ""), false),
+        (body("", w), false),
+    ] {
         let pf = facts(&src);
         assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
@@ -443,22 +448,36 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
 /// not an own write on the global object; an actual own unknown write is.
 #[test]
 fn a_refused_prototype_write_does_not_change_a_global_field() {
-    let body = |write: &str| format!(
-        "{CLASSES}{M}
+    let body = |write: &str| {
+        format!(
+            "{CLASSES}{M}
          declare const unknown: any;
          const g: any = globalThis;
          g.__perry_t_held = new M();
          try {{ {write} }} catch (e) {{}}
          console.log(g.__perry_t_held.m(new A()));
          console.log(new A().a);"
-    );
+        )
+    };
     for (write, want) in [
         ("", true),
-        ("(Object.prototype as any).__perry_t_held = unknown.f;", true),
+        (
+            "(Object.prototype as any).__perry_t_held = unknown.f;",
+            true,
+        ),
         ("g.__perry_t_held = unknown.f;", false),
     ] {
         let src = body(write);
         let pf = facts(&src);
         assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
+}
+
+#[test]
+fn inherited_has_own_property_uses_the_same_non_escaping_model() {
+    let pf = facts(&format!(
+        "{CLASSES} const mp = new Map(); const h: any = mp.hasOwnProperty;
+        h.call(new B(), 'k'); console.log(new B().b);"
+    ));
+    assert!(tmpl(&pf, "B").escape.is_none(), "{}", pf.dump_text());
 }

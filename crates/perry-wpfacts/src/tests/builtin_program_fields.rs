@@ -146,7 +146,7 @@ fn a_native_field_is_read_back_through_any_native() {
          const f = table[process.argv[2] ?? \"push\"];\n\
          const k1 = new K(1);\n\
          (f as any).tag = k1;\n\
-         (([] as any).slice.tag as any).inner = (globalThis as any)[process.argv[3] ?? \"y\"];\n\
+         (([] as any)[process.argv[4] ?? \"slice\"].tag as any).inner = (globalThis as any)[process.argv[3] ?? \"y\"];\n\
          console.log(k1.inner.n); // SITE-MT\n"
     );
     let pf = facts(&src);
@@ -241,4 +241,18 @@ fn a_builtin_handed_to_unknown_code_sinks_its_fields() {
          console.log(v.n.toFixed(0)); // SITE-E\n";
     let pf = facts(src);
     assert!(unproven(&pf, src, "// SITE-E", "n"));
+}
+
+#[test]
+fn identified_slice_does_not_read_push_or_pop_fields() {
+    let src = format!(
+        "{K}const table: {{ [s: string]: any }} = {{ push: [].push, pop: [].pop }};\n\
+         const f = table[process.argv[2] ?? \"push\"];\n\
+         const k1 = new K(1);\n\
+         (f as any).tag = k1;\n\
+         (([] as any).slice.tag as any).inner = (globalThis as any)[process.argv[3] ?? \"y\"];\n\
+         console.log(k1.inner.n); // SITE-DISJOINT\n"
+    );
+    let pf = facts(&src);
+    assert!(proven(&pf, &src, "// SITE-DISJOINT", "n"));
 }

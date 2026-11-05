@@ -1,0 +1,1 @@
+Built-in prototype members now use the realm’s canonical function identity across aliases and instance reads. Function fields, getters, prototype changes, and exposure to unknown code follow that identity, including reads through an anonymous native function value.

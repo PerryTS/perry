@@ -10,7 +10,7 @@ use super::*;
 
 const DECLARED: &str = include_str!("realm_declared_keys.tsv");
 
-/// The generated realm reference under a native prototype member key.
+/// The canonical realm reference under a native prototype member key.
 pub(super) fn native_identity(owner: &str, key: &str) -> Option<&'static str> {
     DECLARED.lines().find_map(|line| {
         let mut row = line.split('\t');

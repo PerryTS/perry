@@ -18,7 +18,7 @@ keys (the chain of every native function value and namespace); `fn <name>
 <key>` own string keys other than length/name of a native prototype method.
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `native <owner> <key> <identity>` rows resolve prototype-property references
-(including aliases) once, at generation, for native function token overlap.
+(including aliases) once, at generation, as canonical native function identities.
 """
 import argparse
 import json
