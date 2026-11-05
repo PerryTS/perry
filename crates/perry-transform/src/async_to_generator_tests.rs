@@ -286,6 +286,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "index",
             vec![Stmt::Expr(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::Array(vec![], None)),

@@ -155,6 +155,7 @@ mod tests {
         let mut module = Module::new("intkey.ts");
         let mut body = prelude;
         body.push(Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -405,6 +406,7 @@ mod tests {
                     init: Some(code),
                 },
                 Stmt::Expr(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),

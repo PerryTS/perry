@@ -463,6 +463,7 @@ fn ordinary_loop_descriptor_is_not_installed_across_a_call() {
 #[test]
 fn trusting_an_operation_does_not_trust_its_effectful_children() {
     let read = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(num(OBJ)),
@@ -649,6 +650,7 @@ fn generic_property_and_index_reads_are_enders() {
     assert!(has(&get, RegionEnder::CollectingCall));
 
     let idx = vec![Stmt::Expr(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(num(OBJ)),

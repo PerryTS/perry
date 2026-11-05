@@ -28,6 +28,7 @@ fn rows_field(index: Expr, prop: &str) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(ROWS2_ID)),

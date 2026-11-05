@@ -606,6 +606,7 @@ fn guarded_put_value_store_loop_accepts_conservative_preloop_call_hazard() {
                 value: Box::new(add(index_get(1, local(2)), int(1))),
                 receiver: Box::new(local(1)),
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })],

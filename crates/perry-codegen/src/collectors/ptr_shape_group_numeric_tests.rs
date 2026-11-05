@@ -201,6 +201,7 @@ fn let_elem(id: u32, arr: u32, idx: u32, class_name: &str) -> Stmt {
         ty: Type::Named(class_name.to_string()),
         mutable: false,
         init: Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(arr)),
@@ -309,6 +310,7 @@ fn read_direct_field(array_id: u32, index_id: u32, property: &str) -> Stmt {
     Stmt::Expr(Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),

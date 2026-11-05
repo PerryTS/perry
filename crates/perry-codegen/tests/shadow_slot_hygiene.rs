@@ -304,6 +304,7 @@ fn persistent_index_alias_shadow_module() -> Module {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(21)),
@@ -352,6 +353,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(30)),
@@ -364,6 +366,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(31)),

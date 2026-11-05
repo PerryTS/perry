@@ -38,6 +38,7 @@ pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(iterable),

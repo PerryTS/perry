@@ -168,6 +168,7 @@ pub(crate) fn for_head_binding_stmts(
                     object,
                     index: Box::new(lower_expr(ctx, &c.expr)?),
                     value: Box::new(source),
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 },
@@ -247,6 +248,7 @@ pub(crate) fn guard_for_in_body(
         then_expr: Box::new(Expr::Bool(true)),
         else_expr: Box::new(Expr::In {
             property: Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),

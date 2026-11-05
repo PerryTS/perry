@@ -408,6 +408,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // is the element's own non-BigInt proof, so a typed-array `ta[i]++`
             // keeps the IR it had.
             let element_read = Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: object.clone(),

@@ -254,6 +254,7 @@ fn elem_field(array_id: u32, index: Expr) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),

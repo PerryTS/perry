@@ -34,6 +34,7 @@ fn call(fid: u32, args: Vec<Expr>) -> Expr {
 
 fn get(recv: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(recv)),
@@ -276,6 +277,7 @@ fn a_sloppy_element_store_keeps_the_seal() {
             value: Box::new(Expr::Integer(2)),
             receiver: Box::new(Expr::LocalGet(receiver)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })

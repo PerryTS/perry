@@ -2768,12 +2768,10 @@ mod tests {
     fn native_fact_graph_collects_range_and_shape_escape_facts() {
         let stmts = vec![
             mutable_number_let(1, Expr::Integer(0)),
-            Stmt::Expr(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::LocalGet(1)),
-            }),
+            Stmt::Expr(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::LocalGet(1)),
+            )),
             Stmt::Let {
                 id: 3,
                 name: "o".to_string(),
@@ -2871,13 +2869,11 @@ mod tests {
             &[
                 number_array_let(1, &[1, 2, 3]),
                 alias_let(2, 1),
-                Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(0)),
-                    value: Box::new(Expr::Integer(9)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                }),
+                Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::Integer(0)),
+                    Box::new(Expr::Integer(9)),
+                )),
             ],
             &HashSet::new(),
             &HashSet::new(),
@@ -2895,13 +2891,11 @@ mod tests {
         let graph = collect_hir_facts(
             &[
                 number_array_let(1, &[1, 2, 3]),
-                Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                    value: Box::new(Expr::Integer(9)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                }),
+                Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::Integer(0)),
+                    Box::new(Expr::Integer(9)),
+                )),
             ],
             &HashSet::new(),
             &HashSet::new(),

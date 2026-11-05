@@ -638,6 +638,7 @@ impl Gen<'_> {
             Expr::IndexGet {
                 object,
                 index,
+                element_offset: _,
                 byte_offset,
                 byte_end,
             } => (
