@@ -759,13 +759,16 @@ pub(crate) fn is_collection(what: &str) -> bool {
 
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
-/// arrays, primitive boxes, `Object.groupBy` and `Object.fromEntries`
-/// results, property descriptors): its birth stores every value the runtime
-/// gives its own enumerable properties under its any key, and none of them
-/// is an accessor. A copy of its own properties reads those fields
-/// (`Model::own_props_modelled`).
+/// arrays, `Object.groupBy` and `Object.fromEntries` results, property
+/// descriptors): its birth stores every value the runtime gives its own
+/// enumerable properties under its any key, and none of them is an
+/// accessor. A copy of its own properties reads those fields
+/// (`Model::own_props_modelled`). A `primbox` is not: the result of an
+/// undescribed primitive, Date or typed-array method (`generic_result`,
+/// `prim_method_generic`) is born with an empty any key, its primitives
+/// given by the load rule (`loads.rs`, "a container of primitives").
 pub(crate) fn own_values_filled(what: &str) -> bool {
-    members::bobj_family(what) == Family::Box
+    members::bobj_family(what) == Family::Box && what != "primbox"
 }
 
 fn seed_family(m: &Model, t: Tok) -> Option<Family> {
