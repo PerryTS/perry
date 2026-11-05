@@ -187,6 +187,14 @@ impl Model {
             TokKind::Builtin(BuiltinNs::GlobalThis)
         ) {
             crate::builtins::note_global_in_top(self);
+            if !self.unit_mode {
+                crate::builtins::note_native_write(
+                    self,
+                    t,
+                    None,
+                    "global object given to unknown code",
+                );
+            }
             self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
                 BuiltinNs::GlobalThis,
             )));

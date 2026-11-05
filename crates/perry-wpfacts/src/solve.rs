@@ -505,7 +505,7 @@ impl Model {
             self.own_read_census[0] += 1;
         }
         if self.diagnostic.is_some() {
-            if let Cons::TopSink { reason } = c {
+            if let Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } = c {
                 self.diagnostic_sink(n, reason);
             }
         }
@@ -1264,6 +1264,9 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::RuntimeStore { reason, retained } => {
+                format!("runtimestore {n} {retained} {reason}")
+            }
             Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
             Cons::CallerValue { dst, reason } => format!("callervalue {n} {dst} {reason}"),

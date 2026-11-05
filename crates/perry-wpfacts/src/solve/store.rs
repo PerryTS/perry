@@ -778,7 +778,12 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        if !builtins::builtin_function(self, t) {
+        // Callable namespaces still expose their declared static keys to
+        // the runtime. Their program-owned fields use the function graph.
+        let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
+            if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
+        let program_field = matches!(key, Key::Named(a) if builtins::undeclared(self, t, a));
+        if !builtins::builtin_function(self, t) || (namespace && !program_field) {
             self.with_b(|m| builtins::tok_store(m, t, key, src));
         }
     }

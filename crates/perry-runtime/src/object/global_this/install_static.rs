@@ -1150,7 +1150,7 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true; "ArrayBuffer[\"@@species\"].<get>", constructible = true; "Array[\"@@species\"].<get>", constructible = true; "Map[\"@@species\"].<get>", constructible = true; "Promise[\"@@species\"].<get>", constructible = true; "RegExp[\"@@species\"].<get>", constructible = true; "Set[\"@@species\"].<get>", constructible = true; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "ArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Array[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Map[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Promise[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "RegExp[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Set[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
         0,
     );
     if getter.is_null() {

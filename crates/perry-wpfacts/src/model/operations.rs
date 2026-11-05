@@ -271,7 +271,7 @@ impl Model {
     }
 
     pub fn tok(&mut self, k: TokKind) -> Tok {
-        let k = crate::builtins::canonical_native(k);
+        let k = crate::builtins::canonical_native(k, !self.unit_mode);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
         }

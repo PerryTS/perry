@@ -64,7 +64,41 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            m.sink_node(src, r);
+            let retained = if !m.unit_mode
+                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
+            {
+                match _key {
+                    Key::Named(a) => realm_declared::namespace_identity(
+                        BuiltinNs::GlobalThis,
+                        &m.atoms[a as usize],
+                    ),
+                    _ => None,
+                }
+                .and_then(|identity| {
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    match m.toks[value as usize] {
+                        TokKind::Builtin(ns)
+                            if !realm_declared::namespace_singleton(ns, identity) =>
+                        {
+                            None
+                        }
+                        _ => Some(value),
+                    }
+                })
+            } else {
+                None
+            };
+            if let Some(retained) = retained {
+                m.cons(
+                    src,
+                    Cons::RuntimeStore {
+                        reason: r,
+                        retained,
+                    },
+                );
+            } else {
+                m.sink_node(src, r);
+            }
             // `process.argv = v`: later reads of the property see `v`.
             if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
                 && match _key {

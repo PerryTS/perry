@@ -96,11 +96,18 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
-            Cons::TopSink { reason } => {
+            Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
+                let retained = if let Cons::RuntimeStore { retained, .. } = c {
+                    Some(*retained)
+                } else {
+                    None
+                };
                 let chain = self.chain_sinks.contains(&n);
                 let saved = std::mem::replace(&mut self.chain_escape, chain);
                 for &t in toks {
-                    self.escape(t, reason);
+                    if retained != Some(t) {
+                        self.escape(t, reason);
+                    }
                 }
                 self.chain_escape = saved;
             }

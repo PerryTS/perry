@@ -211,3 +211,412 @@ fn anonymous_prototype_reads_see_replacements_of_identified_values() {
     "#;
     verdict(src, "// PROTOTYPE-READ", "field", false);
 }
+
+fn timer_source(prefix: &str, call: &str) -> String {
+    format!(
+        r#"
+declare function external(x:any):void;
+class Box {{ field = 1; }}
+function cb(p:any=new Box()) {{
+    console.log(p.field); // CALLBACK
+}}
+function g(f:any) {{ external(f); }}
+{prefix}
+{call}
+"#
+    )
+}
+
+#[test]
+fn global_timer_value_uses_callback_defaults() {
+    for call in ["setTimeout(cb, 0);", "const t=setTimeout; t(cb, 0);"] {
+        verdict(&timer_source("", call), "// CALLBACK", "field", true);
+    }
+}
+
+#[test]
+fn timer_value_through_program_parameter_keeps_its_callback_model() {
+    verdict(
+        &timer_source("function run(t:any) { t(cb,0); }", "run(setTimeout);"),
+        "// CALLBACK",
+        "field",
+        true,
+    );
+}
+
+#[test]
+fn namespace_value_call_and_extracted_call_retain_results() {
+    for call in [
+        "const result=Object.assign(o,{});",
+        "const f=Object.assign; const result=f(o,{});",
+        "const f:any=Object.assign; const result=f.call(null,o,{});",
+    ] {
+        let src =
+            format!("const o:any={{field:1}};\n{call}\nconsole.log(result.field); // RESULT\n");
+        verdict(&src, "// RESULT", "field", true);
+    }
+}
+
+#[test]
+fn namespace_callback_parameter_retains_the_known_result() {
+    let src = r#"
+        const o:any={field:1};
+        function run(generateName:any, node:any) { return generateName(node,{}); }
+        const result=run(Object.assign,o);
+        console.log(result.field); // GENERATED
+    "#;
+    verdict(src, "// GENERATED", "field", true);
+}
+
+#[test]
+fn number_and_global_parse_functions_share_fields_and_prototypes() {
+    for name in ["parseFloat", "parseInt"] {
+        let src=format!("const f:any=Number.{name}; const alias:any={name};\nf.cache={{field:1}};\nconsole.log(alias.cache.field); // PARSE\n");
+        verdict(&src, "// PARSE", "field", true);
+        prototypes(&format!("Number.{name}"), name, false);
+    }
+}
+
+#[test]
+fn named_function_prototype_members_keep_distinct_fields() {
+    let src = r#"
+        declare function unknown():any;
+        const a:any=(()=>0).apply;
+        const b:any=Function.prototype.call;
+        a.cache=unknown();
+        b.cache={field:1};
+        console.log(b.cache.field); // FUNCTION-MEMBER
+    "#;
+    verdict(src, "// FUNCTION-MEMBER", "field", true);
+}
+
+#[test]
+fn replaced_global_timer_value_stays_unproven() {
+    verdict(
+        &timer_source("globalThis.setTimeout=g;", "const t=setTimeout; t(cb,0);"),
+        "// CALLBACK",
+        "field",
+        false,
+    );
+}
+
+#[test]
+fn unknown_global_key_store_keeps_timer_value_unproven() {
+    verdict(
+        &timer_source(
+            "declare function key():any; (globalThis as any)[key()]=g;",
+            "const t=setTimeout; t(cb,0);",
+        ),
+        "// CALLBACK",
+        "field",
+        false,
+    );
+}
+
+#[test]
+fn global_exposure_keeps_timer_value_unproven() {
+    verdict(
+        &timer_source("external(globalThis);", "const t=setTimeout; t(cb,0);"),
+        "// CALLBACK",
+        "field",
+        false,
+    );
+}
+
+#[test]
+fn function_value_exposure_keeps_timer_callback_unproven() {
+    verdict(
+        &timer_source("const t=setTimeout; external(t);", "t(cb,0);"),
+        "// CALLBACK",
+        "field",
+        false,
+    );
+}
+
+#[test]
+fn module_scope_timer_binding_wins_over_the_global() {
+    verdict(
+        &timer_source("const setTimeout:any=g;", "const t=setTimeout; t(cb,0);"),
+        "// CALLBACK",
+        "field",
+        false,
+    );
+}
+
+#[test]
+fn undeclared_global_function_value_stays_unproven() {
+    verdict(
+        &timer_source("", "const t=CXID_undeclared_timer; t(cb,0);"),
+        "// CALLBACK",
+        "field",
+        false,
+    );
+}
+
+#[test]
+fn linked_dynamic_code_keeps_global_function_value_unproven() {
+    let src = timer_source(
+        "eval('globalThis.setTimeout = function (f) { f({}); }');",
+        "const t=setTimeout; t(cb,0);",
+    );
+    let cfg = FactsConfig {
+        dynamic_code: Some("test linked interpreter".into()),
+        interpreted_sources: true,
+        ..Default::default()
+    };
+    let pf = facts_with(&src, cfg);
+    let marker = src.find("// CALLBACK").unwrap();
+    let start = src[..marker].rfind('\n').unwrap() as u32;
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| !s.is_call && s.key == "field" && (start..marker as u32).contains(&s.byte_offset))
+        .unwrap();
+    assert!(matches!(site.verdict, Verdict::No(_)), "{}", pf.dump_text());
+}
+
+// Compare the actual callback Call constraints, not the spelling of the
+// dispatch implementation. The callback node is symbolic; the source-site
+// checks below also require the callback body to receive the program value.
+fn timer_callback_constraints(direct: bool) -> Vec<(Vec<u32>, Vec<u32>, Vec<String>)> {
+    use crate::model::{BuiltinNs, CallSite, Cons, Key, Native, ThisArg, TokKind};
+    let mut m = crate::gen::Gen::new(Vec::new(), false, false).m;
+    m.max_work = 50_000_000;
+    let cb = m.node_l("callback");
+    let delay = m.node_l("delay");
+    let extra = m.node_l("extra");
+    let ret = m.node_l("return");
+    m.calls.push(CallSite {
+        this: ThisArg::Undef,
+        args: vec![cb, delay, extra],
+        spread: vec![],
+        ret,
+        site: 0,
+    });
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let recv = m.node_l("receiver");
+    let key = m.atom("setTimeout");
+    if direct {
+        m.apply(
+            recv,
+            &Cons::MCall {
+                key: Key::Named(key),
+                call: 0,
+            },
+            &[g],
+            0,
+        );
+    } else {
+        let f = m.tok(TokKind::BuiltinFn(Native::Member {
+            identity: "setTimeout",
+        }));
+        m.apply(recv, &Cons::Call { call: 0 }, &[f], 0);
+    }
+    m.solve();
+    m.nodes[cb as usize]
+        .cons
+        .iter()
+        .filter_map(|c| {
+            let Cons::Call { call } = c else {
+                return None;
+            };
+            let c = &m.calls[*call as usize];
+            let mut this = match c.this {
+                ThisArg::Node(n) => m.nodes[n as usize]
+                    .pts
+                    .to_sorted()
+                    .iter()
+                    .map(|&t| m.tok_name(t))
+                    .collect(),
+                ThisArg::Tok(t) => vec![m.tok_name(t)],
+                ThisArg::Undef => vec!["undefined".into()],
+            };
+            this.sort();
+            Some((c.args.clone(), c.spread.clone(), this))
+        })
+        .collect()
+}
+
+#[test]
+fn direct_and_value_timer_callback_constraints_are_identical() {
+    for callee in ["setTimeout", "t"] {
+        let src = format!(
+            r#"
+            class Box {{field=1;}}
+            function cb(p:any) {{
+                console.log(p.field); // SAME-CALLBACK
+            }}
+            const t=setTimeout;
+            {callee}(cb,0,new Box());
+        "#
+        );
+        verdict(&src, "// SAME-CALLBACK", "field", true);
+    }
+    let direct = timer_callback_constraints(true);
+    let value = timer_callback_constraints(false);
+    assert_eq!(direct.len(), 1, "{direct:?}");
+    assert_eq!(
+        direct, value,
+        "callback argument / spread / this constraints differ"
+    );
+}
+
+#[test]
+fn anonymous_native_changes_reach_callable_namespace_values() {
+    for f in ["Object", "Array", "setTimeout", "Math.abs"] {
+        prototypes(f, "[1][process.argv[2] ?? 'map']", false);
+    }
+}
+
+#[test]
+fn null_alias_prototype_is_visible_to_the_prototype_value_read() {
+    let src = r#"
+        const f:any=new Set().keys;
+        const alias:any=new Set().values;
+        Object.setPrototypeOf(alias,null);
+        const parent=Object.getPrototypeOf(f);
+        console.log(parent.cxidProbe);
+        console.log(f.call); // NULL-MEMBER
+    "#;
+    verdict(src, "// NULL-MEMBER", "call", false);
+    let pf = facts_with(
+        src,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    let lines = &pf.diagnostics[0].1;
+    let number = |line: &str, key: &str| -> u32 {
+        line.split(&format!("\"{key}\":"))
+            .nth(1)
+            .expect("field")
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .expect("number")
+    };
+    let site = lines
+        .iter()
+        .find(|l| l.contains("\"record\":\"site\"") && l.contains("\"key\":\"cxidProbe\""))
+        .expect("prototype value site");
+    let dst = number(site, "receiver");
+    let node = lines
+        .iter()
+        .find(|l| l.contains(&format!("\"record\":\"node\",\"id\":{dst},")))
+        .expect("prototype result node");
+    assert_ne!(
+        number(node, "primitiveMask") & crate::model::prim::NULL as u32,
+        0,
+        "{node}"
+    );
+}
+
+#[test]
+fn prototype_constructor_and_global_constructor_are_one_value() {
+    let src = r#"
+        const f:any=Set;
+        const alias:any=Set.prototype.constructor;
+        alias.cache={field:1};
+        console.log(f.cache.field); // CONSTRUCTOR-ID
+    "#;
+    verdict(src, "// CONSTRUCTOR-ID", "field", true);
+}
+
+#[test]
+fn restoring_the_declared_global_value_does_not_expose_its_members() {
+    for (change, proven) in [
+        ("(globalThis as any).Object=Object;", true),
+        (
+            "(globalThis as any).Object=Object; external(Object);",
+            false,
+        ),
+    ] {
+        let src = format!(
+            r#"
+            declare function external(x:any):void;
+            const o:any={{field:1}};
+            function load(){{external(o);}}
+            const unknown:any=(globalThis as any)[process.argv[2]];
+            {change}
+            Object.keys(load as any);
+            console.log(o.field); // RETAINED-GLOBAL
+        "#
+        );
+        let ast = perry_parser::parse_typescript(&src, "t.ts").unwrap();
+        let mut pb = perry_hir::patched_builtins::PatchedBuiltins::new();
+        perry_hir::scan_patched_builtins(&ast, &mut pb);
+        perry_hir::patched_builtins::set_patched_builtins(std::sync::Arc::new(pb));
+        let hir = perry_hir::lower_module(&ast, "t", "t.ts").unwrap();
+        perry_hir::patched_builtins::clear_patched_builtins();
+        let pf = crate::compute(&[("t.ts".into(), &hir)], &FactsConfig::default());
+        let site = pf
+            .sites
+            .iter()
+            .find(|s| s.key == "field" && !s.is_call)
+            .expect("retained global observation");
+        assert_eq!(
+            !matches!(site.verdict, Verdict::No(_)),
+            proven,
+            "{change}\n{}",
+            pf.dump_text()
+        );
+    }
+}
+
+#[test]
+fn annexb_accessor_installed_on_a_global_or_namespace_value_keeps_identity() {
+    for (member, alias) in [
+        ("Number.parseInt", "parseInt"),
+        ("setTimeout", "globalThis.setTimeout"),
+        ("Object.assign", "Object.assign"),
+    ] {
+        for install in [false, true] {
+            let src = format!(
+                r#"
+                declare function external(x:any):void;
+                const o:any={{field:1}};
+                function g(){{external(o);}}
+                const f:any={member};
+                const alias:any={alias};
+                {}
+                alias.zap(o);
+                console.log(o.field); // ANNEX-VALUE
+            "#,
+                if install {
+                    "f.__defineGetter__('zap',()=>g);"
+                } else {
+                    ""
+                }
+            );
+            verdict(&src, "// ANNEX-VALUE", "field", !install);
+        }
+    }
+}
+
+#[test]
+fn an_identified_unmodeled_constructor_keeps_its_declared_static_member() {
+    let src = r#"
+        const ctor:any=URL;
+        const f:any=ctor.parse;
+        const alias:any=URL.parse;
+        f.cache={field:1};
+        console.log(alias.cache.field); // CONSTRUCTOR-STATIC
+    "#;
+    verdict(src, "// CONSTRUCTOR-STATIC", "field", true);
+}
+
+#[test]
+fn an_unmodeled_constructor_static_value_still_has_opaque_effects() {
+    let src = r#"
+        declare function external(x:any):void;
+        const o:any={field:1,toString(){external(o);return 'https://example.org';}};
+        const ctor:any=URL;
+        ctor.canParse(o);
+        console.log(o.field); // CONSTRUCTOR-EFFECT
+    "#;
+    verdict(src, "// CONSTRUCTOR-EFFECT", "field", false);
+    let construct = src.replace("ctor.canParse(o)", "new ctor(o)");
+    verdict(&construct, "// CONSTRUCTOR-EFFECT", "field", false);
+}

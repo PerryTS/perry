@@ -26,6 +26,9 @@ impl Model {
         let TokKind::BuiltinFn(Native::Member { identity }) = self.toks[t as usize] else {
             return false;
         };
+        if builtins::native_namespace_call(self, identity, t, call) {
+            return true;
+        }
         let Some((fam, what, name)) = builtins::native_model(identity) else {
             return false;
         };
@@ -46,7 +49,7 @@ impl Model {
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
-            self.with_b(|m| builtins::own_method(m, r, Key::Named(key), call));
+            self.with_b(|m| builtins::native_prototype_call(m, fam, r, key, call));
         }
         true
     }
