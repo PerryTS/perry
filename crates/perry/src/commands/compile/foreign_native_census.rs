@@ -1,13 +1,17 @@
-//! Foreign writes admitted by the compiler's authenticated addon graph.
+//! Foreign writes admitted by the compiler's native link inventories.
 use super::CompilationContext;
 use std::borrow::Cow;
 
+fn links_foreign_native_code(ctx: &CompilationContext) -> bool {
+    !ctx.native_addons.is_empty() || !ctx.native_libraries.is_empty()
+}
+
 pub(super) fn census(ctx: &CompilationContext) -> Cow<'_, perry_hir::ProtoCensus> {
-    if ctx.native_addons.is_empty() {
+    if !links_foreign_native_code(ctx) {
         return Cow::Borrowed(&ctx.proto_census);
     }
     let mut census = ctx.proto_census.clone();
-    // The source scan cannot see an addon's stores, definitions or prototype
+    // The source scan cannot see foreign stores, definitions or prototype
     // changes. Keep constant candidates behind the same shape checks as a
     // computed source write, and decline unchecked property adds.
     census.dynamic_write = true;
@@ -16,10 +20,17 @@ pub(super) fn census(ctx: &CompilationContext) -> Cow<'_, perry_hir::ProtoCensus
     Cow::Owned(census)
 }
 
+pub(super) fn report(census: &perry_hir::ProtoCensus) {
+    if std::env::var_os("PERRY_PROTO_CENSUS_REPORT").is_some() {
+        eprintln!("{}", census.summary());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::compile::NativeAddonModule;
+    use crate::commands::compile::{NativeAddonModule, NativeFunctionDecl, NativeLibraryManifest};
+    use perry_api_manifest::NativeAbiType;
     use std::path::PathBuf;
 
     fn context(addon: bool) -> CompilationContext {
@@ -68,7 +79,38 @@ mod tests {
     }
 
     #[test]
-    fn programs_without_addons_keep_the_source_census() {
+    fn ffi_libraries_require_shape_checks_even_with_a_numeric_abi() {
+        let mut ctx = context(false);
+        // ABI descriptors constrain marshalling, not a foreign body's effects
+        // or the values it can retain and reach through the runtime.
+        ctx.native_libraries.push(NativeLibraryManifest {
+            module: "arbitrary-foreign-library".into(),
+            package_dir: PathBuf::from("/foreign"),
+            abi_version: Some("0.5".into()),
+            functions: vec![NativeFunctionDecl {
+                name: "arbitrary_foreign_entry".into(),
+                params: vec![NativeAbiType::F64],
+                returns: NativeAbiType::F64,
+            }],
+            target_config: None,
+        });
+        let c = census(&ctx);
+        assert!(
+            c.shadow_reachable(),
+            "foreign FFI writes can shadow a holder"
+        );
+        assert!(
+            !c.create_add_free("inherited"),
+            "foreign FFI can define a setter"
+        );
+        assert!(
+            c.method_is_constant("inherited"),
+            "keep the guarded candidate"
+        );
+    }
+
+    #[test]
+    fn programs_without_foreign_code_keep_the_source_census() {
         let mut ctx = context(false);
         ctx.proto_census.written.insert("written".into());
         assert_eq!(census(&ctx).as_ref(), &ctx.proto_census);

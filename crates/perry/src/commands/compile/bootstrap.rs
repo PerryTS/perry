@@ -191,7 +191,7 @@ pub(super) fn rerun_collect_with_class_field_types(
 ) -> Result<()> {
     // The last collected graph member can be an addon, after every source
     // module was lowered. Its definitions withdraw earlier create-add folds.
-    if perry_hir::install_lowering_proto_census(&super::native_addon_census::census(ctx))
+    if perry_hir::install_lowering_proto_census(&super::foreign_native_census::census(ctx))
         && ctx.patched_builtins_lowered_modules > 0
     {
         ctx.patched_builtins_grew_after_lower = true;
