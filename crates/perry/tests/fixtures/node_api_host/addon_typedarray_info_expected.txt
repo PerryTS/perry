@@ -1,0 +1,39 @@
+Uint8Array(16) type=1 length=16 offset=0 data=ptr delta=0 first=11 ab=0/ptr/16 nobuf_same=1 offset_only=0
+Uint8Array(16) buffer identity true
+Uint16Array(ab,4,3) type=4 length=3 offset=4 data=ptr delta=4 first=44 ab=0/ptr/32 nobuf_same=1 offset_only=4
+Uint16Array(ab,4,3) buffer identity true
+Float64Array(ab,8,2) type=8 length=2 offset=8 data=ptr delta=8 first=88 ab=0/ptr/32 nobuf_same=1 offset_only=8
+Int32Array([7,8,9]) type=5 length=3 offset=0 data=ptr delta=0 first=7 ab=0/ptr/12 nobuf_same=1 offset_only=0
+Int32Array.subarray(1) type=5 length=2 offset=4 data=ptr delta=4 first=8 ab=0/ptr/12 nobuf_same=1 offset_only=4
+Int32Array.subarray(1) buffer identity true
+BigInt64Array(2) type=9 length=2 offset=0 data=ptr delta=0 first=0 ab=0/ptr/16 nobuf_same=1 offset_only=0
+Uint8ClampedArray type=2 length=2 offset=0 data=ptr delta=0 first=200 ab=0/ptr/2 nobuf_same=1 offset_only=0
+Buffer.alloc(8) type=1 length=8 offset=0 data=ptr delta=0 first=5 ab=0/ptr/8 nobuf_same=1 offset_only=0
+Buffer.alloc(8) buffer identity true
+Buffer.subarray(2,5) type=1 length=3 offset=2 data=ptr delta=2 first=5 ab=0/ptr/8 nobuf_same=1 offset_only=2
+Uint8Array.subarray(3,9) type=1 length=6 offset=3 data=ptr delta=3 first=33 ab=0/ptr/16 nobuf_same=1 offset_only=3
+detached view type=1 length=0 offset=0 data=null delta=-1 first=-1 ab=0/null/0 nobuf_same=1 offset_only=0
+detached whole type=3 length=0 offset=0 data=null delta=-1 first=-1 ab=0/null/0 nobuf_same=1 offset_only=0
+detached view buffer identity true
+detached own type=7 length=0 offset=0 data=null delta=-1 first=-1 ab=0/null/0 nobuf_same=1 offset_only=0
+out-of-bounds fixed type=1 length=0 offset=0 data=ptr delta=0 first=-1 ab=0/ptr/4 nobuf_same=1 offset_only=0
+tracking after shrink type=1 length=2 offset=2 data=ptr delta=2 first=22 ab=0/ptr/4 nobuf_same=1 offset_only=2
+fixed after grow type=1 length=4 offset=8 data=ptr delta=8 first=0 ab=0/ptr/32 nobuf_same=1 offset_only=8
+tracking after grow type=1 length=30 offset=2 data=ptr delta=2 first=22 ab=0/ptr/32 nobuf_same=1 offset_only=2
+DataView status=1
+ArrayBuffer status=1
+object status=1
+number status=1
+create 0 Int8Array 2
+create 1 Uint8Array 2
+create 2 Uint8ClampedArray 2
+create 3 Int16Array 2
+create 4 Uint16Array 2
+create 5 Int32Array 2
+create 6 Uint32Array 2
+create 7 Float32Array 2
+create 8 Float64Array 2
+create 9 BigInt64Array 2
+create 10 BigUint64Array 2
+create 11 Float16Array 2
+create 12 status=1
