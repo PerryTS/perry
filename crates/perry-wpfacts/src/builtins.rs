@@ -94,6 +94,49 @@ pub fn interpreted_code_runs(m: &mut Model) {
     m.sink_node(thrown, r);
 }
 
+/// Without the interpreter linked (`Model::interp_linked`: the driver's
+/// link decision, the one that installs the runtime's `dyn-eval`), a call or
+/// construct of the Function-constructor token runs no program code, so it
+/// gives nothing to unknown code. The Function constructor converts every
+/// argument to a string first (`toString`/`valueOf` run: the ToPrimitive
+/// protocol), then throws a TypeError (perry-runtime
+/// `js_function_ctor_from_strings_impl`). The other constructors the token
+/// stands for as a function's `constructor` (`%AsyncFunction%`,
+/// `%GeneratorFunction%`, `%AsyncGeneratorFunction%`) run nothing and return
+/// `undefined`, or under `new` an object of the runtime's. Six arguments or
+/// a spread may be the runtime's depd `wrapfunction` shape, which returns a
+/// runtime-made function: that call runs code (true), as does any call with
+/// the interpreter linked. `skip`: leading arguments that are not the
+/// constructor's (`Function.call`'s `this`).
+pub(crate) fn function_ctor_runs_code(
+    m: &mut Model,
+    call: CallId,
+    skip: usize,
+    construct: bool,
+) -> bool {
+    let c = &m.calls[call as usize];
+    if m.interp_linked || !c.spread.is_empty() || c.args.len().saturating_sub(skip) == 6 {
+        return true;
+    }
+    m.diagnostic_builtin(call, |_| "Function constructor without an interpreter".into());
+    let c = m.calls[call as usize].clone();
+    let r = m.reason("ToPrimitive");
+    for &a in c.args.iter().skip(skip) {
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    if construct {
+        m.add_top(c.ret, |_| "result: new of a function constructor".into());
+    }
+    m.add_prim(c.ret, prim::UNDEF);
+    false
+}
+
 fn unknown_method(m: &mut Model, call: CallId, why: &str) {
     unknown_method_proto(m, call, why, None, false)
 }
@@ -1221,6 +1264,8 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             }
             ret_prim(m, call, prim::UNDEF);
         }
+        // `Function.call(t, ...)` is the constructor's call on the rest.
+        (BuiltinNs::Function, "call") if !function_ctor_runs_code(m, call, 1, false) => {}
         (BuiltinNs::Function, "call" | "apply" | "bind") => {
             // `Function.call(...)`: the Function constructor runs (E14).
             set_dyn_eval(m, "E14 Function(...) value call");
@@ -1319,6 +1364,9 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Function => {
+            if !function_ctor_runs_code(m, call, 0, false) {
+                return;
+            }
             set_dyn_eval(m, "E14 Function(...) call");
             unknown_method(m, call, "E14 dynamic code");
         }

@@ -47,6 +47,7 @@ mod export_star;
 mod field_array_push;
 mod rest_elements;
 mod for_in_keys;
+mod function_ctor_without_interp;
 mod function_values;
 mod getter_contract;
 mod global_gc;
