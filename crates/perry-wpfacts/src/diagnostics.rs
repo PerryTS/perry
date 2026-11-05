@@ -197,8 +197,9 @@ impl Model {
             c.bf_sites.entry(n).or_insert(site);
         }
     }
-    /// The deferred store at node `n` opened every builtin function value.
-    pub(crate) fn census_bf_opened(&mut self, n: Option<NodeId>, site: Option<u32>) {
+    /// The deferred store at node `n` opened builtin function values under
+    /// `key` (rule R2; a computed key: the census row's every key).
+    pub(crate) fn census_bf_opened(&mut self, n: Option<NodeId>, site: Option<u32>, key: Key) {
         if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
             return;
         }
@@ -212,7 +213,11 @@ impl Model {
             })
         });
         let store = site.map(|s| (s, n));
-        self.census_opener(t, None, "store into a builtin function value", store);
+        let k = match key {
+            Key::Named(a) => Some(a),
+            Key::Any(_) => None,
+        };
+        self.census_opener(t, k, "store into a builtin function value", store);
     }
     pub(crate) fn census_native_write(&mut self, t: Tok, k: Option<Atom>) {
         let Some(d) = self.diagnostic.as_mut() else {

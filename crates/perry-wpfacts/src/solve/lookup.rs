@@ -529,14 +529,15 @@ impl Model {
         self.builtin_field_use(t, key, crate::model::R1Wait::Load(dst));
         if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             // Opaque (no field storage, `store_into`): its members are
-            // builtin functions and primitives (`tok_load`), or ⊤ once any
-            // builtin function value has been written.
-            if self.bf_written.is_some() {
+            // builtin functions and primitives (`tok_load`), or ⊤ once a
+            // store into a builtin function value may have named the key
+            // (rule R2, `bf_key_written`); a read before waits on its key.
+            if self.bf_key_written(key).is_some() {
                 self.add_top(dst, |_| {
                     "property of a written builtin function value".into()
                 });
             } else {
-                self.bf_reads.push(dst);
+                self.bf_reads.entry(key).or_default().push(dst);
             }
             self.with_b(|m| builtins::tok_load(m, t, key, dst));
             return;
