@@ -63,6 +63,8 @@ mod named_accessors;
 mod native_fs;
 mod native_given_proto;
 mod native_member;
+mod locked_builtins;
+mod locked_delete;
 mod native_proto;
 mod num_key;
 mod own_key_shadow;

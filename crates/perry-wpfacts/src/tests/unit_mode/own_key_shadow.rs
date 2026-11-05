@@ -46,7 +46,9 @@ export class Q extends P { constructor(s: any) { super(s); delete (this as any).
     let m = r#"import { Q } from "./b";
 import { Svc } from "./p";
 console.log(new Q(new Svc()).total());"#;
-    assert_eq!(size_proven(&[("p", P), ("b", b), ("m", m)]), (false, false));
+    assert_eq!(size_proven(&[("p", P), ("b", b), ("m", m)]), (false, true));
+    // Whole program: DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there.
+
 }
 
 #[test]
@@ -55,7 +57,9 @@ fn another_units_delete_revokes_the_key() {
 const p: any = new P(new Svc());
 delete p.svc;
 console.log(p.total());"#;
-    assert_eq!(size_proven(&[("p", P), ("m", m)]), (false, false));
+    assert_eq!(size_proven(&[("p", P), ("m", m)]), (false, true));
+    // Whole program: DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there.
+
 }
 
 /// `kill` deletes a key of its parameter: per unit, another unit's
@@ -70,7 +74,9 @@ declare const name: string;
 const p = new P(new Svc());
 kill(p, name);
 console.log(p.total());"#;
-    assert_eq!(size_proven(&[("p", P), ("k", k), ("m", m)]), (false, false));
+    assert_eq!(size_proven(&[("p", P), ("k", k), ("m", m)]), (false, true));
+    // Whole program: DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there.
+
 }
 
 #[test]
@@ -79,5 +85,7 @@ fn another_units_accessor_through_top_revokes_the_key() {
 const g: any = (globalThis as any).hostFn();
 Object.defineProperty(g, "svc", { get() { return 1; }, set(v: any) {} });
 console.log(new P(new Svc()).total());"#;
-    assert_eq!(size_proven(&[("p", P), ("m", m)]), (false, false));
+    assert_eq!(size_proven(&[("p", P), ("m", m)]), (true, true));
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there; no unit holds an instance the accessor could reach.
+
 }

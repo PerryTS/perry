@@ -463,6 +463,7 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
         per_evaluation: false,
         static_methods: Vec::new(),

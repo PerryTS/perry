@@ -216,6 +216,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
         per_evaluation: false,
         static_methods: Vec::new(),
@@ -424,6 +425,58 @@ fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
     let op = m.tok(TokKind::ObjectProto);
     m.native_missing.push((op, a, miss));
     true
+}
+
+/// [`intrinsic_miss`] for a lookup on the chain of a value of family `fam`
+/// (a collection of kind `what`): a final read (`members::locked_read`,
+/// DEC 250) is never written and needs no replay.
+fn intrinsic_unwritten(
+    m: &mut Model,
+    fam: Family,
+    what: Option<&str>,
+    a: Atom,
+    miss: NativeMiss,
+) -> bool {
+    members::locked_read(fam, what, &m.atoms[a as usize]) || intrinsic_miss(m, a, miss)
+}
+
+/// DEC 250: is the read of named key `a` on the intrinsic chain of builtin
+/// receiver `t` final (`members::locked_read` of its family)? A native
+/// prototype (a native class a program class extends) is not: past it the
+/// collapsed token may stand for an add-open prototype (`%TypedArray%`,
+/// `Error.prototype`), not `Object.prototype`.
+pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
+    if matches!(m.toks[t as usize], TokKind::NativeProto(_)) {
+        return false;
+    }
+    let what = match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what, .. } => Some(*what),
+            _ => None,
+        },
+        _ => None,
+    };
+    seed_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
+}
+
+/// DEC 250 (Q2): no program write defines named key `name` on
+/// `Object.prototype` (`members::locked_read` of the Object family: an add
+/// there is refused, a member is locked, `constructor` is exempt).
+pub(crate) fn object_final_read(name: &str) -> bool {
+    members::locked_read(Family::Object, None, name)
+}
+
+/// DEC 250: is a read of key `a` on every value of native family `fam`
+/// (`derive`'s NativeMember receivers) final?
+pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
+    let name = m.atoms[a as usize].as_str();
+    match fam {
+        NativeFamily::Str => members::locked_read(Family::Str, None, name),
+        NativeFamily::Array => members::locked_read(Family::Array, None, name),
+        NativeFamily::Collection(w) => members::locked_read(Family::Collection, Some(w), name),
+        // RegExp.prototype is not in the lock: no member of it is final.
+        NativeFamily::RegExp => false,
+    }
 }
 
 /// The opaque builtin function value; in explain mode, counted by the

@@ -440,6 +440,14 @@ pub struct Template {
     /// `Object.prototype` reaches the template only if its keys are made by
     /// [[Set]] (a constructor's `this.k =`), never a literal's birth keys.
     pub chain_miss: bool,
+    /// DEC 250 (Q2) on DECISIONS 242(1): a miss whose key a program
+    /// accessor on `Object.prototype` may stand under: a computed key, or
+    /// `constructor` (the only key the runtime lets a program define there,
+    /// `builtins::object_final_read`). On a chain where the collapsed
+    /// prototype token is `Object.prototype` only (`derive::plain_chain`),
+    /// an accessor under any key there reaches the template only through
+    /// one of these.
+    pub chain_miss_open: bool,
     /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
     /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
     /// node of the constructors the algorithm may take, each receiver's

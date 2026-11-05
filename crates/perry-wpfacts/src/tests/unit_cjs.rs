@@ -395,7 +395,14 @@ fn richards_per_unit_proves_what_the_whole_program_proves() {
     );
     // CJL2: whole-program 22 -> 129 with static edges (the records no
     // longer meet in the dispatch); per unit the dispatch's 4 sites go.
-    assert_cjs_per_unit(&w, &u, 3);
+    // DEC 250 (solver half): per unit 3 -> 19. After the computed store
+    // into ⊤ (`createTask`'s `this.taskTable[identity] = t`) a `push` call
+    // whose lookup reached Object.prototype ran as an opaque member there
+    // (`argument of native Object.prototype.push`), so the module records
+    // escaped and their `exports`/`parent`/`children` reads read ⊤. No
+    // key is added to Object.prototype (Q2): the miss is final, the
+    // records keep their layout (whole-program proves all 19).
+    assert_cjs_per_unit(&w, &u, 19);
 }
 
 #[test]

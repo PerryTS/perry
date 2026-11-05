@@ -99,8 +99,10 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     };
     let name = m.atoms[a as usize].clone();
     // A key a store into ⊤ may have written onto the chain: the call runs
-    // what was stored (a described method may be replaced too).
-    if !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
+    // what was stored (a described method may be replaced too), unless the
+    // read is final on every kind of the mask (DEC 250).
+    let locked = members::prim_families(prim).all(|f| members::locked_read(f, None, &name));
+    if !locked && !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
         unknown_method(
             m,
             call,
@@ -170,7 +172,7 @@ pub(super) fn undescribed_method(
         None if members::member(Family::Object, name).is_some() => {}
         None => {
             let a = m.atom(name);
-            if !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+            if !intrinsic_unwritten(m, fam, None, a, NativeMiss::Call(t, call)) {
                 unknown_method(m, call, why);
             }
         }
@@ -227,9 +229,10 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         n => n,
     };
     // A described receiver's method under a key a store into ⊤ may have
-    // written onto its chain runs what was stored, beside the description.
+    // written onto its chain runs what was stored, beside the description,
+    // unless the read is final (DEC 250).
     if let (true, Some(n), Key::Named(a)) = (described, name.as_deref(), key) {
-        if !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+        if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
             unknown_method(m, call, &format!("argument of a written method {n}"));
         }
     }

@@ -421,6 +421,56 @@ pub(super) fn collection_member(what: &str, name: &str) -> Option<Mem> {
     }
 }
 
+/// DEC 250: is a read of `name` on the intrinsic chain of a value of
+/// family `fam` (a collection of kind `what`) final, so that no write the
+/// program can make (compiled, interpreted or unknown code alike) changes
+/// what it finds? The runtime refuses (TypeError at the store) to replace,
+/// delete or redefine a member the image gives an intrinsic prototype
+/// (`builtin_proto::locked_family`, except `constructor`) and to add a key
+/// to `Object.prototype` (`add_locked`). So the read is final when the key
+/// is not `constructor` and either an own member of the family's own
+/// prototype, that prototype being one of the locked families, or the
+/// lookup passes no prototype but `Object.prototype` (a plain object: its
+/// members and its absent keys alike). Not final where a family stands for
+/// prototypes the runtime leaves open: a function's chain may pass the
+/// async/generator function prototypes or a bound target's, the iterator
+/// family the Map/Set/String/RegExp iterators' and generators', the error
+/// family the `TypeError.prototype`s, `Object(v)` may be `v`, and the
+/// undescribed families have no member list here. A key the lookup finds
+/// past an add-open prototype (`hasOwnProperty` of an array) may be added
+/// there and is not final either.
+pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
+    if name == "constructor" {
+        return false;
+    }
+    match fam {
+        Family::Object => true,
+        Family::Array
+        | Family::Str
+        | Family::Num
+        | Family::Bool
+        | Family::Sym
+        | Family::BigInt
+        | Family::Promise => own(fam, name).is_some(),
+        Family::Collection => {
+            let keys = match what {
+                Some("Map") => MAP_KEYS,
+                Some("Set") => SET_KEYS,
+                Some("WeakMap") => WEAKMAP_KEYS,
+                Some("WeakSet") => WEAKSET_KEYS,
+                _ => return false,
+            };
+            keys.contains(&name) && find(COLLECTION, name).is_some()
+        }
+        Family::Function
+        | Family::Iterator
+        | Family::Error
+        | Family::Box
+        | Family::Wrapper
+        | Family::Opaque => false,
+    }
+}
+
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every
 /// value of family `fam` (an exact Array or a primitive String).
 pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {

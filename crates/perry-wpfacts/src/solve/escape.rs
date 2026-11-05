@@ -432,6 +432,7 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
             static_methods: Vec::new(),
@@ -1010,6 +1011,17 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        // DEC 250: a delete that reaches the runtime's prototypes (the
+        // collapsed `ObjectProto`) removes only a key the lock admits: the
+        // runtime refuses (TypeError) to delete a member the image gives a
+        // locked family, except `constructor` (`builtin_proto::
+        // locked_violation`), and a family it leaves open may lose any key.
+        // That is a native write of every key (below), which a final read
+        // never sees (`members::locked_read`, the same decision). It removes
+        // no key of a program object and installs no setter: no layout on a
+        // chain through it changes, no own key stops shadowing it.
+        let lock_delete =
+            kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);
         // DECISIONS 234: under a computed key, a defineProperty on a
         // prototype of the runtime, or through ⊤ (which may be one), may
@@ -1030,7 +1042,9 @@ impl Model {
                 self.top_reshape(None);
                 self.note_shared(SharedWrite::Removed(None));
             } else if self.is_chain_proto(t) {
-                self.reshape(None);
+                if !lock_delete {
+                    self.reshape(None);
+                }
             } else {
                 self.note_inst(t, true);
             }
@@ -1110,6 +1124,9 @@ impl Model {
         // not own (derive), never as a HARD chain.
         if kind == Hard::E5DefineProperty && matches!(self.toks[t as usize], TokKind::ObjectProto) {
             self.objproto_any_accessor();
+            return;
+        }
+        if lock_delete {
             return;
         }
         if self.hard.contains_key(&t) {

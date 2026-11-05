@@ -318,7 +318,9 @@ fn a_hard_object_prototype_is_hard_in_every_unit() {
     // `Object.defineProperties` on Object.prototype in one unit makes every
     // chain through it HARD (E5), in the other units too, as the whole
     // program derives it (`SharedWrite::Hard`; main: per unit stronger).
-    // The prototype may come as a value (DECISIONS 217).
+    // The prototype may come as a value (DECISIONS 217). Under DEC 250 (Q2)
+    // the accessor lands only under `constructor`: a computed read of `c`
+    // (which may be that key) meets it, its own field `x` alone would not.
     for proto in ["Object.prototype", "Object.getPrototypeOf(o)"] {
         let a = format!(
             "const o: any = {{ a: 1 }};
@@ -331,7 +333,7 @@ fn a_hard_object_prototype_is_hard_in_every_unit() {
             class C { x = 1; }
             const c = new C();
             install(String(Math.random()));
-            console.log(c.x);";
+            console.log(c.x, (c as any)[String(Math.random())]);";
         let (u, _) = super::unit_alias::assert_not_stronger(&[("a", a.as_str()), ("m", m)]);
         let c = u
             .templates
