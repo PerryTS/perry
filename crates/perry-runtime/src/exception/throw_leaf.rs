@@ -53,6 +53,11 @@ impl ThrowKind {
 pub struct CoreError(f64);
 
 impl CoreError {
+    /// Trace an existing core-error slot without discarding its provenance.
+    pub(crate) fn scan_roots(&mut self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+        visitor.visit_nanbox_f64_slot(&mut self.0);
+    }
+
     /// Wrap the NaN-boxed pointer of a freshly built `ErrorHeader`.
     /// Callers: `crate::error` and `crate::io_error` only (checked by the
     /// throw-funnel gate).
@@ -72,11 +77,23 @@ impl CoreError {
 /// A value a catching funnel took from a throw (compiled code or a callback
 /// threw it). The field is private: only [`Caught::mint`] makes one, and
 /// only the funnels in `crate::exception` call it.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[must_use = "a caught value is handled or rethrown"]
 pub struct Caught(f64);
 
+impl PartialEq for Caught {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+impl Eq for Caught {}
+
 impl Caught {
+    /// Trace the existing caught slot without losing its provenance.
+    pub(crate) fn scan_roots(&mut self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+        visitor.visit_nanbox_f64_slot(&mut self.0);
+    }
+
     /// Callers: `crate::exception` only (checked by the throw-funnel gate).
     #[inline]
     pub(crate) fn mint(value: f64) -> Self {
@@ -98,7 +115,10 @@ pub struct RootedCaught<'scope>(crate::gc::RuntimeHandle<'scope>);
 impl Caught {
     /// Root the caught value in `scope` (the value is the same one).
     #[inline]
-    pub fn root<'scope>(self, scope: &'scope crate::gc::RuntimeHandleScope) -> RootedCaught<'scope> {
+    pub fn root<'scope>(
+        self,
+        scope: &'scope crate::gc::RuntimeHandleScope,
+    ) -> RootedCaught<'scope> {
         RootedCaught(scope.root_nanbox_f64(self.0))
     }
 }
@@ -213,5 +233,29 @@ mod tests {
                 crate::error::ERROR_KIND_RANGE_ERROR
             );
         }
+    }
+}
+
+/// A core error retained in an existing GC root across further allocation.
+#[must_use = "a runtime error is handled or thrown"]
+pub struct RootedCoreError<'scope>(crate::gc::RuntimeHandle<'scope>);
+
+impl CoreError {
+    #[inline]
+    pub fn root<'scope>(
+        self,
+        scope: &'scope crate::gc::RuntimeHandleScope,
+    ) -> RootedCoreError<'scope> {
+        RootedCoreError(scope.root_nanbox_f64(self.0))
+    }
+}
+impl RootedCoreError<'_> {
+    #[inline]
+    pub fn value(&self) -> f64 {
+        self.0.get_nanbox_f64()
+    }
+    #[inline]
+    pub fn error(&self) -> CoreError {
+        CoreError(self.value())
     }
 }

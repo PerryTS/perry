@@ -191,7 +191,7 @@ fn step(owner: f64) -> bool {
                     )
                 };
                 if let Err(error) = result {
-                    remember(owner.get_nanbox_f64(), error);
+                    remember(owner.get_nanbox_f64(), error.value());
                 }
                 // Poll completion on the next pass, after Store and callback
                 // frames have unwound. A reentrant pump cannot enter them.
@@ -258,12 +258,12 @@ fn step(owner: f64) -> bool {
         // A throwing before hook must not strand a pending Promise. A throw
         // after settlement propagates through the event pump after unpinning.
         if settled.get() {
-            crate::exception::js_throw(hook_error);
+            crate::exception::rethrow_caught(hook_error);
         }
         let reason = if failed {
             error.get_nanbox_f64()
         } else {
-            hook_error
+            hook_error.value()
         };
         crate::promise::js_promise_reject(
             JSValue::from_bits(promise.get_nanbox_f64().to_bits())

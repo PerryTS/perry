@@ -572,10 +572,41 @@ pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_
 // while wasm is executing, so the span is re-read (a pointer and a length
 // compare, no copying) at the two boundaries where JS can observe it again:
 // when an exported call returns, and when wasm calls back into a JS import.
+#[derive(Clone, Copy)]
+pub(crate) enum ImportException {
+    Caught(crate::exception::Caught),
+    Open(f64),
+}
+
+enum RootedImportException<'scope> {
+    Caught(crate::exception::RootedCaught<'scope>),
+    Open(crate::gc::RuntimeHandle<'scope>),
+}
+
+impl ImportException {
+    fn root<'scope>(
+        self,
+        scope: &'scope crate::gc::RuntimeHandleScope,
+    ) -> RootedImportException<'scope> {
+        match self {
+            Self::Caught(error) => RootedImportException::Caught(error.root(scope)),
+            Self::Open(value) => RootedImportException::Open(scope.root_nanbox_f64(value)),
+        }
+    }
+    fn scan_roots(&mut self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+        match self {
+            Self::Caught(error) => error.scan_roots(visitor),
+            Self::Open(value) => {
+                visitor.visit_nanbox_f64_slot(value);
+            }
+        }
+    }
+}
+
 struct ActiveWasmCall {
     instance: usize,
     context: usize,
-    exception: Option<f64>,
+    exception: Option<ImportException>,
 }
 crate::perry_thread_local! {
     /// True C call frames, present only while an exported call is active.
@@ -584,14 +615,14 @@ crate::perry_thread_local! {
 }
 /// Preserve a thrown JS value in the active call's existing GC root until
 /// the interpreter has returned and released its mutable store borrow.
-pub(crate) fn record_import_exception(error: f64) {
+pub(crate) fn record_import_exception(error: ImportException) {
     ACTIVE_WASM_INSTANCES.with(|stack| {
         if let Some(frame) = stack.borrow_mut().last_mut() {
             frame.exception = Some(error);
         }
     });
 }
-fn import_exception() -> Option<f64> {
+fn import_exception() -> Option<ImportException> {
     ACTIVE_WASM_INSTANCES.with(|stack| stack.borrow().last().and_then(|frame| frame.exception))
 }
 struct ActiveInstanceGuard;
@@ -657,7 +688,7 @@ pub(crate) fn scan_active_wasm_call_roots_mut(visitor: &mut crate::gc::RuntimeRo
         for frame in stack.borrow_mut().iter_mut() {
             visitor.visit_usize_slot(&mut frame.context);
             if let Some(error) = &mut frame.exception {
-                visitor.visit_nanbox_f64_slot(error);
+                error.scan_roots(visitor);
             }
         }
     });
@@ -943,7 +974,7 @@ unsafe extern "C" fn call_wasm_import(
             _ => f64::from_bits(TAG_UNDEFINED),
         })
         .collect();
-    let result = match crate::exception::catch_js_throw(|| {
+    let result = match crate::exception::catch_thrown(|| {
         crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
             crate::closure::plain_call_receiver(),
@@ -953,8 +984,8 @@ unsafe extern "C" fn call_wasm_import(
     }) {
         Ok(result) => result,
         Err(error) => {
-            record_import_exception(error);
-            if crate::wasi_hook_slots::is_exit_marker(error) {
+            record_import_exception(ImportException::Caught(error));
+            if crate::wasi_hook_slots::is_exit_marker(error.value()) {
                 if let Some(code) = crate::wasi_hook_slots::pending_exit_code() {
                     *result_bits = code as u32 as u64;
                     return perry_abi::wasi::IMPORT_EXIT;
@@ -1008,7 +1039,7 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
         inst
     };
     let _active = ActiveInstanceGuard::enter(call_instance, imports.get_nanbox_f64());
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         if inst.is_null() && !external.is_null() {
             call_external_function(external, args)
         } else {
@@ -1021,12 +1052,12 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
     });
     let outcome = match import_exception() {
         Some(error) => Err(error),
-        None => outcome,
+        None => outcome.map_err(ImportException::Caught),
     };
-    let threw = outcome.is_err();
-    let result = scope.root_nanbox_f64(match outcome {
-        Ok(value) | Err(value) => value,
-    });
+    let result = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
+    };
     if !JSValue::from_bits(memory.get_nanbox_f64().to_bits()).is_pointer() {
         memory.set_nanbox_f64(crate::wasm_instance_state::memory(imports.get_nanbox_f64()));
     }
@@ -1047,11 +1078,29 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
         if !instance.is_null() {
             let _ = object_set(instance, b"__wasiProcExitCode", exit_code as u32 as f64);
         }
-        crate::exception::js_throw(result.get_nanbox_f64())
-    } else if threw {
-        crate::exception::js_throw(result.get_nanbox_f64())
+        match result {
+            Ok(value) => crate::exception::throw_open(value.get_nanbox_f64()),
+            Err(error) => match error {
+                RootedImportException::Caught(error) => {
+                    crate::exception::rethrow_caught(error.caught())
+                }
+                RootedImportException::Open(value) => {
+                    crate::exception::throw_open(value.get_nanbox_f64())
+                }
+            },
+        }
     } else {
-        result.get_nanbox_f64()
+        match result {
+            Ok(value) => value.get_nanbox_f64(),
+            Err(error) => match error {
+                RootedImportException::Caught(error) => {
+                    crate::exception::rethrow_caught(error.caught())
+                }
+                RootedImportException::Open(value) => {
+                    crate::exception::throw_open(value.get_nanbox_f64())
+                }
+            },
+        }
     }
 }
 
@@ -1164,9 +1213,9 @@ fn make_global_object(external: *mut c_void, receiver: f64) -> f64 {
     if !born_value.is_pointer() {
         return nanbox_undefined();
     }
-    let object = scope.root_raw_mut_ptr(
-        born_value.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    );
+    let object = scope
+        .root_raw_mut_ptr(born_value.as_pointer::<crate::object::ObjectHeader>()
+            as *mut crate::object::ObjectHeader);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(js_wasm_global_get, 0; with_declared(0)),
         0,
@@ -1349,7 +1398,8 @@ pub extern "C" fn js_webassembly_memory_new(initial: u32, maximum: u32, receiver
     let buffer = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(buffer as i64));
     let born = scope.root_nanbox_f64(wrapper_birth(b"Memory", receiver.get_nanbox_f64()));
     let object = JSValue::from_bits(born.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+        .as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
     let object = scope.root_raw_mut_ptr(set_memory_buffer(object, buffer.get_nanbox_f64()));
     crate::object::register_wasm_extern_wrapper(
         object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
@@ -1652,22 +1702,29 @@ fn call_export_named_rebinding(inst_jsval: f64, name_jsval: f64, args: &[f64]) -
     let inst = unbox_pointer(inst_jsval);
     let context = unsafe { perry_wasm_host_instance_import_context(inst) };
     let _active = ActiveInstanceGuard::enter(inst, crate::value::js_nanbox_pointer(context as i64));
-    let outcome = crate::exception::catch_js_throw(|| call_export_n(inst_jsval, name_jsval, args));
+    let outcome = crate::exception::catch_thrown(|| call_export_n(inst_jsval, name_jsval, args));
     let outcome = match import_exception() {
         Some(error) => Err(error),
-        None => outcome,
+        None => outcome.map_err(ImportException::Caught),
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let threw = outcome.is_err();
-    let value = scope.root_nanbox_f64(match outcome {
-        Ok(value) | Err(value) => value,
-    });
+    let value = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
+    };
     rebind_active_wasm_memories();
     drop(_active);
-    if threw {
-        crate::exception::js_throw(value.get_nanbox_f64());
+    match value {
+        Ok(value) => value.get_nanbox_f64(),
+        Err(error) => match error {
+            RootedImportException::Caught(error) => {
+                crate::exception::rethrow_caught(error.caught())
+            }
+            RootedImportException::Open(value) => {
+                crate::exception::throw_open(value.get_nanbox_f64())
+            }
+        },
     }
-    value.get_nanbox_f64()
 }
 
 #[no_mangle]

@@ -144,11 +144,11 @@ pub(crate) extern "C" fn diag_trace_sync(
             set_field_value(
                 crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
                 "error",
-                err,
+                err.value(),
             );
             publish_channel(events[4], context);
             publish_channel(events[1], context);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }
@@ -261,7 +261,7 @@ pub(crate) extern "C" fn diag_trace_wrapped_callback(
         Ok(result) => result,
         Err(callback_err) => {
             publish_channel(async_end, context);
-            crate::exception::js_throw(callback_err)
+            crate::exception::rethrow_caught(callback_err)
         }
     };
     publish_channel(async_end, context);
@@ -372,11 +372,11 @@ pub(crate) extern "C" fn diag_trace_callback(
             set_field_value(
                 crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
                 "error",
-                err,
+                err.value(),
             );
             publish_channel(events[4], context);
             publish_channel(events[1], context);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }

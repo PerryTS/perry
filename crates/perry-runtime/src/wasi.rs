@@ -788,7 +788,7 @@ pub extern "C" fn js_wasi_start(
         invalid_undefined_property("instance.exports._initialize", initialize)
     }
     let previous_exit = WASI_EXIT_CODE.with(|slot| slot.replace(None));
-    let outcome = crate::exception::catch_js_throw(|| unsafe {
+    let outcome = crate::exception::catch_thrown(|| unsafe {
         crate::closure::js_native_call_value(
             start.get_nanbox_f64(),
             crate::closure::plain_call_receiver(),
@@ -798,12 +798,12 @@ pub extern "C" fn js_wasi_start(
     });
     let exit = WASI_EXIT_CODE.with(|slot| slot.replace(previous_exit));
     if let Err(error) = outcome {
-        if host::is_exit_marker(error) {
+        if host::is_exit_marker(error.value()) {
             if let Some(code) = exit {
                 return code as u32 as f64;
             }
         }
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
     if let Some(code) = exit {
         return code as u32 as f64;
@@ -1085,7 +1085,7 @@ pub extern "C" fn js_wasi_import_call(
     let result = host::call(import.get_nanbox_f64(), syscall, &args);
     if result == perry_abi::wasi::IMPORT_EXIT {
         drop(args);
-        crate::exception::js_throw(host::exit_marker(import.get_nanbox_f64()))
+        crate::exception::throw_open(host::exit_marker(import.get_nanbox_f64()))
     } else {
         result as f64
     }

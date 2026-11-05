@@ -714,7 +714,10 @@ static LAST_INDEX_STORE: crate::object::field_get_set::runtime_store_site::Runti
     crate::object::field_get_set::runtime_store_site::RuntimeStoreSite::new();
 
 #[cfg(feature = "regex-engine")]
-pub(super) fn set_last_index_caught(receiver: f64, value: f64) -> Result<(), f64> {
+pub(super) fn set_last_index_caught(
+    receiver: f64,
+    value: f64,
+) -> Result<(), crate::exception::Caught> {
     LAST_INDEX_STORE.store_caught(receiver, b"lastIndex", value)
 }
 

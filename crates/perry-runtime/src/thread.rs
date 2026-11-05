@@ -542,11 +542,15 @@ pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'
 /// Must run on the thread whose arena should own the error object (the main
 /// thread, at the drain boundary).
 unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
+    unsupported_transfer_error(type_name).value()
+}
+
+unsafe fn unsupported_transfer_error(type_name: &str) -> crate::error::CoreError {
     let msg =
         format!("Cannot transfer a {type_name} across a perry/thread boundary (unsupported type)");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::value::js_nanbox_pointer(err as i64)
+    let err = crate::error::CoreError::type_error(s);
+    err
 }
 
 /// Throw a catchable `TypeError` naming an unsupported cross-thread transfer.
@@ -558,7 +562,7 @@ unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
 /// there would be undefined behavior — worker-side failures are surfaced by
 /// rejecting the returned promise on the main thread instead.
 unsafe fn throw_unsupported_transfer(type_name: &str) -> ! {
-    crate::exception::js_throw(make_unsupported_transfer_error(type_name));
+    crate::exception::throw_core(unsupported_transfer_error(type_name));
 }
 
 /// Main-thread guard: if any value in `values` is non-transferable, throw a

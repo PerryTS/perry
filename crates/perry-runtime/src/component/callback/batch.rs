@@ -178,6 +178,7 @@ impl<'a> InvocationFrame<'a> {
             trigger_async_id: self.trigger,
         };
         crate::async_hooks::try_run_captured_promise_scope(ids, self.context(), completion)
+            .map_err(|error| error.value())
     }
 
     /// Retirement must still execute when a before hook throws. Restore the
