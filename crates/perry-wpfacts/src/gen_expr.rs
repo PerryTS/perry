@@ -301,6 +301,52 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// `E.prototype.K` (`object` is `E.prototype`, `property` is `K`):
+    /// `E`'s node, the `E.prototype` read (its read site as any read's) and
+    /// `K`'s atom. `None`: another shape.
+    fn proto_member(
+        &mut self,
+        fx: &Fx,
+        object: &Expr,
+        property: &str,
+    ) -> Option<(NodeId, NodeId, Atom)> {
+        let Expr::PropertyGet {
+            object: inner,
+            property: p,
+            byte_offset,
+            ..
+        } = object
+        else {
+            return None;
+        };
+        if p != "prototype" || matches!(inner.as_ref(), Expr::PrivateGuard { .. }) {
+            return None;
+        }
+        let mi = fx.module;
+        let e = match self.ns_member(mi, inner, p, false) {
+            Some(e) => e,
+            None => self.expr(fx, inner),
+        };
+        let pa = self.member_atom(inner, p);
+        if *byte_offset != 0 {
+            self.read_sites.push(ReadSite {
+                module: mi,
+                byte_offset: *byte_offset,
+                key: pa,
+                recv: e,
+                is_call: false,
+                value_call: false,
+                func: fx.f,
+            });
+        }
+        let o = self.load(e, Key::Named(pa));
+        if self.diagnostic.is_some() {
+            self.diagnostic_expr(fx, object, o);
+        }
+        let a = self.member_atom(object, property);
+        Some((e, o, a))
+    }
+
     pub(crate) fn load(&mut self, recv: NodeId, key: Key) -> NodeId {
         let dst = self.tmp("load");
         self.m.cons(recv, Cons::Load { key, dst });
@@ -821,6 +867,25 @@ impl<'a> Gen<'a> {
                 byte_offset,
                 ..
             } => {
+                // `E.prototype.K`: the read of `K` runs per value of `E`
+                // (`Cons::ProtoKey`), so that a builtin namespace's prototype
+                // member is the native it names.
+                if let Some((e, o, a)) = self.proto_member(fx, object, property) {
+                    if *byte_offset != 0 {
+                        self.read_sites.push(ReadSite {
+                            module: mi,
+                            byte_offset: *byte_offset,
+                            key: a,
+                            recv: o,
+                            is_call: false,
+                            value_call: false,
+                            func: fx.f,
+                        });
+                    }
+                    let dst = self.tmp("load");
+                    self.m.cons(e, Cons::ProtoKey { key: a, dst });
+                    return dst;
+                }
                 let o = match self.ns_member(mi, object, property, false) {
                     Some(o) => o,
                     None => self.expr(fx, object),

@@ -27,6 +27,7 @@ pub fn map_cons(
     use Cons::*;
     match *c {
         Load { key, dst } => Load { key, dst: n(dst) },
+        ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -349,6 +350,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
     matches!(
         c,
         Load { .. }
+            | ProtoKey { .. }
             | OwnValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
@@ -405,6 +407,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
     use Cons::*;
     match *c {
         Load { dst, .. }
+        | ProtoKey { dst, .. }
         | OwnValues { dst }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }

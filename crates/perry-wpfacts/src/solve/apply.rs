@@ -14,6 +14,16 @@ impl Model {
                     self.with_b(|m| builtins::prim_load(m, prim, key, dst));
                 }
             }
+            Cons::ProtoKey { key, dst } => {
+                for &t in toks {
+                    self.proto_key(t, key, dst);
+                }
+                if prim != 0 {
+                    let r = self.proto_key_relay(key, dst);
+                    let pa = self.atom("prototype");
+                    self.with_b(|m| builtins::prim_load(m, prim, Key::Named(pa), r));
+                }
+            }
             Cons::CjsPublish { dst } => {
                 self.add_prim(dst, prim);
                 let marker = self.atom("__perry_cjs_record");

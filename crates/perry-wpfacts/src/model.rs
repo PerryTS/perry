@@ -1095,6 +1095,9 @@ pub struct Model {
     /// (call, receiver) pairs bound through each method node.
     pub this_done: crate::pts::FxHashSet<(NodeId, Tok)>,
     pub relays: FxHashMap<CallId, NodeId>,
+    /// `Cons::ProtoKey`: per `dst`, the node holding the prototypes read
+    /// through a receiver that names no native (it loads the key into `dst`).
+    pub proto_key_relays: FxHashMap<NodeId, NodeId>,
     pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
     pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,
     /// The calls bound through each (method node, receiver): a summarized

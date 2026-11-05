@@ -88,6 +88,59 @@ pub(super) fn family_load(
     }
 }
 
+/// The family (and site kind) of the intrinsic prototype builtin namespace
+/// `ns` holds under `prototype` (the inverse of `family_ctor`), and the
+/// global binding that names `ns`; `None`: no described prototype, or not
+/// a constructor.
+fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str>, &'static str)> {
+    Some(match ns {
+        BuiltinNs::Object => (Family::Object, None, "Object"),
+        BuiltinNs::Function => (Family::Function, None, "Function"),
+        BuiltinNs::Array => (Family::Array, None, "Array"),
+        BuiltinNs::String => (Family::Str, None, "String"),
+        BuiltinNs::Number => (Family::Num, None, "Number"),
+        BuiltinNs::Boolean => (Family::Bool, None, "Boolean"),
+        BuiltinNs::Symbol => (Family::Sym, None, "Symbol"),
+        BuiltinNs::Promise => (Family::Promise, Some("Promise"), "Promise"),
+        BuiltinNs::Map => (Family::Collection, Some("Map"), "Map"),
+        BuiltinNs::Set => (Family::Collection, Some("Set"), "Set"),
+        BuiltinNs::WeakMap => (Family::Collection, Some("WeakMap"), "WeakMap"),
+        BuiltinNs::WeakSet => (Family::Collection, Some("WeakSet"), "WeakSet"),
+        _ => return None,
+    })
+}
+
+/// `F.prototype.K` through builtin namespace `ns`: the native `K` names
+/// when it is an own method of `F`'s intrinsic prototype (the realm's
+/// description, `members::own`) whose read is final (DEC 250,
+/// `members::locked_read`: the runtime refuses a store there, so no write
+/// replaces it). The prototype itself, not a value of the family, is
+/// read: `Function.prototype`'s own chain is that prototype only. The
+/// namespace token is the runtime's object only while the global binding
+/// that names it is unwritten (DEC 255: a store into the global object
+/// under that name, `globalThis.Array = x`); a write later in the solve
+/// replays into `dst` as a written key (`NativeMiss::Load`).
+pub(crate) fn proto_own_native(m: &mut Model, ns: BuiltinNs, a: Atom, dst: NodeId) -> Option<Native> {
+    let (fam, what, global) = proto_family(ns)?;
+    let name = m.atoms[a as usize].clone();
+    let lock = if fam == Family::Function {
+        Some(members::FN_PROTO_ONLY)
+    } else {
+        what
+    };
+    if !matches!(members::own(fam, &name), Some(Mem::Fn)) || !members::locked_read(fam, lock, &name) {
+        return None;
+    }
+    let native = member_native(fam, what, a, &name)?;
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let ga = m.atom(global);
+    if native_written(m, g, ga) {
+        return None;
+    }
+    m.native_missing.push((g, ga, NativeMiss::Load(dst)));
+    Some(native)
+}
+
 /// `dst` ⊇ what builtin namespace `ns` (token `t`) reads under named key
 /// `a`: its described static, else its chain's member (`Function.prototype`
 /// or `Object.prototype`), else nothing (absent: `undefined`). A key the

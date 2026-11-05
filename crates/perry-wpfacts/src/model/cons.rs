@@ -25,6 +25,11 @@ pub enum Cons {
         /// 149b) another function's marker or ⊤.
         to: Tok,
     },
+    /// dst ⊇ read(read(t, `prototype`), key) for every t in the node
+    /// (`E.prototype.key`): a builtin namespace whose prototype's own
+    /// member `key` is final reads the native it names
+    /// (`Model::proto_key`).
+    ProtoKey { key: Atom, dst: NodeId },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
@@ -425,6 +430,7 @@ impl Cons {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Load { .. } => "load",
+            Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::IndexHole => "indexhole",
             Cons::CjsPublish { .. } => "cjspublish",
