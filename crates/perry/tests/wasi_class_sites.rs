@@ -4,7 +4,8 @@
 //! the case-2c family arm (a declared field takes the typed field load on
 //! every target). Each test compiles a small program with `--target wasi`
 //! and reads the site marker (the block label) from the saved IR; a target
-//! refusal leaves it out.
+//! refusal leaves it out. The emitted births (class, array literal, closure)
+//! likewise take the inline bump.
 #![cfg(all(unix, feature = "target-wasi"))]
 
 use std::process::Command;
@@ -110,4 +111,36 @@ console.log(a(one, 1), a(two, 1));
         labels(&ir, "class_family.word") > 0,
         "the reads of `this.a`/`this.b` in a recursive method take no case-2c family arm on wasm32"
     );
+}
+
+/// The emitted Eden births (class bump, fixed layout, array literal,
+/// closure) read `InlineArenaState` at the target's offsets on wasm32 and
+/// take the inline bump; the outlined runtime allocator was the refusal.
+#[test]
+fn object_array_and_closure_births_take_the_inline_bump_on_wasm32() {
+    let ir = wasi_ir(
+        r#""use strict";
+class Point {
+    x: number;
+    y: number;
+    constructor(x: number, y: number) {
+        this.x = x;
+        this.y = y;
+    }
+}
+const kept: any[] = [];
+for (let i = 0; i < 1000; i++) {
+    const p = new Point(i, i + 1);
+    const o = { a: i, b: [i, i + 1] };
+    const f = () => p.x + o.a;
+    kept.push(p, o, f);
+}
+console.log(kept.length);
+"#,
+    );
+    // The births escape into `kept`, so nothing scalar-replaces them: the
+    // class bump, the literal and the closure each take a fast block.
+    let class_births = labels(&ir, "alloc.fast") + labels(&ir, "fixed_birth.fast");
+    assert!(class_births >= 3, "object births: {class_births}");
+    assert!(labels(&ir, "arrlit.fast") > 0, "array literal birth");
 }
