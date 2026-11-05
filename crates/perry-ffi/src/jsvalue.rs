@@ -88,12 +88,13 @@ impl JsValue {
         })
     }
 
-    /// Construct from a 32-bit integer. Encoded as `INT32_TAG` —
-    /// faster than `from_number(n as f64)` for integer-heavy paths
-    /// (db rowids, indexes, …) and avoids any precision loss.
+    /// Construct a Number from a 32-bit integer. Encoded as the raw `f64`
+    /// (exact for every i32), like `napi_create_int32`: a JS Number has one
+    /// encoding in every JS-visible value, so a field, element or return
+    /// value proven to hold a Number is read as a plain double.
     #[inline]
     pub const fn from_int32(n: i32) -> Self {
-        Self(INT32_TAG | (n as u32 as u64))
+        Self((n as f64).to_bits())
     }
 
     /// Wrap a `*mut StringHeader` returned from
@@ -299,15 +300,21 @@ impl JsValue {
         }
     }
 
-    /// Extract the i32 from an `INT32_TAG`-tagged value. Returns
-    /// 0 for non-int32 values.
+    /// Extract the i32 of a Number whose value is an exact i32 (a raw
+    /// `f64`, the form `from_int32` builds, or a legacy `INT32_TAG` word).
+    /// Returns 0 for any other value.
     #[inline]
     pub fn to_int32(self) -> i32 {
         if self.is_int32() {
-            self.0 as u32 as i32
-        } else {
-            0
+            return self.0 as u32 as i32;
         }
+        if self.is_number() {
+            let n = f64::from_bits(self.0);
+            if n.fract() == 0.0 && n >= i32::MIN as f64 && n <= i32::MAX as f64 {
+                return n as i32;
+            }
+        }
+        0
     }
 
     /// Extract the `*mut StringHeader` for a `STRING_TAG`-tagged
@@ -653,9 +660,10 @@ mod tests {
     fn int32_round_trips() {
         for n in [0, 1, -1, i32::MIN, i32::MAX] {
             let v = JsValue::from_int32(n);
-            assert!(v.is_int32(), "{} should be int32, got {:?}", n, v);
+            // One Number encoding: the raw f64 bits, never an INT32 word.
+            assert_eq!(v.bits(), (n as f64).to_bits(), "{n}");
+            assert!(!v.is_int32(), "{} must not be an INT32 word, got {:?}", n, v);
             assert_eq!(v.to_int32(), n);
-            // is_number also covers int32:
             assert!(v.is_number());
             assert_eq!(v.to_number(), n as f64);
         }
@@ -669,7 +677,7 @@ mod tests {
             (JsValue::TRUE, "true"),
             (JsValue::FALSE, "false"),
             (JsValue::from_number(3.14), "number"),
-            (JsValue::from_int32(42), "int32"),
+            (JsValue::from_int32(42), "number"),
         ];
         for (val, kind) in cases {
             // Each value should match at most one main predicate
@@ -741,7 +749,7 @@ mod tests {
             (JsValue::NULL, "null"),
             (JsValue::from_number(3.14), "number"),
             (JsValue::TRUE, "bool"),
-            (JsValue::from_int32(42), "int32"),
+            (JsValue::from_int32(42), "number"),
             (JsValue::from_bits(POINTER_TAG | 0x5678), "pointer"),
         ] {
             assert!(!val.is_any_string(), "{kind} is not any string");
