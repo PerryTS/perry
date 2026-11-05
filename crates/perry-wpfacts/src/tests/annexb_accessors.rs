@@ -351,6 +351,41 @@ fn calls_without_an_installer_create_no_accessor_work() {
     assert!(g.m.accessors.is_empty());
     assert!(g.m.nodes.iter().all(|n| n.cons.iter().all(|c| !matches!(
         c,
-        crate::model::Cons::AccessorInstall { .. } | crate::model::Cons::Accessor { .. }
+        crate::model::Cons::AccessorInstall { .. }
+            | crate::model::Cons::Accessor { .. }
+            | crate::model::Cons::HolderStep { .. }
+            | crate::model::Cons::VisitHolders { .. }
+            | crate::model::Cons::VisitStop { .. }
+            | crate::model::Cons::AnyAccessors { .. }
     ))));
+}
+
+#[test]
+fn a_late_install_replays_prior_inherited_reads() {
+    for key in ["\"k\"", "key"] {
+        let setup = r#"
+            declare function unknown(): any;
+            declare const key: string;
+            class Cell { value: any = { witness: 1 }; }
+            const cell = new Cell();
+            const holder: any = { cell, source: unknown() };
+            const o: any = Object.create(holder);
+            function provide() {
+                return function () { this.cell.value = this.source; return 0; };
+            }
+        "#;
+        let install = format!("holder.__defineGetter__({key}, provide());");
+        let read = "console.log(o.k);";
+        let tail = "console.log(cell.value.witness);";
+        let early = verdict(&format!("{setup}{install}{read}{tail}"));
+        let late = verdict(&format!("{setup}{read}{install}{tail}"));
+        assert!(
+            matches!(early, Verdict::No(ref why) if !why.starts_with("dead site")),
+            "{early:?}"
+        );
+        assert_eq!(
+            late, early,
+            "key={key}: prior reads must observe the installed getter"
+        );
+    }
 }
