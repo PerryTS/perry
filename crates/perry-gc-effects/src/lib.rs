@@ -12,6 +12,8 @@
 #[cfg(feature = "analyzer")]
 mod archive;
 #[cfg(feature = "analyzer")]
+pub mod effects;
+#[cfg(feature = "analyzer")]
 mod graph;
 #[cfg(feature = "analyzer")]
 mod instructions;

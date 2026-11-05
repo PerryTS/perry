@@ -576,13 +576,13 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "reverse",
-                crate::fn_info!(#[realm(Array.prototype.reverse)] export crate::object::global_this::array_error::array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.reverse, effects = { reads(this); stores(elems(this) -> elems(this)); returns(this) })] export crate::object::global_this::array_error::array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "push",
-                crate::fn_info!(#[realm(Array.prototype.push)] export native_args crate::object::global_this::array_error::array_prototype_push_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
+                crate::fn_info!(#[realm(Array.prototype.push, effects = { reads(this); stores(rest(0) -> elems(this)); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_prototype_push_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
                 1,
             );
             install_proto_method_rest_with_length(
@@ -621,7 +621,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "sort",
-                crate::fn_info!(#[realm(Array.prototype.sort)] export crate::object::global_this::array_error::array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.sort, effects = { reads(this); coerce(elems(this), ToPrimitive); calls(arg(0), this = prim(undefined), args = [elems(this), elems(this)]); stores(elems(this) -> elems(this)); returns(this) })] export crate::object::global_this::array_error::array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // Iteration / search methods: real generic-engine thunks (rest
@@ -639,7 +639,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "filter",
-                    crate::fn_info!(#[realm(Array.prototype.filter)] export native_args crate::object::global_this::array_error::array_proto_filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.filter, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); returns(fresh(Array.prototype, elems = [elems(this)])) })] export native_args crate::object::global_this::array_error::array_proto_filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (

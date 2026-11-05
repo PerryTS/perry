@@ -92,7 +92,4 @@ perry-parser.workspace = true
 perry-transform.workspace = true
 
 [build-dependencies]
-serde.workspace = true
-serde_json.workspace = true
-perry-runtime-manifest.workspace = true
 cc = "1"

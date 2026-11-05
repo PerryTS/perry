@@ -32,6 +32,7 @@ mod gen_expr;
 mod gen_rest;
 mod ledger;
 pub mod model;
+pub mod native_effects;
 pub mod pts;
 mod rooted;
 mod solve;
