@@ -18,7 +18,7 @@ use crate::builtins;
 mod call_and_construct;
 mod native_value;
 mod shared;
-use crate::delta::{Targets, Tokens};
+use crate::delta::Tokens;
 use crate::model::*;
 
 #[path = "solve/apply.rs"]
@@ -82,14 +82,7 @@ impl Model {
                 }
                 false => None,
             };
-        let targets = if toks.is_empty() {
-            Targets::Empty
-        } else {
-            Targets::capture(
-                &self.nodes[n as usize].succ,
-                self.nodes[n as usize].succ_set.as_ref(),
-            )
-        };
+        let boundary = self.nodes[n as usize].succ.len() as u32;
         // Delta tokens are distinct; a slice may repeat one.
         let distinct =
             crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
@@ -130,7 +123,7 @@ impl Model {
             }
             if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
                 fresh.push(t);
-                node.delta.push_to(t, &targets);
+                node.delta.push_to(t, boundary);
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
@@ -146,7 +139,7 @@ impl Model {
                 for t in later {
                     if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
                         fresh.push(t);
-                        node.delta.push_to(t, &targets);
+                        node.delta.push_to(t, boundary);
                         changed = true;
                         self.pts_entries += 1;
                     }
@@ -654,7 +647,7 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.try_copy_delivery(n, s, &delta, dprim) {
+                if self.try_copy_delivery(n, s, i as u32, &delta, dprim) {
                     self.work += 1 + delivery_overhead;
                     if let Some(p) = self.prof.as_mut() {
                         p.step[1] += 1 + delivery_overhead;
@@ -669,12 +662,12 @@ impl Model {
                 let (covered, checks) = if delta.is_empty() {
                     (true, 1)
                 } else {
-                    self.copy_coverage(n, s, Tokens::Delivery(&delta, s))
+                    self.copy_coverage(n, s, Tokens::Delivery(&delta, i as u32))
                 };
                 let toks = if covered {
                     Tokens::Slice(&[])
                 } else {
-                    Tokens::Delivery(&delta, s)
+                    Tokens::Delivery(&delta, i as u32)
                 };
                 let visits = toks.len() as u64;
                 self.work += visits + checks + delivery_overhead;
