@@ -31,6 +31,10 @@ on:
         description: "Re-publish an existing release (e.g. v0.5.1300): rebuild and re-upload assets / re-run publish legs for that tag. Replaces the old implicit 'latest release' fallback."
         type: string
         default: ""
+      assets_from_run:
+        description: "With existing_tag: restore assets from this completed run, without rebuilding or publishing npm."
+        type: string
+        default: ""
       publish_npm:
         description: "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm."
         type: boolean
@@ -94,6 +98,8 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     outputs:
+      assets-run: ${{ steps.resolve.outputs.assets-run }}
+      npm-artifact-ids: ${{ steps.resolve.outputs.npm-artifact-ids }}
       mode: ${{ steps.resolve.outputs.mode }}
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
@@ -140,6 +146,8 @@ jobs:
           NIGHTLY: ${{ inputs.nightly || github.event_name == 'schedule' }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha || github.sha }}
           EXISTING_TAG: ${{ inputs.existing_tag }}
+          ASSETS_FROM_RUN: ${{ inputs.assets_from_run }}
+          PUBLISH_NPM: ${{ inputs.publish_npm }}
           SHA: ${{ github.sha }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
@@ -152,6 +160,12 @@ jobs:
           # HEAD, not this run's commit: a dry run or a cut from a candidate
           # branch would build main. Default to the run's exact SHA;
           # republish pins the tag below.
+          if [ -n "$ASSETS_FROM_RUN" ]; then
+            if [[ ! "$ASSETS_FROM_RUN" =~ ^[0-9]+$ ]] || [ -z "$EXISTING_TAG" ] || [ "$EVENT" != workflow_dispatch ] || [ "$PUBLISH_NPM" = true ]; then
+              echo "::error::assets_from_run requires a numeric run id, existing_tag and publish_npm=false."
+              exit 1
+            fi
+          fi
           CHECKOUT_REF="$SHA"
           if [ "$EVENT" = "release" ]; then
             MODE=release
@@ -250,6 +264,24 @@ jobs:
             echo "::error::could not resolve the commit to build (checkout-ref=$CHECKOUT_REF)."
             exit 1
           fi
+          if [ -n "$ASSETS_FROM_RUN" ]; then
+            source_run=$(gh api "repos/$REPO/actions/runs/$ASSETS_FROM_RUN")
+            source_sha=$(jq -r .head_sha <<< "$source_run")
+            if [ "$(jq -r .status <<< "$source_run")" != completed ] ||
+               [ "$(jq -r .path <<< "$source_run")" != .github/workflows/release-packages.yml ] ||
+               [ "$source_sha" != "$CHECKOUT_SHA" ]; then
+              echo "::error::assets_from_run must be a completed release-packages run at $TAG ($CHECKOUT_SHA)."
+              exit 1
+            fi
+            npm_ids=$(gh api --paginate "repos/$REPO/actions/runs/$ASSETS_FROM_RUN/artifacts" \
+              --jq '.artifacts[] | select(.name == "npm-target-ext-packages" and .expired == false) | .id' | jq -sc .)
+            if [ "$npm_ids" = '[]' ]; then
+              echo "::error::source run has no retained npm-target-ext-packages artifacts."
+              exit 1
+            fi
+            echo "npm-artifact-ids=$npm_ids" >> "$GITHUB_OUTPUT"
+          fi
+          echo "assets-run=$ASSETS_FROM_RUN" >> "$GITHUB_OUTPUT"
           VERSION="${TAG#v}"
           if [ "$MODE" = nightly ]; then
             # The URL keeps the nightly tag; the signed version must be semver.
@@ -277,6 +309,7 @@ jobs:
   # stage (nothing publishes) — the old workflow_dispatch bypass lever.
   # ---------------------------------------------------------------------------
   await-tests:
+    if: needs.preflight.outputs.assets-run == ''
     needs: preflight
     runs-on: ubuntu-latest
     # Job-level timeout must match the bash `deadline=$(( SECONDS + N * 60 ))`
@@ -607,6 +640,7 @@ jobs:
   # `continue-on-error` is deliberate: this is an optimization, never a gate.
   # If it fails or times out, `build` runs exactly as it would have.
   prime-macos-x86_64-cache:
+    if: needs.preflight.outputs.assets-run == ''
     needs: [preflight]
     runs-on: macos-15-intel
     timeout-minutes: 330
@@ -678,6 +712,7 @@ jobs:
   # Build release binaries for all platforms
   # ---------------------------------------------------------------------------
   build-wasi:
+    if: needs.preflight.outputs.assets-run == ''
     needs: [preflight, await-tests]
     uses: ./.github/workflows/release-wasi.yml
     with:
@@ -697,6 +732,7 @@ jobs:
     # warmer's outcome is deliberately unexamined.
     if: >-
       ${{ !cancelled()
+      && needs.preflight.outputs.assets-run == ''
       && needs.preflight.result == 'success'
       && needs.await-tests.result == 'success'
       && needs.build-wasi.result == 'success' }}
@@ -1875,6 +1911,7 @@ jobs:
   # this workflow.
   # ---------------------------------------------------------------------------
   build-cross:
+    if: needs.preflight.outputs.assets-run == ''
     needs: [preflight, await-tests]
     strategy:
       # Each leg is independent; let one cross-target failure not cancel
@@ -2538,13 +2575,58 @@ jobs:
   # rebuild from source when a bundle is missing), matching the old per-leg
   # upload semantics where a red cross leg didn't sink the release.
   # ---------------------------------------------------------------------------
+  recover-npm-artifacts:
+    needs: preflight
+    if: needs.preflight.outputs.assets-run != ''
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        artifact-id: ${{ fromJSON(needs.preflight.outputs.npm-artifact-ids || '[0]') }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to use a different commit."
+            exit 1
+          fi
+      - name: Download one npm publication attempt
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          artifact-ids: ${{ matrix.artifact-id }}
+          run-id: ${{ needs.preflight.outputs.assets-run }}
+          github-token: ${{ github.token }}
+          path: npm-attempt/
+      - name: Keep publication attempts separate for registry selection
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: recovered-npm-${{ matrix.artifact-id }}
+          path: npm-attempt/
+          if-no-files-found: error
+          compression-level: 0
+
   publish-assets:
-    needs: [preflight, build, build-cross, build-wasi, create-release, create-nightly, npm-pack-check, npm-publish]
+    needs: [preflight, build, build-cross, build-wasi, create-release, create-nightly, npm-pack-check, npm-publish, recover-npm-artifacts]
     if: >
       !cancelled() &&
       needs.preflight.outputs.tag != '' &&
-      needs.build.result == 'success' &&
-      contains(fromJSON('["success", "failure"]'), needs.build-cross.result) &&
+      (
+        (needs.preflight.outputs.assets-run != '' && needs.recover-npm-artifacts.result == 'success') ||
+        (needs.preflight.outputs.assets-run == '' && needs.build.result == 'success' &&
+         contains(fromJSON('["success", "failure"]'), needs.build-cross.result))
+      ) &&
       (
         (needs.preflight.outputs.mode == 'cut-release' && needs.create-release.result == 'success') ||
         (needs.preflight.outputs.mode == 'nightly' && needs.create-nightly.result == 'success') ||
@@ -2553,12 +2635,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Local actions under ./.github/actions load from the workspace, so
-      # this job needs the tree preflight resolved before it can use them.
+      # use the dispatched tooling even when republishing an older tag.
       - name: Checkout repository (inline git)
         shell: bash
         env:
-          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CHECKOUT_REF: ${{ github.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -2576,6 +2658,8 @@ jobs:
       - name: Download packaged host archives
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
+          run-id: ${{ needs.preflight.outputs.assets-run || github.run_id }}
+          github-token: ${{ github.token }}
           pattern: release-archive-*
           merge-multiple: true
           path: assets/
@@ -2597,20 +2681,30 @@ jobs:
       - name: Download cross bundles
         # continue-on-error: a fully-red build-cross (legacy modes) must not
         # stop the host archives from shipping.
-        continue-on-error: true
+        continue-on-error: ${{ needs.preflight.outputs.assets-run == '' }}
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
+          run-id: ${{ needs.preflight.outputs.assets-run || github.run_id }}
+          github-token: ${{ github.token }}
           pattern: perry-cross-*
           merge-multiple: true
           path: assets/
 
       - name: Download the target and ext package tarballs
+        if: needs.preflight.outputs.assets-run == ''
         # From npm-publish (cut/release/republish) or npm-pack-check
         # (nightly); absent when neither packed (republish without npm).
-        continue-on-error: true
+        continue-on-error: ${{ needs.preflight.outputs.assets-run == '' }}
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: npm-target-ext-packages
+          path: npm-targets/
+
+      - name: Download recovered npm publication attempts
+        if: needs.preflight.outputs.assets-run != ''
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          pattern: recovered-npm-*
           path: npm-targets/
 
       - name: Sign the target and ext packages for `perry target add` and the ext auto-fetch
@@ -2625,38 +2719,24 @@ jobs:
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.preflight.outputs.tag }}
+          PACKAGE_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          PACKAGE_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          VERIFY_NPM: ${{ needs.preflight.outputs.assets-run != '' }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          tarballs=(npm-targets/*/*.tgz)
-          if [ "${#tarballs[@]}" -eq 0 ]; then
-            echo "::notice::no target or ext package tarballs in this run; none attached to $TAG"
+          # Tooling comes from the dispatch; the catalog belongs to the build.
+          if [ "$(git rev-parse HEAD)" != "$PACKAGE_SHA" ]; then
+            git fetch --no-tags --depth 1 origin "$PACKAGE_REF"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$PACKAGE_SHA"
+            git show FETCH_HEAD:npm/packaged-triples.json > "$RUNNER_TEMP/packaged-triples.json"
+            export PACKAGED_TRIPLES="$RUNNER_TEMP/packaged-triples.json"
+          fi
+          if [ "$VERIFY_NPM" != true ] && [ ! -d npm-targets ]; then
+            echo "::notice::no packed target/ext artifact in this run"
             exit 0
           fi
-          : "${PERRY_CLI_UPDATE_SIGNING_KEY:?configure the protected 32-byte base64 Ed25519 signing secret}"
-          : "${PERRY_CLI_UPDATE_KEY_ID:?configure the matching trusted public-key id}"
-          signer="$RUNNER_TEMP/signer"
-          mkdir -p "$signer"
-          tar xzf assets/perry-linux-x86_64.tar.gz -C "$signer" ./perry
-          for tgz in "${tarballs[@]}"; do
-            triple=$(tar -xzOf "$tgz" package/target.json | jq -r .target_triple)
-            version=$(tar -xzOf "$tgz" package/target.json | jq -r .perry_version)
-            package=$(tar -xzOf "$tgz" package/package.json | jq -r .name)
-            case "$package" in
-              "@perryts/perry-target-$triple") kind=() ;;
-              "@perryts/perry-ext-$triple") kind=(--ext) ;;
-              *) echo "::error::$tgz is $package, not a target or ext package of $triple" >&2; exit 1 ;;
-            esac
-            name="${package#@perryts/}-${version}.tgz"
-            cp "$tgz" "assets/$name"
-            (cd assets && sha256sum "$name" > "$name.sha256")
-            "$signer/perry" updater sign-target-manifest "${kind[@]}" \
-              --artifact "assets/$name" --triple "$triple" \
-              --url "https://github.com/${REPO}/releases/download/${TAG}/${name}" \
-              --release-version "$version" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
-              --secret-key-b64 "$PERRY_CLI_UPDATE_SIGNING_KEY" > "assets/$name.update.json"
-            echo "signed $name"
-          done
+          bash scripts/publish/sign-target-assets.sh assets/perry-linux-x86_64.tar.gz npm-targets assets
 
       - name: Upload all assets to the release
         env:
@@ -3056,7 +3136,7 @@ jobs:
     # Default needs-semantics: runs only when apt succeeded (and is skipped
     # whenever apt was skipped — stage mode, red builds, missing tag).
     needs: [preflight, apt]
-    if: needs.preflight.outputs.mode != 'nightly'
+    if: needs.preflight.outputs.mode != 'nightly' && needs.preflight.outputs.assets-run == ''
     runs-on: ubuntu-latest
     steps:
       # Local actions under ./.github/actions load from the workspace, so
@@ -3354,6 +3434,20 @@ jobs:
             npm/perry-ext-*/*.tgz
           if-no-files-found: error
           compression-level: 0
+
+      - name: Exercise target and ext asset signing without uploading
+        env:
+          REPO: ${{ github.repository }}
+          TAG: stage
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "$RUNNER_TEMP/asset-signing.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          PERRY_CLI_UPDATE_SIGNING_KEY=$(openssl rand -base64 32)
+          export PERRY_CLI_UPDATE_SIGNING_KEY
+          export PERRY_CLI_UPDATE_KEY_ID=stage-throwaway
+          bash scripts/publish/sign-target-assets.sh \
+            release-artifacts/release-archive-perry-linux-x86_64/perry-linux-x86_64.tar.gz npm "$work/assets"
 
       - name: Install the WASI toolchain for the target package smoke
         shell: bash

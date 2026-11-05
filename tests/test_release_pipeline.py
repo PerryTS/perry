@@ -8,6 +8,8 @@ import unittest
 
 import yaml
 
+from test_release_assets import ReleaseAssetTests
+
 ROOT = Path(__file__).resolve().parents[1]
 JOBS = yaml.safe_load((ROOT / '.github/workflows/release-packages.yml').read_text())['jobs']
 SHA, BASE = 'a' * 40, 'b' * 40
@@ -43,6 +45,7 @@ class ReleasePipeline(unittest.TestCase):
                     result = shell('date() { echo 20261023; }\n' + source, cwd=root, env={
                         'EVENT': event, 'NIGHTLY': nightly, 'RELEASE_TAG': release_tag,
                         'CUT_RELEASE': '', 'EXISTING_TAG': '', 'CANDIDATE_SHA': sha,
+                        'ASSETS_FROM_RUN': '', 'PUBLISH_NPM': '',
                         'SHA': sha, 'REF': 'refs/heads/main', 'REF_NAME': 'main',
                         'RUN_NUMBER': '433', 'RUN_ATTEMPT': '1', 'GITHUB_OUTPUT': str(output),
                     })
@@ -60,6 +63,51 @@ class ReleasePipeline(unittest.TestCase):
                            if s.get('name') == f'Sign authenticated CLI update manifest ({name})')
             self.assertEqual(signing['env']['RELEASE_VERSION'], '${{ needs.preflight.outputs.version }}')
             self.assertIn('--release-version ' + argument, signing['run'])
+
+    def test_asset_recovery_preflight_requires_a_completed_tag_run(self):
+        source = step('preflight', 'Resolve run mode')
+        stub = r'''
+ git() {
+   case "$1" in
+     fetch) : ;;
+     show) echo 'version = "1.2.3"' ;;
+     rev-parse) echo "$SHA" ;;
+     *) return 99 ;;
+   esac
+ }
+ gh() {
+   case "$*" in
+     'release view '*) : ;;
+     *'/artifacts'*) printf '101\n102\n' ;;
+     *'/actions/runs/'*) echo "$SOURCE_RUN" ;;
+     *) return 99 ;;
+   esac
+ }
+'''
+        good = dict(status='completed', head_sha=SHA, path='.github/workflows/release-packages.yml')
+        cases = [({}, good, True), ({'ASSETS_FROM_RUN': 'not-a-run'}, good, False),
+                 ({'EXISTING_TAG': ''}, good, False), ({'PUBLISH_NPM': 'true'}, good, False),
+                 ({'CUT_RELEASE': 'true'}, good, False), ({'NIGHTLY': 'true'}, good, False),
+                 ({}, {**good, 'head_sha': BASE}, False),
+                 ({}, {**good, 'status': 'in_progress'}, False),
+                 ({}, {**good, 'path': '.github/workflows/test.yml'}, False)]
+        for changes, run, success in cases:
+            with self.subTest(changes=changes, run=run), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / 'output'
+                result = shell(stub + source, cwd=tmp, env={
+                    'EVENT': 'workflow_dispatch', 'NIGHTLY': '', 'RELEASE_TAG': '',
+                    'CUT_RELEASE': '', 'EXISTING_TAG': 'v1.2.3', 'CANDIDATE_SHA': SHA,
+                    'ASSETS_FROM_RUN': '42', 'PUBLISH_NPM': '', 'SOURCE_RUN': json.dumps(run),
+                    'SHA': SHA, 'REF': 'refs/heads/release/recovery', 'REF_NAME': 'release/recovery',
+                    'RUN_NUMBER': '433', 'RUN_ATTEMPT': '1', 'GITHUB_OUTPUT': str(output),
+                    'REPO': 'test/repo', **changes,
+                })
+                self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                if success:
+                    values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                    self.assertEqual(values['mode'], 'republish')
+                    self.assertEqual(values['assets-run'], '42')
+                    self.assertEqual(json.loads(values['npm-artifact-ids']), [101, 102])
 
     def test_ancestor_comparison_is_complete_and_safe(self):
         source = step('await-tests', 'Wait for Tests')
