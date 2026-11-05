@@ -174,6 +174,9 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
+                let key = self.read_key(index);
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
