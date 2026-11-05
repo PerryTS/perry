@@ -1009,35 +1009,24 @@ impl Model {
                     }
                 }
             }
-            // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
-            Cons::IdxLoad { idx, dst, .. } if self.key_nodes.contains_key(&idx) => {
-                let a = self.key_nodes[&idx];
-                for &t in toks {
-                    self.load_from(t, t, Key::Named(a), dst);
-                }
-            }
             Cons::IdxLoad { idx, dst, shape } => {
                 for &t in toks {
-                    if t == TOP {
-                        self.add_tok(dst, TOP);
-                        continue;
-                    }
-                    // An object's own fields: by the key's values (`IdxKey`:
-                    // a number key names only its numeric fields). A
-                    // marker's fields are its reach markers under any key;
-                    // another value (the global object, a namespace) keeps
-                    // every field.
-                    if self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
-                        let all = self.all_fields(t);
-                        self.edge(all, dst);
-                    }
-                    self.add_prim(dst, prim::UNDEF);
-                    if self.idx_done.insert((idx, t, dst, 0)) {
-                        self.plain_key(t, ChainAct::Load(dst));
-                        self.cons(idx, Cons::IdxKey { obj: t, dst, shape });
-                    }
+                    self.idx_load_tok(idx, t, dst, shape);
                 }
             }
+            Cons::IdxOwnLoad { idx, dst, shape } => {
+                for &t in toks {
+                    self.idx_own_load_tok(idx, t, dst, shape);
+                }
+            }
+            Cons::IdxOwnKey { obj, dst, shape } => self.idx_own_key(n, obj, dst, shape, toks, prim),
+            Cons::OwnGate {
+                obj,
+                idx,
+                dst,
+                shape,
+                callee,
+            } => self.own_gate(obj, idx, dst, shape, callee, toks),
             Cons::IdxKey { obj, dst, shape } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {

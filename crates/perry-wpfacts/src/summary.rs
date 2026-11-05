@@ -249,7 +249,9 @@ impl Model {
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
                 | Cons::Falsy { dst }
-                | Cons::NotUndefined { dst } => Some(dst),
+                | Cons::NotUndefined { dst }
+                // The gate of an own-only read runs where the read does.
+                | Cons::OwnGate { dst, .. } => Some(dst),
                 // Two outputs: both must be observation nodes.
                 Cons::Plus { str, num } => {
                     return !(self.nodes[str as usize].obs && self.nodes[num as usize].obs);

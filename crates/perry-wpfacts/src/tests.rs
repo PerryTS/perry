@@ -73,6 +73,7 @@ mod locked_store;
 mod logical_and;
 mod native_proto;
 mod num_key;
+mod own_guarded_read;
 mod own_key_shadow;
 mod own_length;
 mod parent_value;

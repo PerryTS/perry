@@ -211,6 +211,29 @@ pub fn map_cons(
             dst: n(dst),
             shape,
         },
+        IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
+            idx: n(idx),
+            dst: n(dst),
+            shape,
+        },
+        IdxOwnKey { obj, dst, shape } => IdxOwnKey {
+            obj,
+            dst: n(dst),
+            shape,
+        },
+        OwnGate {
+            obj,
+            idx,
+            dst,
+            shape,
+            callee,
+        } => OwnGate {
+            obj: n(obj),
+            idx: n(idx),
+            dst: n(dst),
+            shape,
+            callee,
+        },
         IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),
             call: k(call),
@@ -378,6 +401,9 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Implicit { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
+            | IdxOwnLoad { .. }
+            | IdxOwnKey { .. }
+            | OwnGate { .. }
             | IdxMCall { .. }
             | IdxKeyCall { .. }
             | ForInBody { .. }
@@ -412,6 +438,8 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
+        | IdxOwnLoad { dst, .. }
+        | IdxOwnKey { dst, .. }
         | Arith { dst }
         | ArrayLenArg { dst }
         | IterNext { dst }

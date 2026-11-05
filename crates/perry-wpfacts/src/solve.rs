@@ -11,6 +11,7 @@
 mod copy;
 mod define;
 mod lookup;
+mod own_read;
 
 use crate::builtins;
 mod call_and_construct;
@@ -226,6 +227,8 @@ impl Model {
             "perry: wpfacts key shapes sites={sites} shaped={shaped} no_constructor={no_ctor} distinct={}",
             self.key_shapes.len().saturating_sub(1)
         );
+        let [own, gated, obj_key] = self.own_read_census;
+        eprintln!("perry: wpfacts own reads generated={own} gated={gated} object_key={obj_key}");
         let (logical, stored, distinct) = self.pts_storage();
         eprintln!(
             "perry: wpfacts sets logical={logical} stored={stored} distinct={distinct} copies={}",
@@ -1392,6 +1395,17 @@ impl Model {
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
+            Cons::IdxOwnLoad { idx, dst, .. } => format!("idxownload {n} {idx} {dst}"),
+            Cons::IdxOwnKey { obj, dst, .. } => format!("idxownkey {n} {obj} {dst}"),
+            Cons::OwnGate {
+                obj,
+                idx,
+                dst,
+                callee,
+                ..
+            } => {
+                format!("owngate {n} {obj} {idx} {dst} {callee}")
+            }
             Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
             Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
             Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),

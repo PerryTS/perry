@@ -287,6 +287,37 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
+    /// `IdxLoad` of a read that runs only after an own-property test of the
+    /// same object and key (`gen/own_guard.rs`): a program object's own
+    /// fields under the key (`IdxOwnKey`), never its prototype chain; any
+    /// other value reads as `IdxLoad`. `OwnGate` adds the ordinary `IdxLoad`
+    /// once the test may be something else.
+    IdxOwnLoad {
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
+    /// The node is the key of an own-only read of object token `obj`
+    /// (`IdxOwnLoad`): a primitive key reads `obj`'s own fields it may name;
+    /// a token (an object, whose ToPropertyKey runs program code at the test
+    /// and again at the read, or ⊤) runs the full lookup (`IdxKey`'s).
+    IdxOwnKey {
+        obj: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+    },
+    /// The node is the callee (`callee`) or the result of the own-property
+    /// test guarding the own-only read `obj[idx]` into `dst`: a callee other
+    /// than `Object.prototype.hasOwnProperty` / `propertyIsEnumerable`, or a
+    /// result holding a token (a written `call` ran unknown code), makes the
+    /// read ordinary (`Cons::IdxLoad`).
+    OwnGate {
+        obj: NodeId,
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+        callee: bool,
+    },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
     /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
@@ -488,6 +519,9 @@ impl Cons {
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::IdxOwnLoad { .. } => "idxownload",
+            Cons::IdxOwnKey { .. } => "idxownkey",
+            Cons::OwnGate { .. } => "owngate",
             Cons::IdxMCall { .. } => "idxmcall",
             Cons::IdxKeyCall { .. } => "idxkeycall",
             Cons::ForInBody { .. } => "forinbody",

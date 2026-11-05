@@ -750,8 +750,14 @@ impl<'a> Gen<'a> {
                 ),
             },
             Expr::Logical { op, left, right } => {
+                let plan = match op {
+                    LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),
+                    _ => None,
+                };
                 let l = self.expr(fx, left);
+                let own = self.own_guard_arm(plan, l);
                 let r = self.expr(fx, right);
+                self.own_guard_done(own);
                 let out = self.tmp("logical");
                 // `l ?? r` is `l` when it is not nullish; `l && r` is `l`
                 // when it is falsy.
@@ -782,8 +788,11 @@ impl<'a> Gen<'a> {
                 then_expr,
                 else_expr,
             } => {
+                let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let own = self.own_guard_arm(plan, t);
                 let a = self.expr(fx, then_expr);
+                self.own_guard_done(own);
                 let b = self.expr(fx, else_expr);
                 let out = self.tmp("cond");
                 self.m.cons(
@@ -1063,7 +1072,24 @@ impl<'a> Gen<'a> {
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                         let shape = self.m.key_shape(index);
-                        self.m.cons(o, Cons::IdxLoad { idx, dst, shape });
+                        match self.own_reads.remove(&(e as *const Expr as usize)) {
+                            // Behind an own-property test (`gen/own_guard.rs`).
+                            Some(gates) => {
+                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape });
+                                self.m.own_read_census[0] += 1;
+                                for (g, callee) in gates {
+                                    let c = Cons::OwnGate {
+                                        obj: o,
+                                        idx,
+                                        dst,
+                                        shape,
+                                        callee,
+                                    };
+                                    self.m.cons(g, c);
+                                }
+                            }
+                            None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
+                        }
                         dst
                     }
                 }
