@@ -21,7 +21,10 @@ fn source(helper: &str, body: &str) -> String {
 }
 
 fn verdict(src: &str, expected: bool) {
-    let pf = facts(src);
+    verdict_facts(facts(src), expected);
+}
+
+fn verdict_facts(pf: ProgramFacts, expected: bool) {
     let sites: Vec<_> = pf
         .sites
         .iter()
@@ -349,4 +352,117 @@ fn refutation_marker_does_not_flow_as_a_value() {
         assert!(m.nodes[n as usize].pts.is_empty());
         assert_eq!(m.nodes[n as usize].prim, 0);
     }
+}
+
+fn tdz_source(helper: &str) -> String {
+    format!(
+        "const early = guard;\n{}",
+        source(helper, "total += guard(dict, k) ? dict[k].size() : 0;")
+    )
+}
+
+fn lower_tdz(src: &str) -> perry_hir::Module {
+    let ast = perry_parser::parse_typescript(src, "t.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "t", "t.ts").unwrap();
+    let mut checks = 0;
+    perry_hir::tdz_check::for_each_module_expr(&hir, &mut |e| {
+        checks += usize::from(perry_hir::tdz_check::is_read_check(e));
+    });
+    assert!(
+        checks > 0,
+        "the helper must actually contain a TDZ check: {hir:?}"
+    );
+    hir
+}
+
+fn tdz_verdict(hir: &perry_hir::Module, expected: bool) {
+    verdict_facts(
+        compute(&[("t.ts".to_string(), hir)], &FactsConfig::default()),
+        expected,
+    );
+}
+
+#[test]
+fn helper_tdz_early_reference_site_proven() {
+    tdz_verdict(&lower_tdz(&tdz_source(HELPER)), true);
+}
+
+#[test]
+fn helper_tdz_exported_site_proven() {
+    // An import makes the exported body reachable through an import cycle,
+    // as in compiler/core.ts, even with the binding's declaration above it.
+    let src = format!(
+        "import {{ peer }} from './peer';\n{}",
+        source(
+            &format!("export {HELPER}"),
+            "total += guard(dict, k) ? dict[k].size() : 0;"
+        )
+    );
+    tdz_verdict(&lower_tdz(&src), true);
+}
+
+#[test]
+fn helper_tdz_closure_site_proven() {
+    let src = source("", "total += guard(dict, k) ? dict[k].size() : 0;");
+    let src = format!("const guard = (map: any, key: any) => h.call(map, key);\n{src}");
+    tdz_verdict(&lower_tdz(&src), true);
+}
+
+#[test]
+fn helper_tdz_reassigned_binding_unproven() {
+    let src = tdz_source(HELPER).replace("const h =", "let h: any =");
+    let src = format!("{src}\nh = () => true;");
+    tdz_verdict(&lower_tdz(&src), false);
+}
+
+#[test]
+fn helper_tdz_mixed_binding_unproven() {
+    let src = tdz_source(HELPER).replace(
+        "const h = Object.prototype.hasOwnProperty;",
+        "const h = Math.random() > 0.5 ? Object.prototype.hasOwnProperty : () => true;",
+    );
+    tdz_verdict(&lower_tdz(&src), false);
+}
+
+#[test]
+fn helper_tdz_different_binding_unproven() {
+    use perry_hir::{Expr, Stmt};
+    let mut hir = lower_tdz(&tdz_source(HELPER));
+    let f = hir
+        .functions
+        .iter_mut()
+        .find(|f| f.name == "guard")
+        .unwrap();
+    let [Stmt::Return(Some(Expr::Sequence(parts)))] = f.body.as_mut_slice() else {
+        panic!("expected the lowering's lifted return check: {:?}", f.body);
+    };
+    let [Expr::Call { args, .. }, Expr::Call { callee, .. }] = parts.as_mut_slice() else {
+        panic!("expected check and call");
+    };
+    let Expr::PropertyGet { object, .. } = callee.as_ref() else {
+        panic!("expected .call");
+    };
+    let Expr::LocalGet(h) = object.as_ref() else {
+        panic!("expected binding");
+    };
+    assert!(matches!(&args[0], Expr::LocalGet(id) if id == h));
+    // Keep the diagnostic label identical: only the slot's identity differs.
+    args[0] = Expr::LocalGet(f.params[0].id);
+    assert_ne!(f.params[0].id, *h);
+    tdz_verdict(&hir, false);
+}
+
+#[test]
+fn helper_tdz_conditional_unproven() {
+    let src = tdz_source(
+        "function guard(map: any, key: any) { return total > 0 ? h.call(map, key) : true; }",
+    );
+    tdz_verdict(&lower_tdz(&src), false);
+}
+
+#[test]
+fn helper_tdz_side_effect_comma_unproven() {
+    let src =
+        tdz_source("function guard(map: any, key: any) { return (other(), h.call(map, key)); }");
+    tdz_verdict(&lower_tdz(&src), false);
 }
