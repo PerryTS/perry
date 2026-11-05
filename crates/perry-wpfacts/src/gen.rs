@@ -14,6 +14,8 @@ mod for_in;
 mod glue;
 mod native_result;
 mod once;
+mod own_guard;
+pub(crate) use own_guard::Region;
 mod primitives;
 mod shared_closures;
 mod view;
@@ -343,6 +345,12 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
+    /// OWN1: the reads guarded by an own-property test (the `IndexGet`'s
+    /// address) and their gates (`Cons::OwnGate`: node, is the callee).
+    pub(crate) own_reads: FxHashMap<usize, Vec<(NodeId, bool)>>,
+    /// The receiver node of the last method call lowered (`call_with`):
+    /// `H` of `H.call(o, k)`, `o` of `o.hasOwnProperty(k)`.
+    pub(crate) own_test_recv: Option<NodeId>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
     /// `ForInKeys` it holds.
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
@@ -563,6 +571,8 @@ impl<'a> Gen<'a> {
             lit_births: FxHashMap::default(),
             default_args: FxHashMap::default(),
             call_lit_arg: None,
+            own_reads: FxHashMap::default(),
+            own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
             const_inits: FxHashMap::default(),

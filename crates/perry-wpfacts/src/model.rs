@@ -38,6 +38,15 @@ pub const IDX_PLAIN_CALL: u8 = 34;
 pub const IDX_NUM_OWN: u8 = 35;
 pub const IDX_CALL_ANY: u8 = 36;
 pub const IDX_CALL_NAMED: u8 = 64;
+/// `idx_done` tags of the own-only read (`Cons::IdxOwnLoad`): its key rule
+/// attached, a token key's full lookup, a string/symbol key, a number key,
+/// the gate fired; 46, 47, 48: a `true`/`false`, `null`, `undefined` key.
+pub const IDX_OWN_KEY: u8 = 41;
+pub const IDX_OWN_ANY: u8 = 42;
+pub const IDX_OWN_STR: u8 = 43;
+pub const IDX_OWN_NUM: u8 = 44;
+pub const IDX_OWN_GATE: u8 = 45;
+pub const IDX_OWN_PRIM: u8 = 46;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -1089,6 +1098,9 @@ pub struct Model {
     /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
     /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
+    /// OWN1 census (PERRY_FACTS_PROFILE): own-only reads generated, gates
+    /// that made one ordinary, object/⊤ keys that ran the full lookup.
+    pub own_read_census: [u64; 3],
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
     /// receiver), the callee relay per call, the edges into it, and the

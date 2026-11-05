@@ -997,12 +997,15 @@ impl<'a> Gen<'a> {
                 then_branch,
                 else_branch,
             } => {
+                let plan = self.own_guard_plan(condition, Region::Stmts(then_branch));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let own = self.own_guard_arm(plan, t);
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
                 self.stmts(&then_fx, then_branch);
+                self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),

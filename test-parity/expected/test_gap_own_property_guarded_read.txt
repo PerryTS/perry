@@ -1,0 +1,55 @@
+a unguarded Sym 1
+a getProperty Sym 1
+a and 1
+a if Sym 1
+a hasOwn 1
+a method 1
+a enumerable 1
+x unguarded undefined
+x getProperty undefined
+x and false
+x if undefined
+x hasOwn undefined
+x method undefined
+x enumerable undefined
+constructor unguarded Object constructor
+constructor getProperty undefined
+constructor and false
+constructor if undefined
+constructor hasOwn undefined
+constructor method undefined
+constructor enumerable undefined
+toString unguarded function toString
+toString getProperty undefined
+toString and false
+toString if undefined
+toString hasOwn undefined
+toString method undefined
+toString enumerable undefined
+b unguarded Sym 2
+b getProperty Sym 2
+b and 2
+b if Sym 2
+b hasOwn 2
+b method 2
+b enumerable 2
+__proto__ unguarded Object.prototype
+__proto__ getProperty undefined
+__proto__ and false
+__proto__ if undefined
+__proto__ hasOwn undefined
+__proto__ method undefined
+__proto__ enumerable undefined
+hasOwnProperty unguarded function hasOwnProperty
+hasOwnProperty getProperty undefined
+hasOwnProperty and false
+hasOwnProperty if undefined
+hasOwnProperty hasOwn undefined
+hasOwnProperty method undefined
+hasOwnProperty enumerable undefined
+total accessor 42 gets=1
+valueOf accessor undefined gets=1
+own constructor Sym 7 / other dict undefined
+clone keys c c=Sym 3
+object key Object constructor
+program test Object constructor
