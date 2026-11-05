@@ -8,7 +8,7 @@ function run(source: string) {
 }
 run(process.argv[2] || "(function (next) { if (next !== undefined) value = next; return value; })");
 const pieces = [process.argv[3] || "Array.prototype.join = function () { return 'spread-eval'; }", 99];
-eval(...pieces);
+try { eval(...pieces); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log([1, 2].join(','));
 const thisSource = process.argv[4] || "this";
 console.log(eval(thisSource) === this);

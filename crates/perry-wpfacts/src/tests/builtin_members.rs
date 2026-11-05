@@ -196,7 +196,10 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
             "new A()",
             "{ q: 1 }",
         ] {
-            for (w, want) in [(named, false), (computed, false), (elsewhere, true)] {
+            // DEC 250 Q2: a class instance's or a literal's chain past the
+            // program is `Object.prototype`, which takes no new key.
+            let fin = other == "new A()" || other == "{ q: 1 }";
+            for (w, want) in [(named, fin), (computed, fin), (elsewhere, true)] {
                 let src = body(hand, w, other);
                 let pf = facts(&src);
                 assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -213,7 +216,9 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
 /// the helper module visible.)
 #[test]
 fn the_prototype_of_a_namespace_is_a_builtin_prototype() {
-    for (hand, other) in [("Map", "Object"), ("globalThis", "\"text\"")] {
+    // The Object constructor's chain is locked. The primitive string's
+    // own String.prototype remains add-open in the collapsed model.
+    for (hand, other, want) in [("Map", "Object", true), ("globalThis", "\"text\"", false)] {
         let src = format!(
             "{CLASSES}{M}
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
@@ -225,7 +230,7 @@ fn the_prototype_of_a_namespace_is_a_builtin_prototype() {
             console.log(new A().a);"
         );
         let pf = facts(&src);
-        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
 }
 
@@ -317,6 +322,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
             console.log(new A().a);"
         )
     };
+    // DEC 250 refuses the Function.prototype add; Object.inner remains an own namespace write.
     let fw = "(Function.prototype as any).inner = function () { return 1; };";
     let top = "const t: any = unknown.value; t.inner = function () { return 1; };";
     for (src, want) in [
@@ -329,7 +335,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
             body("", "(Object as any).inner = function () { return 1; };"),
             false,
         ),
-        (body(fw, ""), false),
+        (body(fw, ""), true),
         (body(top, ""), false),
         (body(&format!("unknown.take(Map); {top}"), ""), false),
         (body("", top), false),
@@ -368,9 +374,11 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
     // no flow-sensitive "own key present"): the read is unknown with or
     // without the global object handed over. What the call hands over still
     // decides the global field itself.
-    for src in [body("", ""), body(w, ""), body("", w)] {
+    // DEC 250 Q2: `Object.prototype` takes no new key, so only a global
+    // object handed to unknown code (a program-written `gc`) loses it.
+    for (src, want) in [(body("", ""), true), (body(w, ""), false), (body("", w), false)] {
         let pf = facts(&src);
-        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
     let held = |src: &str| {
         let pf = facts(src);
@@ -415,6 +423,33 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
         "declare const kk: string; t[kk] = function () { return new Q(); };",
     ] {
         let pf = facts(&body(w));
-        assert!(!site_b(&pf), "{w}\n{}", pf.dump_text());
+        // DEC 250: replacing `Map.prototype.get` is a TypeError, the read is
+        // final; a computed key may still replace the global `Map` binding
+        // (global writes stay open, DEC 250 12:4xZ ruling): `mp` holds ⊤.
+        assert_eq!(site_b(&pf), !w.contains("kk"), "{w}\n{}", pf.dump_text());
+    }
+}
+
+/// DEC 250 refuses a new key on Object.prototype. That prototype hit is
+/// not an own write on the global object; an actual own unknown write is.
+#[test]
+fn a_refused_prototype_write_does_not_change_a_global_field() {
+    let body = |write: &str| format!(
+        "{CLASSES}{M}
+         declare const unknown: any;
+         const g: any = globalThis;
+         g.__perry_t_held = new M();
+         try {{ {write} }} catch (e) {{}}
+         console.log(g.__perry_t_held.m(new A()));
+         console.log(new A().a);"
+    );
+    for (write, want) in [
+        ("", true),
+        ("(Object.prototype as any).__perry_t_held = unknown.f;", true),
+        ("g.__perry_t_held = unknown.f;", false),
+    ] {
+        let src = body(write);
+        let pf = facts(&src);
+        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
 }

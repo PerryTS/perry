@@ -19,20 +19,20 @@ function readLoop(label: string, n: number, read: (i: number) => unknown, mutate
 // 1. Absent key on object literals, then Object.prototype gains / loses it.
 {
   const bags: any[] = [{ a: 1 }, { a: 2 }, { a: 3 }];
-  readLoop("literal absent -> Object.prototype add/delete", 40, (i) => bags[i % 3].zz1, (i) => {
+  try { readLoop("literal absent -> Object.prototype add/delete", 40, (i) => bags[i % 3].zz1, (i) => {
     if (i === 10) (Object.prototype as any).zz1 = "proto";
     if (i === 20) delete (Object.prototype as any).zz1;
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 }
 
 // 2. Absent key, then a getter is defined on Object.prototype (must run every read).
 {
   let calls = 0;
   const bags: any[] = [{ b: 1 }, { b: 2 }];
-  readLoop("literal absent -> Object.prototype getter", 30, (i) => bags[i & 1].zz2, (i) => {
+  try { readLoop("literal absent -> Object.prototype getter", 30, (i) => bags[i & 1].zz2, (i) => {
     if (i === 10) Object.defineProperty(Object.prototype, "zz2", { get() { calls++; return calls > 12 ? "late" : undefined; }, configurable: true });
     if (i === 25) delete (Object.prototype as any).zz2;
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   console.log("getter calls", calls);
 }
 
@@ -79,7 +79,7 @@ function readLoop(label: string, n: number, read: (i: number) => unknown, mutate
   const keys = ["a", "zz6", "b", "zz7"];
   let sum = 0, undef = 0;
   for (let i = 0; i < 40; i++) {
-    if (i === 20) (Object.prototype as any).zz6 = 100;
+    try { if (i === 20) (Object.prototype as any).zz6 = 100; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
     const v = O[keys[i & 3]];
     if (v === undefined) undef++; else sum += v;
   }
@@ -108,9 +108,9 @@ function readLoop(label: string, n: number, read: (i: number) => unknown, mutate
   const o: any = { e: 1 };
   const orig = Object.prototype.toString;
   readLoop("toString through literal", 20, () => o.toString === orig ? "orig" : "replaced", (i) => {
-    if (i === 10) (Object.prototype as any).toString = function () { return "x"; };
+    try { if (i === 10) (Object.prototype as any).toString = function () { return "x"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   });
-  (Object.prototype as any).toString = orig;
+  try { (Object.prototype as any).toString = orig; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   console.log("hasOwnProperty", o.hasOwnProperty("e"), o.hasOwnProperty("zz"), typeof o.isPrototypeOf);
 }
 
@@ -119,11 +119,11 @@ function readLoop(label: string, n: number, read: (i: number) => unknown, mutate
   function f1() { return 1; }
   const g1 = () => 2;
   const fns: any[] = [f1, g1, Object, Array];
-  readLoop("function absent -> Function.prototype add/delete", 40, (i) => fns[i & 3].isBuffer, (i) => {
+  try { readLoop("function absent -> Function.prototype add/delete", 40, (i) => fns[i & 3].isBuffer, (i) => {
     if (i === 10) (Function.prototype as any).isBuffer = "fp";
     if (i === 20) delete (Function.prototype as any).isBuffer;
     if (i === 30) (Object.prototype as any).isBuffer = "op";
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   delete (Object.prototype as any).isBuffer;
   const objs: any[] = [{ a: 1 }, { b: 1 }];
   let bufs = 0;
@@ -168,7 +168,7 @@ function readLoop(label: string, n: number, read: (i: number) => unknown, mutate
   const c = new Cache();
   let a = 0;
   for (let i = 0; i < 30; i++) a = c.get(i, i < 20 ? {} : { allowStale: true, ttl: 10, status: 1 });
-  (Object.prototype as any).ttl = 1000;
+  try { (Object.prototype as any).ttl = 1000; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   a = c.get(1);
   delete (Object.prototype as any).ttl;
   a = c.get(1) + a;
@@ -178,8 +178,8 @@ function readLoop(label: string, n: number, read: (i: number) => unknown, mutate
 // 13. JSON-parsed objects read absent keys, then Object.prototype gains one.
 {
   const rows: any[] = JSON.parse('[{"id":1},{"id":2},{"id":3}]');
-  readLoop("json rows absent", 30, (i) => rows[i % 3].missing, (i) => {
+  try { readLoop("json rows absent", 30, (i) => rows[i % 3].missing, (i) => {
     if (i === 15) (Object.prototype as any).missing = "m";
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   delete (Object.prototype as any).missing;
 }

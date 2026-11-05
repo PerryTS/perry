@@ -41,7 +41,7 @@ late.field_127 = { toJSON: function () { return undefined; } };
 console.log(JSON.stringify(late));
 
 const proto: any = Object.prototype;
-proto.toJSON = function (key: string) { return "prototype:" + key; };
+try { proto.toJSON = function (key: string) { return "prototype:" + key; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(JSON.stringify(makeWide()));
 delete proto.toJSON;
 console.log(JSON.stringify(makeWide()));

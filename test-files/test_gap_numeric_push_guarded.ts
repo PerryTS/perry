@@ -100,7 +100,7 @@ console.log("proxy", proxied.length, JSON.stringify(Array.from(proxied)));
 const beforeSetter: number[] = [1, 2];
 push(beforeSetter, 3);
 let protoSaw: any = null;
-Object.defineProperty(Array.prototype, 7, {
+try { Object.defineProperty(Array.prototype, 7, {
   set(v: any) {
     protoSaw = v;
   },
@@ -108,7 +108,7 @@ Object.defineProperty(Array.prototype, 7, {
     return "proto";
   },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const afterSetter: number[] = [0, 1, 2, 3, 4, 5, 6];
 push(afterSetter, 42);
 console.log("proto-setter", protoSaw, afterSetter[7], afterSetter.length);

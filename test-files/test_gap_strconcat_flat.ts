@@ -39,7 +39,7 @@ Object.defineProperty(Number.prototype, 'length', {configurable: true, get() {
 }});
 console.log(length(42));
 delete (Number.prototype as any).length;
-(Object.prototype as any).length = 91;
+try { (Object.prototype as any).length = 91; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(length(42), length(true), length(123n));
 delete (Object.prototype as any).length;
 console.log(typeof length(42));

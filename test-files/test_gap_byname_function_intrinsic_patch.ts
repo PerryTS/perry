@@ -7,9 +7,12 @@
 // for. Each slot is swapped for ANOTHER intrinsic, an own property shadows one
 // on a single receiver, and a key is redefined as an accessor.
 const G: any = globalThis;
-const FP: any = G[["Func", "tion"].join("")].prototype;
+// DEC 250 locks Function.prototype: FP is a user prototype below it (reached by
+// a run-time name), and target adopts it.
+const FP: any = Object.create(G[["Func", "tion"].join("")].prototype);
 const CALL = ["ca", "ll"].join(""), BIND = ["bi", "nd"].join(""), APPLY = ["app", "ly"].join("");
 function target(this: any, a?: any, b?: any) { return (this && this.tag) + ":" + a + (b === undefined ? "" : ":" + b); }
+Object.setPrototypeOf(target, FP);
 const recv = { tag: "R" };
 const holder: any = { f: target };
 function show(r: any): string { return typeof r === "function" ? "fn(" + r() + ")" : String(r); }

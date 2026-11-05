@@ -33,7 +33,7 @@ log(new C()); log([new C(), new C()]);
 log(new C()); log([new C(), new C()]); log({ c: new C() });
 
 // Object.prototype.toJSON installed and removed between calls.
-(Object.prototype as any).toJSON = function () { return "OP"; };
+try { (Object.prototype as any).toJSON = function () { return "OP"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 log({ a: 1 }); log([{ a: 1 }, { a: 2 }]); log({ a: { b: 1 } }); log(JSON.parse('[{"a":1},{"a":2}]'));
 delete (Object.prototype as any).toJSON;
 log({ a: 1 }); log([{ a: 1 }, { a: 2 }]); log({ a: { b: 1 } });

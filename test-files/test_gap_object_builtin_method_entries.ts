@@ -3,7 +3,22 @@
 // the site cannot prove its kind; the entry proves kind + pristine prototype
 // and otherwise takes the generic call.
 
+// DEC 250 locks the intrinsic prototypes: the patched round's receivers adopt
+// user prototypes below them (UAP/UMP/USP/UFP) and the patches go there. A
+// primitive string's slice exists only on String.prototype (intrinsic-only):
+// that replace is refused (expected file).
+const UAP: any = Object.create(Array.prototype);
+const UMP: any = Object.create(Map.prototype);
+const USP: any = Object.create(Set.prototype);
+const UFP: any = Object.create(Function.prototype);
+let ADOPT = false;
 function pick(i: number): any {
+  const v = pickRaw(i);
+  const user = [UAP, null, UMP, USP, UFP, null][i];
+  if (ADOPT && user) Object.setPrototypeOf(v, user);
+  return v;
+}
+function pickRaw(i: number): any {
   const all: any[] = [
     [1, 2, 3],
     "hello world",
@@ -68,18 +83,21 @@ const origGet = Map.prototype.get;
 const origCall = Function.prototype.call;
 const origSlice = String.prototype.slice;
 const origAdd = Set.prototype.add;
-(Array.prototype as any).push = function (this: any, ...xs: any[]) { return "patched.push:" + xs.length; };
-(Map.prototype as any).get = function () { return "patched.get"; };
-(String.prototype as any).slice = function () { return "patched.slice"; };
-(Set.prototype as any).add = function () { return "patched.add"; };
+ADOPT = true;
+UAP.push = function (this: any, ...xs: any[]) { return "patched.push:" + xs.length; };
+UMP.get = function () { return "patched.get"; };
+try { (String.prototype as any).slice = function () { return "patched.slice"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+USP.add = function () { return "patched.add"; };
 round("patched");
-(Function.prototype as any).call = function () { return "patched.call"; };
+UFP.call = function () { return "patched.call"; };
 log("patched-call", pick(4).call({}, 1, 2));
-Function.prototype.call = origCall;
-Array.prototype.push = origPush;
-Map.prototype.get = origGet;
-String.prototype.slice = origSlice;
-Set.prototype.add = origAdd;
+ADOPT = false;
+delete UFP.call;
+delete UAP.push;
+delete UMP.get;
+delete USP.add;
+try { String.prototype.slice = origSlice; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+void origCall, origPush, origGet, origAdd;
 round("restored");
 
 // A frozen array's push throws.
@@ -91,10 +109,11 @@ class K {}
 const kref: any = K;
 try { kref.call(null); log("class-call", "no throw"); } catch (e: any) { log("class-call", e instanceof TypeError); }
 
-// An argument that patches the method before the call (split site).
+// An argument that writes a method the receiver does not read (split site):
+// arr2's chain is Array.prototype, so its push stays the builtin.
 const arr2: any = [1];
-const r = arr2.push((Array.prototype.push = function () { return "late"; } as any, 5));
+const r = arr2.push((UAP.push = function () { return "late"; } as any, 5));
 log("late", r);
-Array.prototype.push = origPush;
+delete UAP.push;
 
 for (const line of out) console.log(line);

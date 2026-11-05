@@ -288,7 +288,10 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             // The same module.
             let pf = one(&format!("{write}\n{user}\nconsole.log(run());"), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
-            assert!(none_native(&v), "units={units} {write}: {v:?}");
+            // DEC 250: the lock refuses each write (a member replace, an
+            // `Object.prototype` add): the read stays the builtin.
+            // The same locked native member is final in both modes.
+            assert!(native(&v), "units={units} {write}: {v:?}");
             // Another module.
             let pf = modules(
                 &[
@@ -303,7 +306,7 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             );
             let v = verdicts_in(&pf, 1, "indexOf", true);
             assert!(
-                none_native(&v),
+                native(&v),
                 "units={units} other module {write}: {v:?}\n{}",
                 pf.dump_text()
             );
@@ -318,11 +321,13 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
     }
 }
 
-/// Obligation 4 (d): a store into ⊤ may write a builtin prototype. On a
-/// String the site's reason names it (the sites only it keeps); an array's
-/// call of the now unknown member hands the array to unknown code as well.
+/// Obligation 4 (d) under DEC 250: a store into ⊤ may write a builtin
+/// prototype, but never a member the image gives a locked one (`indexOf`
+/// of String.prototype and Array.prototype): both sites stay NativeMember,
+/// and the array is handed to no unknown code. (Before the solver read the
+/// lock, both lost the proof.)
 #[test]
-fn a_store_into_top_is_no_native_member_while_it_holds() {
+fn a_store_into_top_writes_no_locked_native_member() {
     for units in [false, true] {
         for store in ["ext.indexOf = 1;", "ext[process.argv[3]] = 1;"] {
             let src = |s: &str| {
@@ -344,10 +349,7 @@ fn a_store_into_top_is_no_native_member_while_it_holds() {
             assert!(native(&v), "control units={units}: {v:?}");
             let pf = one(&src(store), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
-            assert!(
-                matches!(v.as_slice(), [Verdict::No(w), Verdict::No(_)] if w.starts_with("native member: a store into ⊤")),
-                "units={units} {store}: {v:?}"
-            );
+            assert!(native(&v), "units={units} {store}: {v:?}");
         }
     }
 }

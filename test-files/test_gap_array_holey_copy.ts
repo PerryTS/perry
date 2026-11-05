@@ -74,29 +74,29 @@ function ops(label, fills = true) {
 ops('pristine');
 ops('pristine again');
 
-Array.prototype[3] = 'ap3';
-Object.defineProperty(Array.prototype, 1, {
+try { Array.prototype[3] = 'ap3'; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(Array.prototype, 1, {
   configurable: true,
   get() {
     getterCalls.length++;
     return 'getter1';
   },
   set(v) {},
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 ops('array-proto', false);
 console.log('getter calls ' + (getterCalls.length > 0));
 delete Array.prototype[3];
 delete Array.prototype[1];
 ops('array-proto removed');
 
-Object.prototype[2] = 'op2';
-Object.defineProperty(Object.prototype, 4, {
+try { Object.prototype[2] = 'op2'; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(Object.prototype, 4, {
   configurable: true,
   get() {
     return 'getter4';
   },
   set(v) {},
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 ops('object-proto', false);
 delete Object.prototype[2];
 delete Object.prototype[4];
@@ -105,7 +105,7 @@ ops('object-proto removed');
 // A property added after copies have already been made is seen by the next one.
 const late = { length: 3 };
 console.log('late before ' + show(Array.from(late)));
-Object.prototype[1] = 'late1';
+try { Object.prototype[1] = 'late1'; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('late after ' + show(Array.from(late)));
 delete Object.prototype[1];
 console.log('late removed ' + show(Array.from(late)));
@@ -126,7 +126,7 @@ const proto = { 0: 'p0' };
 console.log('custom proto ' + show(Array.from(Object.setPrototypeOf({ length: 2 }, proto))));
 const getterLength = {
   get length() {
-    Object.prototype[0] = 'from-length-getter';
+    try { Object.prototype[0] = 'from-length-getter'; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
     return 2;
   },
 };

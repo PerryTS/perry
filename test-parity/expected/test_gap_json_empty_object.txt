@@ -1,0 +1,15 @@
+cold {}
+retained 4096 0
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+installed {}
+removed {}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+getter {}
+getter removed {}
+custom "custom-result"
+null prototype {}
+hidden callback "own-result"
+replacer {"changed":true} 2
+spacer {}
+mutated {"answer":42} {}
+calls custom:,own:,

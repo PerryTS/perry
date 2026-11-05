@@ -147,8 +147,10 @@ fn a_define_property_through_top_after_the_call_revokes_the_shadow() {
     assert_eq!(calls("console.log(r.host);"), vec![true, true]);
     assert_eq!(
         calls("Object.defineProperty(r.host, name, { value: 1 });"),
-        vec![false, false]
+        vec![true, true]
     );
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: `createIdentifier` is no key of it.
+
 }
 
 /// A key added after birth is no definite own key: the call still finds
@@ -191,10 +193,13 @@ fn revoked_calls(more: &str, then: &str) -> Vec<String> {
         {then}
         {USE}"
     );
+    // The lock admits constructor writes, so revoking the own shadow
+    // still exposes an arbitrary chain value and exercises the re-check.
+    let src = src.replace("createIdentifier", "constructor");
     let pf = facts(&src);
     pf.sites
         .iter()
-        .filter(|s| s.key == "createIdentifier" && s.is_call)
+        .filter(|s| s.key == "constructor" && s.is_call)
         .map(|s| match &s.verdict {
             Verdict::No(why) => why.to_string(),
             _ => "proven".to_string(),

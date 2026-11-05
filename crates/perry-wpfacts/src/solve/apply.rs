@@ -566,6 +566,17 @@ impl Model {
                         self.add_prim(dst, prim::NUM);
                         continue;
                     }
+                    // The same final-read decision as chain_load: the
+                    // collapsed token also holds stores onto add-open
+                    // prototypes, which this receiver's chain never sees.
+                    if let Key::Named(a) = key {
+                        if matches!(self.toks[q as usize], TokKind::ObjectProto)
+                            && builtins::locked_chain_read(self, of, a)
+                        {
+                            self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
+                            continue;
+                        }
+                    }
                     let f = match key {
                         Key::Named(a) => self.field(q, a),
                         Key::Any => self.all_fields(q),

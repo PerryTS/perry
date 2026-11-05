@@ -76,7 +76,7 @@ Object.assign(lk, { r: 3, s: 4 });
 console.log("13", keys(lk), late, lk.inherited, lk.p, lk.s, Object.prototype.hasOwnProperty.call(lk, "r"));
 // a setter on Function.prototype intercepts a store to any plain function
 let fpHits = 0;
-Object.defineProperty(Function.prototype, "fpSetter", { set(v) { fpHits++; }, configurable: true });
+try { Object.defineProperty(Function.prototype, "fpSetter", { set(v) { fpHits++; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const plain: any = function plain() {};
 plain.fpSetter = 1; plain.other = 2;
 console.log("14", fpHits, Object.prototype.hasOwnProperty.call(plain, "fpSetter"), plain.other);
@@ -137,7 +137,7 @@ cf[ck("hook")] = 2;
 try { (function () { "use strict"; cf[ck("ro")] = 3; })(); console.log("23 no throw"); } catch (e) { console.log("23", (e as Error).constructor.name); }
 cf[ck("second")] = 4;
 console.log("24", cks, keys(cf), cf.ro, Object.prototype.hasOwnProperty.call(cf, "hook"));
-Object.defineProperty(Function.prototype, "fpHook", { set(v) { cks++; }, configurable: true });
+try { Object.defineProperty(Function.prototype, "fpHook", { set(v) { cks++; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const pf: any = function pf() {};
 pf[ck("p1")] = 1;
 pf[ck("fpHook")] = 2;

@@ -432,15 +432,62 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
         return;
     }
     if object_is_marked_prototype(obj) {
-        crate::dyn_eval_hooks::note_proto_write();
-        // #11915: a sealed builtin prototype is always marked, so its
-        // structural mutations (key add, delete, descriptor and attribute
-        // changes, `[[Prototype]]` relinks) all reach this branch.
-        crate::object::builtin_proto::note_write(
-            obj as *const crate::object::ObjectHeader,
-            "shape publication",
-        );
+        note_marked_object_shape_stamped(obj);
     }
+}
+
+/// [`note_object_shape_stamped`]'s first half, run BEFORE the stamp
+/// (`shapes::stamp_object_shape_id_with_carrier_note_impl`): is `obj` a
+/// marked prototype whose word is about to change? A sealed builtin prototype
+/// is always marked, so its structural mutations (key add, delete, descriptor
+/// and attribute changes, `[[Prototype]]` relinks) all reach this report
+/// while its layout is still in place, which is where DEC 250 refuses an
+/// image write (`builtin_proto::note_write`). `added_key` is the key a
+/// key-add stamp appends. The caller publishes the second half after the
+/// stamp when this returns true.
+///
+/// # Safety
+/// `obj` is the receiver the funnel is about to stamp, so its `GcHeader`
+/// precedes it.
+#[inline]
+pub(crate) unsafe fn note_object_shape_stamping(
+    obj: usize,
+    previous: u32,
+    published: u32,
+    added_key: Option<*const crate::StringHeader>,
+) -> bool {
+    if previous == published || !any_prototype_marked() {
+        return false;
+    }
+    if !object_is_marked_prototype(obj) {
+        return false;
+    }
+    use crate::object::builtin_proto::{Key, Mutation};
+    crate::object::builtin_proto::note_write(
+        obj as *const crate::object::ObjectHeader,
+        match added_key {
+            Some(key) => Mutation::Add(Key::Str(key)),
+            None => Mutation::Stamp(published),
+        },
+        "shape stamp",
+    );
+    true
+}
+
+/// [`note_object_shape_stamped`]'s second half for a marked prototype, run
+/// AFTER the stamp: the interpreter hook and the shadow bit (which must
+/// follow the stamp: the publication carries it from the previous word).
+///
+/// # Safety
+/// `obj` is a live object with a `GcHeader`.
+#[inline]
+pub(crate) unsafe fn note_marked_object_shape_stamped(obj: usize) {
+    crate::dyn_eval_hooks::note_proto_write();
+    crate::object::builtin_proto::note_write(
+        obj as *const crate::object::ObjectHeader,
+        crate::object::builtin_proto::Mutation::Publication,
+        "shape publication",
+    );
 }
 
 /// An own-key change that publishes no new layout word: an overflow entry
@@ -456,6 +503,7 @@ pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
         crate::dyn_eval_hooks::note_proto_write();
         crate::object::builtin_proto::note_write(
             obj as *const crate::object::ObjectHeader,
+            crate::object::builtin_proto::Mutation::Publication,
             "overflow key change",
         );
     }

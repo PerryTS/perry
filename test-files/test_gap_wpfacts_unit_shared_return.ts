@@ -8,10 +8,10 @@ function proto(): any {
 var fns: any[] = [proto];
 function install(): void {
   var p = fns[0]();
-  p.toLocaleString = function (this: any): string {
+  try { p.toLocaleString = function (this: any): string {
     this.u = "w";
     return "x";
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 }
 install();
 var tls = Object.prototype.toLocaleString;

@@ -18,7 +18,7 @@ const frozen: number[] = Object.freeze([4, 5, 6]) as number[];
 console.log("frozen", sumTyped(frozen), sumAny(frozen));
 const holes: number[] = [1, , 3];
 console.log("holes", sumTyped(holes), sumAny(holes));
-(Array.prototype as any)[1] = 100;
+try { (Array.prototype as any)[1] = 100; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("holes read through the prototype", sumTyped(holes), sumAny(holes));
 delete (Array.prototype as any)[1];
 const grown: number[] = [];
@@ -32,19 +32,19 @@ const own: number[] = [7, 8];
 console.log("own typed", sumTyped(own), "own erased", sumAny(own));
 const proto: any = Array.prototype;
 const values = proto[Symbol.iterator];
-proto[Symbol.iterator] = function (this: number[]) {
+try { proto[Symbol.iterator] = function (this: number[]) {
   let i = 0;
   return { next: () => (i < this.length ? { value: this[i++] * 10, done: false } : { value: undefined, done: true }) };
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("prototype typed", sumTyped([1, 2]), "prototype erased", sumAny([1, 2]));
-proto[Symbol.iterator] = values;
+try { proto[Symbol.iterator] = values; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const itp: any = Object.getPrototypeOf(values.call([]));
 const next = itp.next;
-itp.next = function (this: any) {
+try { itp.next = function (this: any) {
   const r = next.call(this);
   if (!r.done) r.value = -r.value;
   return r;
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("next typed", sumTyped([1, 2]), "next erased", sumAny([1, 2]));
-itp.next = next;
+try { itp.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("restored", sumTyped([1, 2]), sumAny([1, 2]));

@@ -404,6 +404,31 @@ fn chain_tokens(m: &Model, tm: TmplId) -> Vec<Tok> {
     out
 }
 
+/// DEC 250 (Q2): every object of template `tm` has a chain on which the
+/// collapsed `ObjectProto` token is `%Object.prototype%` and nothing else:
+/// a class (a literal shape or a declared class) whose prototypes are
+/// program class prototypes with no native parent and no `extends`
+/// expression, ending at the static seed. A literal (`__proto__` member),
+/// `Object.create(p)`, `new f()` (`f.prototype`) or a [[Prototype]] write
+/// (`super_relink`) can give the token any builtin prototype, add-open ones
+/// (`Map.prototype`, `Array.prototype` under a name) included.
+fn plain_chain(m: &Model, tm: TmplId) -> bool {
+    if !matches!(m.tmpls[tm as usize].kind, TmplKind::Class { .. }) {
+        return false;
+    }
+    if m.tmpl_toks(tm).iter().any(|t| m.super_relink.contains(t)) {
+        return false;
+    }
+    chain_tokens(m, tm).iter().all(|&p| match &m.toks[p as usize] {
+        TokKind::ObjectProto => true,
+        TokKind::Proto(c) => {
+            let c = &m.tmpls[*c as usize];
+            c.native_parent.is_none() && c.parent_value.is_none()
+        }
+        _ => false,
+    })
+}
+
 /// RPG1b: per key of template `tm` (`keys`, birth keys first): is it a
 /// declared key every add of which runs before any later key can be
 /// present? A declared key is born absent (its birth store writes the hole)
@@ -629,7 +654,20 @@ fn template_facts(
         } => false,
         _ => !tpl.birth_keys.is_empty(),
     };
-    let chain_miss = tpl.chain_miss || set_born;
+    // DEC 250 (Q2): where the chain's collapsed prototype token is
+    // `Object.prototype` only, an accessor under any key there stands under
+    // `constructor` (the one key a program may define on it): only an open
+    // miss, or a [[Set]]-born `constructor`, reaches it.
+    let chain_miss = if plain_chain(m, tm) {
+        tpl.chain_miss_open
+            || set_born
+                && tpl
+                    .birth_keys
+                    .iter()
+                    .any(|&k| !crate::builtins::object_final_read(&m.atoms[k as usize]))
+    } else {
+        tpl.chain_miss || set_born
+    };
     let objproto_tok = m.tok_index.get(&TokKind::ObjectProto).copied();
     let mut accessor_keys: Vec<Atom> = tpl.accessor_keys.clone();
     for t in &ts {
@@ -1644,7 +1682,7 @@ fn native_member(
             return Err(None);
         }
     }
-    builtin_protos_unwritten(m, a).map_err(Some)?;
+    builtin_protos_unwritten(m, Some(fam), a).map_err(Some)?;
     receivers.sort();
     receivers.dedup();
     Ok(receivers)
@@ -1686,7 +1724,11 @@ fn host_member(
 /// under key `a` or under any key, so the intrinsics' descriptions
 /// (`members`) decide what their chains read under `a`. `Err`: the write
 /// that may change it.
-fn builtin_protos_unwritten(m: &Model, a: Atom) -> Result<(), String> {
+fn builtin_protos_unwritten(
+    m: &Model,
+    fam: Option<crate::builtins::NativeFamily>,
+    a: Atom,
+) -> Result<(), String> {
     let objproto = m.tok_index.get(&TokKind::ObjectProto).copied();
     if m.objproto_accessor
         || m.reshaped_any
@@ -1697,7 +1739,10 @@ fn builtin_protos_unwritten(m: &Model, a: Atom) -> Result<(), String> {
             "native member: a builtin prototype may be redefined (accessor, defineProperty)".into(),
         );
     }
+    // DEC 250: a final read (the runtime refuses every write that would
+    // change it) is written by no store, the program's or one through ⊤.
     let (through_top, own) = match objproto {
+        _ if fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a)) => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),
         None => (crate::builtins::native_written(m, TOP, a), false),
     };
@@ -1769,7 +1814,7 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
             todo.push(p);
         }
     }
-    ends && crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, a).is_ok()
+    ends && crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()
 }
 
 /// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`

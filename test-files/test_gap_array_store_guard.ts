@@ -152,18 +152,18 @@ function show(xs: any[]): string {
 //    append), never an overwrite of an existing element.
 {
   let log = "";
-  Object.defineProperty(Array.prototype, "1", {
+  try { Object.defineProperty(Array.prototype, "1", {
     set(v) {
       log += "proto1=" + v + ";";
     },
     configurable: true,
-  });
-  Object.defineProperty(Array.prototype, "3", {
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+  try { Object.defineProperty(Array.prototype, "3", {
     set(v) {
       log += "proto3=" + v + ";";
     },
     configurable: true,
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const a: any[] = [1, , 3];
   put(a, 1, "x");
   const b: any[] = [1, 2, 3];

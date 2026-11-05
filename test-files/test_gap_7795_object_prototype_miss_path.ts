@@ -8,7 +8,8 @@
 // builtin `Object.prototype` members still read as functions, absent keys still
 // read `undefined`, and a USER-installed `Object.prototype` property must still
 // be visible on plain objects (including making them genuinely thenable).
-
+// DEC 250: Object.prototype refuses program adds, so the user-installed half
+// now expects the refused add, and the reads after it see no member.
 const o: any = { a: 1 };
 
 // Builtin Object.prototype members must still resolve through the miss path.
@@ -26,22 +27,15 @@ console.log("call-hasOwn", o.hasOwnProperty("a"));
 console.log("absent", o.then, o.nope, o.zzz);
 
 // A user-installed Object.prototype property must be visible on plain objects.
-(Object.prototype as any).marker = 42;
+try { (Object.prototype as any).marker = 42; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("proto-marker", o.marker);
 const fresh: any = {};
 console.log("proto-marker-fresh", fresh.marker);
-delete (Object.prototype as any).marker;
 console.log("proto-marker-deleted", o.marker, fresh.marker);
 
 // An accessor installed on Object.prototype must still run.
-Object.defineProperty(Object.prototype, "acc", {
-  get() {
-    return 99;
-  },
-  configurable: true,
-});
+try { Object.defineProperty(Object.prototype, "acc", { get() { return 99; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("proto-accessor", ({} as any).acc);
-delete (Object.prototype as any).acc;
 console.log("proto-accessor-gone", ({} as any).acc);
 
 // The await path this optimises: a plain object is NOT thenable...
@@ -53,13 +47,10 @@ plain().then((r: { v: number }) => {
 
   // ...but installing `then` on Object.prototype DOES make plain objects
   // thenable, which the miss path must still observe.
-  (Object.prototype as any).then = function (res: (x: number) => void) {
-    res(123);
-  };
+  try { (Object.prototype as any).then = function (res: (x: number) => void) { res(123); }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   Promise.resolve()
     .then(() => ({ plainObj: true }) as any)
     .then((v: any) => {
       console.log("proto-then-assimilated", v);
-      delete (Object.prototype as any).then;
     });
 });

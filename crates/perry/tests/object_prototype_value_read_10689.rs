@@ -219,9 +219,12 @@ console.log("call-method:", c.m());
     }
 }
 
-/// A user-added `Object.prototype` member is inherited by a plain object. The
-/// folded read could not see it at all, which is the form the report warned
-/// about: a library feature-detects and silently takes the other branch.
+/// A program-written `Object.prototype` member is inherited by a plain object.
+/// The folded read could not see it at all, which is the form the report
+/// warned about: a library feature-detects and silently takes the other
+/// branch. DEC 250 (Q2): a program adds no key to `Object.prototype`, so the
+/// write is the one image member it may replace, `constructor`, with a value
+/// no image member has; the add itself is refused.
 #[test]
 fn user_added_object_prototype_member_is_inherited() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -229,13 +232,16 @@ fn user_added_object_prototype_member_is_inherited() {
         dir.path(),
         "main.js",
         r#"
-Object.prototype.perryInherited = 7;
+let refused = false;
+try { Object.prototype.perryInherited = 7; } catch (e) { refused = e instanceof TypeError; }
+Object.prototype.constructor = 7;
 const o = { a: 1 };
-console.log("inherited-value:", o.perryInherited);
+console.log("inherited-value:", o.constructor);
 console.log("own-value:", o.a);
+console.log("add-refused:", refused, o.perryInherited);
 "#,
     );
-    for expected in ["inherited-value: 7", "own-value: 1"] {
+    for expected in ["inherited-value: 7", "own-value: 1", "add-refused: true undefined"] {
         assert!(
             stdout.contains(expected),
             "missing {expected:?}\nstdout:\n{stdout}"

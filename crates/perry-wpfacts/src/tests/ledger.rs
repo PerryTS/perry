@@ -292,7 +292,7 @@ cause_test!(
     "intrinsic-prototype-top-store",
     "property",
     "q",
-    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = [1].map; console.log(m.q);"#
+    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = ([1] as any).zz; console.log(m.q);"#
 );
 /// A read on a ⊤ receiver names the receiver's own root, even when a key
 /// written onto a builtin prototype through ⊤ is also a member the primitive

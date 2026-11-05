@@ -24,12 +24,12 @@ console.log("own", scan(own), typedScan(own));
 const inherited: any = [1,2,3];
 Object.setPrototypeOf(inherited, { [Symbol.iterator]: own[Symbol.iterator] });
 console.log("inherited", scan(inherited), typedScan(inherited));
-Array.prototype[Symbol.iterator] = own[Symbol.iterator];
+try { Array.prototype[Symbol.iterator] = own[Symbol.iterator]; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("prototype", scan([1,2,3]), typedScan([1,2,3]));
-Array.prototype[Symbol.iterator] = values;
-aip.next = function() { const r = next.call(this); if (!r.done) r.value += 100; return r; };
+try { Array.prototype[Symbol.iterator] = values; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { aip.next = function() { const r = next.call(this); if (!r.done) r.value += 100; return r; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("next", scan([1,2,3]), typedScan([1,2,3]));
-aip.next = next;
+try { aip.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const kind of ["push", "pop", "zero", "splice"]) {
   const a: any = [1,2,3,4];
   const out: any[] = [];
@@ -47,11 +47,11 @@ for (const kind of ["push", "pop", "zero", "splice"]) {
 const out: any[] = [];
 for (const v of [1,2,3]) {
   out.push(v);
-  aip.next = function() { return {done: true}; };
+  try { aip.next = function() { return {done: true}; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 }
 console.log("captured-next", out.join(","));
-aip.next = next;
-(Array.prototype as any)[1] = 42;
+try { aip.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { (Array.prototype as any)[1] = 42; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const holeResult = scan([1,,3]);
 delete (Array.prototype as any)[1];
 console.log("prototype-hole", holeResult);
@@ -69,7 +69,7 @@ Object.defineProperty(elision, "0", {get() { getterReads++; return 1; }, configu
 const [, e] = elision;
 console.log("elision", e, getterReads);
 let inheritedGetterReads = 0;
-Object.defineProperty(Array.prototype, "0", {get() { inheritedGetterReads++; return 90; }, configurable: true});
+try { Object.defineProperty(Array.prototype, "0", {get() { inheritedGetterReads++; return 90; }, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const [, inheritedElision] = [,2];
 delete (Array.prototype as any)[0];
 console.log("elision-inherited-get", inheritedElision, inheritedGetterReads);
@@ -87,7 +87,7 @@ leave();
 const [first] = custom();
 console.log("close-custom", closes, first);
 let builtinCloses = 0;
-aip.return = function() { builtinCloses++; console.log("close-cursor", next.call(this).value); return {done:true}; };
+try { aip.return = function() { builtinCloses++; console.log("close-cursor", next.call(this).value); return {done:true}; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const v of [1,2,3]) break;
 try { for (const v of [4,5,6]) throw 1; } catch {}
 function builtinLeave(): any { for (const v of [7,8,9]) return v; }
@@ -101,11 +101,11 @@ for (let i=0;i<100;i++) grow.push(i);
 grow[Symbol.iterator] = own[Symbol.iterator];
 console.log("growth-alias", scan(alias), typedScan(alias));
 let nextGets = 0;
-Object.defineProperty(aip, "next", {get() { nextGets++; return next; }, configurable: true});
+try { Object.defineProperty(aip, "next", {get() { nextGets++; return next; }, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("next-accessor", scan([1,2,3]), nextGets);
-delete aip.next;
-aip.next = next;
+try { delete aip.next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { aip.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 let protoGets = 0;
-Object.defineProperty(Array.prototype, Symbol.iterator, {get() { protoGets++; return own[Symbol.iterator]; }, configurable: true});
+try { Object.defineProperty(Array.prototype, Symbol.iterator, {get() { protoGets++; return own[Symbol.iterator]; }, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("prototype-accessor", scan([1,2,3]), protoGets);
-Object.defineProperty(Array.prototype, Symbol.iterator, {value: values, writable: true, configurable: true});
+try { Object.defineProperty(Array.prototype, Symbol.iterator, {value: values, writable: true, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }

@@ -1,7 +1,7 @@
 // Typed RegExp operations must observe ordinary method/property semantics.
 function row(name: string, action: () => any) {
   try { console.log(name + ": " + JSON.stringify(action())); }
-  catch (e: any) { console.log(name + ": throw " + e.constructor.name); }
+  catch (e: any) { console.log(name + ": throw " + e.constructor.name + (/read-only/.test(e.message) ? " DEC 250: " + e.message : "")); }
 }
 row("test_typed_own", () => { const r: RegExp = /a/; (r as any).test = () => "own"; return r.test("a"); });
 row("exec_typed_own", () => { const r: RegExp = /a/; (r as any).exec = () => ["own"]; return r.exec("a"); });

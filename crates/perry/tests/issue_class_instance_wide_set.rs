@@ -60,11 +60,13 @@ fn compile_and_run(src: &str) -> String {
 #[test]
 fn class_instance_wide_set_is_fast_and_intercepts() {
     // An `Object.prototype` accessor is present (the worst case that forces the
-    // interception check on every write). The wide build of 20_000 fresh keys
+    // interception check on every write). DEC 250 (Q2): the program adds no key
+    // there, so the accessor is the image's `constructor` redefined (the one
+    // member a program may change on a built-in prototype). The wide build of 20_000 fresh keys
     // must still complete and read back correctly. The base-class `set baz`
     // must intercept (no own `baz` data property created on the instance).
     let src = r#"
-Object.defineProperty(Object.prototype, "__x__", { get(){ return 1; }, configurable: true });
+Object.defineProperty(Object.prototype, "constructor", { get(){ return Object; }, configurable: true });
 
 class Base { _b: any; set baz(v: any) { this._b = "base:" + v; } }
 class C extends Base { [k: string]: any; }

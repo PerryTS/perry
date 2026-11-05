@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function* makeGen() { yield 1; yield 2; yield 3; }
 function fresh(kind: string): any {
   if (kind === "array") return [1,2,3].values();
@@ -37,14 +38,14 @@ for (const kind of ["typed","array","map","set","string","segments"]) {
       const before = Object.getOwnPropertyDescriptor(target,name);
       const next = it.next;
       let gets=0,calls=0;
-      Object.defineProperty(target,name,{configurable:true,get() {
+      locked(() => { Object.defineProperty(target,name,{configurable:true,get() {
         gets++;
         return function() { calls++; return name === "next" ? next.call(this) : {done:true}; };
-      }});
+      }}); });
       let text="";
       for (const x of it) { text+=show(x); break; }
       console.log(kind,level,name,"accessor",gets,calls,text);
-      if (before) Object.defineProperty(target,name,before); else delete target[name];
+      if (before) locked(() => { Object.defineProperty(target,name,before); }); else delete target[name];
     }
     const it: any = fresh(kind);
     let target = it;
@@ -52,7 +53,7 @@ for (const kind of ["typed","array","map","set","string","segments"]) {
     const before = Object.getOwnPropertyDescriptor(target,"return");
     let closes=0;
     for (const x of it) {
-      target.return=function(){closes++;return {done:true};};
+      locked(() => { target.return=function(){closes++;return {done:true};}; });
       break;
     }
     console.log(kind,level,"return-mid-loop",closes);
@@ -101,7 +102,7 @@ function closeDirect(kind:string) {
  const family=Object.getPrototypeOf(probe);
  const before=Object.getOwnPropertyDescriptor(family,"return");
  let closes=0;
- family.return=function(){closes++;return {done:true};};
+ locked(() => { family.return=function(){closes++;return {done:true};}; });
  for(const x of iterable)break;
  console.log(kind,"direct-close",closes);
  if(before)Object.defineProperty(family,"return",before);else delete family.return;
@@ -114,21 +115,21 @@ const rename:any=[1,2].values();
 const renameFamily=Object.getPrototypeOf(rename);
 const nextDesc=Object.getOwnPropertyDescriptor(renameFamily,"next")!;
 const tagDesc=Object.getOwnPropertyDescriptor(renameFamily,Symbol.toStringTag)!;
-delete renameFamily.next;
-renameFamily.return=nextDesc.value;
+locked(() => { delete renameFamily.next; });
+locked(() => { renameFamily.return=nextDesc.value; });
 let renameError="";
 try { for(const x of rename)console.log("unreachable",x); }
 catch(e:any){renameError=e.name;}
 console.log("renamed-next",renameError);
 delete renameFamily.return;
-Object.defineProperty(renameFamily,"next",nextDesc);
-delete renameFamily[Symbol.toStringTag];
+locked(() => { Object.defineProperty(renameFamily,"next",nextDesc); });
+locked(() => { delete renameFamily[Symbol.toStringTag]; });
 let renamedCloses=0;
-renameFamily.return=function(){renamedCloses++;return {done:true};};
+locked(() => { renameFamily.return=function(){renamedCloses++;return {done:true};}; });
 for(const x of [1,2].values())break;
 console.log("replaced-tag-with-return",renamedCloses);
 delete renameFamily.return;
-Object.defineProperty(renameFamily,Symbol.toStringTag,tagDesc);
+locked(() => { Object.defineProperty(renameFamily,Symbol.toStringTag,tagDesc); });
 
 for(const bad of [undefined,null,17,{}]){
  const it:any={[Symbol.iterator](){return this;},next:bad,return(){console.log("unexpected-close");return {done:true};}};

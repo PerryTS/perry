@@ -385,7 +385,7 @@ impl Model {
             return;
         };
         let tpl = &self.tmpls[tm as usize];
-        if tpl.chain_miss || !tpl.kind.is_fact_unit() {
+        if tpl.chain_miss_open || !tpl.kind.is_fact_unit() {
             return;
         }
         if let Key::Named(a) = key {
@@ -403,7 +403,13 @@ impl Model {
                 p = self.tmpls[c as usize].parent;
             }
         }
-        self.tmpls[tm as usize].chain_miss = true;
+        let open = match key {
+            Key::Named(a) => !crate::builtins::object_final_read(&self.atoms[a as usize]),
+            Key::Any => true,
+        };
+        let tpl = &mut self.tmpls[tm as usize];
+        tpl.chain_miss = true;
+        tpl.chain_miss_open |= open;
     }
 
     /// DECISIONS 242 (contract half): a defineProperty on marker `t`
@@ -426,7 +432,10 @@ impl Model {
                 kept.push((a, dst));
             } else {
                 self.add_prim(dst, prim::UNDEF);
-                self.tmpls[tm as usize].chain_miss = true;
+                let open = !crate::builtins::object_final_read(&self.atoms[a as usize]);
+                let tpl = &mut self.tmpls[tm as usize];
+                tpl.chain_miss = true;
+                tpl.chain_miss_open |= open;
             }
         }
         if !kept.is_empty() {

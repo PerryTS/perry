@@ -1,0 +1,28 @@
+true function call
+["string",6]
+true ["string",7]
+function true false
+identity Function true true true
+identity Object true true true
+identity Array true true true
+identity user true true true
+borrowed 21 22 23
+uncurry 24
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+patched false
+DEC 250: Cannot redefine built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot redefine built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+getter-receiver false
+own true
+restored true
+reflect true true true
+proxy true 125
+DEC 250: Cannot redefine built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot redefine built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+undefined-getter false 0
+own-undefined true
+proxy-apply true 126
+proxy-null-args 20
+class-methods true true true
+class-call-rejected true

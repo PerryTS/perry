@@ -1,0 +1,92 @@
+pristine typed 3
+pristine erased 3
+pristine destructure 1/2
+pristine literal 5;6;
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+store @@iterator typed 3
+store @@iterator erased 3
+store @@iterator destructure 1/2
+store @@iterator literal 5;6;
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+restored @@iterator typed 3
+restored @@iterator erased 3
+restored @@iterator destructure 1/2
+restored @@iterator literal 5;6;
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+accessor @@iterator typed 3
+accessor @@iterator erased 3
+accessor @@iterator destructure 1/2
+accessor @@iterator literal 5;6;
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+redefined @@iterator typed 3
+redefined @@iterator erased 3
+redefined @@iterator destructure 1/2
+redefined @@iterator literal 5;6;
+DEC 250: Cannot delete built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+deleted @@iterator typed 3
+deleted @@iterator erased 3
+deleted @@iterator destructure 1/2
+deleted @@iterator literal 5;6;
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+re-added @@iterator typed 3
+re-added @@iterator erased 3
+re-added @@iterator destructure 1/2
+re-added @@iterator literal 5;6;
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+Array.prototype proto null typed 3
+Array.prototype proto null erased 3
+Array.prototype proto null destructure 1/2
+Array.prototype proto null literal 5;6;
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+Array.prototype proto restored typed 3
+Array.prototype proto restored erased 3
+Array.prototype proto restored destructure 1/2
+Array.prototype proto restored literal 5;6;
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+store next typed 3
+store next erased 3
+store next destructure 1/2
+store next literal 5;6;
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+restored next typed 3
+restored next erased 3
+restored next destructure 1/2
+restored next literal 5;6;
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+accessor next typed 3
+accessor next erased 3
+accessor next destructure 1/2
+accessor next literal 5;6;
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+redefined next typed 3
+redefined next erased 3
+redefined next destructure 1/2
+redefined next literal 5;6;
+DEC 250: Cannot delete built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+deleted next typed 3
+deleted next erased 3
+deleted next destructure 1/2
+deleted next literal 5;6;
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+re-added next typed 3
+re-added next erased 3
+re-added next destructure 1/2
+re-added next literal 5;6;
+DEC 250: Cannot change the prototype of built-in %ArrayIteratorPrototype%: built-in objects are read-only in a compiled program
+aip proto null typed 3
+aip proto null erased 3
+aip proto null destructure 1/2
+aip proto null literal 5;6;
+DEC 250: Cannot change the prototype of built-in %ArrayIteratorPrototype%: built-in objects are read-only in a compiled program
+aip proto restored typed 3
+aip proto restored erased 3
+aip proto restored destructure 1/2
+aip proto restored literal 5;6;
+unrelated Array.prototype key typed 3
+unrelated Array.prototype key erased 3
+unrelated Array.prototype key destructure 1/2
+unrelated Array.prototype key literal 5;6;
+unrelated key removed typed 3
+unrelated key removed erased 3
+unrelated key removed destructure 1/2
+unrelated key removed literal 5;6;

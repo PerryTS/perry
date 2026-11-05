@@ -1,0 +1,34 @@
+raw  4,6,3,-3,4,3,false,3,false | 11.5,21,11,-10.5,11.5,10.5,true,10,false | -6,-14,-6,7,-6,-7,false,-7,false | 1,0,0,0,1,0,false,0,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | 1e+300,2e+300,0,-1e+300,1e+300,1e+300,true,1e+300,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false
+boxed 4,6,3,-3,4,3,false,3,false | 11.5,21,11,-10.5,11.5,10.5,true,10,false | -6,-14,-6,7,-6,-7,false,-7,false | 1,0,0,0,1,0,false,0,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | 1e+300,2e+300,0,-1e+300,1e+300,1e+300,true,1e+300,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false
+hole raw 2,2,1,-1,2,1,false,1,false | 3,4,2,-2,3,2,false,2,false | 4,6,3,-3,4,3,false,3,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | 10,18,9,-9,10,9,true,9,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false
+hole boxed 2,2,1,-1,2,1,false,1,false | 3,4,2,-2,3,2,false,2,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | 10,18,9,-9,10,9,true,9,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+proto hole raw 2,2,1,-1,2,1,false,1,false | 3,4,2,-2,3,2,false,2,false | 4,6,3,-3,4,3,false,3,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | 10,18,9,-9,10,9,true,9,false
+proto hole boxed 2,2,1,-1,2,1,false,1,false | 3,4,2,-2,3,2,false,2,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false | 10,18,9,-9,10,9,true,9,false
+poison raw string 71,14,70,-7,07,true,7,false,3
+poison raw string x1,NaN,0,NaN,0x,false,NaN,false,3
+poison raw undefined NaN,NaN,0,NaN,NaN,false,NaN,false,3
+poison raw object 1,0,0,0,0,false,0,false,3
+poison raw boolean 2,2,1,-1,1,false,1,false,3
+poison raw object 42,82,41,-41,41,true,41,false,3
+poison raw object 51,10,50,-5,05,false,5,false,3
+poison raw bigint throw TypeError
+poison raw number 2147483648,4294967294,2147483647,-2147483647,2147483647,true,2147483647,false,3
+poison boxed string 71,14,70,-7,07,true,7,false,3
+poison boxed string x1,NaN,0,NaN,0x,false,NaN,false,3
+poison boxed undefined NaN,NaN,0,NaN,NaN,false,NaN,false,3
+poison boxed object 1,0,0,0,0,false,0,false,3
+poison boxed boolean 2,2,1,-1,1,false,1,false,3
+poison boxed object 42,82,41,-41,41,true,41,false,3
+poison boxed object 51,10,50,-5,05,false,5,false,3
+poison boxed bigint throw TypeError
+poison boxed number 2147483648,4294967294,2147483647,-2147483647,2147483647,true,2147483647,false,3
+getter raw 22 23 46 3 2 4
+getter boxed 22 23 46 3 2 4
+arraylike 6,10,5,-5,6,5,false,5,false | 61,12,60,-6,61,06,true,6,false | 8,14,7,-7,8,7,true,7,true | NaN,NaN,0,NaN,NaN,NaN,false,NaN,false
+proxy 1.25,0.5,0,-0.25,1.25,0.25,false,0,false | 11.25,20.5,10,-10.25,11.25,10.25,true,10,false | 21.25,40.5,20,-20.25,21.25,20.25,true,20,false | 31.25,60.5,30,-30.25,31.25,30.25,true,30,false
+int32 1,0,0,0,1,0,false,0,false | 1000004,2000006,1000003,-1000003,1000004,1000003,true,1000003,false | 2000007,4000012,2000006,-2000006,2000007,2000006,true,2000006,false | 3000010,6000018,3000009,-3000009,3000010,3000009,true,3000009,false | 4000013,8000024,4000012,-4000012,4000013,4000012,true,4000012,false | 4294967296,8589934590,-1,-4294967295,4294967296,4294967295,true,4294967295,false
+before 3 4
+after 91 18 2
+obj 5 8 4
+push 9 [1,{},3,8]

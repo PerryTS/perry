@@ -40,9 +40,9 @@ function dump(label: string, o: any) {
 
 // 1. plain literal, then a mutated Object.prototype (generation != 0).
 dump("plain", { alpha: 1 });
-(Object.prototype as any).gamma = "fromObjProto";
+try { (Object.prototype as any).gamma = "fromObjProto"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 dump("plain+objproto", { alpha: 2 });
-Object.defineProperty(Object.prototype, "beta", { value: "hidden", enumerable: false, configurable: true, writable: true });
+try { Object.defineProperty(Object.prototype, "beta", { value: "hidden", enumerable: false, configurable: true, writable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 dump("plain+objproto2", { alpha: 3 });
 delete (Object.prototype as any).gamma;
 delete (Object.prototype as any).beta;

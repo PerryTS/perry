@@ -188,24 +188,25 @@ fn a_numeric_key_names_no_object_prototype_method() {
 /// `tests/proto_value.rs`.
 #[test]
 fn a_store_through_a_literals_prototype_reaches_every_object() {
-    let sees_e = |get: &str| {
+    let sees_e = |get: &str, key: &str| {
         let pf = facts(&format!(
             "class E {{ z = 3; }}
             const k = String(Math.random());
             const o: any = {{ a: 1 }};
             const p: any = {get};
-            p.y = new E();
+            try {{ p.{key} = new E(); }} catch (e) {{}}
             const q: any = {{}};
-            const r = q.y;
+            const r = q.{key};
             if (r) console.log(r.z);"
         ));
         let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
         assert_eq!(s.len(), 1, "{}", pf.dump_text());
         s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E"))
     };
-    // Seen: the store names `Object.prototype` itself.
-    assert!(sees_e("Object.prototype"));
+    // DEC 250 refuses a new y; constructor is exempt and keeps the prototype-value mechanism live.
+    assert!(!sees_e("Object.prototype", "y"));
+    assert!(sees_e("Object.prototype", "constructor"));
     for get in ["o.__proto__", "o['__proto__']", "Object.getPrototypeOf(o)"] {
-        assert!(sees_e(get), "{get}");
+        assert!(sees_e(get, "constructor"), "{get}");
     }
 }

@@ -13,15 +13,15 @@ use super::*;
 
 /// The facts see what `p.y = new E()` stored, at `q.y` of a fresh literal:
 /// the read site `r.z` has `E` as a receiver (or ⊤).
-fn sees_e_on_literals(get: &str) -> bool {
+fn sees_e_on_literals(get: &str, key: &str) -> bool {
     let pf = facts(&format!(
         "class E {{ z = 3; }}
         const k = String(Math.random());
         const o: any = {{ a: 1 }};
         const p: any = {get};
-        p.y = new E();
+        try {{ p.{key} = new E(); }} catch (e) {{}}
         const q: any = {{}};
-        const r = q.y;
+        const r = q.{key};
         if (r) console.log(r.z);"
     ));
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
@@ -31,7 +31,9 @@ fn sees_e_on_literals(get: &str) -> bool {
 
 #[test]
 fn a_literals_prototype_as_a_value_is_object_prototype() {
-    assert!(sees_e_on_literals("Object.prototype"));
+    // DEC 250 refuses adding y; the exempt constructor store still identifies the prototype.
+    assert!(!sees_e_on_literals("Object.prototype", "y"));
+    assert!(sees_e_on_literals("Object.prototype", "constructor"));
     for get in [
         "o.__proto__",
         "o['__proto__']",
@@ -41,7 +43,7 @@ fn a_literals_prototype_as_a_value_is_object_prototype() {
         // An array's prototype's prototype.
         "Object.getPrototypeOf(Object.getPrototypeOf([1]))",
     ] {
-        assert!(sees_e_on_literals(get), "{get}");
+        assert!(sees_e_on_literals(get, "constructor"), "{get}");
     }
 }
 
@@ -69,7 +71,7 @@ fn a_computed_key_is_never_proto() {
     // DECISIONS 217 (owner): an unknown string key does not reach the
     // prototype, so no store through it is seen on other objects.
     for get in ["o[k]", "Reflect.get(o, k)"] {
-        assert!(!sees_e_on_literals(get), "{get}");
+        assert!(!sees_e_on_literals(get, "constructor"), "{get}");
     }
 }
 
@@ -256,15 +258,16 @@ export function getProto(o: any) { return Object.getPrototypeOf(o); }
 
 #[test]
 fn a_parameters_prototype_is_its_arguments_in_every_unit() {
+    // DEC 250: use the mutable constructor key so the store through the returned prototype can land.
     for get in ["protoOf(o)", "getProto(o)"] {
         let m = format!(
             "import {{ protoOf, getProto }} from './a';
             class E {{ z = 3; }}
             const o: any = {{ a: 1 }};
             const p: any = {get};
-            p.y = new E();
+            p.constructor = new E();
             const q: any = {{}};
-            const r = q.y;
+            const r = q.constructor;
             if (r) console.log(r.z);"
         );
         let mods = [("a", PROTO_OF_PARAM), ("m", m.as_str())];
@@ -318,7 +321,9 @@ fn a_hard_object_prototype_is_hard_in_every_unit() {
     // `Object.defineProperties` on Object.prototype in one unit makes every
     // chain through it HARD (E5), in the other units too, as the whole
     // program derives it (`SharedWrite::Hard`; main: per unit stronger).
-    // The prototype may come as a value (DECISIONS 217).
+    // The prototype may come as a value (DECISIONS 217). Under DEC 250 (Q2)
+    // the accessor lands only under `constructor`: a computed read of `c`
+    // (which may be that key) meets it, its own field `x` alone would not.
     for proto in ["Object.prototype", "Object.getPrototypeOf(o)"] {
         let a = format!(
             "const o: any = {{ a: 1 }};
@@ -331,7 +336,7 @@ fn a_hard_object_prototype_is_hard_in_every_unit() {
             class C { x = 1; }
             const c = new C();
             install(String(Math.random()));
-            console.log(c.x);";
+            console.log(c.x, (c as any)[String(Math.random())]);";
         let (u, _) = super::unit_alias::assert_not_stronger(&[("a", a.as_str()), ("m", m)]);
         let c = u
             .templates

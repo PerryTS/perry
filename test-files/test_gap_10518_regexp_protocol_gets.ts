@@ -57,12 +57,18 @@ try {
 }
 
 // --- Each observable override is still observed.
-const proto = RegExp.prototype as any;
+// DEC 250 locks RegExp and RegExp.prototype: the receivers below adopt UR's
+// prototype (a user class below RegExp), and the writes go to UR.prototype and
+// UR. UR's inherited species getter answers UR, so split's splitter is a UR too
+// and sees the same writes.
+class UR extends RegExp {}
+const proto = UR.prototype as any;
+const rx = (r: RegExp): any => Object.setPrototypeOf(r, proto);
 const log: string[] = [];
 
 // A patched flag getter is seen by `flags`, replace, match and split.
 {
-  const d = Object.getOwnPropertyDescriptor(proto, "global")!;
+  const d = Object.getOwnPropertyDescriptor(RegExp.prototype, "global")!;
   Object.defineProperty(proto, "global", {
     get() {
       log.push("global");
@@ -71,7 +77,7 @@ const log: string[] = [];
     configurable: true,
   });
   log.length = 0;
-  const re: any = /\+/g;
+  const re: any = rx(/\+/g);
   const f = re.flags;
   const r = s.replace(re, " ");
   const m = s.match(re);
@@ -87,7 +93,7 @@ const log: string[] = [];
 // splitter. (replace/match read `flags` too per spec, but V8 reads the flag
 // getters there instead, so they are not compared against it here.)
 {
-  const d = Object.getOwnPropertyDescriptor(proto, "flags")!;
+  const d = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags")!;
   Object.defineProperty(proto, "flags", {
     get() {
       log.push("flags");
@@ -96,7 +102,7 @@ const log: string[] = [];
     configurable: true,
   });
   log.length = 0;
-  console.log("patched flags:", show("aXbxc".split(/x/)), log.length);
+  console.log("patched flags:", show("aXbxc".split(rx(/x/))), log.length);
   Object.defineProperty(proto, "flags", d);
   log.length = 0;
   console.log("restored flags:", show("aXbxc".split(/x/)), log.length);
@@ -120,7 +126,7 @@ for (const [name, sym] of [
   proto[sym] = function (this: RegExp, str: string) {
     return `${name}(${this.source},${str})`;
   };
-  const re = /\+/g;
+  const re = rx(/\+/g);
   const out =
     name === "replace" ? s.replace(re, "x") : name === "match" ? s.match(re) : s.split(re);
   proto[sym] = saved;
@@ -164,14 +170,14 @@ class SplitR extends RegExp {
     calls++;
     return saved.call(this, str);
   };
-  console.log("proto exec:", s.replace(/\+/g, " "), show(s.match(/\+/g)), show(s.split(/\+/)), calls > 0);
+  console.log("proto exec:", s.replace(rx(/\+/g), " "), show(s.match(rx(/\+/g))), show(s.split(rx(/\+/))), calls > 0);
   proto.exec = saved;
 }
 
 // `RegExp.prototype.constructor` and `RegExp[Symbol.species]` feed split.
 {
   const d = Object.getOwnPropertyDescriptor(RegExp, Symbol.species)!;
-  Object.defineProperty(RegExp, Symbol.species, {
+  Object.defineProperty(UR, Symbol.species, {
     get() {
       log.push("species");
       return d.get!.call(this);
@@ -179,8 +185,8 @@ class SplitR extends RegExp {
     configurable: true,
   });
   log.length = 0;
-  console.log("patched species:", show(s.split(/\+/)), show(log));
-  Object.defineProperty(RegExp, Symbol.species, d);
+  console.log("patched species:", show(s.split(rx(/\+/))), show(log));
+  delete (UR as any)[Symbol.species];
 
   const savedCtor = proto.constructor;
   const Fake: any = function () {};
@@ -190,10 +196,10 @@ class SplitR extends RegExp {
   };
   proto.constructor = Fake;
   log.length = 0;
-  console.log("patched constructor:", show(s.split(/\+/)), show(log));
+  console.log("patched constructor:", show(s.split(rx(/\+/))), show(log));
   proto.constructor = savedCtor;
   log.length = 0;
-  console.log("restored:", show(s.split(/\+/)), show(log));
+  console.log("restored:", show(s.split(rx(/\+/))), show(log));
 }
 
 // A `limit` whose valueOf changes the prototype mid-call.
@@ -209,7 +215,7 @@ class SplitR extends RegExp {
       return 10;
     },
   };
-  console.log("limit valueOf:", show(s.split(/\+/, limit as any)), calls > 0);
+  console.log("limit valueOf:", show(s.split(rx(/\+/), limit as any)), calls > 0);
   proto.exec = saved;
 }
 

@@ -5,7 +5,7 @@ Object.setPrototypeOf(C.prototype, B.prototype);
 console.log("relinked", new C().w());
 class Data { w(v) { return super.x = v; } }
 const d = new Data(); console.log("data", d.w(4), d.x, Object.hasOwn(d, "x"));
-Object.defineProperty(Object.getPrototypeOf(Data.prototype), "locked", {value: 1, writable: false, configurable: true});
+try { Object.defineProperty(Object.getPrototypeOf(Data.prototype), "locked", {value: 1, writable: false, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 class Locked { w() { super.locked = 3; } }
 try { new Locked().w(); } catch(e) { console.log("readonly", e.name); }
 delete Object.getPrototypeOf(Data.prototype).locked;

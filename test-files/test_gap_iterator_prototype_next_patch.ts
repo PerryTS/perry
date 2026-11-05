@@ -1,6 +1,10 @@
-// A replaced `%ArrayIteratorPrototype%.next` (and the Map / Set / String
-// family prototypes) must drive for-of, spread, Array.from and manual calls;
-// restoring the ORIGINAL closure must hand iteration back to the builtin.
+// A replaced Map / Set / String iterator prototype `next` must drive for-of,
+// spread, Array.from and manual calls; restoring the ORIGINAL closure must
+// hand iteration back to the builtin. DEC 250 (Q2): in a compiled program
+// `%ArrayIteratorPrototype%` is locked: replacing, redefining or deleting its
+// `next` is a TypeError and every array driver keeps the builtin (A); the
+// per-call proof is exercised on the Set family instead (F-I). Perry differs
+// from node here on purpose: test-parity/expected holds Perry's output.
 // The runtime proves "not patched" allocation-free by comparing the
 // prototype's own `next` against the builtin thunk, so both directions of a
 // replace / restore cycle are exercised on every family, plus an accessor
@@ -44,57 +48,38 @@ function withPatched(proto: any, patch: (orig: any) => any, body: () => void) {
   }
 }
 
-// A: array family, every driver, doubled values through the patch.
-withPatched(
-  arrayProto,
-  (orig) =>
-    function (this: any) {
-      const r = orig.call(this);
-      if (!r.done) r.value = (r.value as number) * 2;
-      return r;
-    },
-  () => {
-    const got: number[] = [];
-    for (const v of [1, 2, 3]) got.push(v);
-    log("A-forof", got.join(","));
-    log("A-spread", [...[4, 5]].join(","));
-    log("A-from", Array.from([6].values()).join(","));
-    // `Array.from(array)` and the CALL / multi-operand spread forms reach
-    // different runtime entry points from `[...array]` — each one has its own
-    // element-copy fast arm, and each has to decline it here.
-    log("A-from-array", Array.from([11, 12]).join(","));
-    log("A-call-spread", ((...xs: number[]) => xs.join(","))(...[13, 14]));
-    log("A-multi-spread", [...[15], ...[16]].join(","));
-    const it = [7, 8].values();
-    log("A-manual", it.next().value, it.next().value, it.next().done);
-  },
-);
-
-// B: after the restore the builtin is back, in every driver.
+// A: the array family is locked (DEC 250): every way of changing its `next`
+// is refused, and every driver still runs the builtin.
+function refused(change: () => void): string {
+  try {
+    change();
+    return "changed";
+  } catch (e: any) {
+    if (e instanceof TypeError) console.log("DEC 250: " + e.message);
+    return e instanceof TypeError ? "TypeError" : "other";
+  }
+}
 {
+  const orig = arrayProto.next;
+  const forms = [
+    refused(() => { arrayProto.next = function () { return { done: true, value: undefined }; }; }),
+    refused(() => { arrayProto.next = orig.bind([100, 200].values()); }),
+    refused(() => { Object.defineProperty(arrayProto, "next", { configurable: true, get() { return orig; } }); }),
+    refused(() => { delete arrayProto.next; }),
+    refused(() => { arrayProto.next = 42; }),
+  ];
+  console.log("A-refused", forms.join(","), arrayProto.next === orig);
   const got: number[] = [];
   for (const v of [1, 2, 3]) got.push(v);
-  console.log("B-forof", got.join(","));
-  console.log("B-spread", [...[4, 5]].join(","));
+  console.log("A-forof", got.join(","));
+  console.log("A-spread", [...[4, 5]].join(","));
+  console.log("A-from", Array.from([6].values()).join(","));
+  console.log("A-from-array", Array.from([11, 12]).join(","));
+  console.log("A-call-spread", ((...xs: number[]) => xs.join(","))(...[13, 14]));
+  console.log("A-multi-spread", [...[15], ...[16]].join(","));
   const it = [7, 8].values();
-  console.log("B-manual", it.next().value, it.next().value, it.next().done);
+  console.log("A-manual", it.next().value, it.next().value, it.next().done);
 }
-
-// C: a second replace after the restore is honoured again (the proof is a
-// per-call read, not a one-shot latch).
-withPatched(
-  arrayProto,
-  () =>
-    function () {
-      return { done: true, value: undefined };
-    },
-  () => {
-    const got: number[] = [];
-    for (const v of [1, 2]) got.push(v);
-    log("C-forof-empty", got.length);
-  },
-);
-console.log("C-restored", [...[9]].join(","));
 
 // D: Map and Set family prototypes, patched and restored.
 withPatched(
@@ -147,28 +132,28 @@ console.log("E-string-restored", [..."cd"].join(","));
 
 // F: restoring by assigning the very same closure object, then a patch that
 // is a bound copy of the original (same algorithm, different function
-// object) — the proof compares by builtin entry, so the bound copy must NOT
+// object): the proof compares by builtin entry, so the bound copy must NOT
 // be mistaken for the builtin: its `this` is fixed to a different iterator.
 {
-  const orig = arrayProto.next;
-  arrayProto.next = orig;
-  console.log("F-same-object", [...[1, 2]].join(","));
-  const other = [100, 200].values();
-  arrayProto.next = orig.bind(other);
+  const orig = setProto.next;
+  setProto.next = orig;
+  console.log("F-same-object", [...new Set([1, 2])].join(","));
+  const other = new Set([100, 200]).values();
+  setProto.next = orig.bind(other);
   try {
-    log("F-bound-copy", [...[1, 2]].join(","));
+    log("F-bound-copy", [...new Set([1, 2])].join(","));
   } finally {
-    arrayProto.next = orig;
+    setProto.next = orig;
     flush();
   }
-  console.log("F-restored", [...[3]].join(","));
+  console.log("F-restored", [...new Set([3])].join(","));
 }
 
 // G: an accessor `next` on the prototype is consulted on every step.
 {
-  const orig = arrayProto.next;
+  const orig = setProto.next;
   let gets = 0;
-  Object.defineProperty(arrayProto, "next", {
+  Object.defineProperty(setProto, "next", {
     configurable: true,
     get() {
       gets++;
@@ -176,9 +161,9 @@ console.log("E-string-restored", [..."cd"].join(","));
     },
   });
   try {
-    log("G-accessor", [...[1, 2]].join(","), gets > 0);
+    log("G-accessor", [...new Set([1, 2])].join(","), gets > 0);
   } finally {
-    Object.defineProperty(arrayProto, "next", {
+    Object.defineProperty(setProto, "next", {
       value: orig,
       writable: true,
       enumerable: false,
@@ -186,44 +171,44 @@ console.log("E-string-restored", [..."cd"].join(","));
     });
     flush();
   }
-  console.log("G-restored", [...[4]].join(","));
+  console.log("G-restored", [...new Set([4])].join(","));
 }
 
 // H: a deleted prototype `next` makes for-of throw a TypeError; restoring
 // it by plain assignment brings the builtin back.
 {
-  const orig = arrayProto.next;
-  delete arrayProto.next;
+  const orig = setProto.next;
+  delete setProto.next;
   try {
-    for (const _v of [1]) {
+    for (const _v of new Set([1])) {
       console.log("H-unexpected");
     }
     log("H", "no-throw");
   } catch (e: any) {
     log("H", e instanceof TypeError);
   } finally {
-    arrayProto.next = orig;
+    setProto.next = orig;
     flush();
   }
-  console.log("H-restored", [...[5, 6]].join(","));
+  console.log("H-restored", [...new Set([5, 6])].join(","));
 }
 
 // I: a NON-CALLABLE prototype `next` must throw a TypeError, not be mistaken
 // for a pointer. The allocation-free proof reads the own slot as a raw value
 // first, so a number, a string and `undefined` each have to defeat it.
 for (const bad of [42, "not a function", undefined, null, {}]) {
-  const orig = arrayProto.next;
-  arrayProto.next = bad;
+  const orig = setProto.next;
+  setProto.next = bad;
   try {
-    for (const _v of [1]) {
+    for (const _v of new Set([1])) {
       console.log("I-unexpected");
     }
     log("I", typeof bad, "no-throw");
   } catch (e: any) {
     log("I", typeof bad, e instanceof TypeError);
   } finally {
-    arrayProto.next = orig;
+    setProto.next = orig;
     flush();
   }
 }
-console.log("I-restored", [...[7, 8]].join(","));
+console.log("I-restored", [...new Set([7, 8])].join(","));

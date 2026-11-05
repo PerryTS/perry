@@ -378,7 +378,11 @@ fn object_set_static_prototype_impl_with(
     // when the first array takes a named property) are the runtime's own
     // definitions and do not count.
     if matches!(link_kind, PrototypeLinkKind::UserOverride) {
-        super::builtin_proto::note_write_addr(obj_ptr, "[[Prototype]] link");
+        super::builtin_proto::note_write_addr(
+            obj_ptr,
+            super::builtin_proto::Mutation::Relink,
+            "[[Prototype]] link",
+        );
         // Object model step 3 (§3.6): every chain a binding site proved
         // through this object changed.
         super::shadow::note_relink(obj_ptr);
@@ -449,7 +453,11 @@ fn object_set_static_prototype_impl_with(
                 crate::array::invalidate_array_index_fast_path();
                 // Every array's chain runs through `%Array.prototype%`'s
                 // holder: its shadow bit now says the chain left its layout.
-                crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
+                crate::object::builtin_proto::note_array_prototype_write(
+                    obj_ptr,
+                    crate::object::builtin_proto::Mutation::Relink,
+                    "relink",
+                );
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             // A lazy JSON array becomes the ordinary array in place, keeping

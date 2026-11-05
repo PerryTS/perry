@@ -84,7 +84,7 @@ console.log("lastArg", (lastArg as any)(1, 2, 3), (lastArg as any)());
 
 // (4) An out-of-range index never sees Array.prototype: the bundle is an
 // Array, the object it stands in for is not.
-(Array.prototype as any)[8] = "array-proto";
+try { (Array.prototype as any)[8] = "array-proto"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 function inherited(): any {
   "use strict";
   return [arguments[8], arguments[0]].join("|");

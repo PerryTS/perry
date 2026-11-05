@@ -250,7 +250,11 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
             configurable,
         );
         let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
-        super::builtin_proto::note_write_addr(addr, "descriptor");
+        super::builtin_proto::note_write_addr(
+            addr,
+            super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+            "descriptor",
+        );
         crate::typedarray_named::note_named_mutation(addr, key_bytes());
         super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
         // Claims the absent key with its entry and marks the receiver.
@@ -282,7 +286,11 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
     let set = scope.root_nanbox_u64(half(has_set, DESC_SET));
     let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
     let name = String::from_utf8_lossy(key_bytes()).into_owned();
-    super::builtin_proto::note_write_addr(addr, "descriptor");
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(addr, name.as_bytes());
     // A new accessor keeps its internal writable bit (as the general
     // definition's `writable = has_accessor` does).
@@ -482,7 +490,11 @@ unsafe fn define_fresh_overflow_data(
         descriptor.flag(b"enumerable").unwrap_or(false),
         descriptor.flag(b"configurable").unwrap_or(false),
     );
-    super::builtin_proto::note_write_addr(addr, "descriptor");
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key)),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(addr, bytes);
     super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
     super::descriptor_state::note_attrs_born_with_keys(addr);

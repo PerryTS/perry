@@ -27,7 +27,7 @@ console.log(v1, v2, calls);
 // An own data property holding undefined, and an expando on Function.prototype.
 const h: any = function h() {};
 h.u = undefined;
-(Function.prototype as any).shared = 42;
+try { (Function.prototype as any).shared = 42; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(h.u, "u" in h, h.shared, any(Object).shared, h.notThere);
 delete (Function.prototype as any).shared;
 console.log(h.shared, any(Object).shared);

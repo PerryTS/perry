@@ -43,8 +43,8 @@ row("null-proto no pie", () => bare.propertyIsEnumerable("k"));
 // --- a replaced Object.prototype method is what plain objects call ----------
 const savedHop = Object.prototype.hasOwnProperty;
 const savedPie = Object.prototype.propertyIsEnumerable;
-(Object.prototype as any).hasOwnProperty = function (k: string) { return "replaced:" + k; };
-(Object.prototype as any).propertyIsEnumerable = function (k: string) { return "replaced-pie:" + k; };
+try { (Object.prototype as any).hasOwnProperty = function (k: string) { return "replaced:" + k; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { (Object.prototype as any).propertyIsEnumerable = function (k: string) { return "replaced-pie:" + k; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 row("replaced hop", () => ({} as any).hasOwnProperty("k"));
 row("replaced pie", () => ({ k: 1 } as any).propertyIsEnumerable("k"));
 class Plain { x = 1; }
@@ -53,8 +53,8 @@ function viaParam(o: any, k: string) { return o.hasOwnProperty(k); }
 let last: any = null;
 for (let i = 0; i < 20; i++) last = viaParam({ k: i }, "k");
 row("replaced hop through param", () => last);
-(Object.prototype as any).hasOwnProperty = savedHop;
-(Object.prototype as any).propertyIsEnumerable = savedPie;
+try { (Object.prototype as any).hasOwnProperty = savedHop; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { (Object.prototype as any).propertyIsEnumerable = savedPie; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 row("restored hop", () => ({ k: 1 } as any).hasOwnProperty("k"));
 row("restored pie", () => ({ k: 1 } as any).propertyIsEnumerable("k"));
 for (let i = 0; i < 20; i++) last = viaParam({ k: i }, "k");

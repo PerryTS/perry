@@ -29,11 +29,11 @@ out.push("reflect " + keys(rc) + " " + (Object.getPrototypeOf(rc) === Other.prot
 // A setter on Object.prototype: DefineField must not call it; a
 // constructor's assignment of a key that is not a field must.
 let setterCalls = 0;
-Object.defineProperty(Object.prototype, "viaSetter", {
+try { Object.defineProperty(Object.prototype, "viaSetter", {
   set(_v: any) { setterCalls++; },
   get() { return "proto-get"; },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 class FieldOverSetter {
   viaSetter = 1;
   other = 2;

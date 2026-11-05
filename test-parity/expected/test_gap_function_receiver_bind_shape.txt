@@ -1,0 +1,40 @@
+function 12 bound add 1
+arrow 2 bound arrow 1
+call/apply NaN NaN
+function 13 bound add 1
+arrow 3 bound arrow 1
+call/apply NaN NaN
+function 14 bound add 1
+arrow 4 bound arrow 1
+call/apply NaN NaN
+function 15 bound add 1
+arrow 5 bound arrow 1
+call/apply NaN NaN
+function 16 bound add 1
+arrow 6 bound arrow 1
+call/apply NaN NaN
+function 17 bound add 1
+arrow 7 bound arrow 1
+call/apply NaN NaN
+bound 7 bound bound add 0
+class 10 true true bound Widget 1
+new 11 true true
+metadata bound renamed 6 6
+getter order length bound changedByLength 8
+both length,length bound changedByLength 8
+observable order length,name bound visible 2
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+prototype patch NaN
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+own patch own:13
+own native 2
+own native 3
+own native 4
+own native 5
+own native 6
+own native 7
+bind brand TypeError
+read before args 5
+DEC 250: Cannot redefine built-in member Function.prototype.name: built-in objects are read-only in a compiled program
+implicit own name 0 shadowedName
+DEC 250: Cannot redefine built-in member Function.prototype.name: built-in objects are read-only in a compiled program

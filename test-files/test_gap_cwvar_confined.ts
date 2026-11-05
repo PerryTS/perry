@@ -32,13 +32,13 @@ console.log(readCon(0), readCon(3), String(readCon(4)), lenCon());
 
 // A prototype getter reached by an out-of-bounds read receives CON as `this`
 // and installs an own accessor on it; later reads must see the accessor.
-Object.defineProperty(Array.prototype, "9", {
+try { Object.defineProperty(Array.prototype, "9", {
   configurable: true,
   get() {
     Object.defineProperty(this, 1, { get() { return "installed"; }, configurable: true });
     return "proto";
   },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(readCon(9), readCon(1), readCon(2));
 delete (Array.prototype as any)[9];
 console.log(readCon(1), String(readCon(9)), lenCon());

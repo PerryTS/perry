@@ -1,0 +1,5 @@
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+push-override 0 1 2 3 2
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+dense-own 0 1 2 3 true

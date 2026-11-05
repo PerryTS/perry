@@ -24,7 +24,7 @@ console.log(readX(child));
 // Object.prototype additions and absent keys
 const plain: any = { a: 1 };
 console.log(plain.notThere, readX(plain));
-(Object.prototype as any).probeAdded = "added";
+try { (Object.prototype as any).probeAdded = "added"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(plain.probeAdded, get(plain, "probeAdded"));
 delete (Object.prototype as any).probeAdded;
 console.log(plain.probeAdded);

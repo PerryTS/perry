@@ -24,7 +24,7 @@ console.log("duplicate", JSON.stringify(JSON.parse('{"b":1,"a":2,"b":3}')));
 console.log("numeric", JSON.stringify(JSON.parse('{"9":1,"2":2,"x":3}')));
 console.log("zero", Object.is(JSON.parse('{"a":-0}').a, -0));
 let setters = 0;
-Object.defineProperty(Object.prototype, "a", { configurable: true, set: function(value: any) { setters++; } });
+try { Object.defineProperty(Object.prototype, "a", { configurable: true, set: function(value: any) { setters++; } }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const own: any = JSON.parse('{"a":42}');
 delete (Object.prototype as any).a;
 console.log("own", setters, own.a, Object.getPrototypeOf(own) === Object.prototype);

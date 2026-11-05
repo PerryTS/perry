@@ -10,20 +10,19 @@ let getterCalls = 0;
 savedObject.defineProperty(numberProto, "laneNumber", {
   configurable: true, get: function () { getterCalls++; return this === 7; },
 });
-savedObject.defineProperty(objectProto, "laneObject", {
-  configurable: true, get: function () { return typeof this; },
-});
+// DEC 250: Object.prototype refuses program adds; its own isPrototypeOf is the probe.
 const fakeNumber: any = function FakeNumber() {};
 fakeNumber.prototype.laneNumber = "wrong number prototype";
 const fakeObject: any = function FakeObject() {};
 savedObject.defineProperty(fakeObject.prototype, "laneObject", { get: function () { return "wrong object prototype"; } });
+savedObject.defineProperty(fakeObject.prototype, "isPrototypeOf", { value: "wrong object prototype" });
 (globalThis as any).Number = fakeNumber;
 (globalThis as any).Object = fakeObject;
 if (typeof gc === "function") gc();
 // First primitive property query follows the original realm's prototypes.
 const value: any = 7;
 const own = value.laneNumber;
-const inherited = value.laneObject;
+const inherited = value.isPrototypeOf === objectProto.isPrototypeOf;
 const constructor = value.constructor === savedNumber;
 (globalThis as any).Number = savedNumber;
 (globalThis as any).Object = savedObject;
@@ -33,5 +32,4 @@ savedObject.defineProperty(numberProto, "laneNumber", { configurable: true, valu
 if (typeof gc === "function") gc();
 console.log("changed", value.laneNumber, getterCalls);
 delete numberProto.laneNumber;
-delete objectProto.laneObject;
 console.log("deleted", value.laneNumber, value.laneObject);

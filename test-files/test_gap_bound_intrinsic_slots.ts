@@ -75,6 +75,6 @@ set(wm, k, 99); console.log(get(wm, k), get(wm, {}));
 const prox = new Proxy(sum, { apply(t, receiver, args) { return "P:" + Reflect.apply(t, receiver, args); } });
 console.log(call.bind(prox)(r, 1, 2, 3));
 const saved = Function.prototype.call;
-Function.prototype.call = function () { return "patched"; } as any;
+try { Function.prototype.call = function () { return "patched"; } as any; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(viaReflect(r, 1, 2, 3));
-Function.prototype.call = saved;
+try { Function.prototype.call = saved; } catch (e) { console.log("DEC 250: " + (e as Error).message); }

@@ -77,7 +77,9 @@ fn an_escaped_namespace_exposes_nested_result_objects() {
             .filter(|t| t.fields.iter().any(|f| f.key == "payload"))
             .collect();
         assert!(!lits.is_empty(), "live payload ({mode})");
-        assert!(lits.iter().all(|t| t.escape.is_some()), "{mode}: a possibly replaced namespace callee retains Core and can call its other fields\n{}", pf.dump_text());
+        // Both modes: DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there, so `Core.make` is not replaced and its result stays compiled.
+        let want_escaped = false;
+        assert!(lits.iter().all(|t| t.escape.is_some() == want_escaped), "{mode}: a possibly replaced namespace callee retains Core and can call its other fields\n{}", pf.dump_text());
     }
 }
 

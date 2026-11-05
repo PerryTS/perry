@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // #11932: `fn.call` / `fn.apply` sites that run hot BEFORE the program ever
 // touches %Function.prototype% (so the runtime has not built it), and then
 // keep running after the program builds and patches it. Nothing in phase 1
@@ -31,8 +32,8 @@ const kCall = "ca" + "ll";
 const kApply = "app" + "ly";
 const orig = { call: FP[kCall], apply: FP[kApply] };
 let calls = 0;
-FP[kCall] = function (this: any, t: any, ...rest: any[]) { calls++; return Reflect.apply(this, t, rest) + 0.5; };
-FP[kApply] = function (this: any, t: any, list: any) { calls++; return Reflect.apply(this, t, list) + 0.25; };
+locked(() => { FP[kCall] = function (this: any, t: any, ...rest: any[]) { calls++; return Reflect.apply(this, t, rest) + 0.5; }; });
+locked(() => { FP[kApply] = function (this: any, t: any, list: any) { calls++; return Reflect.apply(this, t, list) + 0.25; }; });
 let p = 0;
 for (let i = 0; i < 1000; i++) p += run(add, holder, i);
 let pa = 0;
@@ -40,8 +41,8 @@ for (let i = 0; i < 500; i++) pa += arrow.call(null, i);
 out.push("phase2-patched=" + p + " arrow=" + pa + " calls=" + calls);
 
 // Phase 3: restored, hot again, and `bind` now too.
-FP[kCall] = orig.call;
-FP[kApply] = orig.apply;
+locked(() => { FP[kCall] = orig.call; });
+locked(() => { FP[kApply] = orig.apply; });
 calls = 0;
 let r = 0;
 for (let i = 0; i < 1000; i++) r += run(add, holder, i) + add.bind(holder, i)(3);

@@ -99,7 +99,7 @@ console.log("big", big.key_number_0, big.key_number_39, big.key_number_3, child.
 // A program write to Object.prototype: a setter there now intercepts adds on
 // plain and Object.create objects alike.
 let protoSetter = 0;
-Object.defineProperty(Object.prototype, "delta", { set(v) { protoSetter += v; }, get() { return "inherited"; }, configurable: true });
+try { Object.defineProperty(Object.prototype, "delta", { set(v) { protoSetter += v; }, get() { return "inherited"; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (let i = 0; i < 5; i++) { const a: any = {}; a[keys[3]] = 1; const b: any = Object.create(P); b[keys[3]] = 2; if (Object.keys(a).length || Object.keys(b).length) console.log("added past setter"); }
 console.log("proto setter", protoSetter);
 delete (Object.prototype as any).delta;

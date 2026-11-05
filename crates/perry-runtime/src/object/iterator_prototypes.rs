@@ -411,6 +411,9 @@ fn build_iterator_prototypes() {
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
     WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
     super::iterator_ctor::note_birth_keys(shared);
+    // SAFETY: both are live, fully built ordinary objects (collection is
+    // suppressed above).
+    unsafe { super::builtin_proto::seal_iterator_prototypes(shared, array_proto) };
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
@@ -885,7 +888,7 @@ mod override_probe_allocation_tests {
                 0,
             );
             let patched_h = scope.root_nanbox_f64(js_nanbox_pointer(patched as i64));
-            set_proto_next(patched_h.get_nanbox_f64());
+            crate::object::own_override::as_builtin_definition(|| set_proto_next(patched_h.get_nanbox_f64()));
             assert!(
                 !prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
                 "a replaced prototype `next` must defeat the allocation-free proof"
@@ -896,7 +899,7 @@ mod override_probe_allocation_tests {
                 "the replacement installed on the prototype must be the one called"
             );
 
-            set_proto_next(original.get_nanbox_f64());
+            crate::object::own_override::as_builtin_definition(|| set_proto_next(original.get_nanbox_f64()));
             assert!(
                 prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
                 "restoring the original closure must re-enable the allocation-free proof"
@@ -932,14 +935,14 @@ mod override_probe_allocation_tests {
             let getter_h = scope.root_nanbox_f64(js_nanbox_pointer(getter as i64));
             let key =
                 scope.root_string_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));
-            super::super::js_object_define_accessor(
+            crate::object::own_override::as_builtin_definition(|| super::super::js_object_define_accessor(
                 js_nanbox_pointer(array_proto() as i64),
                 key.with_const_ptr::<crate::StringHeader, _>(|k| {
                     f64::from_bits(JSValue::string_ptr(k as *mut crate::StringHeader).bits())
                 }),
                 getter_h.get_nanbox_f64(),
                 f64::from_bits(TAG_UNDEFINED),
-            );
+            ));
             assert!(
                 !prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
                 "an accessor `next` on the prototype must defeat the allocation-free proof \
@@ -951,10 +954,25 @@ mod override_probe_allocation_tests {
             // declined on this prototype for good — conservative: the by-name
             // path runs, exactly as before the fix. Only the semantics are
             // pinned here: the builtin advance is back.
+            // A deleted `next` cannot be put back: that is an add on a sealed
+            // intrinsic prototype (decision 250), which the guard aborts even
+            // for the runtime. The accessor is therefore redefined in place as
+            // the data property, which keeps the key in the image.
+            let bag = js_object_alloc(0, 0);
+            super::super::js_object_set_field_by_name(
+                bag,
+                crate::string::intern_ascii_literal(b"value"),
+                original.get_nanbox_f64(),
+            );
             key.with_const_ptr::<crate::StringHeader, _>(|k| {
-                super::super::js_object_delete_field(array_proto(), k);
+                crate::object::own_override::as_builtin_definition(|| {
+                    super::super::js_object_define_property(
+                        js_nanbox_pointer(array_proto() as i64),
+                        f64::from_bits(JSValue::string_ptr(k as *mut crate::StringHeader).bits()),
+                        js_nanbox_pointer(bag as i64),
+                    )
+                });
             });
-            set_proto_next(original.get_nanbox_f64());
             let iter_obj = js_nanbox_get_pointer(_iter_h.get_nanbox_f64()) as *mut ObjectHeader;
             assert!(
                 call_overridden_iterator_next(iter_obj, crate::array::ARRAY_ITERATOR_CLASS_ID)
@@ -1399,6 +1417,12 @@ mod native_step_tests {
             for kind in kinds() {
                 for level in 0..3 {
                     for name in ["next", "return"] {
+                        // A program cannot add a key to a sealed intrinsic prototype
+                        // (decision 250): above the instance only the `next` the family
+                        // prototype owns can be written.
+                        if level > 0 && !(level == 1 && name == "next") {
+                            continue;
+                        }
                         let iter = fixture(kind);
                         let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
                         assert!(iterator_step_is_builtin(obj), "guard premise");
@@ -1410,11 +1434,11 @@ mod native_step_tests {
                         }
                         let key =
                             crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        super::super::js_object_set_field_by_name(
+                        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
                             target,
                             key,
                             f64::from_bits(crate::value::TAG_UNDEFINED),
-                        );
+                        ));
                         // The family's own next shadows the shared parent's;
                         // `return` is IteratorClose's, never the step's.
                         assert_eq!(
@@ -1671,6 +1695,12 @@ mod native_step_tests {
                 );
                 for level in 0..3 {
                     for name in ["next", "return"] {
+                        // A program cannot add a key to a sealed intrinsic prototype
+                        // (decision 250): above the instance only the `next` the family
+                        // prototype owns can be written.
+                        if level > 0 && !(level == 1 && name == "next") {
+                            continue;
+                        }
                         let iter = fixture(kind);
                         let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
                         let mut target = obj;
@@ -1680,12 +1710,12 @@ mod native_step_tests {
                             )) as *mut ObjectHeader;
                         }
                         let key = crate::string::intern_ascii_literal(name.as_bytes());
-                        super::super::js_object_define_accessor(
+                        crate::object::own_override::as_builtin_definition(|| super::super::js_object_define_accessor(
                             js_nanbox_pointer(target as i64),
                             f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
                             js_nanbox_pointer(other as i64),
                             f64::from_bits(crate::value::TAG_UNDEFINED),
-                        );
+                        ));
                         assert_eq!(
                             iterator_step_is_builtin(obj),
                             name == "return" || level == 2,
@@ -1703,7 +1733,7 @@ mod native_step_tests {
                 )) as *mut ObjectHeader;
                 let ancestor = js_object_alloc(0, 0);
                 let key = crate::string::intern_ascii_literal(b"return");
-                super::super::js_object_set_field_by_name(ancestor, key, saved);
+                crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(ancestor, key, saved));
                 chain_to(shared, ancestor);
                 assert!(
                     iterator_step_is_builtin(obj),

@@ -43,8 +43,8 @@ put(lateB, "late", 2);
 out.push("late " + Object.keys(lateA).join(",") + "|" + Object.keys(lateB).join(",") + "|" + log.join(","));
 
 // Object.prototype setter and read-only inherited key
-Object.defineProperty(Object.prototype, "opSetter", { set(v) { log.push("op " + v); }, configurable: true });
-Object.defineProperty(Object.prototype, "opRo", { value: 1, writable: false, configurable: true });
+try { Object.defineProperty(Object.prototype, "opSetter", { set(v) { log.push("op " + v); }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(Object.prototype, "opRo", { value: 1, writable: false, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (let i = 0; i < 2; i++) {
   const o: any = {};
   put(o, "opSetter", i);

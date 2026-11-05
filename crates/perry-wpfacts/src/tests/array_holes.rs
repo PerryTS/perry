@@ -33,6 +33,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
         per_evaluation: false,
         static_methods: Vec::new(),

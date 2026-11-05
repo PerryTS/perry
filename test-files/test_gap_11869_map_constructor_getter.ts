@@ -192,7 +192,7 @@ const originalSet = IntrinsicMap.prototype.set;
 let setGetterReads = 0;
 let setReceiverIsMap = false;
 let setCalls = 0;
-Object.defineProperty(IntrinsicMap.prototype, "set", {
+try { Object.defineProperty(IntrinsicMap.prototype, "set", {
   configurable: true,
   get() {
     setGetterReads++;
@@ -202,7 +202,7 @@ Object.defineProperty(IntrinsicMap.prototype, "set", {
       return originalSet.call(this, key, value);
     };
   },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const accessorInitialized = new IntrinsicMap([[9, 10], [11, 12]]);
 if (
   setGetterReads !== 1 ||

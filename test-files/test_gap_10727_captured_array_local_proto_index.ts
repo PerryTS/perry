@@ -21,14 +21,17 @@ function show(v: unknown): string {
   return typeof v + "(" + String(v) + ")";
 }
 
+// DEC 250 (intrinsic-only): the trigger is the Array.prototype index latch,
+// which only an index on Array.prototype itself arms. The add is refused now
+// (expected file); the captured-array reads below still run.
 // Arm the array-prototype index deopt, then remove the property again. The
 // latch that this sets is monotone: deleting the property does not clear it.
-Object.defineProperty(Array.prototype, "11", {
+try { Object.defineProperty(Array.prototype, "11", {
   configurable: true,
   get() {
     return "proto11";
   },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 delete (Array.prototype as Record<string, unknown>)["11"];
 
 // 1. the regression: a captured array local, read from its declaring scope

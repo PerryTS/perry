@@ -4,10 +4,11 @@
 // where an installed index property is a genuine heap reference that must stay
 // rooted. This fixture puts an object there, has an offset loop READ it, and
 // retains it across collections — so a missed shading shows up as a dangling
-// reference instead of as luck.
-
+// reference instead of as luck. DEC 250: Array.prototype refuses program index
+// adds, so the index lives on a user array prototype the arrays inherit from.
 const protoHeld: any = { tag: "proto-object", payload: [11, 22, 33] };
-Object.defineProperty(Array.prototype, 7, {
+const userProto: any = Object.create(Array.prototype);
+Object.defineProperty(userProto, 7, {
   value: protoHeld,
   writable: true,
   enumerable: false,
@@ -37,6 +38,7 @@ function collectOffset(a: number[], out: any[]): number {
 }
 
 const five: number[] = [1.5, 2.5, 3.5, 4.5, 5.5];
+Object.setPrototypeOf(five, userProto);
 console.log("counter", sumCounter(five));
 
 const captured: any[] = [];
@@ -71,10 +73,12 @@ console.log("counter-again", sumCounter(five));
 // And a length-8 array reads its OWN element 7, not the prototype's.
 const eight: number[] = [1, 2, 3, 4, 5, 6, 7, 8];
 const ownSeven: any[] = [];
-collectOffset(eight.slice(0, 5), ownSeven);
+const short = eight.slice(0, 5);
+Object.setPrototypeOf(short, userProto);
+collectOffset(short, ownSeven);
 console.log("short-slice-sees-proto", ownSeven[4] === protoHeld);
 console.log("full-eight-index7", eight[7]);
 console.log("sum-eight", sumCounter(eight));
 
-delete (Array.prototype as any)[7];
+delete userProto[7];
 console.log("after-delete", five[7], eight[7]);

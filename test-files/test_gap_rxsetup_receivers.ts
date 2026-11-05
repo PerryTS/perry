@@ -53,7 +53,7 @@ const log: string[] = [];
 
 // Object.prototype writes do not change RegExp behaviour.
 {
-  (Object.prototype as any).exec = function () { return ["object exec"]; };
+  try { (Object.prototype as any).exec = function () { return ["object exec"]; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   show("object prototype", ["abc".replace(/\+/g, "_"), /\+/.test("abc")]);
   delete (Object.prototype as any).exec;
 }

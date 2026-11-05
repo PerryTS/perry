@@ -453,14 +453,20 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
         prototype.get_nanbox_f64(),
         key.get_nanbox_f64(),
     ));
+    // The fixture patches and restores the intrinsic itself, as the runtime
+    // does when it defines one; a program may not (DEC 250).
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        test(value.get_nanbox_f64(), prototype.get_nanbox_f64());
+        crate::object::own_override::as_builtin_definition(|| {
+            test(value.get_nanbox_f64(), prototype.get_nanbox_f64());
+        });
     }));
-    crate::object::js_object_define_property(
-        prototype.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        original.get_nanbox_f64(),
-    );
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_define_property(
+            prototype.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            original.get_nanbox_f64(),
+        );
+    });
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
