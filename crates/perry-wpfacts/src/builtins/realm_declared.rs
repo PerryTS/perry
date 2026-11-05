@@ -22,26 +22,44 @@ pub(super) fn native_identity(owner: &str, key: &str) -> Option<&'static str> {
 /// Coordinates of the canonical reference, including bracketed symbol
 /// names. Alias rows do not choose the call model's holder or key.
 pub(super) fn identity_member(identity: &str) -> Option<(&'static str, &'static str)> {
-    DECLARED.lines().find_map(|line| {
-        let mut row = line.split('\t');
-        if row.next()? != "native" {
-            return None;
-        }
-        let owner = row.next()?;
-        let key = row.next()?;
-        if row.next()? != identity {
-            return None;
-        }
-        let canonical = owner == "%Global%" && key == identity
-            || identity.strip_prefix(owner).is_some_and(|suffix| {
-                suffix.strip_prefix('.') == Some(key)
-                    || suffix
-                        .strip_prefix("[\"")
-                        .and_then(|s| s.strip_suffix("\"]"))
-                        == Some(key)
-            });
-        canonical.then_some((owner, key))
-    })
+    DECLARED
+        .lines()
+        .find_map(|line| {
+            let mut row = line.split('\t');
+            if row.next()? != "native" {
+                return None;
+            }
+            let owner = row.next()?;
+            let key = row.next()?;
+            if row.next()? != identity {
+                return None;
+            }
+            let canonical = owner == "%Global%" && key == identity
+                || identity.strip_prefix(owner).is_some_and(|suffix| {
+                    suffix.strip_prefix('.') == Some(key)
+                        || suffix
+                            .strip_prefix("[\"")
+                            .and_then(|s| s.strip_suffix("\"]"))
+                            == Some(key)
+                });
+            canonical.then_some((owner, key))
+        })
+        .or_else(|| {
+            let reference = DECLARED.lines().find_map(|line| {
+                let mut row = line.split('\t');
+                if row.next()? != "native" {
+                    return None;
+                }
+                row.next()?;
+                row.next()?;
+                let reference = row.next()?;
+                (reference == identity).then_some(reference)
+            })?;
+            if let Some((owner, key)) = reference.rsplit_once("[\"") {
+                return Some((owner, key.strip_suffix("\"]")?));
+            }
+            reference.rsplit_once('.')
+        })
 }
 
 /// A namespace token may summarize several constructors. Exempting it as

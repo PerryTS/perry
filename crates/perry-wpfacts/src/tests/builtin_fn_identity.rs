@@ -324,12 +324,12 @@ fn global_exposure_keeps_timer_value_unproven() {
 }
 
 #[test]
-fn function_value_exposure_keeps_timer_callback_unproven() {
+fn function_value_exposure_preserves_the_timer_body_model() {
     verdict(
         &timer_source("const t=setTimeout; external(t);", "t(cb,0);"),
         "// CALLBACK",
         "field",
-        false,
+        true,
     );
 }
 
@@ -619,4 +619,139 @@ fn an_unmodeled_constructor_static_value_still_has_opaque_effects() {
     verdict(src, "// CONSTRUCTOR-EFFECT", "field", false);
     let construct = src.replace("ctor.canParse(o)", "new ctor(o)");
     verdict(&construct, "// CONSTRUCTOR-EFFECT", "field", false);
+}
+
+#[test]
+fn inherited_namespace_function_values_keep_distinct_identities() {
+    for holder in ["Date", "RegExp", "ArrayBuffer", "URL"] {
+        let src = format!(
+            r#"
+            const f:any={holder}.toString;
+            const a:any={holder}.valueOf;
+            f.cache={{field:1}};
+            console.log(a.cache.field); // INHERITED-DIFFERENT
+        "#
+        );
+        verdict(&src, "// INHERITED-DIFFERENT", "field", false);
+    }
+}
+
+#[test]
+fn inherited_typed_array_statics_have_one_identity_per_function() {
+    for (member, proven) in [("Int8Array.from", true), ("Uint8Array.of", false)] {
+        let src = format!(
+            r#"
+            const f:any=Uint8Array.from;
+            const a:any={member};
+            f.cache={{field:1}};
+            console.log(a.cache.field); // INHERITED-STATIC
+        "#
+        );
+        verdict(&src, "// INHERITED-STATIC", "field", proven);
+    }
+}
+
+#[test]
+fn exposure_keeps_the_native_body_and_opens_its_missing_members() {
+    for exposed in ["t", "[1][process.argv[2]??'map']"] {
+        verdict(
+            &timer_source(
+                &format!("const t=setTimeout; external({exposed});"),
+                "t(cb,0);",
+            ),
+            "// CALLBACK",
+            "field",
+            true,
+        );
+        for call in ["t.zap(o);", "const r=t.zap; r(o);"] {
+            let src = format!(
+                r#"
+                declare function external(x:any):void;
+                const o:any={{field:1}};
+                const t:any=setTimeout;
+                external({exposed});
+                {call}
+                console.log(o.field); // EXPOSED-MEMBER
+            "#
+            );
+            verdict(&src, "// EXPOSED-MEMBER", "field", false);
+        }
+    }
+}
+
+fn property_receiver_primitives(src: &str, key: &str) -> u16 {
+    let pf = facts_with(
+        src,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    let lines = &pf.diagnostics[0].1;
+    let number = |line: &str, key: &str| -> u32 {
+        line.split(&format!("\"{key}\":"))
+            .nth(1)
+            .expect("diagnostic field")
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .expect("number")
+    };
+    let site = lines
+        .iter()
+        .find(|l| {
+            l.contains("\"record\":\"site\"")
+                && l.contains("\"kind\":\"property\"")
+                && l.contains(&format!("\"key\":\"{key}\""))
+        })
+        .expect("property site");
+    let receiver = number(site, "receiver");
+    let node = lines
+        .iter()
+        .find(|l| l.contains(&format!("\"record\":\"node\",\"id\":{receiver},")))
+        .expect("receiver node");
+    number(node, "primitiveMask") as u16
+}
+
+#[test]
+fn independent_anonymous_values_keep_the_absent_field_case() {
+    let src = r#"
+        const f:any=[1][process.argv[2]??'map'];
+        const a:any=[1][process.argv[3]??'slice'];
+        f.cache={field:1};
+        console.log(a.cache.field); // NULLABLE-ANONYMOUS
+    "#;
+    assert_ne!(
+        property_receiver_primitives(src, "field") & crate::model::prim::UNDEF,
+        0
+    );
+}
+
+#[test]
+fn the_named_date_pair_keeps_the_absent_field_case() {
+    let src = r#"
+        const f:any=Date.toString;
+        const a:any=Date.valueOf;
+        f.cache={field:1};
+        console.log(a.cache.field); // NULLABLE-DATE
+    "#;
+    assert_ne!(
+        property_receiver_primitives(src, "field") & crate::model::prim::UNDEF,
+        0
+    );
+}
+
+#[test]
+fn reading_back_through_the_same_anonymous_variable_keeps_its_nullable_layout_proof() {
+    let src = r#"
+        const f:any=[1][process.argv[2]??'map'];
+        f.cache={field:1};
+        console.log(f.cache.field); // NULLABLE-SAME
+    "#;
+    assert_ne!(
+        property_receiver_primitives(src, "field") & crate::model::prim::UNDEF,
+        0
+    );
+    verdict(src, "// NULLABLE-SAME", "field", true);
 }

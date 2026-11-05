@@ -1047,9 +1047,6 @@ pub(crate) fn native_namespace_call(
     } else {
         ns
     };
-    if m.is_escaped(t) {
-        return false;
-    }
     if m.bind_done.insert((call, t, u32::MAX - 6)) {
         m.diagnostic_callee(call, t);
         m.with_b(|m| ns_method(m, ns, Some(name), call));
