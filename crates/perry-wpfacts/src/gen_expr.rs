@@ -1273,7 +1273,10 @@ impl<'a> Gen<'a> {
 
             // -------------------------------------------- classes / new
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 // A chunked literal birth: its chunk calls receive the object
                 // being born, whose chunked slots they initialize.
@@ -1282,7 +1285,19 @@ impl<'a> Gen<'a> {
                     let x = self.tmp("literal chunk object");
                     self.chunk_objects.push(x);
                 }
-                let a = self.evaluate_all(fx, args);
+                // The appended capture forwards are snapshot reads.
+                let caps = args.len().saturating_sub(*cap_args_appended as usize);
+                let a: Vec<NodeId> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        if i >= caps {
+                            self.snapshot_read(fx, e)
+                        } else {
+                            self.expr(fx, e)
+                        }
+                    })
+                    .collect();
                 let x = if chunked {
                     self.chunk_objects.pop()
                 } else {
@@ -1401,7 +1416,7 @@ impl<'a> Gen<'a> {
                 captures,
             } => {
                 for (i, c) in captures.iter().enumerate() {
-                    let v = self.expr(fx, c);
+                    let v = self.snapshot_read(fx, c);
                     let env = self.class_env(mi, class_name, i);
                     self.m.edge(v, env);
                 }
@@ -1415,7 +1430,7 @@ impl<'a> Gen<'a> {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
                 for (i, c) in captures.iter().enumerate() {
-                    let v = self.expr(fx, c);
+                    let v = self.snapshot_read(fx, c);
                     let env = self.class_env(mi, &name, i);
                     self.m.edge(v, env);
                     if env_class.is_none() {
@@ -1552,7 +1567,7 @@ impl<'a> Gen<'a> {
                     self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
                 }
                 for (i, a) in captured_args.iter().enumerate() {
-                    let v = self.expr(fx, a);
+                    let v = self.snapshot_read(fx, a);
                     let env = self.class_env(mi, template, i);
                     self.m.edge(v, env);
                 }

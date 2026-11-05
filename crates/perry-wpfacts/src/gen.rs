@@ -78,6 +78,8 @@ pub(crate) enum ParamGuard {
 pub(crate) struct ModInfo {
     pub path: String,
     pub locals: FxHashMap<u32, NodeId>,
+    /// The dead-zone value of a local's cell (`Gen::dead_zone`).
+    pub dead_zones: FxHashMap<u32, NodeId>,
     pub globals: FxHashMap<u32, NodeId>,
     pub funcs: FxHashMap<u32, FnIdx>,
     pub classes: FxHashMap<String, TmplId>,
@@ -583,6 +585,7 @@ impl<'a> Gen<'a> {
             self.mods.push(ModInfo {
                 path: path.to_string(),
                 locals: FxHashMap::default(),
+                dead_zones: FxHashMap::default(),
                 globals: FxHashMap::default(),
                 funcs: FxHashMap::default(),
                 classes: FxHashMap::default(),
@@ -1641,6 +1644,39 @@ impl<'a> Gen<'a> {
             }
         }
         found
+    }
+
+    /// What a local's cell holds before its declaration runs: the TDZ seed
+    /// (`Stmt::PreallocateTdzBoxes`) writes `undefined` here, not into the
+    /// local. The seed is not a value of the binding: a program read that
+    /// finds it throws a ReferenceError (`js_box_get_bits`), so only
+    /// initialized values flow out of a read. Only the compiler's own
+    /// capture snapshots read a cell in its dead zone without throwing
+    /// (`js_tdz_suppress_begin`): they take `undefined` (`snapshot_read`).
+    pub(crate) fn dead_zone(&mut self, mi: u32, id: u32) -> NodeId {
+        if let Some(&n) = self.mods[mi as usize].dead_zones.get(&id) {
+            return n;
+        }
+        let n = self
+            .m
+            .node_named("dead zone", || format!("dead_zone({mi},{id})"));
+        self.mods[mi as usize].dead_zones.insert(id, n);
+        n
+    }
+
+    /// A class capture snapshot's read of `e` (codegen brackets it in a
+    /// TDZ-suppression window): what the read sees, and when `e` reads a
+    /// local, the `undefined` its cell holds in the dead zone.
+    pub(crate) fn snapshot_read(&mut self, fx: &Fx, e: &perry_hir::Expr) -> NodeId {
+        let v = self.expr(fx, e);
+        let perry_hir::Expr::LocalGet(id) = e else {
+            return v;
+        };
+        let z = self.dead_zone(fx.module, *id);
+        let out = self.tmp("capture snapshot");
+        self.m.edge(v, out);
+        self.m.edge(z, out);
+        out
     }
 
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
