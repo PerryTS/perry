@@ -579,6 +579,11 @@ struct State {
     /// ShapeId, a creation-order number; it is named by the shape it names,
     /// as the header word is. `PERRY_SNAP_TAILSHAPE=0`.
     tail_shape: bool,
+    /// Slot owner rule: a module-global root slot is owned by its first
+    /// registrant in the census (the defining module); in the check run a
+    /// slot of D's arrives poisoned, and an importer's registration of it is
+    /// the duplicate registration, never ownership. `PERRY_SNAP_SLOTOWNER=0`.
+    slot_owner_rule: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -844,6 +849,7 @@ unsafe fn start_census(out: String) {
         slack: !std::env::var("PERRY_SNAP_SLACK").is_ok_and(|v| v == "0"),
         tail_shape: !std::env::var("PERRY_SNAP_TAILSHAPE").is_ok_and(|v| v == "0"),
         first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
+        slot_owner_rule: !std::env::var("PERRY_SNAP_SLOTOWNER").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -1627,6 +1633,17 @@ pub(super) fn global_root(slot: usize) {
     // an access: the slot keeps its first owner, and the re-registering init
     // neither initializes it (rule 2) nor owns it (the check run's poison).
     if st.globals.contains(slot as u64) {
+        return;
+    }
+    // The check run: a slot whose first registrant in the census was a member
+    // of D (the defining module) arrives poisoned (the census's `.dslots`).
+    // That member is skipped here, so the first registration this run sees
+    // is an importer's duplicate: bookkeeping as above, and the slot stays
+    // D's binding, owned by no imaged init.
+    if st.slot_owner_rule
+        && !st.skip.is_empty()
+        && st.env_words.get(slot as u64) == Some(POISON)
+    {
         return;
     }
     count_unwatched_root(st, slot);
