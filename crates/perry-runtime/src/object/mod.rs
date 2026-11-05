@@ -12,11 +12,13 @@ use std::cell::{Cell, RefCell};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
-/// Minimum number of inline field slots every object is allocated with, even
-/// when it has fewer fields. This is a corruption-critical invariant: allocation,
-/// every field get/set bounds check, and every direct-slot read MUST use the
-/// SAME floor, or a write/read past the allocated slots corrupts the heap. It is
-/// centralized here so all sites move in lockstep. (Also mirrored in
+/// Minimum number of inline field slots an ordinary allocation (`js_object_alloc`
+/// and the inline `new`) reserves, even when it has fewer fields. A birth on a
+/// compiler-fixed layout (`object/layout_desc.rs`) has exactly its declared
+/// slots, so no reader may assume the floor: a positional slot read or write is
+/// bounded by the object's own allocation, `object_inline_capacity` (a read
+/// past it walks into the next arena object). It is centralized here so the
+/// allocators move in lockstep. (Also mirrored in
 /// perry-codegen `lower_call/new_alloc.rs` MIN_FIELD_SLOTS for the inline-`new`
 /// path and `expr::inline_slot_floor::INLINE_SLOT_FLOOR` for the emitted bounds
 /// checks; paired by `inline_slot_floor_matches_codegen` here and

@@ -272,10 +272,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
 /// above it live in overflow storage, not in the inline region.
 #[inline]
 unsafe fn object_alloc_limit(obj: *const crate::ObjectHeader) -> u32 {
-    std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    )
+    crate::object::object_inline_capacity(obj)
 }
 
 /// Read shape-template field slot `f` of `obj`: inline when it fits in the
@@ -448,7 +445,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     // `field_count` is copied verbatim when the object moves.
     // The shape probe above resolved this bound for the same receiver, and
     // nothing between it and here can allocate or change the shape.
-    let alloc_limit = std::cmp::max(live_inline_slots, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(obj);
     let field_bits_at = |f: usize| -> u64 {
         // Re-derived per access, deliberately. The pre-#7268 code hoisted
         // `fields_ptr` above the loop, which is exactly the address a `toJSON`

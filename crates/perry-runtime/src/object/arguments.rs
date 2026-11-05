@@ -1275,10 +1275,7 @@ unsafe fn read_ordinary_own_value(
     let keys_view = crate::object::object_keys(obj);
     let keys = keys_view.arr();
     let key_count = keys_view.count() as usize;
-    let alloc_limit = std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    ) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {
@@ -1302,10 +1299,7 @@ unsafe fn write_ordinary_own_value(
     let keys_view = crate::object::object_keys(obj);
     let keys = keys_view.arr();
     let key_count = keys_view.count() as usize;
-    let alloc_limit = std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    ) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {

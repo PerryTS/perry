@@ -25,7 +25,6 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -45,7 +44,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
 
     // Build a map of key_name -> field_value for the object. An own accessor

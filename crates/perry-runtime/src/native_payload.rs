@@ -1325,7 +1325,7 @@ unsafe fn state_slot_set(obj: *mut ObjectHeader, i: usize, value: f64) {
 }
 
 unsafe fn state_inline_limit(obj: *mut ObjectHeader) -> usize {
-    (crate::object::object_live_slot_count(obj) as usize).max(crate::object::INLINE_SLOT_FLOOR)
+    crate::object::object_inline_capacity(obj) as usize
 }
 
 unsafe fn state_key_index(obj: *const ObjectHeader, name: &[u8]) -> Option<usize> {
