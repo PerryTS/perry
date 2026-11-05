@@ -590,6 +590,11 @@ struct State {
     /// slot of D's arrives poisoned, and an importer's registration of it is
     /// the duplicate registration, never ownership. `PERRY_SNAP_SLOTOWNER=0`.
     slot_owner_rule: bool,
+    /// D-written slot rule: a module-global slot a member of D wrote is
+    /// left out of the census digest and named in `.wd` (`0<TAB>slot`, the
+    /// dig's own name for a slot), so the check leaves it out too, as a
+    /// birth word D wrote. `PERRY_SNAP_WDSLOT=0`.
+    wd_slot: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -857,6 +862,7 @@ unsafe fn start_census(out: String) {
         first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
         realm_rule: !std::env::var("PERRY_SNAP_REALM").is_ok_and(|v| v == "0"),
         slot_owner_rule: !std::env::var("PERRY_SNAP_SLOTOWNER").is_ok_and(|v| v == "0"),
+        wd_slot: !std::env::var("PERRY_SNAP_WDSLOT").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -3529,7 +3535,23 @@ fn write_report(st: &mut State) {
         // The module-global slots each imaged init registered.
         for (k, &slot) in st.globals_log.iter().enumerate() {
             let owner = st.slot_owner.get(k).copied().unwrap_or(0);
-            if owner == 0 || st.inits[owner as usize].in_d || st.w.contains(slot as u64) {
+            if owner == 0 || st.inits[owner as usize].in_d {
+                continue;
+            }
+            // A slot a member of D wrote (the CJS support module's
+            // `pendingParent`, set by a deferred require inside a D body) is
+            // named in `.wd` like a birth word D wrote: the check, where D
+            // never runs, leaves it out too.
+            if st.w.contains(slot as u64) {
+                if st.wd_slot {
+                    if let Some(o) = wd_out.as_mut() {
+                        use std::io::Write;
+                        let _ = writeln!(o, "0\t{slot}");
+                    }
+                }
+                continue;
+            }
+            if st.wd_slot && st.wd_names.contains(&(0, slot)) {
                 continue;
             }
             let e = per
