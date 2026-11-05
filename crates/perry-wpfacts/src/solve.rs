@@ -8,6 +8,7 @@
 //! for values leaving into it). The rules here are the executable form of
 //! design section 3.2; `scripts/wpfacts_recompute.py` re-implements them.
 
+mod accessor_lookup;
 mod copy;
 mod define;
 mod lookup;
@@ -1392,6 +1393,7 @@ impl Model {
                 )
             }
             Cons::AnnexBDefine { call, setter } => format!("annexbdefine {n} {call} {setter}"),
+            Cons::AnnexBLookup { call, setter } => format!("annexblookup {n} {call} {setter}"),
             Cons::AccessorInstall { key, f, setter } => {
                 format!(
                     "accinstall {n} {} {} {}",

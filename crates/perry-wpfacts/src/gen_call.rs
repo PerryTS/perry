@@ -765,17 +765,22 @@ impl<'a> Gen<'a> {
                 arg(0).unwrap_or(self.m.top_tok_node)
             }
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
-                let r = self.m.reason("__lookupGetter__ result");
-                for a in &args {
-                    self.m.cons(
-                        *a,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::Any,
-                        },
-                    );
+                let Some(o) = arg(0) else {
+                    return self.m.top_val("accessor lookup without a receiver");
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), args[1..].to_vec(), spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
                 }
-                self.m.top_val("__lookupGetter__ result")
+                self.m.cons(
+                    o,
+                    Cons::AnnexBLookup {
+                        call,
+                        setter: name == "js_object_lookup_setter",
+                    },
+                );
+                ret
             }
             "js_tdz_check_binding" | "js_tdz_check_binding_then" => {
                 let out = self.tmp("tdz");

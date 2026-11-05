@@ -265,7 +265,8 @@ impl Model {
             return false;
         }
         let call = match *c {
-            Cons::Call { call }
+            Cons::AnnexBLookup { call, .. }
+            | Cons::Call { call }
             | Cons::CallThis { call, .. }
             | Cons::NativeThis { call, .. }
             | Cons::New { call }

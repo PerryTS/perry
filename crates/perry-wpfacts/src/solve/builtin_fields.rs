@@ -37,6 +37,10 @@ impl Model {
     }
 
     fn native_field_at(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
+        if matches!(act, ChainAct::Lookup { .. }) {
+            self.accessor_walk(origin, holder, key, act);
+            return;
+        }
         match act {
             ChainAct::Load(dst) => {
                 let n = if self.is_elem_key(key) {
@@ -60,7 +64,7 @@ impl Model {
                 };
                 self.bind_via(n, call, origin);
             }
-            ChainAct::Store(_) => {}
+            ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
         }
         // A function value's inherited fields are observations of the same
         // denotation as its own fields. Keep edges at the use: sharing the
@@ -75,7 +79,7 @@ impl Model {
             match act {
                 ChainAct::Load(dst) => self.edge(cv, dst),
                 ChainAct::Call(call) => self.bind_via(cv, call, origin),
-                ChainAct::Store(_) => {}
+                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
             }
         }
         self.accessor_walk(origin, holder, key, act);

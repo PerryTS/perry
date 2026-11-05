@@ -1862,3 +1862,5 @@ mod builtin_missing_member;
 
 mod annexb_alias;
 mod uri_coercion;
+
+mod accessor_lookup_values;
