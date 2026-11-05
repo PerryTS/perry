@@ -249,6 +249,7 @@ pub struct Classification {
     witness: Vec<Vec<Option<usize>>>,
     /// Reach of JS entries and of the write barrier, for effect declarations.
     pub effect_reach: crate::effects::EffectReach,
+    pub throw_reach: crate::throw_class::ThrowReach,
 }
 impl Classification {
     pub fn witness_path(&self, g: &Graph, name: &str, mode: Mode) -> Vec<String> {
@@ -335,6 +336,23 @@ fn matching_nodes(g: &Graph, spell: &[Vec<&str>], rule: &Rule) -> Vec<usize> {
         .collect()
 }
 pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classification> {
+    classify_inner(g, rules, root, false)
+}
+/// Census upper bound only: omit unresolved indirect seeds without inventing
+/// target delegations. This result must never be used to write a sidecar.
+pub fn without_indirect_seeds(
+    g: &Graph,
+    rules: &[Rule],
+    root: Option<&Path>,
+) -> Result<Classification> {
+    classify_inner(g, rules, root, true)
+}
+fn classify_inner(
+    g: &Graph,
+    rules: &[Rule],
+    root: Option<&Path>,
+    omit_indirect: bool,
+) -> Result<Classification> {
     let nn = g.nodes.len();
     let spell = parallel_map(nn, |i| g.spellings(i));
     let kinds = |kind: &str| rules.iter().filter(|r| r.kind == kind).collect::<Vec<_>>();
@@ -644,6 +662,63 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         |i| named_kind(i, &["panic", "teardown", "collector", "poll"]),
         dead_barrier_rules,
     );
+    let throw_cut: Vec<_> = (0..nn)
+        .map(|i| {
+            named_kind(
+                i,
+                &["js", "panic", "teardown", "collector", "poll", "nothrow"],
+            )
+        })
+        .collect();
+    let throw_open: Vec<_> = (0..nn)
+        .map(|i| {
+            if throw_cut[i]
+                || omit_indirect
+                    && structural[i]
+                        .as_deref()
+                        .is_some_and(|s| s.starts_with("indirect"))
+            {
+                None
+            } else {
+                structural[i].clone()
+            }
+        })
+        .collect();
+    let declarations = if let Some(root) = root {
+        crate::throw_class::declarations(root)?
+    } else {
+        Vec::new()
+    };
+    let mut throw_reach = crate::throw_class::solve_owned(
+        g,
+        &extra_pred,
+        &throw_cut,
+        &throw_open,
+        &declarations,
+        &g.nodes
+            .iter()
+            .map(|n| crate::table::perry_object(&n.obj, &stems))
+            .collect::<Vec<_>>(),
+    )?;
+    // Count dynamic program execution separately: the solver must account for
+    // values it can construct, even though these are not native-origin throws.
+    let mut work = VecDeque::new();
+    for i in 0..nn {
+        if named[i]
+            .is_some_and(|r| r.kind == "js" && spell[i].iter().any(|s| s.contains("::dyn_eval::")))
+        {
+            throw_reach.interpreted_reach[i] = true;
+            work.push_back(i);
+        }
+    }
+    while let Some(t) = work.pop_front() {
+        for &c in g.pred[t].iter().chain(&extra_pred[t]) {
+            if !throw_reach.interpreted_reach[c] {
+                throw_reach.interpreted_reach[c] = true;
+                work.push_back(c);
+            }
+        }
+    }
     let mut node_of = BTreeMap::new();
     let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, n) in g.nodes.iter().enumerate() {
@@ -659,7 +734,7 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
             }
         }
     }
-    let entry_of = |i: usize| {
+    let entry_of = |name: &str, i: usize| {
         let class = if reason[0][i].is_none() {
             Class::Leaf
         } else if reason[1][i].is_none() {
@@ -669,9 +744,23 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         } else {
             Class::Reenters
         };
+        let mut passes = throw_reach.passes[i].clone();
+        let owns = declarations
+            .iter()
+            .any(|d| d.symbol == name && d.operands.iter().any(|p| p.source.is_none()));
+        let alias_unmapped = passes.iter().any(|p| p.source.is_none()) && !owns;
+        if alias_unmapped {
+            passes.retain(|p| p.source.is_some());
+        }
         Entry {
             class,
             throws: reason[3][i].is_some(),
+            throw_class: if alias_unmapped {
+                crate::table::ThrowClass::Open
+            } else {
+                throw_reach.class[i]
+            },
+            passes,
         }
     };
     // The join of the definitions: the weaker class and the OR of throws, so
@@ -679,11 +768,13 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     let table = defs
         .iter()
         .map(|(name, nodes)| {
-            let mut row = entry_of(nodes[0]);
+            let mut row = entry_of(name, nodes[0]);
             for &i in &nodes[1..] {
-                let e = entry_of(i);
+                let e = entry_of(name, i);
                 row.class = row.class.max(e.class);
                 row.throws |= e.throws;
+                row.throw_class = row.throw_class.max(e.throw_class);
+                row.passes.extend(e.passes);
             }
             (name.clone(), row)
         })
@@ -731,6 +822,7 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         reason,
         witness,
         effect_reach,
+        throw_reach,
     })
 }
 
@@ -792,3 +884,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "throw_class_tests.rs"]
+mod throw_class_tests;

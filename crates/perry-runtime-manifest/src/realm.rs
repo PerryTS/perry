@@ -196,6 +196,24 @@ pub struct RealmDeclaration {
     /// What the body does to its inputs; empty = undeclared (unknown code).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<RealmEffect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub throws: Vec<RealmThrowOperand>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RealmThrowOperand {
+    pub source: Option<String>,
+    pub argument: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RealmThrowDeclaration {
+    pub symbol: String,
+    pub source: String,
+    pub line: usize,
+    pub operands: Vec<RealmThrowOperand>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -203,6 +221,8 @@ pub struct RealmDeclaration {
 pub struct RealmManifest {
     pub version: u32,
     pub declarations: Vec<RealmDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub throw_declarations: Vec<RealmThrowDeclaration>,
 }
 
 /// Borrowed projection in the generated compiler table. `facts` preserves

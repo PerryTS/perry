@@ -884,6 +884,7 @@ fn assert_same_value(actual: f64, expected: f64) -> bool {
     crate::value::js_jsvalue_equals(actual, expected) != 0
 }
 
+crate::fn_info!(#[realm(throws = passes(1))] declare
 #[no_mangle]
 pub extern "C" fn js_assert_ok(value: f64, message: f64) -> f64 {
     if crate::value::js_is_truthy(value) != 0 {
@@ -901,7 +902,9 @@ pub extern "C" fn js_assert_ok(value: f64, message: f64) -> f64 {
         is_null_or_undefined(message),
     )
 }
+);
 
+crate::fn_info!(#[realm(throws = passes(0))] declare
 #[no_mangle]
 pub extern "C" fn js_assert_fail(message: f64) -> f64 {
     if is_error_value(message) {
@@ -916,6 +919,7 @@ pub extern "C" fn js_assert_fail(message: f64) -> f64 {
         is_null_or_undefined(message),
     )
 }
+);
 
 #[no_mangle]
 pub extern "C" fn js_assert_strict_equal(actual: f64, expected: f64, message: f64) -> f64 {

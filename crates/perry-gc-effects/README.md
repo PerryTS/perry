@@ -40,3 +40,9 @@ The fixtures README documents the checked-in object fixtures and their
 rebuild command. Tests use only the library and binary, with no subprocess
 disassembler, nm, demangler, Python, Clang, archiver or cross SDK required.
 The optional inspect/profile examples support compatibility and cost audits.
+
+Sidecar v2 appends `throw_class` and `passes` to every row. Native origins
+come from the four typed leaf symbols; declarations supply operands only.
+See `docs/src/internals/typed-throws.md` for the source carrier, coverage
+check, own-argument inheritance rule and diagnostic census. The solver
+continues to use the existing GC class and throws columns.

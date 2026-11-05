@@ -174,7 +174,8 @@ extern "C" fn bun_sql_transaction_rejected(
             finish_transaction(handle, nested, false);
             undefined_f64()
         });
-        perry_runtime::exception::throw_program_value(reason.get_nanbox_f64())
+        // Promise rejection writers include program values, catches and runtime-built errors.
+        perry_runtime::exception::throw_open(reason.get_nanbox_f64())
     }
 }
 

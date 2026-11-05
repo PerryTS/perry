@@ -728,3 +728,6 @@ indirect exact perry_runtime::dyn_eval_hook_roots::register_installed_roots => e
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_active_functions_storage => exact perry_runtime::dyn_eval::function_owner::active_functions_storage::resolve -- evaluator installer fills existing function pin TLS resolver
 
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_pin_top_storage => exact perry_runtime::dyn_eval::function_owner::pin_top_storage::resolve -- evaluator installer fills existing function pin TLS resolver
+
+# interpreted program throw: counted with dynamic code
+js exact perry_runtime::dyn_eval::interp::exec_stmt -- the statement evaluator executes interpreted program text (interp_entry is inlined); exclude its program throws from the native throw class

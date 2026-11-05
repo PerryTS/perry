@@ -113,6 +113,7 @@ pub(super) extern "C" fn pipe_unpipe_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+crate::fn_info!(#[realm(throws = passes(2))] declare
 pub(super) extern "C" fn pipe_error_callback(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -134,6 +135,7 @@ pub(super) extern "C" fn pipe_error_callback(
     }
     f64::from_bits(TAG_UNDEFINED)
 }
+);
 
 pub(super) extern "C" fn pipe_close_callback(
     closure: *const ClosureHeader,
