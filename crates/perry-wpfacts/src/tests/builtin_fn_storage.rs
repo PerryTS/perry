@@ -312,3 +312,140 @@ console.log(diagnostics[0].code); // COMPUTEDDORMANT
         true,
     );
 }
+
+fn field_effect(holder: &str, store: &str, use_value: &str, iterator: bool, want_proven: bool) {
+    let result = if iterator {
+        "({ next() { return { value: 0, done: true }; } })"
+    } else {
+        "\"effect\""
+    };
+    check(
+        &format!(
+            r#"
+declare function input(): any;
+const F: any = {holder};
+const o: any = {{ n: new Diagnostic() }};
+function g(...args: any[]) {{ o.n = input(); return {result}; }}
+{store}
+{use_value}
+console.log(o.n.code); // FIELD-EFFECT
+"#
+        ),
+        "// FIELD-EFFECT",
+        "code",
+        want_proven,
+    );
+}
+
+fn enumerated_field_write(holder: &str, write: &str) {
+    check(
+        &format!(
+            r#"
+declare function input(): any;
+const F: any = {holder};
+const o: any = {{ n: new Diagnostic() }};
+F.k = o;
+{write}
+console.log(o.n.code); // ENUM-FIELD
+"#
+        ),
+        "// ENUM-FIELD",
+        "code",
+        false,
+    );
+}
+
+macro_rules! implicit_field_controls {
+    () => {
+        #[test]
+        fn to_json_direct() {
+            field_effect(HOLDER, "F.toJSON = g;", "JSON.stringify(F);", false, false);
+        }
+        #[test]
+        fn to_json_nested() {
+            field_effect(HOLDER, "F.toJSON = g;", "JSON.stringify({ a: F });", false, false);
+        }
+        #[test]
+        fn value_of_unary_plus() {
+            field_effect(HOLDER, "F.valueOf = g;", "console.log(+F);", false, false);
+        }
+        #[test]
+        fn value_of_relational() {
+            field_effect(HOLDER, "F.valueOf = g;", "console.log(F < 1);", false, false);
+        }
+        #[test]
+        fn symbol_to_primitive_template() {
+            field_effect(HOLDER, "F[Symbol.toPrimitive] = g;", "console.log(`${F}`);", false, false);
+        }
+        #[test]
+        fn symbol_to_primitive_add() {
+            field_effect(HOLDER, "F[Symbol.toPrimitive] = g;", "console.log(F + \"\");", false, false);
+        }
+        #[test]
+        fn to_string_string_constructor() {
+            field_effect(HOLDER, "F.toString = g;", "console.log(String(F));", false, false);
+        }
+        #[test]
+        fn to_string_property_key() {
+            field_effect(HOLDER, "F.toString = g;", "console.log(({} as any)[F]);", false, false);
+        }
+        #[test]
+        fn iterator_array_spread() {
+            field_effect(HOLDER, "F[Symbol.iterator] = g;", "console.log([...F]);", true, false);
+        }
+        #[test]
+        fn iterator_for_of() {
+            field_effect(HOLDER, "F[Symbol.iterator] = g;", "for (const x of F) { console.log(x); }", true, false);
+        }
+        #[test]
+        fn enumerate_object_values() {
+            enumerated_field_write(HOLDER, "Object.values(F)[0].n = input();");
+        }
+        #[test]
+        fn enumerate_object_entries() {
+            enumerated_field_write(HOLDER, "Object.entries(F)[0][1].n = input();");
+        }
+        #[test]
+        fn enumerate_object_spread() {
+            enumerated_field_write(HOLDER, "const copy: any = { ...F }; copy.k.n = input();");
+        }
+        #[test]
+        fn enumerate_object_assign() {
+            enumerated_field_write(HOLDER, "Object.assign({}, F).k.n = input();");
+        }
+        #[test]
+        fn enumerate_for_in_read() {
+            enumerated_field_write(HOLDER, "for (const key in F) { F[key].n = input(); }");
+        }
+        #[test]
+        fn accessor_direct_read() {
+            field_effect(HOLDER, "Object.defineProperty(F, \"x\", { get: g });", "console.log(F.x);", false, false);
+        }
+        #[test]
+        fn accessor_reflect_get() {
+            field_effect(HOLDER, "Object.defineProperty(F, \"x\", { get: g });", "console.log(Reflect.get(F, \"x\"));", false, false);
+        }
+        #[test]
+        fn stored_handlers_stay_dormant() {
+            field_effect(HOLDER, "F.toJSON = g; F.valueOf = g; F[Symbol.toPrimitive] = g; F.toString = g; F[Symbol.iterator] = g;", "", false, true);
+        }
+    };
+}
+
+mod identified_push {
+    use super::*;
+    const HOLDER: &str = "Array.prototype.push";
+    implicit_field_controls!();
+}
+
+mod object_has_own {
+    use super::*;
+    const HOLDER: &str = "Object.prototype.hasOwnProperty";
+    implicit_field_controls!();
+}
+
+mod anonymous_max {
+    use super::*;
+    const HOLDER: &str = "Math.max";
+    implicit_field_controls!();
+}
