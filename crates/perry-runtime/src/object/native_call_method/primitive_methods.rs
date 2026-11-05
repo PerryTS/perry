@@ -604,10 +604,7 @@ pub(super) unsafe fn dispatch_primitive(
                     let msg = b"'then' property on Promise is not callable";
                     let msg_str =
                         crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                    let err = crate::error::js_typeerror_new(msg_str);
-                    crate::exception::js_throw(f64::from_bits(
-                        JSValue::pointer(err as *const u8).bits(),
-                    ));
+                    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
                 }
                 let args = refreshed_args();
                 let result = unsafe {

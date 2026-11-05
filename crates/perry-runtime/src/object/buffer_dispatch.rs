@@ -9,8 +9,7 @@ use perry_base64::Engine as _;
 fn throw_buffer_type_error_with_code(message: &'static str, code: &'static str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn is_buffer_dispatch_string(value: f64) -> bool {
@@ -505,7 +504,7 @@ pub unsafe fn dispatch_buffer_method(
             args,
         ) {
             Ok(value) => value,
-            Err(error) => crate::exception::js_throw(error),
+            Err(error) => crate::exception::rethrow_caught(error),
         };
     }
     let arg_i32 = |i: usize| -> i32 {

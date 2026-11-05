@@ -753,8 +753,7 @@ fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
         value_str
     );
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// sort - sort array in-place using a comparator closure

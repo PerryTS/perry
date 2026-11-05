@@ -96,8 +96,7 @@ pub(super) fn throw_dataview_offset_out_of_bounds() -> ! {
     // Node throws a plain `RangeError` here with no `code` property (#2878).
     const MSG: &[u8] = b"Offset is outside the bounds of the DataView";
     let msg = crate::string::js_string_from_bytes(MSG.as_ptr(), MSG.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 fn throw_buffer_out_of_bounds() -> ! {

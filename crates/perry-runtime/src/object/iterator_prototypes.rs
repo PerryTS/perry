@@ -184,8 +184,7 @@ fn brand_type_error(method: &str) -> f64 {
     msg.extend_from_slice(method.as_bytes());
     msg.extend_from_slice(b" called on incompatible receiver");
     let h = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(h);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(h))
 }
 
 // --- `next` thunks: the receiver's class is the iterator brand. ---

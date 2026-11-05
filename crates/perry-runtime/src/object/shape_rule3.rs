@@ -434,8 +434,7 @@ pub(crate) fn clamp_plus_four_word(kind: &'static str, word: u32) -> u32 {
 #[inline(never)]
 fn throw_plus_four_range_error(message: &'static [u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cfg(test)]

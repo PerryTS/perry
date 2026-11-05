@@ -1197,8 +1197,7 @@ pub(crate) extern "C" fn stream_emit_impl(
 
 fn throw_plain_type_error_value(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 mod options_init;

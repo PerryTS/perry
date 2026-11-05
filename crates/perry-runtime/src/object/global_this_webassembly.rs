@@ -598,8 +598,7 @@ extern "C" fn webassembly_memory_ctor_thunk(
         }
         Err(MemoryCtorError::Range(msg)) => {
             let message_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_rangeerror_new(message_ptr);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+            crate::exception::throw_core(crate::error::CoreError::range_error(message_ptr));
         }
     };
     // The dynamic construct path pre-allocated the receiver with
@@ -719,8 +718,7 @@ extern "C" fn webassembly_memory_grow_thunk(
         }
         Err(MemoryCtorError::Range(msg)) => {
             let message_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_rangeerror_new(message_ptr);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+            crate::exception::throw_core(crate::error::CoreError::range_error(message_ptr));
         }
     }
 }

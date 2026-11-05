@@ -82,9 +82,7 @@ macro_rules! thunk {
             let msg: &'static str = $msg;
             let bytes = msg.as_bytes();
             let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            let err = crate::error::js_error_new_with_message(header);
-            let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-            crate::exception::js_throw(f64::from_bits(bits))
+            crate::exception::throw_core(crate::error::CoreError::error(header))
         }
     };
 }

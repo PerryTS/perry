@@ -645,8 +645,7 @@ pub(crate) unsafe fn resume_fixed_step(
     if get(3) == crate::value::TAG_TRUE {
         let msg = b"Generator is already executing";
         let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
     let next_only =
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| (*(*p).info).params == 1);

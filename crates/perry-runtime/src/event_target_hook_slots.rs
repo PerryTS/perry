@@ -60,13 +60,13 @@ pub fn with_message_event_dispatch(event: f64, target: f64, call: impl FnOnce())
             return;
         }
     }
-    let result = crate::exception::catch_js_throw(call);
-    let error = result.err().map(|value| scope.root_nanbox_f64(value));
+    let result = crate::exception::catch_thrown(call);
+    let error = result.err().map(|caught| caught.root(&scope));
     if let Some(run) = MESSAGE_DISPATCH_STATE.get() {
         run(event.get_nanbox_f64(), target.get_nanbox_f64(), false);
     }
     if let Some(error) = error {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::rethrow_rooted(error);
     }
 }
 static JS_CUSTOM_EVENT_NEW: Hook<extern "C" fn(f64, f64, u32) -> *mut ObjectHeader> = Hook::empty();

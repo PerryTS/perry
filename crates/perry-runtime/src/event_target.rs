@@ -1043,8 +1043,7 @@ fn event_proto_receiver(this: crate::closure::JsThis) -> *mut ObjectHeader {
     }
     let msg = b"Value of this must be an Event";
     let text = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 extern "C" fn event_proto_prevent_default_thunk(

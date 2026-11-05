@@ -429,14 +429,12 @@ fn throw_vm_type(message: &str) -> f64 {
 
 fn throw_type_error_no_code(message: &str) -> f64 {
     let msg = string_ptr(message);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_reference_error_no_code(message: &str) -> f64 {
     let msg = string_ptr(message);
-    let err = crate::error::js_referenceerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg))
 }
 
 fn throw_vm_module_cached_data_rejected() -> f64 {
@@ -727,14 +725,12 @@ fn build_import_env(module: *mut ObjectHeader) -> HashMap<String, f64> {
 
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_syntax(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 fn rust_string_from_header(ptr: *const StringHeader) -> Option<String> {

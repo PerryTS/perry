@@ -38,7 +38,8 @@ pub(crate) use native_call::catch_native_callback;
 mod throw_leaf;
 use throw_leaf::ThrowKind;
 pub use throw_leaf::{
-    rethrow_caught, throw_core, throw_open, throw_program_value, Caught, CoreError,
+    rethrow_caught, rethrow_rooted, throw_core, throw_open, throw_program_value, Caught, CoreError,
+    RootedCaught,
 };
 
 struct ExceptionState {

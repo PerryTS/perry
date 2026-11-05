@@ -1158,8 +1158,7 @@ pub(crate) unsafe fn typed_array_own_to_primitive_number(owner: usize, value: f6
     if non_primitive_calls >= 2 {
         let msg = b"Cannot convert object to primitive value";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
     None
 }

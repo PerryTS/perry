@@ -101,8 +101,7 @@ pub extern "C" fn js_buffer_validate_size(value: f64) -> i32 {
         // Plain `RangeError` (no `ERR_*` code) to match V8/Node.
         let msg = b"Array buffer allocation failed";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_rangeerror_new(s);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::range_error(s));
     }
     n as i32
 }

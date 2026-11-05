@@ -808,8 +808,7 @@ fn throw_locked(family: usize, violation: &Violation) -> ! {
         Violation::AddIndex => format!("Cannot add an array index to built-in {object}: {WHY}"),
     };
     let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 /// The value-store hook (slot and spill stores): [`note_write`] for a sealed

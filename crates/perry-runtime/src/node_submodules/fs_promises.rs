@@ -865,8 +865,7 @@ fn readline_promises_create_interface(opts: f64) -> f64 {
     {
         let message = b"input.on is not a function";
         let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
 
     let output = object_field(opts, b"output").unwrap_or_else(undefined);

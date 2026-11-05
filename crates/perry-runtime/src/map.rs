@@ -3200,14 +3200,14 @@ pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHead
             } else {
                 let map_value = crate::value::js_nanbox_pointer(map as i64);
                 crate::collection_iter::call_with_this_capturing_throw(adder, map_value, &args)
-                    .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+                    .unwrap_or_else(|exc| crate::exception::rethrow_caught(exc))
             }
         });
         if let Err(exc) = pair {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     }
 

@@ -597,8 +597,7 @@ pub extern "C-unwind" fn js_bun_unsupported(member: f64) -> f64 {
     let member = value_to_string(member);
     let message = format!("Bun.{member} is not supported by Perry");
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_message(message);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::error(message))
 }
 
 #[cfg(test)]

@@ -4,8 +4,7 @@ fn throw_invalid_buffer_from_first_arg() -> ! {
     let message = b"The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object.";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Create a Buffer from a string
@@ -537,8 +536,7 @@ fn uint8array_length_or_throw(val: f64) -> u32 {
         };
         let msg = format!("Invalid typed array length: {shown}");
         let m = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_rangeerror_new(m);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::range_error(m));
     }
     // #5067 — a `Uint8Array` is backed by an `i32`-capacity `BufferHeader`, so
     // a length above `i32::MAX` (~2 GiB) cannot be allocated. Node passes the
