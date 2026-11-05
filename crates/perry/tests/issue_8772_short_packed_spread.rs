@@ -178,26 +178,6 @@ fn run_failure(binary: &Path, dir: &Path, moving_gc: bool) -> Output {
     output
 }
 
-fn read_lowering_artifacts(dir: &Path) -> String {
-    let lowering = dir.join(".perry-trace/lowering");
-    let run_dir = std::fs::read_dir(&lowering)
-        .expect("read lowering directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.is_dir())
-        .expect("lowering run directory");
-    std::fs::read_dir(run_dir)
-        .expect("read lowering run")
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.file_name().to_str().is_some_and(|name| {
-                name.starts_with("perry_native_reps_") && name.ends_with(".json")
-            })
-        })
-        .map(|entry| std::fs::read_to_string(entry.path()).expect("read lowering artifact"))
-        .collect::<String>()
-}
-
 fn function_ir<'a>(ir: &'a str, fragment: &str) -> &'a str {
     let name = ir
         .find(fragment)

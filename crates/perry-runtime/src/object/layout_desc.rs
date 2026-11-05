@@ -1838,12 +1838,10 @@ use diagnostics::FAMILY_DIAG;
 #[path = "layout_desc/store.rs"]
 mod store;
 pub(crate) use store::desc_own_key;
-use store::desc_position_by_bytes;
 pub(crate) use store::desc_position_hashed;
 pub(crate) use store::family_create;
 pub(crate) use store::family_own_key;
 pub(crate) use store::family_own_key_hashed;
-use store::family_slot_word;
 pub(crate) use store::family_store;
 pub(crate) use store::family_store_str;
 pub(crate) use store::family_store_value;

@@ -20,7 +20,7 @@ use crate::closure::{is_closure_ptr, ClosureHeader, JsThis};
 // shared-shape constructor in `crate::iter_result`.
 use crate::iter_result::make_iter_result;
 use crate::object::{
-    js_object_alloc, js_object_get_field, js_object_get_field_by_name, js_object_set_field,
+    js_object_alloc, js_object_get_field, js_object_set_field,
     ObjectHeader,
 };
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
