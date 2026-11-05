@@ -499,3 +499,12 @@ pub(crate) fn accessor_receiver(m: &Model, t: Tok) -> bool {
             TokKind::Obj(..) | TokKind::Func(..) | TokKind::Proto(_) | TokKind::ClassObj(_)
         )
 }
+
+/// Callable values whose bodies the accessor groups cannot bind precisely.
+pub(crate) fn unknown_accessor_callable(m: &Model, t: Tok) -> bool {
+    match m.toks[t as usize] {
+        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
+        TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,
+        _ => false,
+    }
+}
