@@ -250,8 +250,8 @@ Two new gap tests, both compared with `diff` against
 `node --experimental-strip-types` on the same file:
 
 ```
-target/release/perry tests/fixtures/programs/test_gap_turnloop_http_server.ts  -o /tmp/e_http.bin
-target/release/perry tests/fixtures/programs/test_gap_turnloop_https_server.ts -o /tmp/e_https.bin
+target/release/perry test-files/test_gap_turnloop_http_server.ts  -o /tmp/e_http.bin
+target/release/perry test-files/test_gap_turnloop_https_server.ts -o /tmp/e_https.bin
 ```
 
 | test | result |
@@ -285,7 +285,7 @@ one.
 
 ### The lifecycle edges
 
-`tests/fixtures/programs/test_gap_turnloop_http_lifecycle.ts` covers what is easy to get
+`test-files/test_gap_turnloop_http_lifecycle.ts` covers what is easy to get
 wrong once the accept loop, the codec and the handler stop being three
 different tasks. Run on Perry, on Node, **and on the base commit**:
 
@@ -320,7 +320,7 @@ hyper path did too.
 
 ### `socket.upgradeToTLS` — the P5 acceptance case
 
-`tests/fixtures/programs/test_net_upgrade_tls.ts` against its Python `SSLRequest` companion:
+`test-files/test_net_upgrade_tls.ts` against its Python `SSLRequest` companion:
 
 ```
 plain connect ok
@@ -369,7 +369,7 @@ reproduces the existing behaviour exactly.
 
 ### `server.keepAliveTimeout`, against the oracle
 
-`tests/fixtures/programs/test_gap_turnloop_keepalive_timeout.ts`, run on both:
+`test-files/test_gap_turnloop_keepalive_timeout.ts`, run on both:
 
 | `keepAliveTimeout` | `keepAliveTimeoutBuffer` | Perry | Node |
 |---|---|---|---|
@@ -580,7 +580,7 @@ change:
   here, killing three of their shards (they auto-resumed). Resolve
   `/proc/PID/cwd` and kill only your own.
 - **Do not rsync a source mirror with `--delete` while a gap suite is running
-  in it.** `tests/parity/output/` is created by the harness at startup and
+  in it.** `test-parity/output/` is created by the harness at startup and
   written per test; deleting it under a live suite fails every remaining test
   with "No such file or directory".
 

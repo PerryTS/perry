@@ -35,7 +35,7 @@ iter_handle_ids_of::<Http2SessionHandle, _>(|peer_id| {
 `session.settings()`, `session.ping()` and `session.goaway()` never encode a
 frame. They walk the **process's own handle table** for a session of the
 opposite kind and push a synthetic event at it.
-`tests/parity/node-suite/http2/` passes because both ends of every fixture there
+`test-parity/node-suite/http2/` passes because both ends of every fixture there
 are Perry, in one process, so the scan always finds its "peer". Three of those
 fixtures — `session/ping-echo.ts`, `session/goaway-opaque-data.ts`,
 `session/settings-callback.ts` — are the ones that look like they cover this
@@ -62,7 +62,7 @@ and hand-encodes/decodes HTTP/2 frames. The loopback path cannot satisfy them:
 the peer is a socket, so there is no second `Http2SessionHandle` in the process
 to find, and a session that never writes a frame prints `(none)`.
 
-The shared codec is `tests/fixtures/programs/_helpers/h2_wire.ts` (436 lines). Three design
+The shared codec is `test-files/_helpers/h2_wire.ts` (436 lines). Three design
 decisions are load-bearing:
 
 * **Byte arithmetic, not `Buffer.readUIntBE`.** Frame headers are assembled and
@@ -434,11 +434,11 @@ is the acceptance criterion for whatever moves it.
 
 * Branch `h2c/http2-conformance`, based on `turnloop/integration` at
   `1db2f76e3`. No version bump, no attribution lines, no `CHANGELOG.md` edit.
-* Files added: 14 fixtures under `tests/fixtures/programs/`, one helper under
-  `tests/fixtures/programs/_helpers/`, `docs/src/testing/http2-conformance.md` (linked from
+* Files added: 14 fixtures under `test-files/`, one helper under
+  `test-files/_helpers/`, `docs/src/testing/http2-conformance.md` (linked from
   `docs/src/SUMMARY.md`), `changelog.d/10354-http2-conformance-fixtures.md`,
   and this report.
-* `tests/parity/gap_snapshot.json` and `tests/parity/known_failures.json` each
+* `test-parity/gap_snapshot.json` and `test-parity/known_failures.json` each
   gain the same 14 entries (`issue: 10327`, `category: module-inventory`, one
   sentence of measured evidence per entry). **That is the deliverable's
   ratchet**: when the transport lands, these flip to passing and the gap gate

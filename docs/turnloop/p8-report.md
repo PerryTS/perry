@@ -309,7 +309,7 @@ the two answers are different for almost every row above. Three facts, each
 established by running something rather than by reading a manifest:
 
 **1. A program that only uses the global `fetch()` reaches no tokio at all.**
-`tests/integration/turnloop/apps/` style probe, one `await fetch(url)` against a local
+`scripts/turnloop/apps/` style probe, one `await fetch(url)` against a local
 origin, base compiler, `PERRY_LOOP_STATS=1`:
 
 ```
@@ -531,7 +531,7 @@ undefined reference to `tokio_worker_agent_census_ts__init_body'
 self-hosting worker, and what this lane's census probe was first written as —
 fails at link time. Node 26.5.1 runs the same file correctly. The same program
 with the worker body in a separate file
-(`tests/fixtures/programs/test_gap_9744_static_worker_helpers.ts`'s shape) links and runs,
+(`test-files/test_gap_9744_static_worker_helpers.ts`'s shape) links and runs,
 which is what the committed probe now does.
 
 Not investigated further: it is a codegen/emission bug, not a transport one,
@@ -731,7 +731,7 @@ four symbols now agree. This is CLAUDE.md's kill-policy call, not a transport
 one. `cron.rs` now has no tokio call sites. It removes no manifest edge and the
 report does not claim otherwise.
 
-### 3. `tests/integration/turnloop/apps/tokio_worker_agent_census.ts`
+### 3. `scripts/turnloop/apps/tokio_worker_agent_census.ts`
 
 The probe for the decline in "The one blocker" above: the same `fetch`, once on
 the primary agent and once inside a `worker_threads` Worker, with the OS thread
@@ -874,7 +874,7 @@ by one is evidence about the other for every subject in this report.
 | `g1.ts` (= `g0.ts` + `import 'node-fetch'`) | base **and** main | SIGSEGV, 3/3 on each — the crash is pre-existing, not a turnloop regression |
 | `g1_nowk` (same file, `PERRY_DISABLE_WELL_KNOWN=1`) | base | correct (`status=200`) — isolates the crash to the well-known routing |
 | `nf_only.ts` | base | node-fetch alone: `r.status` is `undefined`, a bare-number handle |
-| `tests/integration/turnloop/apps/tokio_worker_agent_census.ts` | P8 **and** main | the Worker-agent regression: 200 on main, `fetch failed` on the branch, 3/3 each |
+| `scripts/turnloop/apps/tokio_worker_agent_census.ts` | P8 **and** main | the Worker-agent regression: 200 on main, `fetch failed` on the branch, 3/3 each |
 | `netw_main.ts` | P8 **and** main | `net.connect` inside a Worker: OK on both — the regression is fetch-specific |
 | `race.ts` (park, then fetch, inside a Worker) | P8 **and** main | the fetch **hangs** on both — never settles, never rejects. Pre-existing, not this branch's |
 
@@ -948,7 +948,7 @@ Named precisely, because each is a hole rather than a preference.
   evidence, not measurements.
 * **The auto-optimize gap tier** as a whole. The fast tier ran, which itself
   takes the auto-optimize path per ext-routed test (#7629) — 35 of the
-  `tests/fixtures/programs/test_gap_*.ts` fixtures import a module the well-known flip
+  `test-files/test_gap_*.ts` fixtures import a module the well-known flip
   routes to a `perry-ext-*` wrapper, and each of those built its own coherent
   archives — but the 8-shard auto-optimize mode did not run.
 * **`cargo test --workspace`**, and the `perry-runtime` unit suite. This
@@ -983,9 +983,9 @@ PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
 
 # the worker-agent census (needs an HTTP origin; Linux only)
 python3 -m http.server 8099 --bind 127.0.0.1 &
-perry tests/integration/turnloop/apps/tokio_worker_agent_census.ts -o wcensus
+perry scripts/turnloop/apps/tokio_worker_agent_census.ts -o wcensus
 PERRY_LOOP_STATS=1 ./wcensus
-node --experimental-strip-types tests/integration/turnloop/apps/tokio_worker_agent_census.ts
+node --experimental-strip-types scripts/turnloop/apps/tokio_worker_agent_census.ts
 ```
 
 Three decisions are yours, not this lane's:

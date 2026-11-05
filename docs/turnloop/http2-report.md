@@ -67,7 +67,7 @@ HTTP/2 control surface is not a thin binding over a protocol — it is a
 **loopback simulation**. `queue_session_settings` and `queue_session_goaway`
 enumerate `Http2SessionHandle`s with `iter_handle_ids_of`, pick the ones whose
 `session_type` is the opposite of the caller's, and push an event into their
-queues. No frame is encoded. That is why the `tests/parity/node-suite/http2/`
+queues. No frame is encoded. That is why the `test-parity/node-suite/http2/`
 corpus passes: every case in it is a Perry client talking to a Perry server in
 one process. Moving to turnloop means those surfaces meet a real wire for the
 first time, and the node-suite corpus stops being evidence that they work.

@@ -254,7 +254,7 @@ profile are exactly the agents that do network I/O.
 
 ### Measured
 
-`tests/integration/turnloop/apps/p9_agent_loop_rss.ts`, on the Linux box, three modes x
+`scripts/turnloop/apps/p9_agent_loop_rss.ts`, on the Linux box, three modes x
 three agent counts x three repetitions per arm, median reported. A row's
 `delta_kb` is process RSS once every agent is alive and idle, minus RSS before
 the first Worker was created, taken after a 1500 ms settle (see below).
@@ -309,7 +309,7 @@ the loop preallocation overtakes that saving; below that it does not.
 
 **A `parallelMap` over 64 cores creates ZERO loops**, which is the other half of
 the cost question and is measured rather than argued:
-`tests/integration/turnloop/apps/p9_thread_agent.ts` runs `spawn` and `parallelMap` and
+`scripts/turnloop/apps/p9_thread_agent.ts` runs `spawn` and `parallelMap` and
 prints exactly one `[perry-loop]` line, `agent=0`. See the `perry/thread` section
 above for why there is nothing there to give a loop to.
 
@@ -376,7 +376,7 @@ check that stops it comparing a tree against itself. The `driver=legacy` and
 
 **There is now one `[perry-loop]` line per agent that owned a loop, not one per
 process.** This is the definition that moved. On a single-agent program —
-including `tests/integration/turnloop/apps/node_http_hello.ts`, which is what the server
+including `scripts/turnloop/apps/node_http_hello.ts`, which is what the server
 A/B measures — nothing changes: one line, `agent=0`. On a program with a Worker
 there are two or more, and because a worker retires *during* the program while
 the primary retires at exit, **the worker's line comes first**. `server_ab.py`
@@ -505,7 +505,7 @@ claim that matters, and it was measured over the full 819 in both.
 
 An agent loop holds JS promises across completions, so this is the lane where a
 correct-looking answer over a corrupt heap is most likely.
-`tests/integration/turnloop/apps/p9_worker_gc_stress.ts` runs the primary agent and a
+`scripts/turnloop/apps/p9_worker_gc_stress.ts` runs the primary agent and a
 Worker through a `fetch`, a socket round-trip and an allocating churn loop at the
 same time, retains a graph across all of it, and reads that graph back after
 every collection point.
@@ -603,7 +603,7 @@ the base commit too, or is a surface that did not exist there.
 
 A `net.connect` from a worker agent to a `net.createServer` listener owned by
 the same process's PRIMARY agent connects and then never receives data.
-Reproducer: `tests/integration/turnloop/apps/p9_worker_socket_to_primary.ts`.
+Reproducer: `scripts/turnloop/apps/p9_worker_socket_to_primary.ts`.
 
 ```
 this branch, 1 agent : answered=1/1 ok=1/1
@@ -618,7 +618,7 @@ reaches turnloop instead of failing inside tokio.
 
 ### 2. Concurrent worker agents each holding a raw socket
 
-`tests/integration/turnloop/apps/p9_socket_concurrency.ts` runs the SAME N socket
+`scripts/turnloop/apps/p9_socket_concurrency.ts` runs the SAME N socket
 round-trips two ways, which is what makes it a diagnosis rather than an
 observation:
 

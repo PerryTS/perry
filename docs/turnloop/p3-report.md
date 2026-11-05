@@ -178,7 +178,7 @@ assert its subject was live" rule applied to this change's own instrument.
 
 ### Measured, Linux x86_64, release
 
-The subject is `tests/integration/turnloop/apps/timer_loop_stats.ts`: 25 quiet `await
+The subject is `scripts/turnloop/apps/timer_loop_stats.ts`: 25 quiet `await
 sleep()` parks, 20 sub-millisecond remainders, 2,000 short timeouts, a 200-deep
 `setImmediate` chain and a 50-tick interval. Three interleaved runs per arm.
 
@@ -414,7 +414,7 @@ PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1 \
   PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_LOOP_STATS=1 ./timer_loop_stats
 
 # the loop-stats subject
-PERRY_LOOP_STATS=1 ./timer_loop_stats     # tests/integration/turnloop/apps/timer_loop_stats.ts
+PERRY_LOOP_STATS=1 ./timer_loop_stats     # scripts/turnloop/apps/timer_loop_stats.ts
 ```
 
 Still to run, and NOT run here:

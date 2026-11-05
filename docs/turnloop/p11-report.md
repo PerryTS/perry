@@ -460,7 +460,7 @@ perry-http-client
 ├── perry              (the CLI binary — not linked into any compiled program)
 └── perry-ext-axios    (linked only by a program that imports 'axios')
 
-$ grep -l "from ['\"]axios" tests/fixtures/programs/test_gap_*.ts | wc -l
+$ grep -l "from ['\"]axios" test-files/test_gap_*.ts | wc -l
 0
 ```
 

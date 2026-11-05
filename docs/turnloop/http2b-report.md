@@ -33,7 +33,7 @@ Perry's HTTP/2 control surface was a **loopback simulation**.
 into their queues; `queue_session_ping` fired its own callback straight back
 without consulting anyone. **No frame was ever encoded.**
 
-That is why `tests/parity/node-suite/http2/` passes: every case in it is a Perry
+That is why `test-parity/node-suite/http2/` passes: every case in it is a Perry
 client talking to a Perry server in one process. So `settings()`, `goaway()`
 and `ping()` were not ported here — they were **implemented**, and the existing
 tests constrained nothing, because both ends were Perry.
@@ -487,7 +487,7 @@ again and the per-test comparison above is the second pair of sweeps, at zero.
 
 ### The `node:http2` granular parity suite
 
-`tests/parity/node-suite/http2` — 60 fixtures, run on both arms with a
+`test-parity/node-suite/http2` — 60 fixtures, run on both arms with a
 per-test-outcome variant of `scripts/node_suite_run.py` so the comparison is
 per fixture rather than per count:
 
@@ -513,7 +513,7 @@ now that they are real; it cannot distinguish the two. The new gap tests and
 h2spec are what distinguish them.
 
 **Second, both arms sit below the committed floor of 32/60**
-(`tests/parity/node_suite_baseline.json`), and the seven `perry_err` — which are
+(`test-parity/node_suite_baseline.json`), and the seven `perry_err` — which are
 30-second timeouts in the runner, not compile failures — are the same seven
 fixtures in both arms. Being identical in both arms makes them not this
 branch's, but it also means this run is not a clean check against the floor,
