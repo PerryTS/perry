@@ -1776,3 +1776,129 @@ fn handle_scopes_reuse_the_handle_stack_and_a_collection_scans_only_live_handles
         (live_before, live_before)
     );
 }
+
+/// node's napi_reference_unref only marks its persistent weak: a count that
+/// drops to 0 and back allocates nothing. The weak target is still cleared by
+/// a collection (napi_get_reference_value answers NULL), and a weak target
+/// that something else keeps alive survives with its identity.
+#[test]
+fn reference_count_transitions_allocate_nothing_and_weak_targets_clear() {
+    let env = test_env();
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut scope) },
+        NapiStatus::Ok
+    );
+    let mut dying = std::ptr::null_mut();
+    let mut kept = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut dying) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut kept) },
+        NapiStatus::Ok
+    );
+    let mut weak = std::ptr::null_mut();
+    let mut weak_kept = std::ptr::null_mut();
+    let mut strong_kept = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_reference(env, dying, 1, &mut weak) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_create_reference(env, kept, 0, &mut weak_kept) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_create_reference(env, kept, 1, &mut strong_kept) },
+        NapiStatus::Ok
+    );
+    let mut count = u32::MAX;
+    let before = crate::arena::arena_in_use_bytes();
+    for _ in 0..100_000 {
+        assert_eq!(
+            unsafe { napi_reference_unref(env, weak, &mut count) },
+            NapiStatus::Ok
+        );
+        assert_eq!(count, 0);
+        assert_eq!(
+            unsafe { napi_reference_ref(env, weak, &mut count) },
+            NapiStatus::Ok
+        );
+        assert_eq!(count, 1);
+    }
+    assert_eq!(
+        crate::arena::arena_in_use_bytes(),
+        before,
+        "100k unref/ref cycles must not allocate"
+    );
+    assert_eq!(
+        unsafe { napi_reference_unref(env, weak, &mut count) },
+        NapiStatus::Ok
+    );
+    assert_eq!(count, 0);
+    let mut read = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, weak, &mut read) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        value_bits(env, read).unwrap(),
+        value_bits(env, dying).unwrap(),
+        "an uncollected weak reference reads its target"
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, scope) },
+        NapiStatus::Ok
+    );
+    crate::gc::js_gc_collect();
+    crate::gc::js_gc_collect();
+
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut scope) },
+        NapiStatus::Ok
+    );
+    let mut read = 1usize as NapiValue;
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, weak, &mut read) },
+        NapiStatus::Ok
+    );
+    assert!(read.is_null(), "a collected weak target reads as NULL");
+    assert_eq!(
+        unsafe { napi_reference_ref(env, weak, &mut count) },
+        NapiStatus::Ok
+    );
+    assert_eq!(count, 0, "a collected weak reference cannot be revived");
+
+    let mut via_weak = std::ptr::null_mut();
+    let mut via_strong = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, weak_kept, &mut via_weak) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, strong_kept, &mut via_strong) },
+        NapiStatus::Ok
+    );
+    assert!(
+        !via_weak.is_null(),
+        "a weak target kept alive elsewhere survives"
+    );
+    assert_eq!(
+        value_bits(env, via_weak).unwrap(),
+        value_bits(env, via_strong).unwrap(),
+        "the weak word follows the target if it moved"
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, scope) },
+        NapiStatus::Ok
+    );
+    for reference in [weak, weak_kept, strong_kept] {
+        assert_eq!(
+            unsafe { napi_delete_reference(env, reference) },
+            NapiStatus::Ok
+        );
+    }
+}
