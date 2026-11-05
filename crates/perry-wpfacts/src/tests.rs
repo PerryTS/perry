@@ -1859,3 +1859,4 @@ mod shared_sets;
 mod builtin_missing_member;
 
 mod uri_coercion;
+mod annexb_alias;
