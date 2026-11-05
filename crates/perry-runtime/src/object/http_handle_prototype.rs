@@ -1,20 +1,7 @@
-//! The [[Prototype]] of a live node:http / node:http2 server `req`/`res`
-//! (#13802).
-//!
-//! A live server's request and response are perry-ext-http registry handles,
-//! not heap objects, so nothing links them to a prototype object. The
-//! extension registers a classifier (`js_register_http_server_handle_kind_probe`)
-//! naming which constructor's `.prototype` a handle has: `ServerResponse` /
-//! `IncomingMessage` for http, `Http2ServerResponse` / `Http2ServerRequest`
-//! for the http2 compat API. That prototype is what `Object.getPrototypeOf`
-//! answers and what a property read or method call the native dispatch does
-//! not know falls back to, so helpers patched onto
-//! `Http2ServerResponse.prototype` reach `res`.
-//!
-//! A prototype the program recorded with `Object.setPrototypeOf(res, proto)`
-//! (Express's `app.response`) takes precedence; that is the existing
-//! handle-prototype walk, which [`of_handle`] reports and the field fallbacks
-//! leave to their callers.
+//! Effective prototypes for registry-backed HTTP request and response objects.
+//! HTTP/1 responses are heap objects; HTTP/2 compatibility responses still use
+//! registry handles. Native state remains on the handle, while inherited
+//! properties follow the effective prototype, including explicit null links.
 use crate::value::JSValue;
 
 use super::class_registry::{http_server_handle_kind_probe, HttpServerHandleKind};
@@ -45,33 +32,148 @@ pub(crate) fn of_handle(handle_id: usize) -> Option<f64> {
     native_prototype(handle_id)
 }
 
-/// Does `handle_id` inherit from its node prototype: an http server handle
-/// with no recorded prototype.
-pub(crate) fn inherits_natively(handle_id: usize) -> bool {
+/// Whether the registry handle is a server-side HTTP value.
+pub(crate) fn is_http_handle(handle_id: usize) -> bool {
     kind_of(handle_id).is_some()
-        && super::prototype_chain::object_static_prototype(handle_id).is_none()
 }
 
-/// `handle[key]` read from the node prototype of an http server handle with
-/// no recorded prototype: an ordinary [[Get]] with the handle as receiver, so
-/// an accessor or a patched method sees `this === res`. `None` for another
-/// handle, a handle with a recorded prototype, or a key the chain lacks.
+/// A prototype-only read, preserving a present `undefined` member.
 pub(crate) fn inherited_field(
     handle_id: usize,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
-    if key.is_null() || !inherits_natively(handle_id) {
+    if key.is_null() {
         return None;
     }
-    // The key is rooted first: building the prototype on first use allocates.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
-    let proto = scope.root_nanbox_f64(native_prototype(handle_id)?);
+    let key_root = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+    let name = unsafe {
+        std::slice::from_raw_parts(
+            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+            (*key).byte_len as usize,
+        )
+    }
+    .to_vec();
+    let mut proto = scope.root_nanbox_f64(of_handle(handle_id)?);
     let receiver = f64::from_bits(crate::value::HANDLE_TAG | handle_id as u64);
-    let value =
-        crate::proxy::js_reflect_get(proto.get_nanbox_f64(), key.get_nanbox_f64(), receiver);
-    let value = JSValue::from_bits(value.to_bits());
-    (!value.is_undefined()).then_some(value)
+    loop {
+        let value = proto.get_nanbox_f64();
+        if !JSValue::from_bits(value.to_bits()).is_pointer() {
+            return None;
+        }
+        // [[Get]] on a Proxy must not run its separate `has` trap.
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            return Some(JSValue::from_bits(
+                crate::proxy::js_reflect_get(value, key_root.get_nanbox_f64(), receiver).to_bits(),
+            ));
+        }
+        if let Some(value) = unsafe {
+            super::own_property_get_by_bytes(
+                JSValue::from_bits(value.to_bits()).as_pointer(),
+                &name,
+                receiver,
+            )
+        } {
+            return Some(value);
+        }
+        proto = scope.root_nanbox_f64(super::object_ops::get_prototype_of_resolved(
+            proto.get_nanbox_f64(),
+        ));
+    }
+}
+
+/// Resolve a live HTTP handle before generic registry dispatch. Native own
+/// state survives prototype replacement; synthetic inherited members do not.
+pub(crate) fn field(handle_id: usize, key: *const crate::StringHeader) -> Option<JSValue> {
+    let kind = kind_of(handle_id)?;
+    if key.is_null() {
+        return Some(JSValue::undefined());
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_root = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+    let name = unsafe {
+        std::slice::from_raw_parts(
+            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+            (*key).byte_len as usize,
+        )
+    };
+    let name_owned = std::str::from_utf8(name).ok()?.to_owned();
+    let name = name_owned.as_str();
+    let native = || {
+        let key =
+            (key_root.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+        let ptr = unsafe { (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
+        let value = super::class_handles::handle_property_dispatch()
+            .map(|dispatch| unsafe { dispatch(handle_id as i64, ptr, name.len()) })
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        JSValue::from_bits(value.to_bits())
+    };
+    if let Some(value) = unsafe {
+        super::handle_expando::handle_own_property_get(handle_id as i64, name.as_ptr(), name.len())
+    } {
+        return Some(JSValue::from_bits(value.to_bits()));
+    }
+    let own = match kind {
+        HttpServerHandleKind::IncomingMessage => matches!(
+            name,
+            "_events"
+                | "_readableState"
+                | "_maxListeners"
+                | "socket"
+                | "client"
+                | "httpVersionMajor"
+                | "httpVersionMinor"
+                | "httpVersion"
+                | "complete"
+                | "rawHeaders"
+                | "rawTrailers"
+                | "joinDuplicateHeaders"
+                | "aborted"
+                | "upgrade"
+                | "url"
+                | "method"
+                | "statusCode"
+                | "statusMessage"
+                | "_consuming"
+                | "_dumped"
+        ),
+        HttpServerHandleKind::Http2ServerRequest => matches!(
+            name,
+            "_events" | "_readableState" | "_maxListeners" | "_eventsCount"
+        ),
+        HttpServerHandleKind::Http2ServerResponse => matches!(
+            name,
+            "_events" | "_eventsCount" | "_maxListeners" | "writable" | "req"
+        ),
+        _ => false,
+    };
+    if own {
+        return Some(native());
+    }
+    let key =
+        (key_root.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    if let Some(value) = inherited_field(handle_id, key) {
+        // Stream/emitter intrinsics use heap listener state. Registry HTTP
+        // objects must keep using their native listener store instead.
+        if crate::node_stream::is_builtin_stream_method(f64::from_bits(value.bits()), name) {
+            return Some(native());
+        }
+        return Some(value);
+    }
+    let canonical = scope.root_nanbox_f64(native_prototype(handle_id)?);
+    let effective = scope.root_nanbox_f64(of_handle(handle_id)?);
+    let reaches_native = canonical.get_nanbox_u64() == effective.get_nanbox_u64()
+        || unsafe {
+            super::native_call_method::js_object_is_prototype_of_value(
+                canonical.get_nanbox_f64(),
+                effective.get_nanbox_f64(),
+            )
+        };
+    Some(if reaches_native {
+        native()
+    } else {
+        JSValue::undefined()
+    })
 }
 
 /// `handle.constructor` once the handle dispatch answered `dispatched`: the

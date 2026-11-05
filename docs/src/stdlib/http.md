@@ -30,6 +30,21 @@ Supported on `ServerResponse`: `.statusCode` (get/set),
 `.on('finish'|'close', cb)`. Auto Content-Length on `.end()` when no
 `Transfer-Encoding` was set.
 
+### Live request and response prototypes
+
+HTTP/1 handler arguments inherit from `http.IncomingMessage.prototype` and
+`http.ServerResponse.prototype`. HTTP/2 compatibility handlers use
+`http2.Http2ServerRequest.prototype` and `http2.Http2ServerResponse.prototype`.
+`Object.getPrototypeOf`, `instanceof`, and inherited `constructor` reads expose
+those identities, and helpers added to the prototypes are available on live
+messages.
+
+Prototype replacements and patched methods take precedence over inherited
+native members. `Object.setPrototypeOf(message, null)` removes inherited
+members, not own properties: for example, an HTTP/1 request retains its own
+`method`, whereas an HTTP/2 compatibility request's inherited `method` is no
+longer available. Restore the original prototype before using its methods again.
+
 ### `https.createServer({ key, cert }, handler)`
 
 ```typescript,no-test

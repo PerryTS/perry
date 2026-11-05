@@ -440,14 +440,8 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     return proto;
                 }
             }
-            // #13802: a live server's `req`/`res` is a registry handle too, and
-            // answered `null` here, so `res instanceof Http2ServerResponse`,
-            // `res.constructor` and helpers patched onto the prototype all
-            // missed. perry-ext-http says which constructor's `.prototype` the
-            // handle has (an HTTP/2 compat response is `Http2ServerResponse`,
-            // not `http.ServerResponse`); a prototype recorded by
-            // `Object.setPrototypeOf(res, proto)` (Express's `app.response`)
-            // wins, as it does for property reads.
+            // Registry-backed HTTP messages inherit their Node prototype unless
+            // user code recorded a replacement (including null).
             if let Some(proto) = crate::object::http_handle_prototype::of_handle(raw_addr as usize)
             {
                 return proto;

@@ -1231,6 +1231,12 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     }
 
     match property.as_str() {
+        "writable"
+            if super::response::response_state(response_root.get())
+                .is_some_and(|sr| sr.http2_compat) =>
+        {
+            bool_value(true)
+        }
         "statusCode" => js_node_http_res_get_status(response_root.get()),
         "statusMessage" => js_node_http_res_get_status_message(response_root.get()),
         "headersSent" => bool_value(js_node_http_res_headers_sent(response_root.get()) != 0),
@@ -1506,6 +1512,9 @@ mod response_socket_tests {
     /// read as `http.IncomingMessage` / `http.ServerResponse`.
     #[test]
     fn server_handle_kind_names_the_compat_constructors() {
+        perry_ffi::initialize_runtime_fixture();
+        unsafe { crate::server::native_dispatch::js_ext_http_nm_install() };
+        let scope = perry_ffi::TransientRootScope::enter();
         let incoming = || {
             IncomingMessage::new(
                 "GET".into(),
@@ -1522,20 +1531,24 @@ mod response_socket_tests {
             f64::from_bits(TAG_UNDEFINED),
             0,
             http1_request,
+            0.0,
         );
+        let http1_response = scope.root_nanbox(http1_response);
         let mut compat = incoming();
         compat.http2_compat = true;
         let http2_request = alloc_incoming_message(compat);
         let http2_response =
             crate::server::response::alloc_server_response_for_turnloop(0, 0, http2_request);
 
-        assert_eq!(http_server_handle_kind(http1_response), 1);
+        let http1_response = crate::server::server::object_handle(http1_response.get());
+        assert_eq!(http_server_handle_kind(http1_response), 0);
         assert_eq!(http_server_handle_kind(http1_request), 2);
         assert_eq!(http_server_handle_kind(http2_response), 3);
         assert_eq!(http_server_handle_kind(http2_request), 4);
         assert_eq!(http_server_handle_kind(0), 0);
 
-        for handle in [http2_response, http2_request, http1_response, http1_request] {
+        crate::server::response_payload::close(http1_response);
+        for handle in [http2_response, http2_request, http1_request] {
             drop_handle(handle);
         }
     }

@@ -1,14 +1,13 @@
-// #13802: the compat API's `req`/`res` inherit from
-// `Http2ServerRequest.prototype` / `Http2ServerResponse.prototype`.
 import * as http2 from "node:http2";
 
-// A framework-style helper patched onto the prototype reaches `res`.
 const responseProto: any = http2.Http2ServerResponse.prototype;
 responseProto.sendText = function (this: any, text: string) {
   this.setHeader("content-type", "text/plain");
   this.end(text);
 };
 
+const requestProto: any = http2.Http2ServerRequest.prototype;
+requestProto.parityHelper = function () { return "request-helper"; };
 const server = http2.createServer();
 let client: any;
 try {
@@ -25,7 +24,32 @@ try {
         response.constructor.name,
         request.constructor === http2.Http2ServerRequest,
         typeof response.sendText,
+        request.parityHelper(),
       );
+      const originalOn = request.on;
+      requestProto.on = function () { return "override"; };
+      console.log(request.on("probe", () => {}));
+      requestProto.on = undefined;
+      console.log(typeof request.on);
+      requestProto.on = originalOn;
+      console.log(originalOn.call(request, "aborted", () => {}) === request);
+      const custom = { constructor: function Custom() {}, on() { return "custom"; } };
+      Object.setPrototypeOf(request, custom);
+      console.log(request.constructor === custom.constructor, request.on());
+      Object.setPrototypeOf(request, null);
+      console.log(typeof request.constructor, typeof request.on, request.method);
+      Object.setPrototypeOf(request, new Proxy({}, {
+        get(_target, key, receiver) { return key === "parityProxy" && receiver === request; },
+        has() { throw new Error("unexpected has trap"); },
+      }));
+      console.log(request.parityProxy);
+      Object.setPrototypeOf(request, requestProto);
+      const responseCustom = { constructor: function CustomResponse() {} };
+      Object.setPrototypeOf(response, responseCustom);
+      console.log(response.constructor === responseCustom.constructor, response.statusCode, response.req === request, response.writable);
+      Object.setPrototypeOf(response, null);
+      console.log(typeof response.constructor, typeof response.end, response.statusCode, response.req === request, response.writable);
+      Object.setPrototypeOf(response, responseProto);
       response.sendText("ok");
       resolve();
     });

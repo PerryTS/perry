@@ -53,6 +53,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 // a small registry id are gone, and with them this block's
                 // reason to decode the key.
                 if !key.is_null() {
+                    if let Some(value) =
+                        crate::object::http_handle_prototype::field(raw as usize, key)
+                    {
+                        return value;
+                    }
                     // Drizzle-sqlite blocker: synth `data.constructor` for
                     // small-handle native instances so drizzle's
                     // `isConfig(data)` duck-type via
@@ -103,6 +108,9 @@ pub(crate) fn get_field_by_name_object_tail(
     // when the codegen passes a raw i64 handle through the slow path.
     if crate::value::addr_class::is_handle_band(obj as usize) {
         if !key.is_null() {
+            if let Some(value) = crate::object::http_handle_prototype::field(obj as usize, key) {
+                return value;
+            }
             // #340/#341: the timer arm that decoded the key here is gone; the
             // handle dispatcher below decodes its own.
             if let Some(dispatch) = handle_property_dispatch() {
