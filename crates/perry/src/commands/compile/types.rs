@@ -1579,6 +1579,7 @@ pub struct NativeAddonModule {
     pub ship_package_payload: bool,
     /// WASI: the addon's wasm32 archives, linked into the program; empty for
     /// a loaded (sidecar) addon.
+    #[cfg(feature = "target-wasi")]
     pub wasm_archives: Vec<PathBuf>,
 }
 

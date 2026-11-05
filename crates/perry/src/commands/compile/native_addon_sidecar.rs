@@ -481,6 +481,7 @@ mod tests {
                 package_dir: package,
                 entry_relative: PathBuf::from("demo.node"),
                 ship_package_payload: true,
+                #[cfg(feature = "target-wasi")]
                 wasm_archives: Vec::new(),
             },
         );
@@ -555,6 +556,7 @@ mod tests {
             package_dir: package.clone(),
             entry_relative: kept[0].into(),
             ship_package_payload: true,
+            #[cfg(feature = "target-wasi")]
             wasm_archives: Vec::new(),
         };
         let ctx = CompilationContext::new(dir.path().to_path_buf());
@@ -606,6 +608,7 @@ mod tests {
             package_dir: package.clone(),
             entry_relative: "index.node".into(),
             ship_package_payload: true,
+            #[cfg(feature = "target-wasi")]
             wasm_archives: Vec::new(),
         };
         fs::write(package.join("package.json"), r#"{"name":"demo"}"#).unwrap();
