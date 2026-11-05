@@ -456,7 +456,8 @@ pub extern "C" fn js_fs_cp_sync(from_value: f64, to_value: f64) -> i32 {
 pub extern "C" fn js_fs_cp_sync_options(from_value: f64, to_value: f64, options_value: f64) -> i32 {
     match js_fs_cp_options_result(from_value, to_value, options_value, true, true) {
         Ok(()) => 1,
-        Err(err) => crate::exception::js_throw(err),
+        // Native fs failures, program Promise/iterator values and hook-built abort errors mix here.
+        Err(err) => crate::exception::throw_open(err),
     }
 }
 

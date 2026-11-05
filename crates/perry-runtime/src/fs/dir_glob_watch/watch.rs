@@ -1239,7 +1239,8 @@ extern "C" fn bun_glob_sync_iterator_next_impl(
     });
     match action {
         GlobNextAction::Done => iterator_result(undefined_value(), true),
-        GlobNextAction::Reject(reason) => crate::exception::js_throw(reason),
+        // Native validation/regex errors and caught glob callback failures share this channel.
+        GlobNextAction::Reject(reason) => crate::exception::throw_open(reason),
         GlobNextAction::Entry(entry, with_file_types) => {
             let scope = crate::gc::RuntimeHandleScope::new();
             let value = scope.root_nanbox_f64(glob_entry_value(&entry, with_file_types));
@@ -1644,7 +1645,8 @@ pub(crate) fn js_bun_glob_async_iterator(pattern_value: f64, options_value: f64)
 pub(crate) fn js_bun_glob_sync_iterator(pattern_value: f64, options_value: f64) -> f64 {
     let run = match run_bun_glob_result(pattern_value, options_value) {
         Ok(run) => run,
-        Err(err) => crate::exception::js_throw(err),
+        // Native validation/regex errors and caught glob callback failures share this channel.
+        Err(err) => crate::exception::throw_open(err),
     };
     let id = next_glob_iterator_id();
     GLOB_ITERATORS.with(|iterators| {

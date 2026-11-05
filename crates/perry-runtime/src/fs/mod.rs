@@ -703,7 +703,8 @@ pub extern "C" fn js_fs_write_file_sync_options(
     unsafe {
         match write_file_path_or_fd_result(path_value, content_value, options_value) {
             Ok(()) => 1,
-            Err(err) => crate::exception::js_throw(err),
+            // Native fs failures, program Promise/iterator values and hook-built abort errors mix here.
+            Err(err) => crate::exception::throw_open(err),
         }
     }
 }

@@ -25,7 +25,8 @@ extern "C" fn bun_glob_match(
 ) -> f64 {
     match crate::fs::bun_glob_matches(captured(closure), path) {
         Ok(matches) => bool_value(matches),
-        Err(error) => crate::exception::js_throw(error),
+        // Native validation/regex errors and caught glob callback failures share this channel.
+        Err(error) => crate::exception::throw_open(error),
     }
 }
 

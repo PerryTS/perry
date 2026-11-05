@@ -236,7 +236,8 @@ pub(super) fn dispose(component: f64) -> f64 {
             std::mem::replace(&mut (*state(component.get_nanbox_f64())).root_failed, false)
         };
         if failed {
-            crate::exception::js_throw(records::get(
+            // Caught callbacks and program Promise rejections share the persistent ERROR records.
+            crate::exception::throw_open(records::get(
                 origin_row(component.get_nanbox_f64(), 0),
                 records::ERROR,
             ));
@@ -302,7 +303,8 @@ pub(super) fn dispose(component: f64) -> f64 {
     }
     drop((batch, bytes));
     if outcome.is_err() {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(error.get_nanbox_f64());
     }
     undefined()
 }

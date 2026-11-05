@@ -252,7 +252,8 @@ pub(crate) unsafe fn guarded<R>(db: f64, f: impl FnOnce() -> R) -> (R, Result<()
 /// Throw what a guarded call ended with, outside every SQLite frame.
 pub(crate) unsafe fn throw_call_end(end: CallEnd) -> ! {
     match end {
-        CallEnd::Threw(value) => perry_runtime::exception::js_throw(value),
+        // Caught SQLite callbacks and native conversion errors share pendingException.
+        CallEnd::Threw(value) => perry_runtime::exception::throw_open(value),
         CallEnd::Closed => throw_invalid_state("database is not open"),
     }
 }
