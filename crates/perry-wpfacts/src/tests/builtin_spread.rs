@@ -3,7 +3,7 @@
 //! their values, in key order, running the source's own getters. A builtin
 //! object whose template is a container the model fills
 //! (`Model::own_props_modelled`: `JSON.parse` values, `Object.keys` arrays,
-//! primitive boxes …) holds every such value under its any key and no
+//! `Object.groupBy` results …) holds every such value under its any key and no
 //! accessor the runtime made, so the copy takes those values, never ⊤.
 //! Every other builtin object keeps its own properties out of the model:
 //! the copy stays ⊤.
@@ -110,5 +110,36 @@ console.log(o.b.len());
         json()
     );
     let pf = facts(&src);
+    assert!(!proven(&call_of(&pf, "len").verdict));
+}
+
+/// Sabotage twin: the program writes into the parsed value through a
+/// computed key, here a value from unknown code: the write lands in the
+/// source's any key and the copy carries it.
+#[test]
+fn a_computed_key_write_into_json_data_is_copied() {
+    let source = format!(
+        "((x: any) => {{ x[String(Math.random())] = (globalThis as any).g; return x; }})({})",
+        json()
+    );
+    assert!(!verdicts(&source, "{ a: obj, ...src }").1);
+    assert!(!verdicts(&source, "Object.assign({ a: obj }, src)").1);
+}
+
+/// Sabotage twin: a primitive method's container (`"ab".match("a")`, an
+/// undescribed result) is born with an empty any key; its strings come from
+/// the load rule, not its fields. The copy's `o[0]` is a String at run
+/// time, so `(o[0] || obj).len()` is no call of `V::len` only.
+#[test]
+fn a_spread_of_a_primitive_method_result_keeps_its_strings() {
+    let src = r#"
+class V { k = 1; len() { return this.k; } }
+const obj = new V();
+const s: any = "ab".match("a");
+const o: any = { ...s };
+const v = o[0] || obj;
+console.log(v.len());
+"#;
+    let pf = facts(src);
     assert!(!proven(&call_of(&pf, "len").verdict));
 }
