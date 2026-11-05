@@ -637,6 +637,7 @@ pub(super) fn compile_method(
         new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -1612,6 +1613,9 @@ pub(super) fn compile_method(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    if !method.is_async && !method.is_generator {
+        ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, method_body);
+    }
     if ctor_no_super_throw {
         ctx.block()
             .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);

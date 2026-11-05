@@ -231,6 +231,51 @@ pub(crate) fn chain(
     None
 }
 
+/// `super.method` in an instance method of `class`: the chain from `class`'s
+/// prototype (the methods' [[HomeObject]], whose static shape names its
+/// parent's prototype as [[Prototype]]) through [`chain`] of the parent to
+/// the ConstFn holder, with the holder's class name. `None` when any class on
+/// it has evaluated heritage (its prototype may be born off the static shape)
+/// or the compiler names no such chain.
+pub(crate) fn super_chain(
+    ctx: &crate::expr::FnCtx<'_>,
+    class: &str,
+    method: &str,
+) -> Option<(Vec<(u32, u32)>, String)> {
+    let c = ctx.classes.get(class)?;
+    if c.specialized_from.is_some() || c.extends_expr.is_some() {
+        return None;
+    }
+    let cid = *ctx.class_ids.get(class)?;
+    let (id, shape) = super::static_shape_ids::static_prototype_layout(cid)?;
+    let parent = c.extends_name.as_ref()?;
+    if !matches!(shape.proto, BirthProto::Prototype(_, p) if ctx.class_ids.get(parent) == Some(&p))
+    {
+        return None;
+    }
+    let tail = chain(ctx, parent, method)?;
+    let &(holder_cid, _) = tail.last()?;
+    // Walk the same links to name the holder; refuse evaluated heritage.
+    let mut name = parent.clone();
+    for _ in 0..64 {
+        let c = ctx.classes.get(&name)?;
+        if c.extends_expr.is_some() {
+            return None;
+        }
+        if let Some(origin) = &c.specialized_from {
+            name = origin.clone();
+            continue;
+        }
+        if ctx.class_ids.get(&name) == Some(&holder_cid) {
+            let mut result = vec![(cid, id)];
+            result.extend(tail);
+            return Some((result, name));
+        }
+        name = c.extends_name.clone()?;
+    }
+    None
+}
+
 /// The static prototype chain of `class`'s instances to `%Object.prototype%`
 /// (class id, static ShapeId of each prototype, the class's first), when
 /// every prototype on it is a declared class with a complete static shape

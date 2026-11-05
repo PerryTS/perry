@@ -194,14 +194,24 @@ pub(crate) fn holder_constant(
     let Some(chain) = crate::codegen::static_prototype::chain(ctx, class, method) else {
         return "false".into();
     };
+    chain_constant(ctx, method, &chain)
+}
+
+/// `i1`: the prototypes of `chain` (a static chain the compiler names for
+/// `method`, holder last) still hold what their class definitions stored.
+/// `"true"` for a constant method in a program with no dynamic write or
+/// relink. Otherwise (a name the program writes, or any name once a dynamic
+/// write exists) a clear bit on each prototype proves it: a prototype's bit
+/// is set by any write or relink after its creation, static or dynamic.
+pub(crate) fn chain_constant(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    method: &str,
+    chain: &[(u32, u32)],
+) -> String {
     if method_is_constant(method) && !shadow_tests() {
         return "true".into();
     }
-    // A name the program writes (or any name, once a dynamic write exists):
-    // a clear bit on each holder proves its slots still hold what the class
-    // definition stored (a prototype's bit is set by any write after its
-    // creation, static or dynamic).
-    holders_unshadowed(ctx, &chain)
+    holders_unshadowed(ctx, chain)
 }
 
 /// `i1`: every prototype of `chain` (class ids, holder last) carries no

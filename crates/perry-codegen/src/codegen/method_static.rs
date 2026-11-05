@@ -312,6 +312,7 @@ pub(in crate::codegen) fn compile_static_method(
         // side, mirroring instance-method setup.
         class_stack: vec![class.name.clone()],
         in_static_member: true,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
