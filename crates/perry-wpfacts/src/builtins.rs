@@ -882,7 +882,7 @@ fn any_written(m: &mut Model, dst: NodeId) {
 }
 
 mod methods;
-pub(crate) use methods::{accessor_receiver, annexb_define};
+pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
 pub use methods::*;
 /// The runtime's global functions [`ns_method`] describes under
 /// [`BuiltinNs::Other`] (`gc` and the timers, the number/URI helpers, the

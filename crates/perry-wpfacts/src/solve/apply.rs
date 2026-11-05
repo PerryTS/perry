@@ -758,7 +758,7 @@ impl Model {
                         TokKind::Func(_, _) => {
                             self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                         }
-                        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) => {
+                        _ if builtins::unknown_accessor_callable(self, t) => {
                             // An unknown accessor: the key it is installed
                             // under (any key, when computed) reads ⊤ on the
                             // holder, and the holder escapes to the code that

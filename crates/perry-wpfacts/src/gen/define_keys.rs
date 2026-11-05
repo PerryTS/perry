@@ -112,8 +112,8 @@ impl<'a> Gen<'a> {
         (n >= 0.0 && n <= i32::MAX as f64 && n.fract() == 0.0).then_some(n as u32)
     }
 
-    /// The constant string `e` evaluates to: a constant expression
-    /// (`const_eval`), or a constant binding whose initializer is one.
+    /// ToPropertyKey of a constant primitive expression or immutable binding.
+    /// The numeric spelling is the runtime's JavaScript spelling.
     pub(crate) fn const_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
         let mut seen: Vec<Binding> = Vec::new();
         let mut e = e.clone();
@@ -141,10 +141,14 @@ impl<'a> Gen<'a> {
                 ConstInit::Lit(_) => return None,
             }
         }
-        match self.const_eval(mi, &e)? {
-            crate::gen_const::Const::Str(s) => Some(s),
-            _ => None,
-        }
+        use crate::gen_const::Const;
+        Some(match self.const_eval(mi, &e)? {
+            Const::Str(s) => s,
+            Const::Num(n) => perry_hir::js_number_to_string(n),
+            Const::Bool(b) => b.to_string(),
+            Const::Undef => "undefined".into(),
+            Const::Null => "null".into(),
+        })
     }
 
     /// The keys a store under computed key `e` may name, when they are a
@@ -261,9 +265,7 @@ impl<'a> Gen<'a> {
                     lits.extend(name.cloned());
                 }
                 Expr::ObjectDefineProperty(_, k, _)
-                | Expr::ReflectDefineProperty { key: k, .. } => {
-                    keys.push(k.as_ref().clone())
-                }
+                | Expr::ReflectDefineProperty { key: k, .. } => keys.push(k.as_ref().clone()),
                 Expr::RegisterClassComputedAccessor { key_expr, .. } => {
                     keys.push(key_expr.as_ref().clone());
                 }

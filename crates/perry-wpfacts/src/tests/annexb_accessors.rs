@@ -213,3 +213,85 @@ fn array_receiver_uses_accessor_model() {
         true,
     );
 }
+
+#[test]
+fn numeric_constant_key_preserves_other_fields() {
+    check(
+        r#"
+        class Machine { witness = 1; }
+        const o: any = new Machine();
+        o.__defineGetter__(1, function () { return 0; });
+        console.log(o.witness);
+    "#,
+        true,
+    );
+}
+
+#[test]
+fn getter_omitted_argument_runs_default() {
+    check(
+        r#"
+        declare function unknown(): any;
+        class Cell { value: any = { witness: 1 }; }
+        const cell = new Cell();
+        const o: any = {};
+        o.__defineGetter__("k", function (value = unknown()) { cell.value = value; });
+        console.log(o.k);
+        console.log(cell.value.witness);
+    "#,
+        false,
+    );
+}
+
+#[test]
+fn setter_omitted_arguments_run_defaults() {
+    check(
+        r#"
+        declare function unknown(): any;
+        class Cell { value: any = { witness: 1 }; }
+        const cell = new Cell();
+        const o: any = {};
+        o.__defineSetter__("k", function (value: any, other = unknown()) { cell.value = other; });
+        o.k = 0;
+        console.log(cell.value.witness);
+    "#,
+        false,
+    );
+}
+
+#[test]
+fn callable_builtin_accessor_is_not_a_data_field() {
+    check(
+        r#"
+        const o: any = { witness: 1 };
+        o.__defineGetter__("witness", Object);
+        console.log(o.witness);
+    "#,
+        false,
+    );
+}
+
+#[test]
+fn class_accessor_is_not_a_data_field() {
+    check(
+        r#"
+        class C {}
+        const o: any = { witness: 1 };
+        o.__defineGetter__("witness", C);
+        console.log(o.witness);
+    "#,
+        false,
+    );
+}
+
+#[test]
+fn noncallable_namespace_installs_nothing() {
+    check(
+        r#"
+        const o: any = { witness: 1 };
+        o.__defineGetter__("k", Math);
+        console.log(o.witness);
+    "#,
+        true,
+    );
+}

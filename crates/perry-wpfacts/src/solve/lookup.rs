@@ -1329,6 +1329,12 @@ impl Model {
             self.group_summarized(ft, this, sp, ar, setter);
             return;
         }
+        // A getter has no arguments; a setter has exactly its stored value.
+        // Missing arguments are undefined, including for default parameters.
+        for i in usize::from(setter)..self.funcs[f as usize].params.len() {
+            let p = self.funcs[f as usize].params[i];
+            self.add_prim(p, prim::UNDEF);
+        }
         if setter {
             if let Some(&p0) = self.funcs[f as usize].params.first() {
                 self.edge_quiet(sp, p0);
