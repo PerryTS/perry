@@ -1381,6 +1381,7 @@ impl Model {
                     *setter as u8
                 )
             }
+            Cons::AnnexBDefine { call, setter } => format!("annexbdefine {n} {call} {setter}"),
             Cons::AccessorInstall { key, f, setter } => {
                 format!(
                     "accinstall {n} {} {} {}",

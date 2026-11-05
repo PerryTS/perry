@@ -74,10 +74,10 @@ impl<'a> Gen<'a> {
             }
         }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
-        self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
-            Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
-            _ => None,
-        };
+        self.call_lit_arg = args
+            .first()
+            .and_then(|x| self.const_key(fx.module, x))
+            .map(|s| self.m.atom(&s));
         if let Expr::ExternFuncRef { name, .. } = callee {
             if self.is_runtime_extern(fx.module, name) {
                 let lits: Vec<Option<String>> = args
@@ -137,7 +137,18 @@ impl<'a> Gen<'a> {
                         func: fx.f,
                     });
                 }
-                self.mcall(o, Key::Named(a), args, spread)
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(a) = lit {
+                    self.m.call_lit.insert(call, a);
+                }
+                self.m.cons(
+                    o,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call,
+                    },
+                );
+                ret
             }
             Expr::IndexGet { object, index, .. } => {
                 let o = self.expr(fx, object);
@@ -150,12 +161,24 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(a) = lit {
+                    self.m.call_lit.insert(call, a);
+                }
                 match self.read_key(index) {
-                    Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
+                    Key::Named(a) => {
+                        self.m.cons(
+                            o,
+                            Cons::MCall {
+                                key: Key::Named(a),
+                                call,
+                            },
+                        );
+                        ret
+                    }
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
                     Key::Any(_) => {
-                        let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
                         let shape = self.m.key_shape(index);
                         self.m.cons(
                             o,
@@ -689,9 +712,28 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
-            "js_object_define_getter" | "js_object_define_setter" | "js_object_define_property" => {
+            "js_object_define_getter" | "js_object_define_setter" => {
+                let (Some(o), Some(k), Some(f)) = (arg(0), arg(1), arg(2)) else {
+                    return self.prim_node(prim::UNDEF);
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), vec![k, f], spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
+                }
+                self.m.cons(
+                    o,
+                    Cons::AnnexBDefine {
+                        call,
+                        setter: name == "js_object_define_setter",
+                    },
+                );
+                self.m.add_prim(ret, prim::UNDEF);
+                ret
+            }
+            "js_object_define_property" => {
                 // E5 on the target.
-                let r = self.m.reason("E5 defineProperty/__defineGetter__");
+                let r = self.m.reason("E5 defineProperty");
                 if let Some(o) = arg(0) {
                     let star = self.m.atom(crate::STAR_KEY);
                     self.m.define_on.insert((o, star, false));

@@ -196,6 +196,10 @@ pub fn map_cons(
             setter,
         },
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
+        AnnexBDefine { call, setter } => AnnexBDefine {
+            call: k(call),
+            setter,
+        },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
         ProtoOf { dst } => ProtoOf { dst: n(dst) },
         ProtoValues { dst } => ProtoValues { dst: n(dst) },
@@ -421,6 +425,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | CreateProto { .. }
             | NewTargetHard { .. }
             | ShareBuffer { .. }
+            | AnnexBDefine { .. }
             | Accessor { .. }
             | ProtoFrom { .. }
     )

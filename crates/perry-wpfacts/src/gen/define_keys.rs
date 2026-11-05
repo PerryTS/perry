@@ -255,20 +255,34 @@ impl<'a> Gen<'a> {
                         Expr::GlobalGet(id) => self.bound_literal((mi as u32, true, *id)),
                         _ => None,
                     };
+                    if name.is_none() {
+                        keys.push(Expr::Undefined);
+                    }
                     lits.extend(name.cloned());
                 }
                 Expr::ObjectDefineProperty(_, k, _)
-                | Expr::ReflectDefineProperty { key: k, .. }
-                    if matches!(k.as_ref(), Expr::LocalGet(_) | Expr::GlobalGet(_)) =>
-                {
+                | Expr::ReflectDefineProperty { key: k, .. } => {
                     keys.push(k.as_ref().clone())
+                }
+                Expr::RegisterClassComputedAccessor { key_expr, .. } => {
+                    keys.push(key_expr.as_ref().clone());
+                }
+                Expr::Call { args, .. } if args.len() >= 2 => {
+                    keys.push(args[0].clone());
+                }
+                Expr::CallSpread { .. } => {
+                    keys.push(Expr::Undefined);
                 }
                 _ => {}
             });
             for k in &keys {
                 if let Some(s) = self.const_key(mi as u32, k) {
                     let a = self.m.atom(&s);
-                    self.m.accessor_atoms.insert(a);
+                    self.m.add_accessor_atom(a);
+                } else {
+                    let star = self.m.atom(crate::STAR_KEY);
+                    self.m.add_accessor_atom(star);
+                    self.m.numeric_accessor = true;
                 }
             }
             for name in lits {

@@ -788,8 +788,12 @@ impl Model {
                     }
                 }
             }
+            Cons::AnnexBDefine { call, setter } => {
+                for &t in toks {
+                    self.with_b(|m| builtins::annexb_define(m, t, call, setter));
+                }
+            }
             Cons::AccessorInstall { key, f, setter } => {
-                let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
                     if let Some(s) = self.shared_of(t) {
                         let k = self.atoms[key as usize].clone();
@@ -811,7 +815,7 @@ impl Model {
                     if t == TOP {
                         continue;
                     }
-                    if key == star {
+                    if key == star && !builtins::accessor_receiver(self, t) {
                         // A computed-key accessor: it may answer any key, so
                         // it runs as unknown code and every key read through
                         // this holder may yield anything (derive kills the
