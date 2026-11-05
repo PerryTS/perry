@@ -1,4 +1,6 @@
-use super::{boxed_object, closure_value, install_method, js_bool, js_undefined, key};
+use super::{
+    boxed_object, closure_value, install_method, js_bool, js_undefined, key, set_object_prototype,
+};
 use crate::closure::{ClosureHeader, JsThis};
 use crate::feature_hooks::Hook;
 use crate::object::{self, ObjectHeader};
