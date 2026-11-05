@@ -1,13 +1,13 @@
 //! Read access to the runtime's realm table and the effect declarations it
-//! carries (BFX1 S1 carrier). The table is generated once, by perry-hir's
-//! build script, from the runtime's own `#[realm(..)]` declarations: the
+//! carries (BFX1 S1 carrier). The table is generated once, by the build
+//! script of the leaf crate perry-realm-table, from the runtime's own `#[realm(..)]` declarations: the
 //! runtime's declaration is the single authority, the solver keeps no names.
 //! No solver rule reads the effects yet.
 use perry_hir::realm_manifest::RealmEntry;
 
 /// Every realm declaration, in manifest order.
 pub fn realm() -> &'static [RealmEntry] {
-    perry_hir::realm_table::REALM
+    perry_realm_table::REALM
 }
 
 #[cfg(test)]

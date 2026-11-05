@@ -1,6 +1,6 @@
 //! Typed compiler consumer of the runtime build producer's JSON artifact.
-//! Included by perry-hir's build script, never by the runtime manifest crate:
-//! the one compiler table, read by codegen and wpfacts alike.
+//! Included by the build script of the leaf crate perry-realm-table, never by
+//! the runtime manifest crate: the one compiler table, read by codegen and wpfacts.
 use crate::realm::RealmManifest;
 use std::fmt::Write;
 use std::path::Path;

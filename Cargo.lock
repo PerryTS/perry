@@ -5109,6 +5109,7 @@ dependencies = [
  "perry-gc-effects",
  "perry-hir",
  "perry-parser",
+ "perry-realm-table",
  "perry-runtime-manifest",
  "perry-transform",
  "serde",
@@ -5544,6 +5545,16 @@ version = "0.5.1663"
 dependencies = [
  "perex",
  "regex",
+]
+
+[[package]]
+name = "perry-realm-table"
+version = "0.5.1663"
+dependencies = [
+ "perry-hir",
+ "perry-runtime-manifest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6025,6 +6036,7 @@ version = "0.5.1663"
 dependencies = [
  "perry-hir",
  "perry-parser",
+ "perry-realm-table",
  "perry-transform",
 ]
 

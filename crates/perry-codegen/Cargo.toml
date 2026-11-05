@@ -47,6 +47,7 @@ testing = []
 
 [dependencies]
 perry-hir.workspace = true
+perry-realm-table.workspace = true
 # The sidecar table rows (`GcEffects::from_sidecar`); the format only, no analyzer.
 perry-gc-effects.workspace = true
 perry-dispatch.workspace = true
