@@ -868,7 +868,7 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_h = scope.root_raw_mut_ptr(target);
     let event_h = scope.root_nanbox_f64(event);
-    if !is_event_target(target_h.get_raw_mut_ptr()) {
+    if !target_h.with_const_ptr::<ObjectHeader, _>(|target| is_event_target(target)) {
         return bool_value(true);
     }
     let Some(event_ptr) = value_as_ptr::<ObjectHeader>(event_h.get_nanbox_f64()) else {
@@ -924,14 +924,16 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
         for (record, callback, capture, once) in callbacks {
             let present = {
                 let _gc = crate::gc::GcSuppressScope::new();
-                value_as_ptr::<ObjectHeader>(state::get(
-                    target_h.get_raw_mut_ptr::<ObjectHeader>(),
-                    state::LISTENERS,
-                ))
-                .and_then(|bag| event_array(bag, name_h.get_raw_const_ptr(), false))
-                .is_some_and(|array| {
-                    (0..js_array_length(array))
-                        .any(|index| js_array_get(array, index).bits() == record.get_nanbox_u64())
+                target_h.with_mut_ptr::<ObjectHeader, _>(|target| {
+                    name_h.with_const_ptr::<StringHeader, _>(|name| {
+                        value_as_ptr::<ObjectHeader>(state::get(target, state::LISTENERS))
+                            .and_then(|bag| event_array(bag, name, false))
+                            .is_some_and(|array| {
+                                (0..js_array_length(array)).any(|index| {
+                                    js_array_get(array, index).bits() == record.get_nanbox_u64()
+                                })
+                            })
+                    })
                 })
             };
             if !present {
