@@ -783,6 +783,9 @@ pub fn diagnostics_channel_drain_uncaught() {
         }
         return;
     }
+    if DIAG_PENDING_UNCAUGHT.with(|q| q.borrow().is_empty()) {
+        return;
+    }
     let pending: Vec<_> = DIAG_PENDING_UNCAUGHT.with(|q| {
         q.borrow_mut()
             .extract_if(.., |(_, domain)| {
