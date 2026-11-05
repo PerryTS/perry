@@ -31,10 +31,10 @@ console.log("keys", Object.keys(first).join(","));
 Object.setPrototypeOf(second, { inherited: 12 });
 console.log("prototype", second.inherited, JSON.stringify(second));
 const third: any = JSON.parse("{}");
-Object.defineProperty(Object.prototype, "emptyParseSetter", {
+try { Object.defineProperty(Object.prototype, "emptyParseSetter", {
     configurable: true,
     set: function(value: number) { this.observed = value + 1; }
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 third.emptyParseSetter = 41;
 delete (Object.prototype as any).emptyParseSetter;
 console.log("setter", JSON.stringify(third));

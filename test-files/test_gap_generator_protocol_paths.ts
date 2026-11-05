@@ -194,7 +194,12 @@ log.push("params " + pairs.join(","));
 // yield* must not consult Function.prototype.call
 const realCall = Function.prototype.call;
 let callUsed = 0;
-(Function.prototype as any).call = function (this: Function, ...args: unknown[]) {
+// DEC 250 locks Function.prototype: the iterator's methods adopt a user
+// function prototype UFP below it, and its call is patched there.
+const UFP: any = Object.create(Function.prototype);
+Object.setPrototypeOf(custom.next, UFP);
+Object.setPrototypeOf((custom as any)[Symbol.iterator], UFP);
+UFP.call = function (this: Function, ...args: unknown[]) {
   callUsed++;
   return realCall.apply(this, args as any);
 };
@@ -203,6 +208,6 @@ function* viaCall() {
 }
 custom.i = 0;
 log.push("call untouched " + JSON.stringify([...viaCall()].length) + " " + callUsed);
-(Function.prototype as any).call = realCall;
+delete UFP.call;
 
 for (const line of log) console.log(line);

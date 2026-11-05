@@ -23,7 +23,7 @@ class Bound {
 }
 show("bound0", new Bound(1));
 patchBind = true;
-(Function.prototype as any).bind = function (this: any, ...args: any[]) {
+try { (Function.prototype as any).bind = function (this: any, ...args: any[]) {
   if (patchBind) {
     patchBind = false;
     Object.defineProperty(Bound.prototype, "z", {
@@ -33,11 +33,11 @@ patchBind = true;
     });
   }
   return realBind.apply(this, args as any);
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const b1: any = new Bound(2);
 show("bound1", b1);
 console.log("z", b1.z, Object.prototype.hasOwnProperty.call(b1, "z"));
-(Function.prototype as any).bind = realBind;
+try { (Function.prototype as any).bind = realBind; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 delete (Bound.prototype as any).z;
 show("bound2", new Bound(3));
 

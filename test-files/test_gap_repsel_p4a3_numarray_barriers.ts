@@ -12,7 +12,7 @@ function holesSeeProto(): string {
   const c: number[] = new Array(4);
   c[0] = (c[0] || 0) + 1;
   const before = "" + c[2];
-  (Array.prototype as any)[2] = 777;
+  try { (Array.prototype as any)[2] = 777; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const after = "" + c[2]; // hole -> reads through the polluted prototype
   const viaOr = (c[2] as any) || -1; // 777 is truthy
   delete (Array.prototype as any)[2];
@@ -47,7 +47,7 @@ function aliasedProtoWrite(): string {
   const c: number[] = new Array(4);
   c[0] = 1;
   const p: any = Array.prototype; // naming site -> opaque prototype mutation
-  p[3] = 555;
+  try { p[3] = 555; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const viaHole = "" + c[3]; // inherited 555, NOT undefined
   const viaOr = (c[3] as any) || -1; // 555 is truthy
   const viaSum = (c[0] || 0) + ((c[3] as any) || 0);

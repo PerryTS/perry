@@ -20,7 +20,7 @@ Object.setPrototypeOf(custom, proto);
 fill(custom, 3);
 console.log(calls, custom[0], custom[1], Object.hasOwn(custom, '0'));
 const inherited = new Array(2);
-Object.defineProperty(Array.prototype, '0', { set(v) { calls += v; }, get() { return 80; }, configurable: true });
+try { Object.defineProperty(Array.prototype, '0', { set(v) { calls += v; }, get() { return 80; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 fill(inherited, 4);
 delete Array.prototype[0];
 console.log(calls, inherited[0], inherited[1], Object.hasOwn(inherited, '0'));

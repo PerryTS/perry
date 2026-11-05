@@ -72,7 +72,7 @@ loop("absent-then-mid", rabs, d, () => { (L3.prototype as any).missing = "L3.mis
 loop("absent-holder-undef", rabs, d, () => { (L3.prototype as any).missing = undefined; });
 loop("absent-holder-null", rabs, d, () => { (L3.prototype as any).missing = null; });
 delete (L3.prototype as any).missing;
-loop("absent-then-objproto", rabs, d, () => { (Object.prototype as any).missing = "OP.missing"; });
+try { loop("absent-then-objproto", rabs, d, () => { (Object.prototype as any).missing = "OP.missing"; }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 delete (Object.prototype as any).missing;
 
 // 5. the chain relinked under the entry: setPrototypeOf on a middle prototype.

@@ -38,7 +38,7 @@ console.log(JSON.stringify(proto));
 
 const fresh = JSON.parse('{"id":1,"text":"plain"}');
 console.log(JSON.stringify(fresh));
-(Object.prototype as any).toJSON = function(key: string) { calls += "default:" + key + ","; return "default-result"; };
+try { (Object.prototype as any).toJSON = function(key: string) { calls += "default:" + key + ","; return "default-result"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(JSON.stringify(fresh));
 delete (Object.prototype as any).toJSON;
 console.log(JSON.stringify(fresh), calls);

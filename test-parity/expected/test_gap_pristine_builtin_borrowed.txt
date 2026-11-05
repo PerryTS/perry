@@ -1,0 +1,6 @@
+11,22
+3,4
+4
+DEC 250: Cannot replace built-in member Array.prototype.slice: built-in objects are read-only in a compiled program (adding a new member is allowed)
+3,4
+3,4

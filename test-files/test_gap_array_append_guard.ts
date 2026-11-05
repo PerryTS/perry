@@ -51,7 +51,7 @@ try { effectStore(restricted, () => { Object.freeze(restricted); return 2; }); }
 catch (e) { console.log('rhs frozen', e instanceof TypeError, restricted.length); }
 // A prototype mutation after a hot append loop must stand down the append arm.
 const intercepted: any = [];
-Object.defineProperty(Array.prototype, '0', { set(v) { seen = v; }, configurable: true });
+try { Object.defineProperty(Array.prototype, '0', { set(v) { seen = v; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 append(intercepted, 31);
 const got = seen; const len = intercepted.length; const own = Object.hasOwn(intercepted, '0');
 delete (Array.prototype as any)[0];

@@ -8,11 +8,18 @@
 //! key, a value store to the holder, a key added to and deleted from the
 //! holder, a getter defined on it, `setPrototypeOf` on the receiver and on an
 //! intermediate hop, a key added to a hop at depth 2 and 3, `F.prototype`
-//! replaced per iteration, a key added to `Object.prototype` under an absent
-//! entry, a collection that moves a holder that was young at prime time, the
+//! replaced per iteration, a key added to a sealed built-in prototype
+//! (`Date.prototype`; DEC 250 Q2 refuses adds on `Object.prototype`) under an
+//! absent entry, a collection that moves a holder that was young at prime time, the
 //! exotic receivers (`process.env`, `arguments`) and a class accessor. Each
-//! line prints the value read and the value node prints; the entry must have
-//! primed (data and absent), or the program proves nothing about it.
+//! line prints the value read and the value node prints.
+//!
+//! The read site no longer holds an entry (db6b253e9: "property reads hold no
+//! site state; the old read caches are deleted"), so there is no prime count
+//! left to assert: the `read_holder_primes` / `read_absent_primes` counters
+//! went with the caches. What stays is the contract: a read answered from the
+//! receiver's and the holder's shapes must see each of these changes, and any
+//! stale answer prints a line that does not end in ` ok`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -115,19 +122,20 @@ function t7(n: number): number {
 }
 check("ctor-prototype", t7(N), (N - (N >> 1)) * 1 + (N >> 1) * 2);
 
-// 8. absent: a key added to Object.prototype mid-loop (depth 1: a literal;
-// depth 2: an Object.create child)
+// 8. absent: a key added mid-loop to a sealed built-in prototype in the
+// chain (depth 1: its direct child; depth 2: an Object.create grandchild).
+// DEC 250 (Q2): Object.prototype takes no program add; Date.prototype does.
 function t8(o: any, n: number): number {
   let s = 0;
   for (let i = 0; i < n; i++) {
-    if (i === H) (Object.prototype as any).zz8 = 8;
+    if (i === H) (Date.prototype as any).zz8 = 8;
     s += num(o.zz8, 0);
   }
-  delete (Object.prototype as any).zz8;
+  delete (Date.prototype as any).zz8;
   return s;
 }
-check("absent-d1", t8({ a: 1 }, N), (N - H) * 8);
-check("absent-d2", t8(Object.create({ a: 1 }), N), (N - H) * 8);
+check("absent-d1", t8(Object.create(Date.prototype), N), (N - H) * 8);
+check("absent-d2", t8(Object.create(Object.create(Date.prototype)), N), (N - H) * 8);
 function t8b(o: any, n: number): number {
   let s = 0;
   for (let i = 0; i < n; i++) s += num(o.zz, 1);
@@ -167,11 +175,14 @@ check("exotic-env", t10(process.env, N), N - H);
 function t11(n: number, ...rest: any[]): number {
   let s = 0;
   const a: any = (function (this: any) { return arguments; })(1, 2);
+  // DEC 250 (Q2): the key is added to the arguments object's own prototype,
+  // not to Object.prototype.
+  const p11: any = {};
+  Object.setPrototypeOf(a, p11);
   for (let i = 0; i < n; i++) {
-    if (i === H) (Object.prototype as any).zz11 = 3;
+    if (i === H) p11.zz11 = 3;
     s += num(a.zz11, 0);
   }
-  delete (Object.prototype as any).zz11;
   return s;
 }
 check("exotic-arguments", t11(N), (N - H) * 3);
@@ -226,10 +237,10 @@ fn run(n: &str) -> (String, String) {
 #[test]
 fn holder_entry_follows_every_chain_change() {
     for n in ["40", "41"] {
-        let (stdout, _stderr) = run(n);
+        let (stdout, stderr) = run(n);
         let lines: Vec<&str> = stdout.lines().collect();
         assert_eq!(lines.len(), 17, "n={n}: expected 17 checks:\n{stdout}");
         let failed: Vec<&&str> = lines.iter().filter(|l| !l.ends_with(" ok")).collect();
-        assert!(failed.is_empty(), "n={n}: wrong reads {failed:?}\n{stdout}");
+        assert!(failed.is_empty(), "n={n}: wrong reads {failed:?}\n{stdout}\n{stderr}");
     }
 }

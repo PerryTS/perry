@@ -11,5 +11,8 @@ function anyCodes(s: any): number {
   return t;
 }
 console.log(codes('abc'), anyCodes('abc'), anyCodes('xyzwvutsrq'));
-(String.prototype as any).charCodeAt = function (this: string, i: number) { return 1000 + i; };
+// DEC 250 (intrinsic-only): a primitive string's methods come only from
+// String.prototype. The replace is refused now (expected file); the reads
+// after it still run.
+try { (String.prototype as any).charCodeAt = function (this: string, i: number) { return 1000 + i; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(codes('abc'), anyCodes('abc'), anyCodes('xyzwvutsrq'));

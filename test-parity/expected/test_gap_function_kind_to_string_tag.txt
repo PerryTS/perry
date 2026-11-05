@@ -1,0 +1,14 @@
+[object AsyncFunction]
+[object GeneratorFunction]
+[object AsyncGeneratorFunction]
+[object AsyncFunction]
+[object AsyncFunction]
+[object Function]
+changed inherited [object Changed]
+inherited getter [object Receiver]
+own [object Own]
+deleted inherited [object Function]
+inherited symbol 7
+DEC 250: Cannot add member Function.prototype[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program
+ordinary parent [object Function]
+async parent [object Function]

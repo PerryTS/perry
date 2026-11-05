@@ -65,9 +65,9 @@ console.log(first); // 100
 // restore the surrounding method's receiver before its catch block resumes.
 const iteratorPrototype: any = Object.getPrototypeOf([][Symbol.iterator]());
 const originalNext = iteratorPrototype.next;
-iteratorPrototype.next = function () {
+try { iteratorPrototype.next = function () {
   throw new Error("replacement next");
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const outerReceiver = {
   marker: "outer",
   run(this: any) {
@@ -78,4 +78,4 @@ const outerReceiver = {
   },
 };
 console.log("throw restores this:", outerReceiver.run()); // outer
-iteratorPrototype.next = originalNext;
+try { iteratorPrototype.next = originalNext; } catch (e) { console.log("DEC 250: " + (e as Error).message); }

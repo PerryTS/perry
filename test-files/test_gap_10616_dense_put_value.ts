@@ -59,9 +59,9 @@ console.log(target[0], target[0.5], target[-1]);
 // A hole can be intercepted by an inherited setter.
 const hole: any = new Array(1);
 let seen = 0;
-Object.defineProperty(Array.prototype, "0", {
+try { Object.defineProperty(Array.prototype, "0", {
   get() { return 50; }, set(v) { seen = v; }, configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const old = update(hole, 0);
 delete (Array.prototype as any)[0];
 console.log(old, seen, Object.hasOwn(hole, "0"));

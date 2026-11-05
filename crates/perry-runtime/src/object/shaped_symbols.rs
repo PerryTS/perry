@@ -368,6 +368,13 @@ pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: 
 }
 
 pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Value(f64::from_bits(
+            crate::value::POINTER_TAG | symbol as u64,
+        ))),
+        "delete symbol",
+    );
     let _holder_edit = descriptor_state::HolderEdit::new(addr);
     let Some(obj) = owner(addr) else {
         return false;

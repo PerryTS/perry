@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Decision 150: an interpreted function receives an object and installs a
 // setter and getter under `v` on that object's prototype, which is
 // `Object.prototype`. A constructor that assigns `this.v = …` afterwards
@@ -39,7 +40,7 @@ const install = new Function(
     "});",
   ].join("\n"),
 );
-install(escaped);
+locked(() => { install(escaped); });
 const after = new Cell(7);
 console.log(rv(after), rw(after), Object.keys(after).join(","));
 console.log(rv(before), rw(before));

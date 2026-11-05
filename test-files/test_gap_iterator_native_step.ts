@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Native stepping must preserve the public protocol and IteratorClose.
 function* numbers() { try { yield 1; yield 2; yield 3; } finally { console.log("generator-finally"); } }
 function make(kind: string): any {
@@ -34,18 +35,18 @@ for (const kind of ["typed","array", "map", "set", "string", "segments", "genera
       const old = Object.getOwnPropertyDescriptor(target, method);
       const original = it.next.bind(it);
       let calls = 0;
-      Object.defineProperty(target, method, {
+      locked(() => { Object.defineProperty(target, method, {
         configurable: true, writable: true,
         value: function() {
           calls++;
           if (method === "next") return original();
           return {value: undefined, done: true};
         }
-      });
+      }); });
       let seen = "";
       for (const x of it) { seen += value(x); if (seen.length > 0) break; }
       console.log(kind, level, method, seen, calls);
-      if (old) Object.defineProperty(target, method, old); else delete target[method];
+      if (old) locked(() => { Object.defineProperty(target, method, old); }); else delete target[method];
     }
   }
   for (const exit of ["break", "throw", "return"]) {

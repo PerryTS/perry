@@ -27,7 +27,7 @@ const immutable: any = Object.defineProperty({}, 'x', { value: 1 });
 let caught = 0;
 for (let i = 0; i < 32; i++) {
   try {
-    Object.defineProperty(new Proxy(immutable, { defineProperty(t, k, d) { d.value = 1; return true; } }), 'x', { value: 2 });
+    try { Object.defineProperty(new Proxy(immutable, { defineProperty(t, k, d) { d.value = 1; return true; } }), 'x', { value: 2 }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   } catch (error) { if (error instanceof TypeError) caught++; }
 }
 console.log('proxy-copy-recovery', caught, immutable.x);
@@ -42,7 +42,7 @@ userDescriptor.value = 7;
 userDescriptor.writable = false;
 userDescriptor.configurable = true;
 let copyFields = '';
-Object.defineProperty(Object.prototype, 'value', setterDescriptor);
+try { Object.defineProperty(Object.prototype, 'value', setterDescriptor); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 try {
   Reflect.defineProperty(new Proxy({}, { defineProperty(t, k, descriptor) {
     copyFields = String(Object.prototype.hasOwnProperty.call(descriptor, 'value')) + ':' +

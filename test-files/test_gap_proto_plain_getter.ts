@@ -235,19 +235,22 @@ const N = 2000;
   console.log("getter_forms", s, t, u, ok, caught, v);
 }
 
-// 7. A getter on %Object.prototype% read through a plain literal.
+// 7. A getter on a plain literal's prototype read through the literal. DEC
+// 250 locks %Object.prototype%, so the prototype is a user object LP that the
+// literal names.
 {
   const readGz = (o: any): any => o.gz;
-  Object.defineProperty(Object.prototype, "gz", {
+  const LP: any = {};
+  Object.defineProperty(LP, "gz", {
     get: function (this: any) {
       return typeof this.k === "number" ? this.k : -1;
     },
     configurable: true,
   });
-  const o: any = { k: 2 };
+  const o: any = { __proto__: LP, k: 2 };
   let sum = 0;
   for (let i = 0; i < N; i++) sum += readGz(o);
-  delete (Object.prototype as any).gz;
+  delete LP.gz;
   console.log("object_prototype_getter", sum, readGz(o));
 }
 

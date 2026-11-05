@@ -1,0 +1,151 @@
+DEC 250: Cannot add member Object.prototype.lateProp: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.lateProp: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.lateProp: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Object.prototype.valueOf: built-in objects are read-only in a compiled program
+DEC 250: Cannot delete built-in member Object.prototype.valueOf: built-in objects are read-only in a compiled program
+DEC 250: Cannot redefine built-in member Object.prototype.valueOf: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype[Symbol(s2)]: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.viaObject: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.objectLevel: built-in objects are read-only in a compiled program
+row plain: number:1 number:2 u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row empty: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row literal3: number:1 number:2 u fn fn fn fn obj fn fn fn fn fn string:zero string:one u u u u u u u u u u u u u u u
+row nullProto: number:1 u u u u u u u u u u u u u u u u u u u u u u u u u u u u u
+row nullChain: u u u u u u u u u u u u u u u u u u u u u u u u u u u u u u
+row chain2: number:5 number:6 u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row chain3: number:5 number:6 u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row legacy: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row klass: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row sub: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row klassCtor: u u u fn fn fn fn fn fn fn fn fn fn u u u number:0 string:Klass u u u u u obj u u u u u u
+row withGetter: number:1 u string:from getter 1 fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row array: u u u fn fn fn fn obj fn fn fn fn fn number:1 number:2 number:3 number:3 u u u u u u u u u u u u u
+row fn: u u u fn fn fn fn skipped fn fn fn fn fn u u u number:2 string:named u u u u u obj u u u u u u
+row arrow: u u u fn fn fn fn skipped fn fn fn fn fn u u u number:0 string:arrow u u u u u u u u u u u u
+row regexp: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u string:gi string:x+ number:0 u u u u u u u u
+row weakmap: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row weakset: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row date: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row error: u u u fn fn fn fn obj fn fn fn fn fn u u u u string:Error string:boom u u u u u u u u u u u
+row typeError: u u u fn fn fn fn obj fn fn fn fn fn u u u u string:TypeError string:bad u u u u u u u u u u u
+row args: u u u fn fn fn fn obj fn fn fn fn fn number:1 number:2 u number:2 u u u u u u u u u u u u u
+row boxedString: u u u fn fn fn fn obj fn fn fn fn fn string:a string:b string:c number:3 u u u u u u u u u u u u u
+row boxedNumber: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row Math: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row JSON: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row Reflect: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row globalThis: u u u fn fn fn fn obj fn fn fn fn fn u u u u u u u u u u u u u u u u u
+row u8: u u u fn fn fn fn obj fn fn fn fn fn number:0 number:0 number:0 number:3 u u u u u u u u u u u u u
+chain3 a: 5 7 undefined
+nullChain toString: u
+nullProto a: number:1
+nullProto hasOwnProperty: u
+prototype add: before: u u u
+prototype add: miss again: u u u
+prototype add: data: u u u
+prototype add: shadow: u number:6 u
+prototype add: unshadow: u u u
+prototype add: removed: u u u
+prototype getter: u u u
+prototype getter removed: u u u
+prototype setter:  own=true
+prototype setter read: u u number:9
+prototype setter removed: u u number:10 own=lateProp
+prototype after own delete: u u u
+method before: true
+method replaced: [object Object] true
+method deleted: fn
+method restored: true
+delete: before: number:2 a,b,c
+delete: after: u a,c
+delete: re-added last: number:4 a,c,b
+shadow builtin: string:own a,c,b,toString
+unshadow builtin: fn a,c,b
+numeric keys order: 1,2,10,z,y,x,01,-1
+numeric reads: string:one string:two string:ten string:str string:neg u u
+numeric re-add: 1,2,10,z,y,x,01,-1 again
+for-in order: 1,2,10,z,y,x,01,-1
+proto swap: before: u u fn
+proto swap: holder: number:9 u fn
+proto swap: other: number:10 number:11 fn
+proto swap: null: u u u
+proto swap: Object.prototype: u u fn
+proto swap: __proto__ set: number:9 u fn
+proto literal: number:10 number:1 fn
+null literal: number:1 u
+grandparent mutation: number:1u number:2 number:3 u
+symbol miss: u u u
+symbol own: string:one 1 a
+symbol on Object.prototype: u
+symbol removed: u u
+@@ string key: u u
+@@ string key own: string:str a,@@iterator
+toStringTag: [object T] string:T
+getter own: number:1 number:1 number:2 a,a
+frozen: number:1 u fn
+sealed: number:1 u
+non-extensible: number:1 u
+defineProperty: number:1 number:2 ro
+big hit/miss: number:0 number:1 number:150 number:299 u u fn 300
+big after deletes: u number:1 u number:150 u number:299 257
+big re-add: string:back k299,k0
+big child: number:1 u u
+array: number:1 number:3 string:e u u
+regexp: string:g string:ab(c) number:0 number:1 u
+map: number:1 string:x u u
+weakmap: string:x u fn fn
+arguments: number:1 number:3 number:3 u u
+boxed string: string:a number:3 u u
+primitive string: string:b number:3 u fn
+primitive number: fn u
+class instance: number:1 number:2 string:getter fn u fn
+class statics: number:3 string:Sub u
+class prototype add: string:later string:later
+class prototype delete: u u
+class sees Object.prototype: u u u u
+class lost Object.prototype: u u u u
+class rows 0: number:1 u u fn u string:acc 1 u u u u fn fn fn obj u u | number:1 number:2 u fn fn string:acc 1 u u u u fn fn fn obj u u | number:1 number:2 number:3 fn fn string:acc 1 u u u u fn fn fn obj u u | u u u u u u u u number:1 u fn fn fn obj u u
+class rows 1: number:1 u u fn u string:acc 1 u u u u fn fn fn obj u u | number:1 number:2 u fn fn string:acc 1 u u u u fn fn fn obj u u | number:1 number:2 number:3 fn fn string:acc 1 u u u u fn fn fn obj u u | u u u u u u u u number:1 u fn fn fn obj u u
+class rows 2: number:1 u u fn u string:acc 1 u u u u fn fn fn obj u u | number:1 number:2 u fn fn string:acc 1 u u u u fn fn fn obj u u | number:1 number:2 number:3 fn fn string:acc 1 u u u u fn fn fn obj u u | u u u u u u u u number:1 u fn fn fn obj u u
+static vs instance: fn number:5 u u u string:Leaf | u u
+class instance proto links: true true true
+class method add: before: u u
+class method add: after: fn fn u string:late
+class method add: removed: u u
+class data add: before: u u
+class data add: after: number:42 number:42 number:42 u
+class data add: removed: u u
+class getter: before: u u
+class getter: after: string:got 1 string:got 1 u Leaf,Mid
+class getter: removed: u u
+class defineProperty value: string:on leaf u
+class Object.prototype: before: u u
+class Object.prototype: added: u u u
+class Object.prototype: shadowed: string:shadow u
+class Object.prototype: removed: u u
+class own: before: u
+class own: set: string:mine u a,b,c,ownShadow
+class own: deleted: u a,b,c
+class setPrototypeOf instance: before: u number:1 fn
+class setPrototypeOf instance: donor: string:donor number:1 u number:3 fn
+class setPrototypeOf instance: Mid: u number:1 fn fn number:3
+class setPrototypeOf instance: null: u u u number:3
+class setPrototypeOf instance: back: u fn fn number:3
+class __proto__ set instance: string:donor u number:3
+class setPrototypeOf prototype: before: u fn fn
+class setPrototypeOf prototype: other: string:other chain string:other m fn number:1 number:2 string:other chain string:other m
+class setPrototypeOf prototype: restored: u fn fn
+class setPrototypeOf prototype: null: u u u u number:3
+class setPrototypeOf prototype: back: u fn fn fn
+class frozen prototype: number:1 u fn
+class frozen prototype write: false u
+class accessor: number:7 u u u
+class extends null: u u fn true
+class extends Array: number:1 number:2 number:1 u fn fn
+class extends Error: string:boom number:1 u string:Error fn
+class expression: number:1 string:expr u
+per-evaluation classes: before: u u
+per-evaluation classes: after: string:c1 u
+per-evaluation classes: fresh: string:c1 u
+in/hasOwn: true true number:1 | true true u | false false u | true false fn | true false fn | true false obj
+inherited undefined: u true number:1

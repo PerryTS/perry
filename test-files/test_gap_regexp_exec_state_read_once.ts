@@ -113,15 +113,15 @@ const mat = /m/;
 log("symbol-match", "m".match(mat));
 const origExec = RegExp.prototype.exec;
 let patched = 0;
-RegExp.prototype.exec = function (this: RegExp, s: string) {
+try { RegExp.prototype.exec = function (this: RegExp, s: string) {
   patched++;
   return origExec.call(this, s);
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const viaTest = /t/;
 log("patched-proto-test", [viaTest.test("t"), patched > 0]);
 const patchedExec = /(p)/.exec("p");
 log("patched-proto-exec", [patchedExec?.[1], patched > 1]);
-RegExp.prototype.exec = origExec;
+try { RegExp.prototype.exec = origExec; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
 // 7. Lead-unit exclusion and hasIndices.
 const lead = /xyz+/g;

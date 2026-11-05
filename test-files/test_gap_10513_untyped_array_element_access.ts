@@ -109,7 +109,7 @@ function show(label: string, v: any): void { console.log(label, JSON.stringify(v
 // 8. Array.prototype pollution with an indexed accessor
 {
   const log: string[] = [];
-  Object.defineProperty(Array.prototype, 3, { set(v) { log.push("AP3=" + v); }, get() { return "ap3"; }, configurable: true });
+  try { Object.defineProperty(Array.prototype, 3, { set(v) { log.push("AP3=" + v); }, get() { return "ap3"; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const a: any = [0, 1, 2];
   put(a, 3, "x"); // append position: inherited setter wins
   const h: any = [0, 1, 2, , 4];

@@ -123,7 +123,7 @@ fn prototype_patches_keep_lookup_first_dispatch() {
     ));
     assert_eq!(
         stdout,
-        "prototype snapshot arg;old:5:true; 0\ncustom prototype custom:6; 0\n"
+        "prototype lock locked;arg; 1\ncustom prototype custom:6; 0\n"
     );
     assert!(
         !ir.contains("fieldpush.header"),

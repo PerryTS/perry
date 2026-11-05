@@ -1,6 +1,13 @@
 //! Regression coverage for #9249: indexed accessors installed on
 //! `Array.prototype` through the descriptor APIs must invalidate array-store
 //! fast paths just like a plain indexed assignment to the prototype does.
+//!
+//! DEC 250 (Q2): a program adds no index key to `Array.prototype` or
+//! `Object.prototype`. Each descriptor API must still reach the same index
+//! note a plain indexed assignment does, which on those two is now the lock's
+//! TypeError (a funnel that skipped the note would install silently); the
+//! interception itself is shown on the array's own prototype, installed after
+//! the array is linked to it.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -54,16 +61,23 @@ fn define_property_array_prototype_index_setter_intercepts_numeric_store() {
     compile_and_run(
         r#"
 let hits = 0;
-Object.defineProperty(Array.prototype, 7, {
+let refused = "none";
+try {
+  Object.defineProperty(Array.prototype, 7, { get() { return "AP"; }, configurable: true });
+} catch (e) { refused = (e as Error).constructor.name; }
+const proto: any = Object.create(Array.prototype);
+const nums = [1, 2, 3];
+Object.setPrototypeOf(nums, proto);
+nums[5] = 0;
+Object.defineProperty(proto, 7, {
   set(value) { hits++; },
   get() { return "P"; },
   configurable: true
 });
-const nums = [1, 2, 3];
 nums[7] = 42;
-console.log(hits, nums.length, nums[7]);
+console.log(refused, hits, nums.length, nums[7], ([] as any)[7]);
 "#,
-        "1 3 P\n",
+        "TypeError 1 6 P undefined\n",
         "define_property",
     );
 }
@@ -103,12 +117,17 @@ descriptors[9] = {
   get() { return "P"; },
   configurable: true
 };
-Object.defineProperties(Array.prototype, descriptors);
+let refused = "none";
+try { Object.defineProperties(Array.prototype, descriptors); } catch (e) { refused = (e as Error).constructor.name; }
+const proto: any = Object.create(Array.prototype);
 const flags = [true, false];
+Object.setPrototypeOf(flags, proto);
+flags[1] = true;
+Object.defineProperties(proto, descriptors);
 flags[9] = false;
-console.log(hits, flags.length, flags[9]);
+console.log(refused, hits, flags.length, flags[9], ([] as any)[9]);
 "#,
-        "1 2 P\n",
+        "TypeError 1 2 P undefined\n",
         "define_properties",
     );
 }
@@ -118,16 +137,26 @@ fn define_property_object_prototype_index_setter_intercepts_array_store() {
     compile_and_run(
         r#"
 let hits = 0;
-Object.defineProperty(Object.prototype, 5, {
+let refused = "none";
+try {
+  Object.defineProperty(Object.prototype, 5, { get() { return "OP"; }, configurable: true });
+} catch (e) { refused = (e as Error).constructor.name; }
+// The accessor sits at the END of the array's chain (a plain object above
+// the array's own prototype), as Object.prototype did.
+const base: any = {};
+const proto: any = Object.create(base);
+const values = [1];
+Object.setPrototypeOf(values, proto);
+values[0] = 2;
+Object.defineProperty(base, 5, {
   set(value) { hits++; },
   get() { return "P"; },
   configurable: true
 });
-const values = [1];
 values[5] = 99;
-console.log(hits, values.length, values[5]);
+console.log(refused, hits, values.length, values[5], ({} as any)[5]);
 "#,
-        "1 1 P\n",
+        "TypeError 1 1 P undefined\n",
         "object_prototype",
     );
 }
@@ -144,21 +173,28 @@ fn reflect_define_property_non_writable_prototype_index_blocks_array_store() {
 //   no error 1 P
 // The point of this test is that a non-writable inherited index BLOCKS the
 // store, so it opts into strict mode rather than asserting the sloppy no-op.
-Reflect.defineProperty(Array.prototype, 11, {
+let refused = "none";
+try {
+  Reflect.defineProperty(Array.prototype, 11, { value: "AP", writable: false, configurable: true });
+} catch (e) { refused = (e as Error).constructor.name; }
+const proto: any = Object.create(Array.prototype);
+const values = [1];
+Object.setPrototypeOf(values, proto);
+values[0] = 2;
+Reflect.defineProperty(proto, 11, {
   value: "P",
   writable: false,
   configurable: true
 });
-const values = [1];
 let result = "no error";
 try {
   values[11] = 99;
 } catch (error) {
   result = error.name;
 }
-console.log(result, values.length, values[11]);
+console.log(refused, result, values.length, values[11], ([] as any)[11]);
 "#,
-        "TypeError 1 P\n",
+        "TypeError TypeError 1 P undefined\n",
         "reflect_define_property",
     );
 }

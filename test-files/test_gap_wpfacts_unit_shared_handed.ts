@@ -5,10 +5,12 @@
 function fill(t: any, k: string, v: any): void {
   t[k] = v;
 }
-fill(Object.prototype, "toLocaleString", function (this: any): string {
-  this.u = "w";
-  return "x";
-});
+try {
+  fill(Object.prototype, "toLocaleString", function (this: any): string {
+    this.u = "w";
+    return "x";
+  });
+} catch (e) { console.log("DEC 250: " + (e as Error).message); }
 var tls = Object.prototype.toLocaleString;
 var pair = { u: 5, v: 6 };
 function total(): number {

@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function check(label: string, value: any): void {
   console.log(label, typeof value, typeof value === "function", typeof value === "object");
 }
@@ -46,9 +47,9 @@ check("call-trap-object", new Proxy({}, { apply() { return 1; } }));
 check("symbol", Symbol("s"));
 check("null", null);
 const fp: any = Function.prototype;
-fp.extra = 1;
+locked(() => { fp.extra = 1; });
 delete fp.extra;
-Object.setPrototypeOf(fp, null);
-Object.freeze(fp);
+locked(() => { Object.setPrototypeOf(fp, null); });
+locked(() => { Object.freeze(fp); });
 check("mutated-function-prototype", fp);
 check("proxy-mutated-function-prototype", new Proxy(fp, {}));

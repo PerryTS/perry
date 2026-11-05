@@ -27,11 +27,11 @@ const fns: any[] = [plainFn, function other() { return 2; }, arrow];
 const read = (f: any) => `${f.isBuffer}|${f.custom}|${typeof f.call}|${f.length}|${f.name.length > 0}`;
 
 phase("fn.start", read, fns);
-(Function.prototype as any).custom = "onFunctionProto";
+try { (Function.prototype as any).custom = "onFunctionProto"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 phase("fn.fproto", read, fns);
 delete (Function.prototype as any).custom;
 phase("fn.fproto.gone", read, fns);
-(Object.prototype as any).isBuffer = "onObjectProto";
+try { (Object.prototype as any).isBuffer = "onObjectProto"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 phase("fn.oproto", read, fns);
 delete (Object.prototype as any).isBuffer;
 phase("fn.oproto.gone", read, fns);
@@ -39,7 +39,7 @@ phase("fn.oproto.gone", read, fns);
 phase("fn.own", read, fns);
 Object.setPrototypeOf(arrow, { custom: "setproto" });
 phase("fn.setproto", (f) => `${f.custom}|${f.isBuffer}`, [arrow]);
-Object.defineProperty(Function.prototype, "custom", { get() { return "getter"; }, configurable: true });
+try { Object.defineProperty(Function.prototype, "custom", { get() { return "getter"; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 phase("fn.accessor", (f) => `${f.custom}`, [function late() {}]);
 delete (Function.prototype as any).custom;
 

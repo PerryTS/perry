@@ -15,11 +15,11 @@ function probeReturn(xs: number[]): number {
 
 let closes = 0;
 const IP = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
-IP.return = function () { closes++; return {}; };
+try { IP.return = function () { closes++; return {}; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 probe("break", [1, 2, 3]);
 console.log("ret", probeReturn([1, 2, 3]), "closes", closes);
 delete IP.return;
-(Object.prototype as any).return = function () { closes += 10; return {}; };
+try { (Object.prototype as any).return = function () { closes += 10; return {}; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 probe("objproto", [1, 2, 3]);
 console.log("closes", closes);
 delete (Object.prototype as any).return;

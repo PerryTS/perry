@@ -9,7 +9,7 @@ for (const x of own) {
 console.log("own-entry", text, ownCalls);
 let getterCloses = 0;
 const family: any = Object.getPrototypeOf([].values());
-family.return = function() { getterCloses++; return {}; };
+try { family.return = function() { getterCloses++; return {}; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const failing: any = [];
 Object.defineProperty(failing, "0", { get() { throw 17; }, configurable: true });
 failing.length = 1;
@@ -25,7 +25,7 @@ let protoCalls = 0;
 text = "";
 for (const x of source) {
   text += x;
-  if (x === 4) Array.prototype[Symbol.iterator] = function() { protoCalls++; throw 9; };
+  try { if (x === 4) Array.prototype[Symbol.iterator] = function() { protoCalls++; throw 9; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 }
-Array.prototype[Symbol.iterator] = original;
+try { Array.prototype[Symbol.iterator] = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("prototype-entry", text, protoCalls);

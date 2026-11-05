@@ -31,9 +31,14 @@ console.log(u(t).get(k1), u(t).has(k1));
 // keys that are not objects
 try { w.set(1, 1); } catch (e) { console.log("set prim:", (e as Error).constructor.name); }
 console.log(w.get(1), w.has("x"));
-// patched prototype (last: it withdraws the pristine fact)
-const saved = WeakMap.prototype.get;
-(WeakMap.prototype as any).get = function () { return "patched"; };
-console.log(w.get(k2));
-WeakMap.prototype.get = saved;
-console.log(w.get(k2));
+// patched prototype, after the site ran on the receiver. DEC 250 locks
+// WeakMap.prototype, so the patch lands on a user prototype below it that
+// the receiver adopted before its warm calls.
+const UWP: any = Object.create(WeakMap.prototype);
+const late: any = Object.setPrototypeOf(new WeakMap(), UWP);
+u(late).set(k2, 2);
+console.log(u(late).get(k2));
+UWP.get = function () { return "patched"; };
+console.log(u(late).get(k2));
+delete UWP.get;
+console.log(u(late).get(k2));

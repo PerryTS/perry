@@ -1,10 +1,11 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function read(a: any[], k: any) { return a[k]; }
 function len(a: any[]) { return a.length; }
 // Object.prototype alone must invalidate the empty-chain proof, before any
 // Array.prototype indexed mutation has happened in this process.
 if (process.argv[2] === 'object-first') {
 const objectFirst: any[] = [14, , ];
-Object.defineProperty(Object.prototype, '23', {configurable:true,get(){return this[0]+50;}});
+{ Object.defineProperty(Object.prototype, '23', {configurable:true,get(){return this[0]+50;}}); }
 console.log('object first oob',read(objectFirst,23));
 objectFirst.length=24;console.log('object first hole',read(objectFirst,23));
 delete Object.prototype[23];
@@ -15,7 +16,7 @@ console.log(read(a,0), read(a,1), read(a,2), read(a,3), read(a,999999));
 console.log(read(a,-1), read(a,1.5), read(a,NaN), read(a,'0'), read(a,'01'), read(a,'length'));
 console.log(read(a,-0), read(a,Infinity), read(a,2147483648), read(a,4294967295));
 let getterCalls=0;
-Object.defineProperty(Array.prototype, '20', {configurable:true, get(){getterCalls++; return 71;}});
+locked(() => { Object.defineProperty(Array.prototype, '20', {configurable:true, get(){getterCalls++; return 71;}}); });
 const h: any[] = new Array(24); h[0]=9;
 console.log(read(h,20), read(h,0), read(h,21), getterCalls);
 delete Array.prototype[20];
@@ -56,7 +57,7 @@ console.log(read({0:123,length:2} as any,0),len({length:2} as any));
 function numericRead(a: number[], k: number) { return a[k] * 2; }
 const nums: number[] = [2, 4, 6];
 console.log(numericRead(nums, 1), numericRead(nums, -1), numericRead(nums, 20), numericRead(nums, 0.5), numericRead(nums, NaN));
-Object.defineProperty(Array.prototype, '20', {configurable:true, get(){return 17;}});
+locked(() => { Object.defineProperty(Array.prototype, '20', {configurable:true, get(){return 17;}}); });
 const sparseNumbers: number[] = new Array(24);
 console.log(numericRead(sparseNumbers, 20), numericRead(sparseNumbers, 21));
 delete Array.prototype[20];
@@ -66,13 +67,13 @@ console.log(numericRead(numericAlias, 99));
 // intrinsic prototypes, then walks a replaced chain (including proxies).
 const inherited: any[] = [17, , ];
 (inherited as any).marker = 80;
-Object.defineProperty(Array.prototype, '23', {configurable:true, get(){return this[0] + this.marker;}});
-Object.defineProperty(Object.prototype, '24', {configurable:true, get(){return this[0] + this.marker + 1;}});
+locked(() => { Object.defineProperty(Array.prototype, '23', {configurable:true, get(){return this[0] + this.marker;}}); });
+locked(() => { Object.defineProperty(Object.prototype, '24', {configurable:true, get(){return this[0] + this.marker + 1;}}); });
 inherited.length = 25;
 console.log('inherited holes', read(inherited,23), read(inherited,24));
 inherited.length = 1;
 console.log('inherited oob', read(inherited,23), read(inherited,24), read(inherited,25));
-Object.defineProperty(Object.prototype, '23', {configurable:true, get(){return 900;}});
+locked(() => { Object.defineProperty(Object.prototype, '23', {configurable:true, get(){return 900;}}); });
 console.log('precedence', read(inherited,23));
 delete Array.prototype[23]; delete Object.prototype[23]; delete Object.prototype[24];
 const chain: any = Object.create(Array.prototype);
@@ -84,24 +85,24 @@ Object.setPrototypeOf(inherited,null); console.log('null proto',read(inherited,2
 const proxyProto: any = new Proxy({23:100}, {get(t,k,r){return k==='23' ? r[0]+t[k] : Reflect.get(t,k,r);}});
 Object.setPrototypeOf(inherited,proxyProto); console.log('proxy proto',read(inherited,23));
 const arrayProto: any[] = [];
-Object.defineProperty(arrayProto,'23',{configurable:true,get(){return this[0]+this.marker+3;}});
+{ Object.defineProperty(arrayProto,'23',{configurable:true,get(){return this[0]+this.marker+3;}}); }
 Object.setPrototypeOf(inherited,arrayProto); console.log('array proto',read(inherited,23));
 // Restore the known intrinsic chain directly: getPrototypeOf is a separate API.
-Object.setPrototypeOf(Array.prototype,{26:123});
+locked(() => { Object.setPrototypeOf(Array.prototype,{26:123}); });
 console.log('intrinsic relink',read([1],26));
-Object.setPrototypeOf(Array.prototype,Object.prototype);
-Array.prototype[27]=127; Object.prototype[28]=128;
+locked(() => { Object.setPrototypeOf(Array.prototype,Object.prototype); });
+locked(() => { Array.prototype[27]=127; }); locked(() => { Object.prototype[28]=128; });
 const protoData: any[] = new Array(30);
 console.log('prototype data holes',read(protoData,27),read(protoData,28));
 protoData.length=0;
 console.log('prototype data oob',read(protoData,27),read(protoData,28));
-Object.prototype[29]=129;
-Object.defineProperty(Array.prototype,'29',{configurable:true,get(){return undefined;}});
+locked(() => { Object.prototype[29]=129; });
+locked(() => { Object.defineProperty(Array.prototype,'29',{configurable:true,get(){return undefined;}}); });
 console.log('undefined getter shadows',read(protoData,29));
 delete Array.prototype[27]; delete Object.prototype[28]; delete Array.prototype[29]; delete Object.prototype[29];
 
 const originalObject = Object;
-Object.prototype[30] = 130;
+locked(() => { Object.prototype[30] = 130; });
 globalThis.Object = {prototype:{30:999}} as any;
 console.log('intrinsic object after global replace',read(protoData,30));
 globalThis.Object = originalObject;

@@ -15,7 +15,7 @@ big[4294967295] = "not-an-index";
 console.log("2^32-1", at(big, 4294967295), big.length, at(big, 2 ** 53), at(big, -(2 ** 53)));
 console.log("fraction", at([1, 2], 1.5), at([1, 2], -0));
 (Array.prototype as any)[-3] = "from Array.prototype";
-(Object.prototype as any)[-4] = "from Object.prototype";
+try { (Object.prototype as any)[-4] = "from Object.prototype"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("inherited", at([], -3), at([], -4), at({}, -4), at({}, -3));
 Object.defineProperty(Array.prototype, "-5", { get() { return "getter len " + this.length; }, configurable: true });
 console.log("getter", at([1, 2, 3], -5), at([], -5));
@@ -37,7 +37,7 @@ console.log("accessor", at(acc, 5));
 const child: any = Object.create({ 9: "proto nine", [-9]: "proto minus nine" });
 child[10] = "own ten";
 console.log("chain", at(child, 9), at(child, -9), at(child, 10), at(child, 11));
-(Object.prototype as any)[12] = "op twelve";
+try { (Object.prototype as any)[12] = "op twelve"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("object proto index", at({}, 12), at(child, 12), at([], 12));
 delete (Object.prototype as any)[12];
 console.log("object proto index gone", at({}, 12), at([], 12));

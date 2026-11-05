@@ -1,0 +1,26 @@
+DEC 250: Cannot add member Object.prototype.presence10497: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.undefined10497: built-in objects are read-only in a compiled program
+default true false false 0
+own true false
+deleted false false 0
+linked true false 0
+replaced true false 0
+null false false
+retargeted true true
+proxy true false 2
+key true 1
+symbol true
+class true
+class-null true
+prototype true true
+bytes true,true,true,true,true,true false false
+holes false
+call true false
+primitive 3
+function 6 8
+bound 10
+callable 10
+function-miss true
+function-own true true
+function-delete false true
+wrapper true true false

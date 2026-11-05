@@ -1,0 +1,19 @@
+ordinary 8440 619830776
+changed 271570033
+getter 0 1 5610 179340407
+getter 31 1 5610 379452479
+getter 63 1 5610 520681475
+toJSON 0 691778399 1
+toJSON 31 871670851 1
+toJSON 63 135206967 1
+ordering-omissions [{"id":0,"field_0":0,"nested":{"value":"heap value 0","yes":true},"tail":"original"},{"id":1,"field_1":2,"nested":{"3":3,"20":20,"z":null},"tail":"original"},{"field_2":4,"nested":{"value":"heap value 2","yes":true}}]
+deleted-hidden [{"id":0,"field_0":0,"nested":{"value":"heap value 0","yes":true}},{"id":1,"field_1":2,"nested":{"3":3,"20":20,"z":null}},{"field_2":4,"nested":{"value":"heap value 2","yes":true}}]
+prototype [{"id":0,"field_0":0,"nested":"inherited:nested"},{"id":1,"field_1":2,"nested":{"3":3,"20":20,"z":null}},{"field_2":4,"nested":{"value":"heap value 2","yes":true}}]
+sparse [{"id":0,"field_0":0,"nested":{"value":"heap value 0","yes":true},"tail":"original"},null,{"id":2,"field_2":4,"nested":{"value":"heap value 2","yes":true},"tail":"original"}]
+cycle true
+throw true 1
+after-throw 876934793
+retained 1600 542890 81739672 834668578
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+global-prototype [{"id":0,"field_0":0,"nested":{"value":"heap value 0","yes":true},"tail":"original"},{"id":1,"field_1":2,"nested":{"value":"heap value 1","yes":true},"tail":"original"},{"id":2,"field_2":4,"nested":{"value":"heap value 2","yes":true},"tail":"original"}]
+global-restored 595138204

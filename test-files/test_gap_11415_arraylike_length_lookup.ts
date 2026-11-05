@@ -1,6 +1,6 @@
 const proto: any = Object.prototype;
-proto.length = 2;
-proto[0] = 'proto';
+try { proto.length = 2; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { proto[0] = 'proto'; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const plain: any = {};
 console.log('prototype', Array.prototype.join.call(plain, ','));
 const nil: any = Object.create(null);

@@ -100,7 +100,7 @@ function readLoop(xs: any[], n: number): string {
 //    out-of-bounds reads now reach the prototype (the protector latches).
 {
   const h: any[] = [1, , 3, , ];
-  Object.defineProperty(Array.prototype, 3, { get() { return "AP3"; }, configurable: true });
+  try { Object.defineProperty(Array.prototype, 3, { get() { return "AP3"; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   // Read while the getter is installed, print after it is gone: node's own
   // console.log builds arrays that trip over it.
   const r1 = [read(h, 1), read(h, 3), read(h, 0), h.length].join("|");
@@ -110,7 +110,7 @@ function readLoop(xs: any[], n: number): string {
   delete (Array.prototype as any)[3];
   console.log("Array.prototype getter", r1);
   console.log("vacated slot sees the prototype", r2);
-  (Object.prototype as any)[1] = "OP1";
+  try { (Object.prototype as any)[1] = "OP1"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const g: any[] = [7, , 9];
   console.log("Object.prototype index", read(g, 1), read(g, 0), read([], 1));
   delete (Object.prototype as any)[1];

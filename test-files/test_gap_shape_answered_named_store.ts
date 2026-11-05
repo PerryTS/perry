@@ -60,15 +60,15 @@ let arrayProxyTotal = 0;
 const arrayProxyParent = new Proxy(arrayParent, { set(_target, key, value, receiver) {
   arrayProxyTotal += value; Object.defineProperty(receiver, key, { value: value + 1, writable: true }); return true;
 } });
-Object.setPrototypeOf(Array.prototype, arrayProxyParent);
+try { Object.setPrototypeOf(Array.prototype, arrayProxyParent); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const proxyArray: any = []; putArray(proxyArray, 7);
-Object.setPrototypeOf(Array.prototype, arrayParent);
+try { Object.setPrototypeOf(Array.prototype, arrayParent); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("array-proxy", arrayProxyTotal, proxyArray.rangeEnd);
 let arrayGrandparentSetter = 0;
-Object.defineProperty(Object.prototype, "rangeEnd", { set(v) { arrayGrandparentSetter += v; }, configurable: true });
+try { Object.defineProperty(Object.prototype, "rangeEnd", { set(v) { arrayGrandparentSetter += v; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const grandparentArray: any = []; putArray(grandparentArray, 8);
 console.log("array-grandparent-setter", arrayGrandparentSetter, Object.hasOwn(grandparentArray, "rangeEnd"));
-Object.defineProperty(Object.prototype, "rangeEnd", { value: 21, writable: false, configurable: true });
+try { Object.defineProperty(Object.prototype, "rangeEnd", { value: 21, writable: false, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const grandparentReadonlyArray: any = [];
 console.log("array-grandparent-readonly", Reflect.set(grandparentReadonlyArray, "rangeEnd", 1), grandparentReadonlyArray.rangeEnd, Object.hasOwn(grandparentReadonlyArray, "rangeEnd"));
 delete (Object.prototype as any).rangeEnd;
@@ -104,10 +104,10 @@ function freshFunction(): any { return function fresh() {}; }
 function putFunction(o: any, value: number) { o.rangeEnd = value; }
 for (let i = 0; i < 24; i++) putFunction(freshFunction(), i);
 let functionSetter = 0;
-Object.defineProperty(Function.prototype, "rangeEnd", { set(v) { functionSetter += v; }, configurable: true });
+try { Object.defineProperty(Function.prototype, "rangeEnd", { set(v) { functionSetter += v; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const changedFunction = freshFunction(); putFunction(changedFunction, 6);
 console.log("function-setter", functionSetter, Object.hasOwn(changedFunction, "rangeEnd"));
-Object.defineProperty(Function.prototype, "rangeEnd", { value: 19, writable: false, configurable: true });
+try { Object.defineProperty(Function.prototype, "rangeEnd", { value: 19, writable: false, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const readonlyFunction = freshFunction();
 console.log("function-readonly", Reflect.set(readonlyFunction, "rangeEnd", 1), readonlyFunction.rangeEnd, Object.hasOwn(readonlyFunction, "rangeEnd"));
 delete (Function.prototype as any).rangeEnd;

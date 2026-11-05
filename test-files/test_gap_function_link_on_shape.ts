@@ -43,7 +43,7 @@ const hp = { [Symbol.hasInstance](v: any) { return v === 42; } };
 const hf: any = Object.setPrototypeOf(function hf() {}, hp);
 console.log("12", (42 as any) instanceof hf, ({} as any) instanceof hf);
 // Function.prototype is not on a relinked function's chain
-(Function.prototype as any).fpx = "fp";
+try { (Function.prototype as any).fpx = "fp"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("13", (plain as any).fpx, (function () {} as any).fpx, bound.fpx);
 delete (Function.prototype as any).fpx;
 // a function linked off %Function.prototype% is an instance of Function only

@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Object model §3.6: `Object.create(P)` families on a chain of prototypes
 // born on their carried layouts (computed keys from other modules, a spread
 // of another module's literal, accessors, symbol keys), in a program that
@@ -94,14 +95,14 @@ Object.freeze(SomeProto)
 show("frozen", some(12))
 
 // A read-only `value` on the root: the add fails (strict code throws).
-Object.defineProperty(Object.prototype, "value", { value: "root", writable: false, configurable: true })
+locked(() => { Object.defineProperty(Object.prototype, "value", { value: "root", writable: false, configurable: true }); });
 try {
   some(13)
   log.push("root-readonly: no throw")
 } catch (e) {
   log.push("root-readonly: " + (e instanceof TypeError))
 }
-delete (Object.prototype as any).value
+delete (Object.prototype as any).value;
 show("root-deleted", some(14))
 
 // The grandparent relinked to a prototype with a setter.

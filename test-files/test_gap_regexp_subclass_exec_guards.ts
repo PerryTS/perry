@@ -34,16 +34,16 @@ const o = new Objects("q");
 console.log("objects", (o.exec("q") as any)[1].v, ("q".match(o) as any)[0].v);
 // A written RegExp.prototype.exec drives @@split.
 const orig = RegExp.prototype.exec;
-RegExp.prototype.exec = function (this: RegExp, s: string): any {
+try { RegExp.prototype.exec = function (this: RegExp, s: string): any {
   if (this.lastIndex !== 1) return null;
   this.lastIndex = 2;
   const r: any = ["b", { v: 7 }];
   r.index = 1;
   return r;
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const parts: any[] = "abc".split(/b/);
 console.log("written proto exec", parts.length, parts[1].v);
-RegExp.prototype.exec = orig;
+try { RegExp.prototype.exec = orig; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 // An own exec on a plain RegExp is not the splitter's.
 const own: any = /b/;
 own.exec = function () {

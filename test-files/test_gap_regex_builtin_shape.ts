@@ -1,5 +1,9 @@
 // Warm each receiver before changing the fact its shape proved.
 function warm(r: any) { "a a".replace(r, "x"); }
+// DEC 250 locks RegExp.prototype: the receivers of the prototype rows adopt a
+// user prototype URP below it (before they are warmed), and the writes go there.
+const URP: any = Object.create(RegExp.prototype);
+const rx = (r: RegExp): any => Object.setPrototypeOf(r, URP);
 const exec = RegExp.prototype.exec;
 let own: any = /a/g;
 warm(own);
@@ -10,18 +14,19 @@ console.log("own exec", "a a".replace(own, "x"), calls);
 const flags = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags")!;
 warm(/a/g);
 let order: string[] = [];
-Object.defineProperty(RegExp.prototype, "flags", { configurable: true,
+Object.defineProperty(URP, "flags", { configurable: true,
   get() { order.push("flags"); return ""; } });
-const patched: any = /a/g;
+const patched: any = rx(/a/g);
 patched.exec = function (s: string) { order.push("exec"); return exec.call(this, s); };
 console.log("proto flags", "a a".replace(patched, "x"), order.join(","));
-Object.defineProperty(RegExp.prototype, "flags", flags);
+Object.defineProperty(URP, "flags", flags);
 
 const replace = RegExp.prototype[Symbol.replace];
-warm(/a/g);
-RegExp.prototype[Symbol.replace] = function (s: string, _replacement: any) { return "patched:" + s; };
-console.log("proto replace", "a a".replace(/a/g, "x"));
-RegExp.prototype[Symbol.replace] = replace;
+const pr: any = rx(/a/g);
+warm(pr);
+URP[Symbol.replace] = function (s: string, _replacement: any) { return "patched:" + s; };
+console.log("proto replace", "a a".replace(pr, "x"));
+URP[Symbol.replace] = replace;
 
 for (const name of ["hasIndices", "global", "ignoreCase", "multiline", "dotAll", "unicode", "unicodeSets", "sticky"]) {
   const desc = Object.getOwnPropertyDescriptor(RegExp.prototype, name)!;
@@ -30,12 +35,12 @@ for (const name of ["hasIndices", "global", "ignoreCase", "multiline", "dotAll",
   let seen = 0;
   Object.defineProperty(r, name, { configurable: true, get() { seen++; return false; } });
   console.log("own flag", name, "a a".replace(r, "x"), seen);
-  const next: any = /a/g;
+  const next: any = rx(/a/g);
   warm(next);
   let got = 0;
-  Object.defineProperty(RegExp.prototype, name, { configurable: true, get() { got++; return false; } });
+  Object.defineProperty(URP, name, { configurable: true, get() { got++; return false; } });
   console.log("proto flag", name, "a a".replace(next, "x"), got);
-  Object.defineProperty(RegExp.prototype, name, desc);
+  Object.defineProperty(URP, name, desc);
 }
 // Full observable flag Get order survives aggregate proof refusal.
 const ordered: any = /a/g;
@@ -82,10 +87,12 @@ console.log("prototype", "a".replace(custom, "x"));
 
 // The aggregate proof is also shared by builtin test/exec admission.
 const protoExec = RegExp.prototype.exec;
-const execReceiver = /a/;
+const execReceiver = rx(/a/);
+const execReplace = rx(/a/g);
+warm(execReplace);
 console.log("warm test", execReceiver.test("a"));
 let protoExecCalls = 0;
-RegExp.prototype.exec = function (_s: string) { protoExecCalls++; return null; };
+URP.exec = function (_s: string) { protoExecCalls++; return null; };
 console.log("proto exec test", execReceiver.test("a"), protoExecCalls);
-console.log("proto exec replace", "a".replace(/a/g, "x"), protoExecCalls);
-RegExp.prototype.exec = protoExec;
+console.log("proto exec replace", "a".replace(execReplace, "x"), protoExecCalls);
+URP.exec = protoExec;

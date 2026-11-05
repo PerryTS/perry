@@ -19,21 +19,21 @@ fn shared_parent_keeps_the_native_step_until_a_protocol_method_appears() {
             "the @@toStringTag accessor is not a protocol method"
         );
 
-        super::super::js_object_set_field_by_name(
+        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
             shared,
             crate::string::intern_ascii_literal(b"map"),
             1.0,
-        );
+        ));
         assert!(
             iterator_step_is_builtin(obj),
             "a helper method is not a protocol method"
         );
 
-        super::super::js_object_set_field_by_name(
+        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
             shared,
             crate::string::intern_ascii_literal(b"return"),
             1.0,
-        );
+        ));
         assert!(
             !iterator_step_is_builtin(obj),
             "an inherited return requires protocol"
@@ -60,11 +60,25 @@ fn a_protocol_method_added_after_deleting_an_intrinsic_key_still_revokes() {
             shared,
             crate::string::intern_ascii_literal(b"constructor"),
         );
-        super::super::js_object_set_field_by_name(
-            shared,
-            crate::string::intern_ascii_literal(b"return"),
-            1.0,
-        );
+        // The program's add is refused (DEC 250 Q2) and changes nothing;
+        // the runtime's own definition of the key still revokes.
+        let after_delete = iterator_step_is_builtin(obj);
+        crate::exception::catch_js_throw(|| {
+            super::super::js_object_set_field_by_name(
+                shared,
+                crate::string::intern_ascii_literal(b"return"),
+                1.0,
+            )
+        })
+        .expect_err("a program add on the iterator prototype is refused");
+        assert_eq!(iterator_step_is_builtin(obj), after_delete, "a refused add changes nothing");
+        super::super::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field_by_name(
+                shared,
+                crate::string::intern_ascii_literal(b"return"),
+                1.0,
+            )
+        });
         assert!(
             !iterator_step_is_builtin(obj),
             "a return that replaced a deleted key"

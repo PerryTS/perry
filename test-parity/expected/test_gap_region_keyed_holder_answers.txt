@@ -1,0 +1,18 @@
+2,2,4,5,true
+2,4,4,5,true
+2,2,4,5,true
+2,5,4,5,true
+2,5,4,5,true
+6,9,4,5,true
+6,9,4,5,true
+6,10,5,6,true a
+8,10,5,6,true
+3,3,5,6,true
+DEC 250: Cannot add member Object.prototype.rowSpan: built-in objects are read-only in a compiled program
+3,3,5,6,true
+3,3,5,6,true
+2,2,5,6,true
+2,2,5,6,true
+undefined,NaN,5,6,true
+true true true true undefined 1
+[object Object],9,5,6,true a,coerce

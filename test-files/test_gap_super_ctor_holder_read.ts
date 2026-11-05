@@ -80,12 +80,12 @@ show("C own late", Object.prototype.hasOwnProperty.call(c3, "late"));
 show("A.late plain", make(A, "a4").late);
 
 // A setter on Object.prototype named like a family key.
-Object.defineProperty(Object.prototype, "tag", {
+try { Object.defineProperty(Object.prototype, "tag", {
   set(v: any) {
     Object.defineProperty(this, "tag", { value: "op:" + v, writable: true, enumerable: true, configurable: true });
   },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 show("D.tag", make(D, "d5").tag);
 show("D.m", make(D, "d6").m);
 delete (Object.prototype as any).tag;

@@ -147,17 +147,12 @@ probe("sqlite all", () => stmt.all()[1], "name");
 probe("sqlite iterate", () => stmt.iterate().next().value, "id");
 probe("sqlite columns", () => stmt.columns()[0], "name");
 
-// A polluted Object.prototype must not reach a null-prototype result.
-(Object.prototype as any).toJSON = function () {
-  return "polluted";
-};
-(Object.prototype as any).inherited = 1;
-show("polluted qs", [querystring.parse("a=1"), "inherited" in querystring.parse("a=1")]);
-show("polluted groupBy", Object.groupBy([1], () => "k"));
-show("polluted sqlite", stmt.get());
-show("polluted create", Object.create(null));
-delete (Object.prototype as any).toJSON;
-delete (Object.prototype as any).inherited;
+// Object.prototype's members must not reach a null-prototype result (DEC 250:
+// the program cannot pollute Object.prototype; its own members stand in).
+show("polluted qs", [querystring.parse("a=1"), "toString" in querystring.parse("a=1")]);
+show("polluted groupBy", [Object.groupBy([1], () => "k"), "valueOf" in Object.groupBy([1], () => "k")]);
+show("polluted sqlite", [stmt.get(), "hasOwnProperty" in (stmt.get() as any)]);
+show("polluted create", [Object.create(null), "isPrototypeOf" in Object.create(null)]);
 
 // The store lanes on Object.create(null) receivers: a warm loop of named and
 // keyed adds, then an accessor and a readonly key added later to a sibling.

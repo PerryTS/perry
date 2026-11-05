@@ -3080,6 +3080,22 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
         LayoutWord(super::layout_desc::layout_id_of_word(previous)),
         id,
     );
+    // DEC 250: a MARKED object's structural change is reported before the
+    // stamp (a locked built-in refuses an image write while nothing has
+    // changed yet) and published after it (the shadow bit follows the stamp).
+    let marked = crate::object::proto_validity::note_object_shape_stamping(
+        obj as usize,
+        previous,
+        id.0,
+        match publish {
+            Publish::KeyAdd(key) => Some(key),
+            Publish::Carry | Publish::Write => None,
+        },
+    );
+    // The report may withdraw a sealed prototype (its shadow bit on the word
+    // still in place): the publication carries the bit from the word the
+    // report left, not the one read before it.
+    let previous = if marked { (*obj).parent_class_id } else { previous };
     (*obj).parent_class_id = match publish {
         Publish::Carry => super::layout_desc::carry_shadow(previous, id),
         Publish::Write => super::shadow::publish_word(obj, previous, id),
@@ -3092,7 +3108,9 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
     // change publishes, which is why the validity bump lives here rather than
     // in a list of mutation entry points that would have to be kept complete.
     // Until something is marked as a prototype this is one relaxed `bool` load.
-    crate::object::proto_validity::note_object_shape_stamped(obj as usize, previous, id.0);
+    if marked {
+        crate::object::proto_validity::note_marked_object_shape_stamped(obj as usize);
+    }
     if !crate::arena::pointer_in_nursery(obj as usize) {
         // The header store above made `obj` the carrier of `id`.
         let record = shape_record_of_receiver((id).0);

@@ -295,6 +295,9 @@ pub(crate) unsafe fn apply_property_descriptor(
     descriptor: &crate::object::object_ops::DescView<'_>,
 ) -> bool {
     unsafe {
+        // DEC 250: a definition that touches a built-in member is a redefine,
+        // reported before any store (the stores below would say "replace").
+        note_definition_target(obj_value, key_value);
         // #6748 follow-up: classify the receiver ONCE. A `GC_TYPE_OBJECT` that
         // is not an exotic cell (RegExp is the one OBJECT-typed exotic) cannot
         // be a proxy or handle id, a typed array, a buffer, a closure, or an
@@ -1285,4 +1288,36 @@ pub(crate) unsafe fn apply_property_descriptor(
         super::super::arguments_object_after_define(obj, key_str, descriptor);
         true
     }
+}
+
+/// Reports a DefineOwnProperty of the key on the receiver to the built-in lock.
+unsafe fn note_definition_target(obj_value: f64, key_value: f64) {
+    let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
+    if !jv.is_pointer() {
+        return;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    // Only a string key is read as text: `js_get_string_pointer_unified`
+    // hands back any pointer-tagged value's address, and a symbol read as a
+    // `StringHeader` is a read of the wrong allocation.
+    let key = crate::value::JSValue::from_bits(key_value.to_bits());
+    let sp = if key.is_string() || key.is_short_string() {
+        crate::value::js_get_string_pointer_unified(key_value) as *const crate::StringHeader
+    } else {
+        std::ptr::null()
+    };
+    let bytes = if sp.is_null() {
+        None
+    } else {
+        super::super::has_own_helpers::str_from_string_header(sp)
+    };
+    let key = match bytes {
+        Some(name) => crate::object::builtin_proto::Key::Bytes(name.as_bytes()),
+        None => crate::object::builtin_proto::Key::Value(key_value),
+    };
+    crate::object::builtin_proto::note_write_addr(
+        addr,
+        crate::object::builtin_proto::Mutation::Redefine(key),
+        "defineProperty",
+    );
 }
