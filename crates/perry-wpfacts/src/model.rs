@@ -30,13 +30,14 @@ pub const YIELD_VALUE: &str = "#yield";
 
 /// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
 /// prototype read as a value, a number key's chain (read, call), a
-/// computed call's full lookup, and (plus the primitive bit) a call under
+/// computed call's full lookup and numeric own fields, and (plus the primitive bit) a call under
 /// ToPropertyKey of `true`/`null`/`undefined`.
 pub const IDX_PROTO_VALUE: u8 = 32;
 pub const IDX_PLAIN_LOAD: u8 = 33;
 pub const IDX_PLAIN_CALL: u8 = 34;
 pub const IDX_NUM_OWN: u8 = 35;
 pub const IDX_CALL_ANY: u8 = 36;
+pub const IDX_CALL_NUM_OWN: u8 = 37;
 pub const IDX_CALL_NAMED: u8 = 64;
 /// `idx_done` tags of the own-only read (`Cons::IdxOwnLoad`): its key rule
 /// attached, a token key's full lookup, a string/symbol key, a number key,

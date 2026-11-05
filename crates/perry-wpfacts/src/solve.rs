@@ -32,6 +32,16 @@ mod fields;
 mod shaped_keys;
 mod virt;
 
+// Property-key ranges come from value deltas, not source annotations. Keep
+// computed reads and calls on the same partition of ToPropertyKey's inputs.
+fn index_needs_general_key(toks: Tokens<'_>, prim: u16) -> bool {
+    prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty()
+}
+
+fn index_has_numeric_key(prim: u16) -> bool {
+    prim & (prim::NUM | prim::BIGINT) != 0
+}
+
 impl Model {
     // ---------------------------------------------------------------- nodes
 
