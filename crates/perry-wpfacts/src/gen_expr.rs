@@ -277,6 +277,32 @@ impl<'a> Gen<'a> {
         }
     }
 
+    pub(crate) fn element_site(
+        &mut self,
+        fx: &Fx,
+        expr: &Expr,
+        recv: NodeId,
+        idx: NodeId,
+        key: Key,
+        op: crate::derive::ElementOp,
+    ) {
+        let byte_offset = match expr {
+            Expr::IndexGet { element_offset, .. }
+            | Expr::IndexSet { element_offset, .. }
+            | Expr::IndexUpdate { element_offset, .. }
+            | Expr::PutValueSet { element_offset, .. } => *element_offset,
+            _ => 0,
+        };
+        self.element_sites.push(crate::gen::ElementSite {
+            module: fx.module,
+            byte_offset,
+            op,
+            recv,
+            idx,
+            key,
+        });
+    }
+
     pub(crate) fn key_of(&mut self, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
@@ -1016,6 +1042,20 @@ impl<'a> Gen<'a> {
                         }
                     }
                 }
+                // Observing a key must not intern atoms or add solver work.
+                let atom = match key.as_ref() {
+                    Expr::String(s) => self.m.atom_index.get(s).copied(),
+                    Expr::SymbolFor(name) => match name.as_ref() {
+                        Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
+                            self.m.atom_index.get(s).copied()
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let element_key = atom.map_or(Key::any(), Key::Named);
+                let idx = self.for_in_key_of(fx.module, key).unwrap_or(k);
+                self.element_site(fx, e, rv, idx, element_key, crate::derive::ElementOp::Write);
                 v
             }
             Expr::PropertyUpdate {
@@ -1072,7 +1112,10 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                match self.read_key(index) {
+                let key = self.read_key(index);
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                match key {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any(_) => {
                         let dst = self.tmp("idxload");
@@ -1147,6 +1190,12 @@ impl<'a> Gen<'a> {
                     };
                     self.store_elem(fx, e, o, key, i, v, "[]=");
                 }
+                let key = match index.as_ref() {
+                    Expr::String(s) => Key::Named(self.m.atom_index[s]),
+                    _ => Key::any(),
+                };
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Write);
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {
@@ -1161,6 +1210,8 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let key = self.key_of(index);
+                self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Read);
+                self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Write);
                 let cur = self.load(o, key);
                 let r2 = self.m.reason("ToNumeric");
                 self.m.cons(

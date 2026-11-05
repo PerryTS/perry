@@ -38,6 +38,17 @@ pub struct ReadSite {
     pub func: FnIdx,
 }
 
+/// A computed member operation over nodes already generated for the solve.
+#[derive(Clone, Debug)]
+pub(crate) struct ElementSite {
+    pub module: u32,
+    pub byte_offset: u32,
+    pub op: crate::derive::ElementOp,
+    pub recv: NodeId,
+    pub idx: NodeId,
+    pub key: Key,
+}
+
 /// Another unit's module namespace object as this unit holds it (§18.2,
 /// DECISIONS 115-CWL3). A key holds what a named import of it binds, and
 /// that value exists in this unit once the unit names the key: `ns.k` read
@@ -133,6 +144,7 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    pub(crate) element_sites: Vec<ElementSite>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -486,6 +498,7 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            element_sites: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
