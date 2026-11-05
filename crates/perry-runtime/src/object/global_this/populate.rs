@@ -315,13 +315,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         ) {
             install_builtin_species_accessor(closure_ptr);
         }
-        if name == "Error" {
-            install_error_static_methods(closure_ptr);
-        }
         let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         // #4533: `Object.getPrototypeOf(TypeError) === Error`. The constructor's
         // `[[Prototype]]` is `Error` itself (not `Function.prototype`).
         if name == "Error" {
+            ERROR_CONSTRUCTOR_PTR.with(|cell| cell.set(closure_ptr as usize));
             error_ctor_bits = Some(ctor_value.to_bits());
         } else if is_native_error_subclass_constructor(name) {
             if let Some(proto_bits) = error_ctor_bits {
@@ -1116,81 +1114,6 @@ pub(crate) fn scan_error_constructor_root_mut(visitor: &mut crate::gc::RuntimeRo
 /// user override apart from Perry's built-in default.
 pub(crate) fn default_prepare_stack_trace_func_ptr() -> usize {
     global_this_error_prepare_stack_trace_thunk as *const u8 as usize
-}
-
-fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
-    if ctor.is_null() {
-        return;
-    }
-    ERROR_CONSTRUCTOR_PTR.with(|c| c.set(ctor as usize));
-    let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
-        0,
-    );
-    if closure.is_null() {
-        return;
-    }
-    super::super::native_module::set_bound_native_closure_name(closure, "captureStackTrace");
-
-    let key = crate::string::js_string_from_bytes(b"captureStackTrace".as_ptr(), 17);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        key,
-        value,
-        "captureStackTrace".to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
-    );
-
-    // #2904: `Error.isError` — V8/Node Error duck-check.
-    install_error_static_fn(
-        ctor,
-        "isError",
-        crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
-    );
-
-    // #2904: `Error.prepareStackTrace` — default stack-formatting hook.
-    install_error_static_fn(
-        ctor,
-        "prepareStackTrace",
-        crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
-    );
-
-    // #2904: `Error.stackTraceLimit` — writable number controlling captured
-    // frame count. Node's default is 10; Perry's stacks are coarse but the
-    // property must read as a number and be writable.
-    let limit_key = crate::string::js_string_from_bytes(b"stackTraceLimit".as_ptr(), 15);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        limit_key,
-        10.0,
-        "stackTraceLimit".to_string(),
-        super::super::PropertyAttrs::new(true, true, true),
-    );
-}
-
-/// #2904: install a callable static method on the `Error` constructor closure
-/// as a non-enumerable, writable, configurable data property (matching Node's
-/// property descriptors for the V8 static helpers).
-fn install_error_static_fn(
-    ctor: *mut crate::closure::ClosureHeader,
-    name: &str,
-    info: *const crate::closure::JsFunctionInfo,
-) {
-    let closure = crate::closure::js_closure_alloc(info, 0);
-    if closure.is_null() {
-        return;
-    }
-    super::super::native_module::set_bound_native_closure_name(closure, name);
-    let key = super::global_name_key(name);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        key,
-        value,
-        name.to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
-    );
 }
 
 // =====================================================================
