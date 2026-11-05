@@ -41,7 +41,8 @@ impl<'a> Batch<'a> {
     }
     pub fn rethrow_callback_error(&self) {
         if let Some(error) = self.callback_error() {
-            crate::exception::js_throw(error);
+            // Caught callbacks and program Promise rejections share the persistent ERROR records.
+            crate::exception::throw_open(error);
         }
     }
     pub fn cleanup(&self, body: impl FnOnce() -> f64) -> Result<f64, f64> {

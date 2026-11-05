@@ -94,7 +94,8 @@ fn complete(
     };
     let outcome = frame.run(|| {
         if let Some(error) = first_error(component.get_nanbox_f64(), origin) {
-            crate::exception::js_throw(error);
+            // Caught callbacks and program Promise rejections share the persistent ERROR records.
+            crate::exception::throw_open(error);
         }
         if reply["ok"] != true {
             fail(
@@ -391,7 +392,8 @@ pub(super) fn reject_pending(component: f64, message: &str) {
     }
     drop((ids, reply, batch));
     if failed {
-        crate::exception::js_throw(first.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(first.get_nanbox_f64());
     }
 }
 
@@ -676,7 +678,8 @@ pub(super) fn cycle(component: f64) -> bool {
     let active = needed(component.get_nanbox_f64());
     drop((primary, cleanup, output, report, event));
     if failed {
-        crate::exception::js_throw(first.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(first.get_nanbox_f64());
     }
     active
 }
@@ -700,7 +703,8 @@ pub(super) fn drive(component: f64, id: u64) -> f64 {
             std::thread::yield_now();
         }
         if let Some(error) = first_error(component.get_nanbox_f64(), id) {
-            crate::exception::js_throw(error);
+            // Caught callbacks and program Promise rejections share the persistent ERROR records.
+            crate::exception::throw_open(error);
         }
         records::get(origin_row(component.get_nanbox_f64(), id), records::RESULT)
     });
@@ -719,7 +723,8 @@ pub(super) fn drive(component: f64, id: u64) -> f64 {
     }
     prune(component.get_nanbox_f64());
     if outcome.is_err() {
-        crate::exception::js_throw(result.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(result.get_nanbox_f64());
     }
     result.get_nanbox_f64()
 }
