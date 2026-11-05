@@ -23,6 +23,8 @@ mod copy_write;
 mod dataview;
 mod detach;
 mod encode;
+#[cfg(test)]
+mod error_object_tests;
 mod exotic_view;
 /// #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are registered
 /// buffers with no integer-indexed own properties.

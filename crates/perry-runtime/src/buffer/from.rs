@@ -974,29 +974,11 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
 }
 
-fn throw_buffer_alloc_size_out_of_range() -> ! {
-    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_RANGE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-    });
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    {
-        let set = |key: &[u8], value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        let str_val = |s: &[u8]| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-        };
-        set(b"name", str_val(b"RangeError"));
-        set(b"code", str_val(b"ERR_OUT_OF_RANGE"));
-        set(
-            b"message",
-            str_val(b"The value of \"size\" is out of range"),
-        );
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+pub(super) fn throw_buffer_alloc_size_out_of_range() -> ! {
+    crate::exception::throw_core(crate::error::CoreError::range_error_with_own_code(
+        b"The value of \"size\" is out of range",
+        b"ERR_OUT_OF_RANGE",
+    ))
 }
 
 fn validate_buffer_alloc_size(size: i32) -> u32 {
@@ -1197,31 +1179,15 @@ pub extern "C" fn js_buffer_alloc_unsafe_slow(size: f64) -> *mut BufferHeader {
     super::store::store_alloc(crate::gc::GC_TYPE_BUFFER, size, super::store::Init::Uninit)
 }
 
-fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
-    static REGISTER_TYPE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_TYPE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_TYPE_ERROR);
-    });
-
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_TYPE_ERROR, 4);
-    {
-        let set = |key: &[u8], value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        let str_val = |s: &[u8]| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-        };
-        let message = format!(
-            "The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array. Received {}",
-            crate::fs::validate::describe_received(element)
-        );
-        set(b"name", str_val(b"TypeError"));
-        set(b"code", str_val(b"ERR_INVALID_ARG_TYPE"));
-        set(b"message", str_val(message.as_bytes()));
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+pub(super) fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
+    let message = format!(
+        "The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array. Received {}",
+        crate::fs::validate::describe_received(element)
+    );
+    crate::exception::throw_core(crate::error::CoreError::type_error_with_own_code(
+        message.as_bytes(),
+        b"ERR_INVALID_ARG_TYPE",
+    ))
 }
 
 fn normalize_buffer_concat_total_length(total_length: f64) -> Option<usize> {
