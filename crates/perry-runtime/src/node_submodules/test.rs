@@ -176,15 +176,15 @@ fn object_string(value: f64, name: &[u8]) -> Option<String> {
     object_property(value, name).and_then(value_to_string)
 }
 
-fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
-    crate::exception::catch_js_throw(f)
+fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, crate::exception::Caught> {
+    crate::exception::catch_thrown(f)
 }
 
 fn throw_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    let err = crate::error::CoreError::error(msg);
+    crate::exception::throw_core(err)
 }
 
 fn throw_invalid_arg_type(arg: &str, expected: &str, value: f64) -> ! {
@@ -788,7 +788,7 @@ fn record_mock_call(id: i64, args_value: f64, this_value: f64, result: f64, erro
     set_field(call, "this", this_handle.get_nanbox_f64());
     set_field(call, "target", undefined_value());
     set_field(call, "result", result_handle.get_nanbox_f64());
-    set_field(call, "error", error_handle.get_nanbox_f64());
+    set_field(call, "error", error_handle.value());
     set_field(call, "stack", stack_handle.get_nanbox_f64());
     let call_handle = scope.root_nanbox_f64(boxed_ptr(call));
 
@@ -833,18 +833,18 @@ extern "C" fn mock_function_invoke(
             let rest_handle = scope.root_nanbox_f64(rest);
             let this_handle = scope.root_nanbox_f64(this_value);
             let message_handle = scope.root_nanbox_f64(string_value("undefined is not a function"));
-            let error = crate::error::js_typeerror_new(raw_ptr_from_value(
+            let error = crate::error::CoreError::type_error(raw_ptr_from_value(
                 message_handle.get_nanbox_f64(),
             ) as *mut crate::StringHeader);
-            let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+            let error_handle = error.root(&scope);
             record_mock_call(
                 id,
                 rest_handle.get_nanbox_f64(),
                 this_handle.get_nanbox_f64(),
                 undefined_value(),
-                error_handle.get_nanbox_f64(),
+                error_handle.value(),
             );
-            crate::exception::js_throw(error_handle.get_nanbox_f64());
+            crate::exception::throw_core(error_handle.error());
         }
         record_mock_call(id, rest, this_value, undefined_value(), undefined_value());
         return undefined_value();
@@ -878,15 +878,15 @@ extern "C" fn mock_function_invoke(
             result_handle.get_nanbox_f64()
         }
         Err(err) => {
-            let err_handle = scope.root_nanbox_f64(err);
+            let err_handle = err.root(&scope);
             record_mock_call(
                 id,
                 rest_handle.get_nanbox_f64(),
                 this_value,
                 undefined_value(),
-                err_handle.get_nanbox_f64(),
+                err_handle.value(),
             );
-            crate::exception::js_throw(err_handle.get_nanbox_f64())
+            crate::exception::rethrow_caught(err_handle.caught())
         }
     }
 }
