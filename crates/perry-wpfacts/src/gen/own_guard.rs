@@ -2,9 +2,11 @@
 //! and key (`Cons::IdxOwnLoad`, `solve/own_read.rs`).
 //!
 //! The test is `H.call(o, k)` (H's value gated to
-//! `Object.prototype.hasOwnProperty` / `propertyIsEnumerable` at solve time),
+//! `Object.prototype.hasOwnProperty` / `propertyIsEnumerable` at solve time,
+//! and H's own `call` field to nothing written),
 //! `o.hasOwnProperty(k)` (the member gated the same way) or
-//! `Object.hasOwn(o, k)`; `o` and `k` are bindings (a local, a parameter,
+//! `Object.hasOwn(o, k)` (the `Object` constructor's `hasOwn` field gated
+//! to nothing written); `o` and `k` are bindings (a local, a parameter,
 //! `this`). The read is `o[k]` with the same bindings, and it is the first
 //! thing the guarded region evaluates that can run code: the consequent of
 //! `test ? … : …`, the right operand of `test && …`, the then-branch of
@@ -208,12 +210,17 @@ impl<'a> Gen<'a> {
         let recv = self.own_test_recv.take();
         let plan = plan?;
         let gates = match (plan.form, recv) {
-            (OwnTest::HasOwn, _) => Vec::new(),
-            (OwnTest::Call, Some(h)) => vec![(h, true), (t, false)],
+            // `Object.hasOwn` is a static of the `Object` constructor, which
+            // the program may replace: its field gates the read.
+            (OwnTest::HasOwn, _) => {
+                let obj = self.m.tok(TokKind::Builtin(BuiltinNs::Object));
+                vec![(self.tok_node(obj), OwnGateAt::ObjectCtor)]
+            }
+            (OwnTest::Call, Some(h)) => vec![(h, OwnGateAt::OwnFn), (t, OwnGateAt::Value)],
             (OwnTest::Method, Some(o)) => {
                 let a = self.m.atom("hasOwnProperty");
                 let h = self.load(o, Key::Named(a));
-                vec![(h, true), (t, false)]
+                vec![(h, OwnGateAt::OwnFn), (t, OwnGateAt::Value)]
             }
             (_, None) => return None,
         };

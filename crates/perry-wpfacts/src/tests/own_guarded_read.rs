@@ -225,3 +225,167 @@ fn helper_guard_stays() {
     );
     assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
+
+// ---- OWN2: twins that try to break the rule ----
+
+/// The program writes `Function.prototype.call`: the runtime refuses the
+/// store (TypeError: a member of a locked intrinsic prototype, DEC 250), so
+/// `H.call(o, k)` still runs the native and the read stays own-only.
+#[test]
+fn written_function_prototype_call_is_refused() {
+    let pf = dict(
+        "(Function.prototype as any).call = function (this: any, o: any, key: string) { return true; }; \
+         total += hasOwnProperty.call(dict, k) ? dict[k].size() : 0;",
+    );
+    assert!(proven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// The program writes an own `call` onto the builtin `hasOwnProperty`.
+#[test]
+fn written_own_call_of_the_builtin_stays() {
+    let pf = dict(
+        "(hasOwnProperty as any).call = function (o: any, key: string) { return true; }; \
+         total += hasOwnProperty.call(dict, k) ? dict[k].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// The program writes `call` onto the builtin `hasOwnProperty` under a
+/// computed key.
+#[test]
+fn written_computed_call_of_the_builtin_stays() {
+    let pf = dict(
+        "const names = [\"call\", \"q\"]; \
+         for (const nm of names) (hasOwnProperty as any)[nm] = function (o: any, key: string) { return true; }; \
+         total += hasOwnProperty.call(dict, k) ? dict[k].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// The program replaces `Object.prototype.hasOwnProperty` before reading it.
+#[test]
+fn written_object_prototype_has_own_property_stays() {
+    let pf = facts(
+        r#"
+        (Object.prototype as any).hasOwnProperty = function (key: string) { return true; };
+        const hasOwnProperty = Object.prototype.hasOwnProperty;
+        class Sym { n = 1; size(): number { return this.n; } }
+        const dict: Record<string, Sym> = {};
+        for (const n of ["a", "b"]) dict[n] = new Sym();
+        const lit: Record<string, Sym> = { a: new Sym(), b: new Sym() };
+        let total = 0;
+        for (const k of ["a", "x", "constructor"]) {
+            total += hasOwnProperty.call(dict, k) ? dict[k].size() : 0;
+            total += lit.hasOwnProperty(k) ? lit[k].size() : 0;
+        }
+        console.log(total);
+        "#,
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// The program replaces `Object.hasOwn` (a static member of a builtin
+/// constructor is not locked).
+#[test]
+fn written_object_has_own_stays() {
+    let pf = dict(
+        "(Object as any).hasOwn = function (o: any, key: string) { return true; }; \
+         total += Object.hasOwn(dict, k) ? dict[k].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// The object's own `hasOwnProperty` field, written under a named key.
+#[test]
+fn own_has_own_property_field_stays() {
+    let pf = dict(
+        "const lit: any = { a: new Sym(), b: new Sym() }; \
+         lit.hasOwnProperty = () => true; \
+         total += lit.hasOwnProperty(k) ? lit[k].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// The object binding is reassigned inside the guarded region.
+#[test]
+fn object_reassigned_between_stays() {
+    let pf = dict(
+        "let d: any = dict; \
+         if (hasOwnProperty.call(d, k)) { d = Object.create(dict); total += d[k].size(); }",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// An own getter runs at the read: its result is the read's value.
+#[test]
+fn own_getter_runs() {
+    let pf = dict(
+        "const lit: any = { get a(): any { return Object; }, b: new Sym() }; \
+         total += hasOwnProperty.call(lit, k) ? lit[k].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// An own symbol-keyed property is read under a symbol key.
+#[test]
+fn own_symbol_key_is_read() {
+    let pf = dict(
+        "const sym = Symbol(\"s\"); const lit: any = { a: new Sym() }; lit[sym] = Object; \
+         const ks: any[] = [k, sym]; \
+         for (const kk of ks) total += hasOwnProperty.call(lit, kk) ? lit[kk].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// An own numeric-keyed property of a program object under a number key.
+#[test]
+fn own_numeric_key_is_read() {
+    let pf = dict(
+        "const lit: any = { a: new Sym() }; lit[1] = Object; \
+         const ks: any[] = [k, 1]; \
+         for (const kk of ks) total += hasOwnProperty.call(lit, kk) ? lit[kk].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// A class instance: the key `size` lives on the class prototype only (the
+/// test is false there); an own property `Object.assign` adds is read.
+#[test]
+fn instance_own_property_from_assign_is_read() {
+    let pf = dict(
+        "class Box { n = 1; size(): number { return this.n; } } \
+         const b: any = new Box(); Object.assign(b, { x: Object }); \
+         const ks = [k, \"size\", \"x\"]; \
+         for (const kk of ks) total += hasOwnProperty.call(b, kk) ? b[kk].size() : 0;",
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// An object that reached unknown code: its own fields may hold anything.
+#[test]
+fn escaped_object_stays() {
+    let pf = facts(
+        r#"
+        declare function ext(x: any): void;
+        const hasOwnProperty = Object.prototype.hasOwnProperty;
+        class Sym { n = 1; size(): number { return this.n; } }
+        const lit: Record<string, Sym> = { a: new Sym(), b: new Sym() };
+        ext(lit);
+        let total = 0;
+        for (const k of ["a", "x", "constructor"]) {
+            total += hasOwnProperty.call(lit, k) ? lit[k].size() : 0;
+        }
+        console.log(total);
+        "#,
+    );
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// `Object.call(o, k)` runs the `Object` constructor (`Object(k)`, an
+/// object: always true): the `Object` constructor is not an own-property
+/// builtin at a callee.
+#[test]
+fn object_constructor_call_stays() {
+    let pf = dict("total += (Object as any).call(dict, k) ? dict[k].size() : 0;");
+    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}

@@ -1401,10 +1401,10 @@ impl Model {
                 obj,
                 idx,
                 dst,
-                callee,
+                at,
                 ..
             } => {
-                format!("owngate {n} {obj} {idx} {dst} {callee}")
+                format!("owngate {n} {obj} {idx} {dst} {at:?}")
             }
             Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
             Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
