@@ -933,8 +933,13 @@ pub fn lower_module_full_with_platform_globals(
     // bindings before any initializer/function body can reference them; the
     // declaration pass below still records the imports in source order.
     module_decl::pre_register_static_import_bindings(&mut ctx, ast_module);
-    // An import binding a local declaration repeats is an early error.
-    module_decl::import_redeclaration::check_import_redeclarations(ast_module)?;
+    // An import binding a local declaration repeats is an early error; a
+    // TypeScript import that may name a type waits for its export.
+    let locally_redeclared_imports =
+        module_decl::import_redeclaration::check_import_redeclarations(
+            ast_module,
+            source_file_path,
+        )?;
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.
@@ -957,6 +962,7 @@ pub fn lower_module_full_with_platform_globals(
     }
     let mut module = Module::new(name);
     module.requested_modules = requested_modules(ast_module);
+    module.locally_redeclared_imports = locally_redeclared_imports;
     // #9423: hand codegen the strictness lowering just computed. Set here, next
     // to `ctx.module_strict`, rather than at the end of lowering, so a later
     // early return cannot ship a module that claims to be sloppy.
@@ -1279,15 +1285,6 @@ pub fn lower_module_full_with_platform_globals(
                         if ctx.proxy_locals.contains(&name) && decl_init_is_proxy_new(decl) {
                             ctx.register_proxy_local(pre_id);
                         }
-                        // #3144, same forward-reference reason: a function
-                        // body lowered before this module-level declarator
-                        // resolves `m` to `pre_id`, so `m.call(...)` there must
-                        // already see the alias. The declarator re-registers.
-                        if let Some(method) = decl.init.as_deref().and_then(|init| {
-                            crate::destructuring::var_decl::builtin_proto_method_alias(&ctx, init)
-                        }) {
-                            ctx.builtin_proto_method_local_ids.insert(pre_id, method);
-                        }
                         ctx.pre_registered_module_vars.insert(name);
                         if var_decl.kind == ast::VarDeclKind::Var {
                             ctx.pre_registered_module_var_decls
@@ -1599,6 +1596,9 @@ pub fn lower_module_full_with_platform_globals(
             module.gen_param_prologue_len.insert(id, len);
         }
         // #4101: flush captured function source text for `fn.toString()`.
+        module
+            .non_constructor_funcs
+            .extend(ctx.non_constructor_funcs.drain());
         for (id, src) in ctx.closure_source_text.drain() {
             module.closure_source_text.insert(id, src);
         }

@@ -164,20 +164,31 @@ fn instrumented_numeric_array_read_keeps_census_after_sole_admission() {
     // this test also exercises the instrument when the suite defaults to OFF.
     const CHILD: &str = "NUMERIC_PHI_TEST_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        let current = std::thread::current();
+        // Started the way libtest's runner starts a per-test process under
+        // the workspace's `panic-abort-tests`: `__RUST_TEST_INVOKE=<libtest
+        // name>`, no arguments; exit 50 (libtest's `TR_OK`) is a pass.
+        let module = module_path!()
+            .split_once("::")
+            .map_or("", |(_crate, module)| module);
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([current.name().unwrap(), "--exact", "--test-threads=1"])
+            .env(
+                "__RUST_TEST_INVOKE",
+                format!(
+                    "{module}::instrumented_numeric_array_read_keeps_census_after_sole_admission"
+                ),
+            )
             .env(CHILD, "1")
             .env("PERRY_STORE_CENSUS", "1")
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "instrumented array read failed: {}\n{}",
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "instrumented array read failed ({}): {}\n{}",
+            output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
         return;
     }
     assert!(super::store_census::enabled());

@@ -1,0 +1,35 @@
+A.m Base.m:A
+A.n Base.n:A
+A.k Base.k
+A.late late-unset
+B.m Base.m:B
+B.n B.n:B
+B.k Base.k
+B.late late-unset
+C.m Base.m:C
+C.n B.n:C
+C.k Base.k
+C.late late-set:from-hook
+D.m Base.m:D
+D.n Base.n:D
+D.k Base.k
+D.late late-unset
+Base.m Base.m:Base
+Base.n Base.n:Base
+Base.k Base.k
+Base.late late-unset
+r.m Other.m
+r.n Other.n
+r proto true
+A.k after Base.k2
+C.m after B.m:c2
+A.m still Base.m:a3
+C.late setter setter:late-set:setter:from-hook
+C own late false
+A.late plain late-unset
+DEC 250: Cannot add member Object.prototype.tag: built-in objects are read-only in a compiled program
+D.tag d5
+D.m Base.m:d6
+E.m own Base.m:e
+E keys tag,m,n,k,late
+done

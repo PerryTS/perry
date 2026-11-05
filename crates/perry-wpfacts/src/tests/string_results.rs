@@ -46,6 +46,13 @@ fn proves(body: &str, marker: &str, key: &str) {
     }
 }
 
+fn proven_src(src: &str, marker: &str, key: &str) {
+    for per_unit in [false, true] {
+        let v = verdict_at(&facts_of(src, per_unit), src, marker, key);
+        assert!(proven(&v), "per_unit={per_unit} {marker} .{key}: {v:?}");
+    }
+}
+
 fn unproven(src: &str, marker: &str, key: &str) {
     for per_unit in [false, true] {
         let v = verdict_at(&facts_of(src, per_unit), src, marker, key);
@@ -127,11 +134,11 @@ fn array_slice_result_length() {
     assert!(proven(&v), "{v:?}");
 }
 
-/// A written `String.prototype.trim` runs what was stored: its result is
-/// unknown.
+/// DEC 250: replacing `String.prototype.trim` is a TypeError, so the call
+/// runs the builtin and its result is a string.
 #[test]
-fn written_prototype_method_result_is_unknown() {
-    unproven(
+fn a_replaced_locked_prototype_method_keeps_its_result() {
+    proven_src(
         "(String.prototype as any).trim = function () { return { length: 9 }; };\n\
          function f(s: string) { return s.trim().length; }\n\
          console.log(f(\" a \"));\n",

@@ -250,66 +250,6 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
-    // ========== ethers ==========
-    // Utility functions (receiver-less, no class filter).
-    NativeModSig {
-        module: "ethers",
-        has_receiver: false,
-        method: "getAddress",
-        class_filter: None,
-        runtime: "js_ethers_get_address",
-        args: &[NA_STR],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "ethers",
-        has_receiver: false,
-        method: "formatEther",
-        class_filter: None,
-        runtime: "js_ethers_format_ether",
-        args: &[NA_PTR],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "ethers",
-        has_receiver: false,
-        method: "formatUnits",
-        class_filter: None,
-        runtime: "js_ethers_format_units",
-        args: &[NA_PTR, NA_F64],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "ethers",
-        has_receiver: false,
-        method: "parseEther",
-        class_filter: None,
-        runtime: "js_ethers_parse_ether",
-        args: &[NA_STR],
-        ret: NR_BIGINT,
-    },
-    NativeModSig {
-        module: "ethers",
-        has_receiver: false,
-        method: "parseUnits",
-        class_filter: None,
-        runtime: "js_ethers_parse_units",
-        args: &[NA_STR, NA_F64],
-        ret: NR_BIGINT,
-    },
-    // Wallet.createRandom() — static method on the Wallet class.
-    // class_filter matches `Wallet` so `ethers.Wallet.createRandom()` in
-    // HIR (which lowers to class_name="Wallet", method="createRandom")
-    // resolves here.
-    NativeModSig {
-        module: "ethers",
-        has_receiver: false,
-        method: "createRandom",
-        class_filter: Some("Wallet"),
-        runtime: "js_ethers_wallet_create_random",
-        args: &[],
-        ret: NR_JS_VALUE,
-    },
     // ========== #2875 DisposableStack / AsyncDisposableStack ==========
     // `new DisposableStack()` / `new AsyncDisposableStack()` are dispatched
     // by `lower_builtin_new`; the rows below cover the instance methods and

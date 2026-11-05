@@ -269,7 +269,11 @@ pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
     // A sealed native constructor's own bag also describes its parent
     // link. Accessors, symbols, deletes and relinks all reach this funnel,
     // including constructors already on FunctionDictionary.
-    crate::object::builtin_proto::note_write((*closure).props, "function own state");
+    crate::object::builtin_proto::note_write(
+        (*closure).props,
+        crate::object::builtin_proto::Mutation::Publication,
+        "function own state",
+    );
     let dict = function_dictionary_shape();
     let id = (*closure).shape_id;
     // A class function object keeps its (sticky, dictionary-kind) class shape.
@@ -398,7 +402,11 @@ pub(crate) unsafe fn closure_link_on_shape(ptr: usize, proto_bits: u64) -> bool 
         return false;
     };
     shapes::write_identity_word(proto_id, proto_bits);
-    crate::object::builtin_proto::note_write((*closure).props, "function own state");
+    crate::object::builtin_proto::note_write(
+        (*closure).props,
+        crate::object::builtin_proto::Mutation::Relink,
+        "function own state",
+    );
     refresh_closure_shape_as(ptr, Some(proto_id));
     true
 }

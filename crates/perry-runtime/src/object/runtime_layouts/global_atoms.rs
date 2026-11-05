@@ -954,6 +954,13 @@ global_atom!(
     "perry_image_literal_0_756e646566696e6564",
     "perry_atom_756e646566696e6564"
 );
+global_atom!(
+    G127,
+    GA127,
+    "MessageEvent",
+    "perry_image_literal_0_4d6573736167654576656e74",
+    "perry_atom_4d6573736167654576656e74"
+);
 
 // The global object's own builtin keys in their enumeration (populate) order,
 // each with its attribute byte: 2 = writable, configurable (not enumerable);
@@ -1028,6 +1035,7 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
     GA60 => 2,
     GA61 => 2,
     GA62 => 2,
+    GA127 => 2,
     GA63 => 2,
     GA64 => 2,
     GA65 => 2,

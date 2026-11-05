@@ -103,7 +103,9 @@ impl<'a> Gen<'a> {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
-                if module == "__perry_runtime" {
+                if module == "__perry_borrowed_proof" {
+                    self.prim_node(prim::BOOL)
+                } else if module == "__perry_runtime" {
                     self.runtime_glue(fx, method, o, a, args)
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
@@ -258,8 +260,14 @@ impl<'a> Gen<'a> {
                 "process.env key",
                 Protocol::ToPrimitive,
             ),
+            Expr::ProcessArgv => {
+                let n = self.m.node_l("process.argv");
+                self.m.own(n);
+                let a = self.m.process_argv;
+                self.m.edge(a, n);
+                n
+            }
             Expr::ProcessEnv
-            | Expr::ProcessArgv
             | Expr::ProcessMemoryUsage
             | Expr::ProcessVersions
             | Expr::ProcessHrtime(..)
@@ -321,7 +329,13 @@ impl<'a> Gen<'a> {
                 self.tok_node(t)
             }
             Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr => {
-                self.m.top_val("process stdio")
+                let ns = match e {
+                    Expr::ProcessStdin => BuiltinNs::Stdin,
+                    Expr::ProcessStdout => BuiltinNs::Stdout,
+                    _ => BuiltinNs::Stderr,
+                };
+                let t = self.m.tok(TokKind::Builtin(ns));
+                self.tok_node(t)
             }
             Expr::ProcessNextTick { callback, args } => {
                 let cb = self.expr(fx, callback);

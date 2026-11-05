@@ -149,7 +149,8 @@ const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
 mod function_receiver;
-use function_receiver::{function_call, function_ok};
+use function_receiver::function_call;
+pub(super) use function_receiver::function_ok;
 
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
 /// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,
@@ -181,10 +182,7 @@ pub(crate) unsafe fn by_name_function_apply(target: f64, args: &[f64]) -> Option
 #[inline(never)]
 unsafe fn array_push(recv: f64, values: &[f64]) -> f64 {
     let arr = raw(recv) as *mut crate::array::ArrayHeader;
-    if crate::array::array_is_frozen(arr) {
-        crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
-    }
-    crate::array::guard_writable_length(arr);
+    crate::array::push_guard(arr, values.len() as u32);
     let mut a = arr;
     for v in values {
         a = crate::array::js_array_push_f64_spec(a, *v);

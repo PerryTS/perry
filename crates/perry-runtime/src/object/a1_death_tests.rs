@@ -56,7 +56,7 @@ fn death_helper_fails_when_the_child_survives() {
     if in_death_child() {
         return;
     }
-    let outcome = std::panic::catch_unwind(|| {
+    let outcome = crate::test_support::child_unwind(|| {
         assert_child_aborts("object::a1_death_tests::death_child_that_survives", "");
     });
     assert!(

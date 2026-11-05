@@ -1,0 +1,8 @@
+relinked B1
+data 4 4 true
+DEC 250: Cannot add member Object.prototype.locked: built-in objects are read-only in a compiled program
+static S5
+rhs order B7 B7
+proxy 8 x:8
+null write TypeError
+constructor write B9

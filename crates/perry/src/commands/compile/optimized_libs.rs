@@ -95,7 +95,7 @@ pub(crate) fn well_known_flip_enabled() -> bool {
 pub(crate) fn wrapper_is_sole_provider(module: &str) -> bool {
     matches!(
         module.strip_prefix("node:").unwrap_or(module),
-        "net" | "ws" | "zlib"
+        "net" | "perry/websocket" | "zlib"
     )
 }
 

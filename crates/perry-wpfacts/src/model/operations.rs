@@ -140,29 +140,34 @@ impl Model {
     }
 
     /// Record a write under `key` onto `t` that may reach
-    /// `%Function.prototype%`'s `bind`, `name` or `length`
-    /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
+    /// `%Function.prototype%`'s bind metadata or borrowed call methods
+    /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
-        if self.fnproto_write.is_some()
-            || !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto))
-        {
+        if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
             return;
         }
-        let hits = match key {
-            None | Some(Key::Any) => true,
-            Some(Key::Named(a)) => matches!(
-                self.atoms[a as usize].as_str(),
-                "bind" | "name" | "length" | crate::STAR_KEY
-            ),
+        let key_name = match key {
+            Some(Key::Named(a)) => Some(self.atoms[a as usize].as_str()),
+            _ => None,
         };
-        if hits {
+        let any = key_name.is_none() || key_name == Some(crate::STAR_KEY);
+        let bind = any || matches!(key_name, Some("bind" | "name" | "length"));
+        let borrow = any || matches!(key_name, Some("call" | "apply"));
+        if (bind && self.fnproto_write.is_none()) || (borrow && self.fnproto_borrow_write.is_none())
+        {
             let on = if t == TOP {
                 "a value from unmodeled code"
             } else {
                 "a builtin prototype"
             };
-            self.fnproto_write = Some(self.reason(&format!("{what} on {on}")));
+            let reason = self.reason(&format!("{what} on {on}"));
+            if bind && self.fnproto_write.is_none() {
+                self.fnproto_write = Some(reason);
+            }
+            if borrow && self.fnproto_borrow_write.is_none() {
+                self.fnproto_borrow_write = Some(reason);
+            }
         }
     }
 
@@ -187,6 +192,20 @@ impl Model {
 
     pub fn is_iter_key(&self, k: Key) -> bool {
         matches!(k, Key::Named(a) if self.atoms[a as usize] == ITER_ELEM)
+    }
+
+    /// The protocol value key: what an iteration consumer (a for-of step,
+    /// spread, `Array.from`, a collection constructor) reads from a `next()`
+    /// result it has seen is not done. Such a consumer never reads the done
+    /// result's value. On a builtin iterator's `IterResult` it is the
+    /// yielded values (`#yield`, without the done result's `undefined`); on
+    /// any other object it is `value`.
+    pub fn yield_key(&mut self) -> Key {
+        Key::Named(self.atom(YIELD_VALUE))
+    }
+
+    pub fn is_yield_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == YIELD_VALUE)
     }
 
     pub fn atom(&mut self, s: &str) -> Atom {
@@ -593,7 +612,16 @@ impl Model {
         } else {
             String::new()
         };
-        (fi.module, fi.func_id, name)
+        // A synthetic function (`<resolver>`, `<override .. of ..>`, `<another
+        // unit's accessor>`) belongs to no module: its `module` is a
+        // placeholder, not its identity (it would name another module once
+        // dynamic reach drops the first one).
+        let module = if fi.func_id == u32::MAX && fi.name.starts_with('<') {
+            u32::MAX
+        } else {
+            fi.module
+        };
+        (module, fi.func_id, name)
     }
 
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
@@ -627,7 +655,10 @@ impl Model {
     pub fn body_active(&self, f: FnIdx) -> bool {
         match &self.act {
             None => true,
-            Some(a) => a.on.contains(&self.act_key(f)),
+            Some(a) => {
+                let k = self.act_key(f);
+                a.on.contains(&k) || (a.fixed && !a.seen.is_empty() && !a.seen.contains(&k))
+            }
         }
     }
 
@@ -1667,6 +1698,43 @@ impl Model {
         v
     }
 
+    /// The array `process.argv` holds at startup: made once by the runtime,
+    /// its elements strings.
+    pub(crate) fn process_argv_array(&mut self) -> Tok {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: u32::MAX,
+                site: u32::MAX - 1,
+                what: "arraybox",
+            },
+            display: "process.argv".into(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        let fa = self.field_any(t);
+        self.add_prim(fa, prim::STR);
+        t
+    }
+
     pub(super) fn marker_template(&mut self, display: String) -> TmplId {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
@@ -1691,7 +1759,10 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1729,7 +1800,10 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

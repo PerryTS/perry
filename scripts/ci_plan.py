@@ -32,8 +32,8 @@ THE THREE TIERS
   full   nightly, release tags, `workflow_dispatch` (the release pipeline's
          `await-tests` dispatches this and waits for the `full-suite-gate` job),
          and PRs carrying the `run-extended-tests` label. The sweep plus the
-         slow/opt-in suites (parity, compile-smoke, doc-tests, package smokes,
-         the gap suite in its 24-shard auto-optimize mode).
+         slow/opt-in suites (parity in auto-optimize mode, compile-smoke,
+         doc-tests, package smokes).
 
 PR SCOPE
 --------
@@ -88,6 +88,8 @@ JOBS: dict[str, tuple[str, ...]] = {
     "gc_call_effects": ("pr", "sweep", "full"),
     "gc_stress": ("pr", "sweep", "full"),
     "e2e_scoped": ("pr",),  # scoped to the PR's diff; meaningless without one
+    # The subjects the PR's diff owns (scripts/test_owners.py), auto mode.
+    "parity_scoped": ("pr",),
     "security_audit": ("pr", "sweep", "full"),  # pr: only when `deps` changed
     "windows_build": ("sweep", "full"),
     "windows_arm64_build": ("sweep", "full"),
@@ -95,13 +97,8 @@ JOBS: dict[str, tuple[str, ...]] = {
     "repsel_census": ("sweep", "full"),
     "harmonyos_smoke": ("sweep", "full"),
     "binary_size": ("full",),  # ELF/Mach-O link absence + macOS linked-size budget; full-tier required gate
+    # Every program case, test-files and node-suite, in auto-optimize mode.
     "parity": ("full",),
-    # The per-module node-compatibility corpus (test-parity/node-suite/**), scored
-    # against test-parity/node_suite_baseline.json. compiler-runtime.yml still
-    # runs it on the merge queue, but that workflow's jobs cannot be `needs:`-ed
-    # by `full-suite-gate` -- and a corpus no release waits for is a corpus
-    # nobody reads. See the job comment in test.yml.
-    "node_suite_guard": ("full",),
     "test262": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),
@@ -113,44 +110,25 @@ JOBS: dict[str, tuple[str, ...]] = {
 
 TIERS = ("pr", "sweep", "full")
 
-# The gap suite: shard count and harness mode per tier.
-#   fast = PERRY_SKIP_BUILD=1 against one prebuilt release compiler + runtime
-#          archives; ~1.5 s/test. Only ext-routed tests (http/net/ws/zlib/
-#          events) still take the per-test auto-optimize path.
-#   full = the harness's default: every test compiles through auto-optimize,
-#          which rebuilds a feature-stripped runtime per distinct feature set
-#          (~200 s each, redundantly per shard). ~40 min/shard. This is the
-#          arm that sees auto-optimize-only link bugs, so it stays in the
-#          nightly/release tier.
-#
-# Shard counts, measured 2026-08-16 on ubuntu-latest in fast mode: the release
-# build is ~8 min per shard, non-ext tests are ~2 s each (~18 min for the whole
-# suite), and every ext-routed test whose feature set the shard has not seen
-# yet costs a ~4-5 min auto-optimize runtime rebuild (23 such tests, spread
-# round-robin). At 4 shards the slowest shard was 39.5 min (6 rebuilds); at 6
-# it is ~28 min, level with gc-stress, for ~170 job-minutes -- against 480 for
-# the old 8 x auto-optimize shards.
+# The gap suite: shard count per tier, in `fast` mode (parity.py against one
+# prebuilt release compiler + runtime archives; ~1.5 s/test). Only ext-routed
+# tests (http/net/ws/zlib/events) take the per-test auto-optimize path. The
+# full tier's auto-optimize coverage of these cases is the `parity` job.
 GAP_SUITE = {
     # Fast PR shard 1 in run36981459549 exhausted its 110-minute bound.
     # Twelve modulo slices halve each former six-way slice; the worker and
     # no-new-untriaged snapshot gate retain the same complete corpus.
     "pr": {"mode": "fast", "total": 12},
     "sweep": {"mode": "fast", "total": 3},
-    # Twelve-way run 36967233926 still hit the 110-minute job bound:
-    # shard 3 completed only 79/102 fixtures and shard 4 only 82/102.
-    # Doubling the modulo partition halves each existing slice without
-    # dropping fixtures or changing auto-optimize and snapshot acceptance.
-    "full": {"mode": "full", "total": 24},
+    "full": {"mode": "fast", "total": 3},
 }
 
-# Parity: full tier only, sharded. The unsharded job was killed by GitHub's
-# 6-hour job cap on 2026-08-16 (run 31935729773). The corpus subsequently
-# outgrew the original 8-way split: release run 32922022811 reached only
-# 152/173 tests in shard 8 before its 150-minute cap. Twelve shards restore
-# wall-time margin without exceeding the org's 20-runner pool once the other
-# full-tier jobs drain. `parity-aggregate` (not in JOBS: it keys off
-# `jobs.parity`) merges the shard reports and runs the aggregate-only gates.
-PARITY_SHARDS = 12
+# Parity: full tier only, every case of test-files and node-suite through
+# `parity.py run --suite all --mode auto`, one verdict per shard.
+# 16: ~7,930 cases, ~496 per shard, ~170 of them serial. The old serial job ran
+# ~95-135 cases per shard-hour, so (326/4 workers + 170)/100 ~= 2.5 h per shard
+# at worst, inside the 300-minute timeout.
+PARITY_SHARDS = 16
 
 # test262: full tier only. The full corpus (~53k cases, judged by Perry alone)
 # is ~1.1 CPU-s per case, so sixteen 4-core shards run about an hour each after
@@ -337,7 +315,7 @@ def plan(
                 on = scope["deps"]
             else:
                 on = on and scope["core"]
-        if job == "e2e_scoped":
+        if job in ("e2e_scoped", "parity_scoped"):
             # Reads the PR's complete file list via ci_pr_files.py; no PR on a
             # `workflow_dispatch --tier pr`, so the job would fail on a
             # missing PR number rather than skip.
@@ -444,6 +422,8 @@ def _self_test() -> int:
     check("docs-only PR: WASI execution off", not docs["jobs"]["wasi_execution"])
     check("core PR: gc-stress is one PR-subset shard", core["gc_stress"] == {"mode": "pr", "total": 1, "shards": [1]})
     check("core PR: e2e-scoped on", core["jobs"]["e2e_scoped"])
+    check("core PR: parity-scoped on", core["jobs"]["parity_scoped"])
+    check("docs-only PR: parity-scoped off", not docs["jobs"]["parity_scoped"])
     check("core PR: gc call-effects sidecar check on", core["jobs"]["gc_call_effects"])
     check("docs-only PR: gc call-effects sidecar check off", not docs["jobs"]["gc_call_effects"])
     check("core PR: windows off", not core["jobs"]["windows_build"])
@@ -472,7 +452,7 @@ def _self_test() -> int:
     check("nested .md is not core", not is_core("crates/perry/README.md"))
     check("AGENTS.md is core (lint doc-claim audits)", is_core("AGENTS.md"))
     check("a .ts test file is core", is_core("test-files/test_gap_x.ts"))
-    check("scripts are core", is_core("scripts/run_gap_tests.sh"))
+    check("scripts are core", is_core("scripts/parity.py"))
     check("generated api docs are core", is_core("docs/api/perry.d.ts"))
 
     # 3. Sweep and full.
@@ -482,13 +462,16 @@ def _self_test() -> int:
     check("sweep: parity off", not sweep["jobs"]["parity"])
     check("sweep: perry integration shards off", not sweep["jobs"]["cargo_test_perry"])
     check("sweep: e2e-scoped off", not sweep["jobs"]["e2e_scoped"])
+    check("sweep: parity-scoped off", not sweep["jobs"]["parity_scoped"])
     check("sweep: 3 fast gap shards", sweep["gap"]["total"] == 3 and sweep["gap"]["mode"] == "fast")
     check("sweep: cargo-test full", sweep["cargo_test_scope"] == "full")
     check("sweep: security-audit on", sweep["jobs"]["security_audit"])
     check("sweep: full GC matrix has four shards", sweep["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
     full = plan("schedule", "refs/heads/main")
-    check("full: every job except e2e-scoped", all(v for k, v in full["jobs"].items() if k != "e2e_scoped"))
+    check("full: every job except the PR-scoped ones",
+          all(v for k, v in full["jobs"].items() if k not in ("e2e_scoped", "parity_scoped")))
+    check("full: no PR-scoped job", not full["jobs"]["e2e_scoped"] and not full["jobs"]["parity_scoped"])
     check(
         "full: perry integrations sharded",
         full["cargo_test_perry"]
@@ -497,8 +480,8 @@ def _self_test() -> int:
             "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
         },
     )
-    check("full: 24 auto-optimize gap shards", full["gap"] == {"mode": "full", "total": 24, "shards": list(range(1, 25)), "update_snapshot": False})
-    check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
+    check("full: gap lane runs like the sweep", full["gap"] == sweep["gap"])
+    check("full: parity sharded", full["parity"]["shards"] == list(range(1, PARITY_SHARDS + 1)))
     check("full: full GC matrix has four shards", full["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
     labelled = plan("pull_request", "refs/pull/1/merge", labels=[EXTENDED_LABEL], changed=["README.md"])
@@ -508,6 +491,7 @@ def _self_test() -> int:
     snap = plan("workflow_dispatch", "refs/heads/x", tier_input="pr", update_gap_snapshot=True)
     check("snapshot update: one fast shard", snap["gap"] == {"mode": "fast", "total": 1, "shards": [1], "update_snapshot": True})
     check("dispatch --tier pr has no PR to scope e2e against", not snap["jobs"]["e2e_scoped"])
+    check("dispatch --tier pr has no PR to scope parity against", not snap["jobs"]["parity_scoped"])
     check("dispatch --tier pr runs cargo-test unscoped (no PR to read)", snap["cargo_test_scope"] == "full")
 
     # 4. The gc_gate_wiring_check contract: `gc-stress` is a registered

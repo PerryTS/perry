@@ -112,8 +112,8 @@ pub(in crate::codegen) fn compile_static_method(
     );
 
     // A static method invoked as `C.m()` binds `this` to the class
-    // constructor `C`. Represent that as the class-ref NaN-box (the same
-    // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
+    // constructor `C`. Use its function object (the same value
+    // `Expr::ClassRef` lowers to) stored in a
     // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
     // resolve against the class object via the normal dynamic-dispatch
     // path. (Previously `this` fell through to a receiver-less read and came
@@ -312,6 +312,7 @@ pub(in crate::codegen) fn compile_static_method(
         // side, mirroring instance-method setup.
         class_stack: vec![class.name.clone()],
         in_static_member: true,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -447,7 +448,13 @@ pub(in crate::codegen) fn compile_static_method(
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
-        spec_ta_ready: std::collections::HashSet::new(),
+        // Bindings proven at every read of this body (one rule with the
+        // pre-pass judge: `spec_abi_sites::ta_ready_at_entry`).
+        spec_ta_ready: crate::collectors::spec_abi_sites::ta_ready_at_entry(
+            &cross_module.spec_ta_bindings,
+            &cross_module.definite_init,
+            Some(f.id),
+        ),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
         typed_element_locals: std::collections::HashSet::new(),
@@ -466,7 +473,6 @@ pub(in crate::codegen) fn compile_static_method(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,

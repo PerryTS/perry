@@ -226,13 +226,50 @@ macro_rules! runtime_layout {
             pub fn desc() -> *mut PerryLayoutDesc {
                 #[cfg(not(any(test, feature = "test-layout-descriptors")))]
                 {
-                    // SAFETY: an extern_weak static reads as the symbol's
-                    // address, or null when the program does not define it.
-                    let desc = unsafe { DEFINITION };
+                    let desc = definition();
                     if desc.is_null() {
                         crate::object::runtime_layouts::undefined_runtime_layout(stringify!($name));
                     }
                     desc
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    definition()
+                }
+            }
+            /// The layout symbol's address, or null when the program does
+            /// not define it.
+            #[cfg(not(target_os = "windows"))]
+            #[inline(always)]
+            fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: an extern_weak static reads as the symbol's
+                    // address, or null when the program does not define it.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
+            // COFF: LLVM lowers an undefined extern_weak reference, in each
+            // object that makes one, to a weak external whose default
+            // (`.weak.<symbol>.default.<a symbol of that object>`) is unique
+            // to the object, and MSVC link.exe rejects two weak externals of
+            // one symbol with different defaults (LNK1227). An inlined
+            // `desc()` made one per object that births the layout, here and
+            // in every crate that inlines it. So on Windows exactly one object
+            // reads the symbol: this reader, which every birth calls. Wrapper
+            // crates call it by its C name (perry-ffi `runtime_layouts`).
+            #[cfg(target_os = "windows")]
+            #[inline(never)]
+            #[export_name = concat!("perry_layout_reader_", stringify!($name))]
+            extern "C" fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: as above.
+                    unsafe { DEFINITION }
                 }
                 #[cfg(any(test, feature = "test-layout-descriptors"))]
                 {
@@ -306,6 +343,11 @@ include!("runtime_layouts/ascii_chars.rs");
 /// the receiver's layout: no spelling is built, hashed or looked up per read.
 pub(crate) mod intrinsic_private_atoms {
     use super::*;
+    runtime_atom!(
+        WORKER_ID,
+        "#<perry:private-value:0:@0:[[WorkerId]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b576f726b657249645d5d3e"
+    );
     runtime_atom!(MESSAGE_PORT_ID, "#<perry:private-value:0:@0:[[MessagePortId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b4d657373616765506f727449645d5d3e");
     runtime_atom!(
         REGEXP_MATCHER,
@@ -578,6 +620,7 @@ const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
     hash
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
     (*desc).layout_id
@@ -610,6 +653,9 @@ use literal_atoms::ATOM_28;
 use literal_atoms::ATOM_29;
 use literal_atoms::ATOM_3;
 use literal_atoms::ATOM_30;
+use literal_atoms::ATOM_31;
+use literal_atoms::ATOM_32;
+use literal_atoms::ATOM_33;
 use literal_atoms::ATOM_4;
 use literal_atoms::ATOM_5;
 use literal_atoms::ATOM_6;
@@ -634,7 +680,9 @@ runtime_layout!(
     0x52540001,
     0,
     &raw const READABLE_STATE_PROTO_FAMILY,
-    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_4, ATOM_5],
+    // node 26.12 ReadableState (26102c22f2, 247c0274c1): `fastChunk`,
+    // `pipeOnData` and `pipePause` sit between `length` and `pipes`.
+    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_31, ATOM_32, ATOM_33, ATOM_4, ATOM_5],
     realm = [
         "node:stream.Readable",
         "node:stream.Duplex",
@@ -1329,15 +1377,23 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "LITERAL_OPTIONAL") {
         return 0x80000084;
     }
+    #[cfg(test)]
+    if same(name, "ARRAY_LATE") {
+        return 0x80000085;
+    }
+    #[cfg(test)]
+    if same(name, "DEFINED_HOLE") {
+        return 0x80000086;
+    }
     panic!("runtime descriptor absent from native catalog");
 }
 
 /// The rows of the runtime layouts only perry-runtime's own tests declare
-/// (`HOLEY` … `LITERAL_OPTIONAL` above): the band right after the native
+/// (`HOLEY` … `DEFINED_HOLE` above): the band right after the native
 /// rows. They are runtime layouts like the native ones, so their shape is
 /// installed at their first birth; no startup walk sees them.
 #[cfg(test)]
-const TEST_LAYOUT_ROWS: u32 = 8;
+const TEST_LAYOUT_ROWS: u32 = 10;
 #[cfg(not(test))]
 const TEST_LAYOUT_ROWS: u32 = 0;
 

@@ -150,7 +150,10 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     (
         hit(TOP) && (!is_global || m.global_in_top),
         hit(np)
+            // A prototype write is a chain contribution, separate from
+            // the namespace's own hit above and its TOP reachability.
             || (global
+                && !locked_chain_read(m, np, a)
                 && m.tok_index
                     .get(&TokKind::ObjectProto)
                     .is_some_and(|&op| hit(op))),
@@ -164,6 +167,7 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
     let Key::Named(a) = key else {
         return false;
     };
+    m.census_native_read(np, a, miss.clone());
     let TokKind::NativeProto(native) = &m.toks[np as usize] else {
         return false;
     };
@@ -204,6 +208,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
+    m.census_native_write(t, k);
     if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
         return;
     }
@@ -361,10 +366,20 @@ pub(super) fn replay_native_missing(m: &mut Model) {
     let mut keep = Vec::with_capacity(pending.len());
     m.with_b(|m| {
         for (np, a, miss) in pending {
+            m.census_native_read(np, a, miss.clone());
             if !native_written(m, np, a) {
                 keep.push((np, a, miss));
                 continue;
             }
+            let saved_gate = m
+                .diagnostic
+                .as_mut()
+                .and_then(|d| d.census.as_mut())
+                .map(|c| {
+                    let old = c.active_gate;
+                    c.active_gate = Some((np, a));
+                    old
+                });
             match miss {
                 NativeMiss::Load(dst) => {
                     let bf = builtin_fn(m, "written key replay");
@@ -418,6 +433,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     );
                 }
             }
+            if let Some(old) = saved_gate {
+                let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
+                c.active_gate = old;
+                c.pending_gate = None;
+            }
         }
     });
     keep.append(&mut m.native_missing);
@@ -463,7 +483,10 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
+        per_evaluation: false,
+        static_methods: Vec::new(),
     });
     m.tok(TokKind::Obj(tm, NO_CTX))
 }
@@ -572,5 +595,16 @@ pub(super) fn native_method(
         }
         (_, "toString") => ret_prim(m, call, prim::STR),
         _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
+    }
+}
+
+pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
+    native_written(m, t, a)
+}
+pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
+    match &m.toks[np as usize] {
+        TokKind::NativeProto(n) => ns_by_name(n).is_some(),
+        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
+        _ => false,
     }
 }

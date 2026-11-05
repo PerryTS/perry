@@ -495,6 +495,10 @@ pub(super) fn emit_string_pool(
             chunker.current_block().fn_info_ref(body)
         },
         layouts,
+        &fresh_class_templates
+            .iter()
+            .filter_map(|name| class_ids.get(name).copied())
+            .collect(),
     );
     for decl in declarations {
         for global in decl.globals {
@@ -990,7 +994,7 @@ pub(super) fn emit_string_pool(
             .map(|c| {
                 c.params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .count() as u32
             })
             .unwrap_or(0);
@@ -1245,14 +1249,10 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Refs #618 / #420: register every class id with the runtime so
-    // `js_value_typeof` can distinguish a class ref (NaN-boxed INT32 with
-    // class_id payload) from a real int32 numeric value. Without this,
-    // `typeof <class>` returns "number" for classes that don't define any
-    // methods (the existing `js_register_class_method` loop only fires
-    // for classes with at least one method body). drizzle's `class
-    // FakePrimitiveParam { static [entityKind] = "FakePrimitiveParam" }`
-    // and similar method-less marker classes hit this.
+    // Refs #618 / #420: register every class id, including method-less marker
+    // classes. Class metadata and flagged prototype references use this
+    // registration; constructor values are their function objects, independent
+    // of any numerically equal INT32 word.
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
         // Also collect `(cid, name)` pairs so we can mirror Perry's
@@ -1313,8 +1313,8 @@ pub(super) fn emit_string_pool(
         );
     }
     // #9413: mirror each class's retained source text into the runtime so
-    // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
-    // ClosureHeader) answers with the class source. Same shape, and the same
+    // `Function.prototype.toString` on a constructor function object answers
+    // with the class source. Same shape, and the same
     // output-kind spelling choice, as the function-source loop above (#11501:
     // an executable lends its rodata instead of copying every class body).
     for (cid, source) in &class_source_constants {
@@ -1345,7 +1345,9 @@ pub(super) fn emit_string_pool(
                     ctor.params
                         .iter()
                         .take_while(|p| {
-                            !p.is_rest && p.default.is_none() && !p.name.starts_with("__perry_cap_")
+                            !p.is_rest
+                                && p.default.is_none()
+                                && !perry_hir::cap_fields::is_cap_field_name(&p.name)
                         })
                         .count() as u32
                 })

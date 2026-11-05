@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // #7910 — the promise-assimilation fast path (`Get(resolution, "then")`) must
 // stay observationally identical to the spec path across every route that can
 // put a `then` on a resolution value's [[Get]] chain.
@@ -30,22 +31,22 @@ async function main() {
   log.push("warm=" + (await warm(200)));
 
   // ── 1. plain assignment onto Object.prototype ────────────────────────────
-  (Object.prototype as any).then = function (res: (v: unknown) => void) {
+  locked(() => { (Object.prototype as any).then = function (res: (v: unknown) => void) {
     res("assign");
-  };
+  }; });
   log.push("assign -> " + (await resolveHere({ tag: 1 })));
   delete (Object.prototype as any).then;
   log.push("assign-removed -> " + JSON.stringify(await resolveHere({ tag: 1 })));
 
   // ── 2. Object.defineProperty, data descriptor ────────────────────────────
   await warm(50);
-  Object.defineProperty(Object.prototype, "then", {
+  locked(() => { Object.defineProperty(Object.prototype, "then", {
     value: function (res: (v: unknown) => void) {
       res("defineProperty-data");
     },
     configurable: true,
     writable: true,
-  });
+  }); });
   log.push("dp-data -> " + (await resolveHere({ tag: 2 })));
   delete (Object.prototype as any).then;
   log.push("dp-data-removed -> " + JSON.stringify(await resolveHere({ tag: 2 })));
@@ -55,7 +56,7 @@ async function main() {
   // "no then" verdict would show up as a call count that is too low.
   await warm(50);
   let getterCalls = 0;
-  Object.defineProperty(Object.prototype, "then", {
+  locked(() => { Object.defineProperty(Object.prototype, "then", {
     get() {
       getterCalls++;
       return function (res: (v: unknown) => void) {
@@ -63,7 +64,7 @@ async function main() {
       };
     },
     configurable: true,
-  });
+  }); });
   log.push("accessor -> " + (await resolveHere({ tag: 3 })));
   log.push("accessor -> " + (await resolveHere({ tag: 3 })));
   delete (Object.prototype as any).then;
@@ -75,13 +76,13 @@ async function main() {
   // invoked rather than being memoized away.
   await warm(50);
   let undefGetterCalls = 0;
-  Object.defineProperty(Object.prototype, "then", {
+  locked(() => { Object.defineProperty(Object.prototype, "then", {
     get() {
       undefGetterCalls++;
       return undefined;
     },
     configurable: true,
-  });
+  }); });
   const u1 = await resolveHere({ tag: 4 });
   const u2 = await resolveHere({ tag: 4 });
   const u3 = await resolveHere({ tag: 4 });
@@ -92,31 +93,31 @@ async function main() {
 
   // ── 5. Object.assign onto Object.prototype ───────────────────────────────
   await warm(50);
-  Object.assign(Object.prototype, {
+  locked(() => { Object.assign(Object.prototype, {
     then(res: (v: unknown) => void) {
       res("object-assign");
     },
-  });
+  }); });
   log.push("object-assign -> " + (await resolveHere({ tag: 5 })));
   delete (Object.prototype as any).then;
   log.push("object-assign-removed -> " + JSON.stringify(await resolveHere({ tag: 5 })));
 
   // ── 6. Reflect.set / Reflect.defineProperty ──────────────────────────────
   await warm(50);
-  Reflect.set(Object.prototype, "then", function (res: (v: unknown) => void) {
+  locked(() => { Reflect.set(Object.prototype, "then", function (res: (v: unknown) => void) {
     res("reflect-set");
-  });
+  }); });
   log.push("reflect-set -> " + (await resolveHere({ tag: 6 })));
   delete (Object.prototype as any).then;
 
   await warm(50);
-  Reflect.defineProperty(Object.prototype, "then", {
+  locked(() => { Reflect.defineProperty(Object.prototype, "then", {
     value: function (res: (v: unknown) => void) {
       res("reflect-dp");
     },
     configurable: true,
     writable: true,
-  });
+  }); });
   log.push("reflect-dp -> " + (await resolveHere({ tag: 6 })));
   delete (Object.prototype as any).then;
   log.push("reflect-removed -> " + JSON.stringify(await resolveHere({ tag: 6 })));
@@ -192,7 +193,7 @@ async function main() {
   const grand = { then(res: (v: unknown) => void) { res("grandparent"); } };
   let protoOfProto = "no-throw";
   try {
-    Object.setPrototypeOf(Object.prototype, grand);
+    locked(() => { Object.setPrototypeOf(Object.prototype, grand); });
   } catch (e) {
     protoOfProto = "throws:" + (e instanceof TypeError);
   }
@@ -214,9 +215,9 @@ async function main() {
   // `await` reaches the probe through a different runtime entry point
   // (`js_assimilate_thenable`) than `Promise.resolve` (`get_then_action`).
   await warm(50);
-  (Object.prototype as any).then = function (res: (v: unknown) => void) {
+  locked(() => { (Object.prototype as any).then = function (res: (v: unknown) => void) {
     res("await-path");
-  };
+  }; });
   const awaited = await ({ tag: 12 } as any);
   delete (Object.prototype as any).then;
   log.push("await-path -> " + awaited);
@@ -226,9 +227,9 @@ async function main() {
   await warm(50);
   const returner = async () => ({ tag: 13 });
   log.push("returned -> " + JSON.stringify(await returner()));
-  (Object.prototype as any).then = function (res: (v: unknown) => void) {
+  locked(() => { (Object.prototype as any).then = function (res: (v: unknown) => void) {
     res("returned-assimilated");
-  };
+  }; });
   const r13 = await returner();
   delete (Object.prototype as any).then;
   log.push("returned -> " + r13);

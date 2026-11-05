@@ -1,0 +1,1 @@
+Native module namespaces with a short name (`fs`, `os`, `path`) no longer decline own-field reads: the module-name guard reads inline strings, not only heap strings. Two store-site audit markers for the symbol space.

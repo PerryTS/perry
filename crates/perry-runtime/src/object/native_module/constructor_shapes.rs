@@ -313,6 +313,11 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
             dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
     }
+    if (module, name) == ("worker_threads", "Worker") {
+        let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
+        crate::messaging::install_worker_metadata_getters(proto.get_nanbox_f64());
+        crate::messaging::install_worker_async_dispose(proto.get_nanbox_f64());
+    }
     if (module, name) == ("zlib", "#ZlibBase") {
         install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));
     }

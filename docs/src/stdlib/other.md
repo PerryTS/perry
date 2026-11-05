@@ -34,7 +34,9 @@ const placeholder = await sharp({
 
 ## cheerio (HTML Parsing)
 
-Native bindings via `perry-ext-cheerio` (v0.5.550).
+`cheerio` has no native binding: `import * as cheerio from "cheerio"` compiles
+the real npm package (and its parse5 / htmlparser2 / css-select dependencies)
+from source, so selectors, traversal and manipulation behave as on Node.
 
 ```typescript,no-test
 import * as cheerio from "cheerio";
@@ -46,8 +48,25 @@ console.log($("h1").text()); // "Hello"
 
 ## nodemailer (Email)
 
+`nodemailer` has no native binding: `import nodemailer from "nodemailer"`
+compiles the real npm package from source (install it with `npm install
+nodemailer`), and its SMTP transport runs over Perry's `net` / `tls`.
+
 ```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:nodemailer}}
+import nodemailer from "nodemailer";
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.example.com",
+  port: 587,
+  auth: { user: "user", pass: "pass" },
+});
+
+await transporter.sendMail({
+  from: "sender@example.com",
+  to: "recipient@example.com",
+  subject: "Hello from Perry",
+  text: "This email was sent from a compiled TypeScript binary!",
+});
 ```
 
 ## zlib (Compression)
@@ -64,9 +83,8 @@ console.log(decompressed.toString()); // "Hello, World!"
 
 ## ethers (Ethereum)
 
-Native bindings via `perry-ext-ethers` (v0.5.556) — backed by
-[`ethers-rs`](https://github.com/gakonst/ethers-rs)-style ABI plumbing through
-`perry-ffi`'s BigInt + Buffer surfaces.
+`ethers` compiles from its npm source (no native binding); see
+[Cryptography](crypto.md#ethers) for what works today.
 
 ```typescript,no-test
 import { ethers } from "ethers";

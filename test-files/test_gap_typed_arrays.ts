@@ -16,9 +16,9 @@ const iteratorDescriptor = Object.getOwnPropertyDescriptor(
   Array.prototype,
   Symbol.iterator,
 )!;
-delete (Array.prototype as any)[Symbol.iterator];
+try { delete (Array.prototype as any)[Symbol.iterator]; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const noPrototypeIterator = new Uint8Array([6, 7]);
-Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+try { Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(
   "from array without prototype iterator:",
   noPrototypeIterator[0],

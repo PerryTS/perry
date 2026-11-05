@@ -1501,9 +1501,11 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let Some(entry) = crate::collection_iter::iterator_next_value(iter) else {
+                let Some(entry) = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64()) else {
                     break;
                 };
                 add_entry(map_handle, adder_handle, entry, Some(iter));
@@ -1593,9 +1595,11 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let Some(element) = crate::collection_iter::iterator_next_value(iter) else {
+                let Some(element) = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64()) else {
                     break;
                 };
                 add_value(element, Some(iter));

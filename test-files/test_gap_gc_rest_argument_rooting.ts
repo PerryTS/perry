@@ -10,8 +10,8 @@
 // to land on; and without the seeded schedule the only collections are allocation-triggered,
 // which take `ManualGcScanGuard::force_full_scan` and make the copying minor
 // ineligible — so nothing MOVES and a stale register still names a live
-// object. `run_parity_tests.sh` applies `parity-env` to the perry compile AND
-// the perry run (lines 955/1001), which is exactly what
+// object. `scripts/parity.py` applies `parity-env` to the perry compile AND
+// the perry run, which is exactly what
 // `PERRY_GC_MOVING_LOOP_POLLS` needs: it is read at both. With the line, the
 // parent SIGSEGVs 10/10. Node ignores both knobs, so the oracle is unchanged.
 //

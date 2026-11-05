@@ -164,7 +164,7 @@ impl Model {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             self.note_array_member_write(t, None, None, &what);
         }
-        if self.fnproto_write.is_none()
+        if (self.fnproto_write.is_none() || self.fnproto_borrow_write.is_none())
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
@@ -221,6 +221,15 @@ impl Model {
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
+            // Unknown code given `process` (or the global object) may write
+            // the array `process.argv` holds.
+            if matches!(
+                self.toks[t as usize],
+                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
+            ) {
+                let a = self.process_argv_tok;
+                self.escape(a, reason);
+            }
             return;
         }
         if self.rel_phase != b'S' {
@@ -261,7 +270,24 @@ impl Model {
     }
 
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
+        // A few hard/contract paths mark directly rather than entering escape.
+        // Retain those actual events too; this data never feeds the solver.
+        if let Some(d) = &mut self.diagnostic {
+            if let Some(c) = &mut d.census {
+                c.escapes.insert((
+                    t,
+                    d.cause_node.unwrap_or(NO_NODE),
+                    d.cur_call.unwrap_or(u32::MAX),
+                    d.escaping.last().copied().unwrap_or(u32::MAX),
+                    reason,
+                    c.active_gate,
+                ));
+            }
+        }
         self.escaped.insert(t, reason);
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
         let w = (t >> 6) as usize;
         if self.esc_bits.len() <= w {
             self.esc_bits.resize(w + 1, 0);
@@ -420,7 +446,10 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
@@ -996,6 +1025,17 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        // DEC 250: a delete that reaches the runtime's prototypes (the
+        // collapsed `ObjectProto`) removes only a key the lock admits: the
+        // runtime refuses (TypeError) to delete a member the image gives a
+        // locked family, except `constructor` (`builtin_proto::
+        // locked_violation`), and a family it leaves open may lose any key.
+        // That is a native write of every key (below), which a final read
+        // never sees (`members::locked_read`, the same decision). It removes
+        // no key of a program object and installs no setter: no layout on a
+        // chain through it changes, no own key stops shadowing it.
+        let lock_delete =
+            kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);
         // DECISIONS 234: under a computed key, a defineProperty on a
         // prototype of the runtime, or through ⊤ (which may be one), may
@@ -1016,7 +1056,9 @@ impl Model {
                 self.top_reshape(None);
                 self.note_shared(SharedWrite::Removed(None));
             } else if self.is_chain_proto(t) {
-                self.reshape(None);
+                if !lock_delete {
+                    self.reshape(None);
+                }
             } else {
                 self.note_inst(t, true);
             }
@@ -1098,6 +1140,9 @@ impl Model {
             self.objproto_any_accessor();
             return;
         }
+        if lock_delete {
+            return;
+        }
         if self.hard.contains_key(&t) {
             return;
         }
@@ -1109,6 +1154,9 @@ impl Model {
             self.with_s(|m| m.resume_stopped(t));
         }
         self.hard.insert(t, (kind, reason));
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
         self.rel(|| format!("hardmark {t} {}", kind.code()));
         // Deleting / redefining can move values or install accessors: the
         // object's fields are now written by unknown code as well.

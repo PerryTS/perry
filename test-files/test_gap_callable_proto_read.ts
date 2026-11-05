@@ -89,10 +89,9 @@ console.log(Object.getPrototypeOf(G3.prototype) === G2.prototype, Object.getProt
 (Getters.prototype as any).deepNull = null;
 (Getters.prototype as any).deepUndef = undefined;
 console.log(g.deepNull, g.deepUndef, "deepNull" in g);
-// %Function.prototype% is not on a class instance's chain
-(Function.prototype as any).fpExpando = "fp";
-console.log(g.fpExpando, (function () {} as any).fpExpando);
-delete (Function.prototype as any).fpExpando;
+// %Function.prototype% is not on a class instance's chain (DEC 250: its own
+// `apply` stands in for a program add, which the lock refuses)
+console.log(typeof g.apply, typeof (function () {} as any).apply);
 // symbol keys and later prototype edits
 const sym = Symbol("s");
 (G2.prototype as any)[sym] = "sym-value";

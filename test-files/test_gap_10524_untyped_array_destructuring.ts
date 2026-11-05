@@ -176,7 +176,7 @@ log("accessor", ac0 + ":" + ac1 + ":" + getterCalls);
 
 // --- sticky runtime facts: run last ------------------------------------------
 function inheritedElementChecks(): void {
-  (Array.prototype as any)[1] = "inherited";
+  try { (Array.prototype as any)[1] = "inherited"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const [ie0, ie1, ie2] = untyped([0, , 2]);
   log("inherited", ie0 + ":" + ie1 + ":" + ie2);
   delete (Array.prototype as any)[1];
@@ -185,7 +185,7 @@ function inheritedElementChecks(): void {
 function patchedPrototypeChecks(): void {
   const original = (Array.prototype as any)[Symbol.iterator];
   let patchedCalls = 0;
-  (Array.prototype as any)[Symbol.iterator] = function () {
+  try { (Array.prototype as any)[Symbol.iterator] = function () {
     patchedCalls++;
     let i = 0;
     return {
@@ -194,10 +194,10 @@ function patchedPrototypeChecks(): void {
         return { done: i > 2, value: i * 1000 };
       },
     };
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const [pp0, pp1] = untyped([1, 2]);
   log("patched.any", pp0 + ":" + pp1 + ":" + patchedCalls);
-  (Array.prototype as any)[Symbol.iterator] = original;
+  try { (Array.prototype as any)[Symbol.iterator] = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const [rr0, rr1] = untyped([1, 2]);
   log("restored", rr0 + ":" + rr1);
 }

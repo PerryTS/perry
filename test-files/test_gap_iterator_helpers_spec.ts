@@ -177,13 +177,13 @@ const own: any = [1, 2].values();
 own.map = () => "own-map";
 console.log("own override", own.map((x: number) => x));
 const savedMap = P.map;
-P.map = function (this: any, fn: any) {
+try { P.map = function (this: any, fn: any) {
   return "proto-map";
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("proto override gen", gen().map((x: number) => x));
 console.log("proto override array iter", [1].values().map((x: number) => x));
 console.log("proto override helper", gen().filter(() => true).map((x: number) => x));
-P.map = savedMap;
+try { P.map = savedMap; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("restored", JSON.stringify(gen().map((x: number) => x * 10).toArray()));
 
 // --- existing behaviour ---

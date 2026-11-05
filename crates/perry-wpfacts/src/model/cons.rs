@@ -29,6 +29,9 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// A store under an index of each Array in the node: it may leave a
+    /// hole (`Model::mark_hole`); an append never does.
+    IndexHole,
     /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
     /// wrapper's record literal carries `__perry_cjs_record` at birth), or
     /// the published value itself for a raw publication.
@@ -127,6 +130,11 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// The argument of a defaulted parameter: its values but `undefined`
+    /// flow into the parameter's local `dst` (the default replaces
+    /// `undefined`, a `Guard` on the argument). A rule of the program text,
+    /// like `NotNullish`.
+    NotUndefined { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// DECISIONS 242 (contract half): another unit's function reads `key`
@@ -390,6 +398,7 @@ impl Cons {
         match self {
             Cons::Load { .. } => "load",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::IndexHole => "indexhole",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
@@ -409,6 +418,7 @@ impl Cons {
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::NotUndefined { .. } => "notundefined",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",

@@ -17,6 +17,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  appendFileSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
@@ -37,7 +38,7 @@ import {
   npmPackageDir,
   targetPackageName,
 } from './constants.mts'
-import { isStrippableUiArchive, stageExt, stageTarget } from './stage-target.mts'
+import { isStrippableExtArchive, isStrippableUiArchive, stageExt, stageTarget } from './stage-target.mts'
 
 const VERSION = '0.5.1700'
 const REVISION = 'a'.repeat(40)
@@ -229,6 +230,13 @@ test('stageTarget: a tampered, missing, unlisted or foreign bundle file is refus
   })
 })
 
+test('isStrippableExtArchive: ext archives of every host', () => {
+  assert.equal(isStrippableExtArchive('x86_64-unknown-linux-musl', 'libperry_ext_http.a'), true)
+  assert.equal(isStrippableExtArchive('x86_64-pc-windows-msvc', 'perry_ext_http.lib'), true)
+  assert.equal(isStrippableExtArchive('aarch64-apple-darwin', 'libperry_ext_http.a'), true)
+  assert.equal(isStrippableExtArchive('x86_64-unknown-linux-gnu', 'libperry_runtime.a'), false)
+})
+
 test('stageExt: every ext archive of the release archive, hashed into target.json', () => {
   withTemp(dir => {
     const triple = 'x86_64-unknown-linux-gnu'
@@ -239,7 +247,9 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
     }
     const pkg = path.join(dir, 'pkg')
     assert.throws(() => stageExt({ sourceDir: src, packageDir: pkg, triple, version: VERSION }), /PERRY_SOURCE_REVISION/)
-    const staged = stageExt({ sourceDir: src, packageDir: pkg, triple, version: VERSION, revision: REVISION })
+    // The stub marks every archive it is handed; target.json must describe the marked copy.
+    const stripArchive = (archive: string) => appendFileSync(archive, '!')
+    const staged = stageExt({ sourceDir: src, packageDir: pkg, triple, version: VERSION, revision: REVISION, stripArchive })
     const packageJson = JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8'))
     assert.equal(packageJson.name, '@perryts/perry-ext-x86_64-unknown-linux-gnu')
     for (const key of ['os', 'cpu', 'libc', 'bin', 'scripts', 'dependencies', 'optionalDependencies', 'peerDependencies']) {
@@ -254,10 +264,11 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
       targetJson.files,
       ['libperry_ext_http.a', 'libperry_ext_ws.a'].map(name => ({
         path: `lib/${name}`,
-        sha256: sha256(`${name} bytes`),
-        size: Buffer.byteLength(`${name} bytes`),
+        sha256: sha256(`${name} bytes!`),
+        size: Buffer.byteLength(`${name} bytes!`),
       })),
     )
+    assert.equal(readFileSync(path.join(src, 'libperry_ext_http.a'), 'utf8'), 'libperry_ext_http.a bytes', 'the release archive is not touched')
     assert.ok(!existsSync(path.join(pkg, 'lib/libperry_runtime.a')), 'core archives stay in the host package')
     assert.match(readFileSync(path.join(pkg, 'README.md'), 'utf8'), /perry target add --ext/)
     rmSync(path.join(src, 'libperry_ext_http.a'))
@@ -293,6 +304,9 @@ function fixtureRepo(dir: string): { repo: string; artifacts: string } {
   for (const file of ['constants.mts', 'stage-target.mts']) {
     cpSync(path.join(REPO_ROOT, 'scripts/publish', file), path.join(repo, 'scripts/publish', file))
   }
+  // The fixture archives are not real ar files: a no-op stand-in for the strip step
+  // (its own test below runs the real script on real archives).
+  writeFileSync(path.join(repo, 'scripts/strip-archive-members.py'), '#!/usr/bin/env python3\n')
   // Templates and the wrapper's launcher only: no staged output of this tree.
   for (const file of [
     'npm/packaged-triples.json',

@@ -120,10 +120,6 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                         );
                     }
                 }
-                // #3144 builtin-prototype method aliases (`const m = [].map`)
-                // are NOT tracked here: this scan is keyed by bare name, and
-                // the `.call`/`.apply` fold needs the resolved binding. See
-                // `track_decl_aliases` / `builtin_proto_method_local_ids`.
             }
         }
     }

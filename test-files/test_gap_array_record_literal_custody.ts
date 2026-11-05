@@ -4,23 +4,23 @@ const [a, b, c] = [value(1), value(2), value(3)];
 console.log("plain", a, b, c, log.join(","));
 const proto: any = Array.prototype;
 const original = proto[Symbol.iterator];
-proto[Symbol.iterator] = function(this: number[]) {
+try { proto[Symbol.iterator] = function(this: number[]) {
   log.push("open:" + this.join(","));
   let i = 0;
   return { next: () => i < this.length ? { value: this[i++] * 10, done: false } : { done: true },
     return: () => { log.push("close"); return { done: true }; } };
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const [x, y] = [value(4), value(5), value(6)];
-proto[Symbol.iterator] = original;
+try { proto[Symbol.iterator] = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("override", x, y, log.join(","));
 const itp: any = Object.getPrototypeOf([1][Symbol.iterator]());
 const savedNext = itp.next;
-itp.next = function(this: any) { const r = savedNext.call(this); if (!r.done) r.value += 100; return r; };
+try { itp.next = function(this: any) { const r = savedNext.call(this); if (!r.done) r.value += 100; return r; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const [m, n] = [7, 8];
-itp.next = savedNext;
+try { itp.next = savedNext; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("next", m, n);
 let receiver: any;
-itp.return = function(this: any) { receiver = this; return { done: true }; };
+try { itp.return = function(this: any) { receiver = this; return { done: true }; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const [first] = [11, 12, 13];
 delete itp.return;
 console.log("close-cursor", first, receiver.next().value, receiver.next().value, receiver.next().done);

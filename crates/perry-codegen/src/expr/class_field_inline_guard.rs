@@ -102,7 +102,7 @@ pub(crate) fn class_field_subclass_arms(
         }
         // A class with computed runtime members has keys the packed layout
         // does not describe; its sets route through the by-name path anyway.
-        if super::property_set::class_has_computed_runtime_members(ctx, sub_name) {
+        if super::property_get::class_has_evaluated_accessor(ctx, sub_name) {
             continue;
         }
         // The layout algorithm SHOULD put an inherited field at the same index
@@ -278,7 +278,7 @@ pub(crate) fn class_field_predicted_shape(
     let keys_global = ctx.class_keys_globals.get(class_name)?.clone();
     if !class_instances_keep_birth_shape(ctx, class_name)
         || !transitive_subclasses(ctx, class_name).is_empty()
-        || super::property_set::class_has_computed_runtime_members(ctx, class_name)
+        || super::property_get::class_has_evaluated_accessor(ctx, class_name)
     {
         return None;
     }

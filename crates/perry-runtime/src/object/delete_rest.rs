@@ -38,6 +38,7 @@ pub extern "C" fn js_object_delete_field(
     }
     super::builtin_proto::note_write_addr(
         (obj as u64 & crate::value::POINTER_MASK) as usize,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Str(key)),
         "delete",
     );
     if !key.is_null() {
@@ -1140,6 +1141,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
     super::builtin_proto::note_write_addr(
         (obj as u64 & crate::value::POINTER_MASK) as usize,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Value(key)),
         "delete",
     );
     #[cfg(perry_contract_checks)]

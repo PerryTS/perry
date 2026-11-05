@@ -36,6 +36,15 @@ impl Model {
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
+        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
+            if !c.injecting
+                && self.cur_src != NO_NODE
+                && self.cur_src != n
+                && toks.iter().any(|&t| t == TOP)
+            {
+                c.top_edges.insert((self.cur_src, n));
+            }
+        }
         let mut later: Vec<Tok> = Vec::new();
         // A marker crossing into the node arrives as a member of the node's
         // own marker (MRK, `Model::crosses`; DECISIONS 44 for parameters):
@@ -288,7 +297,41 @@ impl Model {
     }
 
     /// Seed a token (an input fact outside the solver rules: logged).
+    #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
+        if t == TOP
+            && self.diagnostic.as_ref().is_some_and(|d| d.census.is_some())
+            && !self
+                .nodes
+                .get(self.cur_src as usize)
+                .is_some_and(|v| v.pts.contains_tok(TOP))
+        {
+            if let Some(d) = &mut self.diagnostic {
+                if let Some(c) = &mut d.census {
+                    if !c.injecting {
+                        let at = std::panic::Location::caller();
+                        let gate = c.node_gate(n);
+                        c.injections.insert((
+                            n,
+                            at.file().into(),
+                            at.line(),
+                            "direct TOP token".into(),
+                            d.cause_node.unwrap_or(NO_NODE),
+                            d.cur_call.unwrap_or(u32::MAX),
+                            d.escaping.last().copied().unwrap_or(u32::MAX),
+                            self.cur_fn,
+                            gate,
+                        ));
+                        if c.suppress.as_deref()
+                            == Some(format!("{}:{}:{n}", at.file(), at.line()).as_str())
+                        {
+                            c.suppressed += 1;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         if self.rel_phase != b'S' {
             self.rel(|| format!("addr {n} {t}"));
         }
@@ -304,7 +347,44 @@ impl Model {
 
     /// Seed ⊤ into `n` as an ORIGIN (not a propagation): `why` names the
     /// unmodeled thing; only interned in explain mode (diagnostics).
+    #[track_caller]
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
+        if self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+            let w = why(self);
+            let at = std::panic::Location::caller();
+            let d = self.diagnostic.as_mut().unwrap();
+            let c = d.census.as_mut().unwrap();
+            let gate = c.node_gate(n);
+            c.injections.insert((
+                n,
+                at.file().into(),
+                at.line(),
+                w.clone(),
+                d.cause_node.unwrap_or(NO_NODE),
+                d.cur_call.unwrap_or(u32::MAX),
+                d.escaping.last().copied().unwrap_or(u32::MAX),
+                self.cur_fn,
+                gate,
+            ));
+            let key = format!("{}:{}:{n}", at.file(), at.line());
+            if c.suppress.as_deref() == Some(key.as_str()) {
+                c.suppressed += 1;
+                return;
+            }
+            let saved = std::mem::replace(&mut c.injecting, true);
+            self.add_top_inner(n, |_| w);
+            self.diagnostic
+                .as_mut()
+                .unwrap()
+                .census
+                .as_mut()
+                .unwrap()
+                .injecting = saved;
+            return;
+        }
+        self.add_top_inner(n, why);
+    }
+    fn add_top_inner(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
         if self.explain || self.diagnostic.is_some() {
             let w = why(self);
             if !self.nodes[n as usize].pts.contains_tok(TOP) {
@@ -328,6 +408,7 @@ impl Model {
     }
 
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
+    #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
         // Explain and the dump name each origin: its own node.
         if !self.explain && self.diagnostic.is_none() {
@@ -364,8 +445,10 @@ impl Model {
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
-        if self.diagnostic.is_some() && matches!(c, Cons::TopSink { .. }) {
-            self.diagnostic_sink(n);
+        if self.diagnostic.is_some() {
+            if let Cons::TopSink { reason } = c {
+                self.diagnostic_sink(n, reason);
+            }
         }
         if self.relations.is_some()
             && !matches!(
@@ -562,6 +645,8 @@ impl Model {
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
+        #[cfg(debug_assertions)]
+        self.assert_shadowed_complete();
     }
 
     // --------------------------------------------------------------- fields
@@ -733,6 +818,7 @@ impl Model {
                     );
                     let r = self.reason(&what);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
                 }
             }
         }
@@ -757,6 +843,7 @@ impl Model {
                 );
                 let r = self.reason(&what);
                 self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                self.parent_unsettled.insert(tm);
             }
         }
     }
@@ -1092,6 +1179,7 @@ impl Model {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::IndexHole => format!("indexhole {n}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
@@ -1140,6 +1228,7 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

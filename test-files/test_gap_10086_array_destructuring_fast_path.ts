@@ -260,11 +260,11 @@ log("gen.loop", genLoopOut.join(","));
 function patchedNextChecks(): void {
   const arrayIterProto: any = Object.getPrototypeOf([][Symbol.iterator]());
   const originalNext = arrayIterProto.next;
-  arrayIterProto.next = function (this: any) {
+  try { arrayIterProto.next = function (this: any) {
     const r = originalNext.call(this);
     if (!r.done) r.value = (r.value as number) * 2;
     return r;
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const src: number[] = [1, 2];
   const [na, nb] = src;
   log("patchedNext.proven", na + ":" + nb);
@@ -275,7 +275,7 @@ function patchedNextChecks(): void {
   const forOf: number[] = [];
   for (const v of src) forOf.push(v);
   log("patchedNext.forof", forOf.join(","));
-  arrayIterProto.next = originalNext;
+  try { arrayIterProto.next = originalNext; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const [ra, rb] = src;
   log("patchedNext.restored", ra + ":" + rb);
 }
@@ -287,7 +287,7 @@ function patchedNextChecks(): void {
 function patchedPrototypeChecks(): void {
   const original = (Array.prototype as any)[Symbol.iterator];
   let patchedCalls = 0;
-  (Array.prototype as any)[Symbol.iterator] = function () {
+  try { (Array.prototype as any)[Symbol.iterator] = function () {
     patchedCalls++;
     let i = 0;
     return {
@@ -296,7 +296,7 @@ function patchedPrototypeChecks(): void {
         return { done: i > 2, value: i * 1000 };
       },
     };
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   let pa = 0;
   let pb = 0;
   [pa, pb] = [1, 2];
@@ -305,7 +305,7 @@ function patchedPrototypeChecks(): void {
   const [pc, pd] = plain;
   log("patched.proven", pc + ":" + pd);
   log("patched.calls", patchedCalls);
-  (Array.prototype as any)[Symbol.iterator] = original;
+  try { (Array.prototype as any)[Symbol.iterator] = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const [qa, qb] = [1, 2];
   log("restored", qa + ":" + qb);
 }

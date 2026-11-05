@@ -46,7 +46,8 @@
 //! Every accepted job produces exactly one [`Delivery`] (DESIGN D4): `Done`
 //! when the pool ran it, `Cancelled` when [`cancel`] won the race with the
 //! pool thread or the loop shut down with the job still outstanding, `Failed`
-//! when the job panicked on the pool thread (turnloop catches the unwind).
+//! when the driver reports a failure. (A job that panics aborts the process:
+//! every build is `panic = "abort"`.)
 //! A submission the driver *refuses* never becomes a job at all and reports
 //! through `submit`'s return value instead, so a caller never has to guess
 //! whether its `deliver` will run.

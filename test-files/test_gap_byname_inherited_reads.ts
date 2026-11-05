@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Inherited and absent static-key reads answered from holder shapes (#10495):
 // every phase reads through the same sites long enough for them to cache, then
 // changes what the shapes prove and reads again. The output must stay node's.
@@ -48,7 +49,7 @@ phase("D.shadow3", (o) => String(o.DB), [ds[3]]);
 phase("D.others", readD, [ds[0], ds[1]]);
 delete (D.prototype as any).DM; // delete on the prototype
 phase("D.deleted", readD, ds);
-(Object.prototype as any).missing = "fromObjectProto"; // absent key appears on Object.prototype
+locked(() => { (Object.prototype as any).missing = "fromObjectProto"; }); // absent key appears on Object.prototype
 phase("D.objproto", readD, ds);
 delete (Object.prototype as any).missing;
 phase("D.objproto.gone", readD, ds);
@@ -83,7 +84,7 @@ class E {
 }
 const es: any[] = [new E(), new E()];
 phase("absent.start", (o) => `${o.$u}|${o.$offset}|${o.$x}`, es);
-(Object.prototype as any).$offset = 9;
+locked(() => { (Object.prototype as any).$offset = 9; });
 phase("absent.objproto", (o) => `${o.$u}|${o.$offset}|${o.$x}`, es);
 delete (Object.prototype as any).$offset;
 phase("absent.restored", (o) => `${o.$u}|${o.$offset}|${o.$x}`, es);

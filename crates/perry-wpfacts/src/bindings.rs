@@ -312,6 +312,11 @@ fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
         let TokKind::ClassObj(tm) = m.toks[t as usize] else {
             return None;
         };
+        // Rule C (DECISIONS 251): a class expression evaluated more than
+        // once is one class object per evaluation, never one class's.
+        if m.tmpls[tm as usize].per_evaluation {
+            return None;
+        }
         let TmplKind::Class { class_id, .. } = m.tmpls[tm as usize].kind else {
             return None;
         };

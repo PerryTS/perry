@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // `re.test(s)` at a method site whose entry calls the builtin directly: the
 // site's receiver and holder ShapeIds prove `test` and RegExpExec's
 // `Get(R, "exec")` are the builtins (RegExp.prototype names both bodies as
@@ -75,33 +76,33 @@ t("proto_exec_override_after_warm", () => {
   const r = /a/; warm(r, "a");
   const o = RegExp.prototype.exec;
   let calls = 0;
-  RegExp.prototype.exec = function (this: any, s: any) { calls++; return null; };
+  locked(() => { RegExp.prototype.exec = function (this: any, s: any) { calls++; return null; }; });
   try { return [run(r, "a"), run(/a/, "a"), calls]; } finally { RegExp.prototype.exec = o; }
 });
 t("after_restore", () => { const r = /a/; warm(r, "a"); return [run(r, "a"), run(r, "b")]; });
 t("proto_exec_same_function_rewritten", () => {
   const r = /a/; warm(r, "a");
   const o = RegExp.prototype.exec;
-  RegExp.prototype.exec = o;
+  locked(() => { RegExp.prototype.exec = o; });
   return [run(r, "a"), run(r, "b")];
 });
 t("deleted_proto_exec", () => {
   const r = /a/; warm(r, "a");
   const d = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec")!;
-  delete (RegExp.prototype as any).exec;
+  locked(() => { delete (RegExp.prototype as any).exec; });
   try { return [run(r, "a"), run(r, "b")]; } finally { Object.defineProperty(RegExp.prototype, "exec", d); }
 });
 t("proto_exec_getter", () => {
   const r = /a/; warm(r, "a");
   const d = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec")!;
   let gets = 0;
-  Object.defineProperty(RegExp.prototype, "exec", { get() { gets++; return d.value; }, configurable: true });
+  locked(() => { Object.defineProperty(RegExp.prototype, "exec", { get() { gets++; return d.value; }, configurable: true }); });
   try { return [run(r, "a"), run(r, "b"), gets]; } finally { Object.defineProperty(RegExp.prototype, "exec", d); }
 });
 t("proto_test_override_after_warm", () => {
   const r = /a/; warm(r, "a");
   const o = RegExp.prototype.test;
-  RegExp.prototype.test = function () { return "patched"; } as any;
+  locked(() => { RegExp.prototype.test = function () { return "patched"; } as any; });
   try { return run(r, "a"); } finally { RegExp.prototype.test = o; }
 });
 t("subclass_exec", () => {

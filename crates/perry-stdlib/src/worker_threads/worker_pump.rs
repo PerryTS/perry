@@ -13,13 +13,15 @@ use super::*;
 /// port consumes once listeners before calling JS and folds that into ref state.
 pub(super) fn deliver_parent_port_message(message: SerializedValue) {
     parent_port::worker_parent_port_object();
-    MESSAGE_PORTS.with(|ports| {
-        let mut ports = ports.borrow_mut();
-        let state = ports.get_mut(&(PARENT_PORT_HANDLE as u64)).unwrap();
-        if !state.closed {
-            state.inbox.push_back(message);
-        }
+    let lease = MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow()
+            .get(&parent_port::id())
+            .map(|state| state.lease)
     });
+    if let Some(lease) = lease {
+        port_transport::enqueue(lease, message);
+    }
     js_worker_threads_channels_process_pending();
 }
 
@@ -92,13 +94,29 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
     };
     for event in events {
         match event {
+            WorkerEvent::DataReady(worker_id) => {
+                let lease = WORKERS
+                    .lock()
+                    .unwrap()
+                    .get(&worker_id)
+                    .map(|worker| worker.data_port);
+                if let Some(message) = lease.and_then(port_transport::receive) {
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let (data, ports) =
+                        unsafe { perry_runtime::thread::deserialize_message(&message, true) };
+                    let data = scope.root_nanbox_u64(data);
+                    let ports = scope.root_nanbox_u64(ports);
+                    dispatch_worker_event_with_ports(
+                        worker_id,
+                        "message",
+                        Some(data.get_nanbox_f64()),
+                        Some(ports.get_nanbox_f64()),
+                    );
+                    processed += 1;
+                }
+            }
             WorkerEvent::Online(worker_id) => {
                 dispatch_worker_event(worker_id, "online", None);
-                processed += 1;
-            }
-            WorkerEvent::Message(worker_id, message) => {
-                let bits = unsafe { deserialize_nanbox_on_current_thread(&message) };
-                dispatch_worker_event(worker_id, "message", Some(f64::from_bits(bits)));
                 processed += 1;
             }
             WorkerEvent::Error(worker_id, error) => {
@@ -159,7 +177,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
     }
 
     if STDIN_EOF.with(|eof| *eof.borrow()) && !parent_port::is_closed() {
-        message_port::close_port(PARENT_PORT_HANDLE as u64);
+        message_port::close_port(parent_port::id());
     }
     processed
 }
@@ -211,7 +229,7 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
     if has_messages
         || has_worker_events
         || has_live_refed_worker
-        || (started && !eof && message_port::port_is_refed(PARENT_PORT_HANDLE as u64))
+        || (started && !eof && message_port::port_is_refed(parent_port::id()))
     {
         1
     } else {
@@ -222,6 +240,14 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
 /// Run the listeners of one worker event. Returns whether anything listened
 /// (a listener or an `on<event>` property).
 fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool {
+    dispatch_worker_event_with_ports(worker_id, event, arg, None)
+}
+fn dispatch_worker_event_with_ports(
+    worker_id: u64,
+    event: &str,
+    arg: Option<f64>,
+    ports: Option<f64>,
+) -> bool {
     // Collect (callback, web_event) pairs, then invoke OUTSIDE the WORKERS lock —
     // a listener may re-enter postMessage / terminate, which needs the lock again.
     let (object_bits, callbacks, async_resources): (
@@ -252,6 +278,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
     // (with `.data`) for "message" events; Node-style `on` listeners receive the
     // raw payload. Lazily build the event object only if a web listener exists.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let ports = ports.map(|ports| scope.root_nanbox_f64(ports));
     let object_h = scope.root_nanbox_f64(f64::from_bits(object_bits));
     // Root the callbacks BEFORE allocating the `MessageEvent` (or any value the
     // listeners are called with): the allocation can trigger a moving GC, which
@@ -289,14 +316,26 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
             let data = (event == "message")
                 .then(|| arg_handle.as_ref().map(|h| h.get_nanbox_f64()))
                 .flatten();
-            let ev = event_object(event, object_h.get_nanbox_f64().to_bits(), data);
+            let ev = if let (Some(data), Some(ports)) = (data, ports.as_ref()) {
+                perry_runtime::event_target_hook_slots::message_event_with_ports(
+                    data,
+                    ports.get_nanbox_f64(),
+                )
+            } else {
+                event_object(event, object_h.get_nanbox_f64().to_bits(), data)
+            };
             Some(scope.root_nanbox_f64(ev))
         } else {
             None
         };
 
         if let (Some(callback_h), Some(event_h)) = (property_handler, event_handle.as_ref()) {
-            call_callback1(
+            let call = if event == "message" {
+                call_message_callback1
+            } else {
+                call_callback1
+            };
+            call(
                 callback_h.get_nanbox_f64().to_bits(),
                 object_h.get_nanbox_f64().to_bits(),
                 event_h.get_nanbox_f64(),
@@ -316,11 +355,19 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
                 arg_handle.as_ref().map(|h| h.get_nanbox_f64())
             };
             if let Some(arg) = call_arg {
-                perry_runtime::closure::js_closure_call1(
-                    closure,
-                    perry_runtime::closure::plain_call_receiver(),
-                    arg,
-                );
+                if web_event && event == "message" {
+                    call_message_callback1(
+                        callback_h.get_nanbox_f64().to_bits(),
+                        object_h.get_nanbox_f64().to_bits(),
+                        arg,
+                    );
+                } else {
+                    perry_runtime::closure::js_closure_call1(
+                        closure,
+                        perry_runtime::closure::plain_call_receiver(),
+                        arg,
+                    );
+                }
             } else {
                 perry_runtime::closure::js_closure_call0(
                     closure,

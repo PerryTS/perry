@@ -190,6 +190,11 @@ pub(super) unsafe fn construct(
                 return Some(value);
             }
         }
+        BuiltinConstructorIdentity::MessageEvent => {
+            return Some(crate::event_target_hook_slots::construct_message_event(
+                args,
+            ));
+        }
         BuiltinConstructorIdentity::Event => {
             let event_type = args
                 .first()
@@ -521,6 +526,18 @@ pub(super) unsafe fn construct(
                 crate::buffer::js_array_buffer_new_with_options(size, options)
             };
             return Some(crate::value::js_nanbox_pointer(buf as i64));
+        }
+        // The Web Streams constructors reached as values (`const RS =
+        // ReadableStream; new RS({ start })`, a parameter, an object member,
+        // the `node:stream/web` export, which is this same constructor).
+        // Without these arms the generic path built an ordinary object and
+        // never ran the source's `start`.
+        BuiltinConstructorIdentity::ReadableStream
+        | BuiltinConstructorIdentity::WritableStream
+        | BuiltinConstructorIdentity::TransformStream => {
+            if let Some(stream) = crate::node_stream::construct_web_stream(name, args) {
+                return Some(stream);
+            }
         }
         BuiltinConstructorIdentity::DataView => {
             let undef = f64::from_bits(crate::value::TAG_UNDEFINED);

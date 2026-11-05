@@ -1,6 +1,4 @@
-//! Verdict tests for the #3144 builtin-prototype alias `.call` fold: it must
-//! follow the resolved binding, not the spelling. Output parity against node is
-//! `test-files/test_gap_builtin_proto_alias_scope.ts`; this pins the routing.
+//! Borrowed aliases and unrelated same-named parameters both retain reflective dispatch.
 
 #![cfg(test)]
 
@@ -40,7 +38,7 @@ fn keeps_reflective_call(body: &str) -> bool {
 
 /// A callback parameter that merely shares its spelling with a
 /// `var e = [].slice` alias in another function keeps its real `.call(...)`;
-/// the alias's own function still folds (positive control).
+/// the alias's own function retains the selected method value too.
 #[test]
 fn a_same_named_parameter_is_not_folded_into_a_builtin_method_call() {
     let module = lower(
@@ -54,11 +52,12 @@ fn a_same_named_parameter_is_not_folded_into_a_builtin_method_call() {
         }
         "#,
     );
-    let folded = body_of(&module, "tail");
+    let tail = body_of(&module, "tail");
     assert!(
-        !keeps_reflective_call(&folded),
-        "positive control: alias folds: {folded}"
+        keeps_reflective_call(&tail),
+        "alias must stay reflective: {tail}"
     );
+    assert!(!tail.contains("ArrayLikeMethod"), "{tail}");
     let cast = body_of(&module, "cast");
     assert!(
         keeps_reflective_call(&cast),
@@ -87,7 +86,7 @@ fn a_parameter_lowered_before_the_alias_is_not_folded() {
         keeps_reflective_call(&format!("{:?}", module)),
         "convert's e485.call was folded"
     );
-    assert!(!keeps_reflective_call(&body_of(&module, "tail")));
+    assert!(keeps_reflective_call(&body_of(&module, "tail")));
 }
 
 /// #4101 alias form: `Function.prototype.toString` held in a local must stay a
@@ -103,4 +102,31 @@ fn a_function_prototype_to_string_alias_stays_reflective() {
         "#,
     );
     assert!(keeps_reflective_call(&body_of(&module, "source")));
+}
+
+/// `Function.prototype.call` / `apply` / `bind` reached through `.call` act
+/// on their `this` value's [[Call]]: the fold must not rewrite
+/// `Function.prototype.call.call(t, …)` into `t.call(…)`, a by-name read that
+/// a function relinked by `Object.setPrototypeOf` (or one with an own
+/// `call`) answers with another method. Reflective, `t` stays the first
+/// argument of the outer `.call`; folded, it becomes the receiver and the
+/// argument list starts at the `thisArg`. Output parity:
+/// `test-files/test_gap_function_proto_intrinsic_call_on_relinked.ts`.
+#[test]
+fn function_prototype_intrinsics_stay_reflective() {
+    let module = lower(
+        r#"
+        function direct_call(t: any): any { return Function.prototype.call.call(t, null, 1); }
+        function direct_apply(t: any): any { return Function.prototype.apply.call(t, null, [1]); }
+        function direct_bind(t: any): any { return Function.prototype.bind.call(t, null); }
+        function alias_call(t: any): any { var c = Function.prototype.call; return c.call(t, null, 1); }
+        "#,
+    );
+    for name in ["direct_call", "direct_apply", "direct_bind", "alias_call"] {
+        let body = body_of(&module, name);
+        assert!(
+            body.contains("property: \"call\"") && body.contains("args: [LocalGet("),
+            "{name} was folded into a by-name call on its target: {body}"
+        );
+    }
 }

@@ -26,8 +26,8 @@ the fixture.
 - Network/DOMStorage helper inventories and validation without external
   frontends
 
-The module is in the sequential lane in `scripts/node_suite_run.py`; no new
-runner exception is needed.
+`scripts/parity.py` runs the module in its serial lane; no new runner exception
+is needed.
 
 ## Oracle and alternate-runtime evidence
 

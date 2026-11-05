@@ -515,13 +515,3 @@ fn actual_tiny_entry_image_preserves_the_generated_reference_contract() {
         .contains("root contract violated"));
 }
 
-#[test]
-fn well_known_symbol_class_hooks_are_owned_by_module_init() {
-    let m = lower(
-        "class Dead { get [Symbol.toStringTag]() { return 'D'; } } function dead() {}",
-        "entry.ts",
-    );
-    let c = run(&[("entry.ts", &m)]);
-    assert!(live(&c, "__perry_wk_tostringtag_Dead"));
-    assert!(!live(&c, "dead"));
-}

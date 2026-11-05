@@ -14,7 +14,7 @@ mod guards;
 pub(crate) use guards::array_length_is_non_writable;
 pub(super) use guards::throw_cannot_delete_array_index;
 use guards::throw_frozen_array_mutation;
-pub(crate) use guards::throw_non_extensible_array_push;
+pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 use guards::throw_non_writable_length;
 
 #[inline]
@@ -37,20 +37,16 @@ unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
 
 /// Guard called from the static `push_single`/`push` codegen path so that
 /// frozen + non-writable-`length` checks fire even for `arr.push()` with no
-/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`.
+/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`;
+/// `argc` is the call's static argument count, which decides whether the first
+/// failing `Set` is the element add or the `length` write ([`push_guard`]).
 #[no_mangle]
-pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader) {
+pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader, argc: u32) {
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return;
     }
-    // SAFETY: `clean_arr_ptr_mut` just proved this exact pointer is the live,
-    // non-forwarded array head; no allocation occurs before the flag read.
-    let flags = unsafe { array_object_flags_resolved(arr) };
-    if flags & gc::OBJ_FLAG_FROZEN != 0 {
-        throw_frozen_array_mutation();
-    }
-    guard_writable_length(arr);
+    push_guard(arr, argc);
 }
 
 #[no_mangle]
@@ -75,6 +71,17 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
             return arr;
+        }
+        // DEC 250 (i): `%Array.prototype%` never gains an element. It has no
+        // element room (`seal_realm`), and this is the one place an existing
+        // array's capacity grows, so every dense add to it (push, unshift,
+        // splice, concat-into, a store past its end) arrives here; a sparse
+        // index store refuses in `note_array_index_write`. Cold: only a real
+        // reallocation asks.
+        if arr as usize == super::array_prototype_addr_if_resolved() {
+            crate::object::builtin_proto::refuse_index_add(
+                crate::object::builtin_proto::BuiltinProto::Array,
+            );
         }
 
         // Double up to ARRAY_MAX_CAPACITY, or honor a larger minimum.
@@ -820,7 +827,7 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     // allocation or safepoint intervenes before the read.
     let flags = unsafe { array_object_flags_resolved(arr) };
     if flags & gc::OBJ_FLAG_FROZEN != 0 {
-        throw_frozen_array_mutation();
+        push_guard(arr, 1);
     }
     guard_writable_length(arr);
     if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
@@ -1063,7 +1070,7 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
         arr_handle.set_raw_mut_ptr(current);
         // An inherited setter above can change either integrity condition.
         if array_is_frozen(current) {
-            throw_frozen_array_mutation();
+            push_guard(current, 1);
         }
         guard_writable_length(current);
         (*current).length = length + 1;
@@ -1789,9 +1796,10 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     // allocates fresh instead of mutating the stored element. No-op for SSO /
     // non-string (mirrors `js_array_push_f64`, #5548).
     string::js_string_addref_if_heap_string(value);
+    let recv = arr;
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return js_array_alloc(0);
+        return unshift_non_array_receiver(recv, &[value]);
     }
     if crate::array::array_iteration_is_exotic(arr) {
         return unshift_array_spec_path(arr, &[value]);
@@ -1862,9 +1870,17 @@ pub extern "C" fn js_array_unshift_variadic(
     items: *const f64,
     count: u32,
 ) -> *mut ArrayHeader {
+    let recv = arr;
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return js_array_alloc(0);
+        let values = unsafe {
+            if items.is_null() {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(items, count as usize)
+            }
+        };
+        return unshift_non_array_receiver(recv, values);
     }
     // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so both
     // a frozen array and a non-writable `length` throw before the no-op early
@@ -1944,6 +1960,24 @@ pub extern "C" fn js_array_unshift_variadic(
         );
         arr
     })
+}
+
+/// `ArrayUnshift` is folded from the binding's DECLARED type, and a declared
+/// type is a hint, not a layout fact: `let a = [9]; a = Object.create(p)`
+/// reaches here with an object. Run the spec-generic `Array.prototype.unshift`
+/// on it (it reads `length` and the indices through the real chain) and return
+/// the ORIGINAL receiver, so codegen's realloc write-back keeps the binding on
+/// the object and its length read sees the new `length`. Same rule as the
+/// #7574 arm of [`js_array_push_f64`]; the fresh empty array returned here
+/// before replaced the binding and dropped the call.
+fn unshift_non_array_receiver(recv: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHeader {
+    match crate::array::subclass::array_object_receiver(recv) {
+        Some(obj) => {
+            crate::array::subclass::array_object_method(obj, "unshift", items);
+            recv
+        }
+        None => js_array_alloc(0),
+    }
 }
 
 fn unshift_array_spec_path(arr: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHeader {

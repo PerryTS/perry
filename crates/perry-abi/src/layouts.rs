@@ -609,6 +609,11 @@ const _: () = {
 /// reads the name without validating it. Clear, the name is validated, and one
 /// that is not UTF-8 (a WTF-8 name) names no member.
 pub const CLASS_MEMBER_NAME_UTF8: u8 = 4;
+/// `ClassMemberDecl.flags`: the member is keyed by a symbol the compiler knows
+/// (a well-known symbol or `Symbol.for("lit")`); the name bytes are that
+/// symbol's `Symbol.for` spelling (`@@__perry_wk_<name>` or the registry key),
+/// never a string key.
+pub const CLASS_MEMBER_NAME_SYMBOL: u8 = 8;
 
 /// Explicit dynamic mints: all returns and finalizer carriers are LayoutWords.
 pub mod dynamic_layout_ffi {

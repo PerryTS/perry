@@ -38,20 +38,18 @@ Each of these, absolutely (there is no allowlist to add an entry to):
     names a `TOKIO` package, or a `not_tokio` package that has left the lock
     (a stale note fails, so the file cannot describe a tree that is gone).
 
-NOT TOKIO: `tungstenite`, `lettre`
-----------------------------------
+NOT TOKIO: `tungstenite`
+------------------------
 
-The old inventory tracked the whole "tokio family" by name, which included two
+The old inventory tracked the whole "tokio family" by name, which included
 crates that are not tokio at all. They are listed under `not_tokio` in the JSON
-with the reason, and the gate CHECKS that reason against the lock rather than
+with the reason (`lettre` left with the nodemailer binding), and the gate CHECKS that reason against the lock rather than
 trusting it:
 
   * `tungstenite` 0.30 — synchronous WebSocket protocol. perry-ui-android uses
     it over a blocking `std::net::TcpStream` on one std thread per connection,
     and turnloop-websocket uses it as a codec. Its lock entry has no tokio
     dependency.
-  * `lettre` — perry-ext-nodemailer uses its `message` builder only; the
-    `tokio1` / `tokio1-rustls-tls` / `pool` transport features are off.
 
 USAGE
 -----

@@ -109,7 +109,7 @@ impl Model {
                                 "perry: wpfacts explain: E23 another unit's accessor on Object.prototype key {k}"
                             );
                         }
-                        self.objproto_accessor = true
+                        self.note_objproto_accessor()
                     }
                     // A lookup of the key there runs that unit's function as
                     // getter or setter (`builtins::other_unit_accessor`).

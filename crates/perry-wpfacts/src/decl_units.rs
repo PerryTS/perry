@@ -463,12 +463,14 @@ fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module 
         async_step_closures,
         closure_display_names,
         class_display_names,
+        non_constructor_funcs,
         closure_source_text,
         class_source_text,
         async_generator_funcs,
         local_source_spans,
         gen_param_prologue_len,
         requested_modules,
+        locally_redeclared_imports,
     } = module;
     Module {
         name: name.clone(),
@@ -505,12 +507,14 @@ fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module 
         async_step_closures: async_step_closures.clone(),
         closure_display_names: closure_display_names.clone(),
         class_display_names: class_display_names.clone(),
+        non_constructor_funcs: non_constructor_funcs.clone(),
         closure_source_text: closure_source_text.clone(),
         class_source_text: class_source_text.clone(),
         async_generator_funcs: async_generator_funcs.clone(),
         local_source_spans: local_source_spans.clone(),
         gen_param_prologue_len: gen_param_prologue_len.clone(),
         requested_modules: requested_modules.clone(),
+        locally_redeclared_imports: locally_redeclared_imports.clone(),
     }
 }
 

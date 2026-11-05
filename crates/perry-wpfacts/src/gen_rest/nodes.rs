@@ -94,7 +94,17 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
-        let tm = self.new_arr_template(mi, what);
+        self.new_arr_of(mi, what, elems, false)
+    }
+
+    /// `new_arr_from` of an array whose birth fills each index below its
+    /// length in order (ArrayCreate + CreateDataProperty): it has no hole.
+    pub(crate) fn new_dense_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
+        self.new_arr_of(mi, what, elems, true)
+    }
+
+    fn new_arr_of(&mut self, mi: u32, what: &str, elems: &[NodeId], dense: bool) -> NodeId {
+        let tm = self.new_arr_birth(mi, what, dense);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {

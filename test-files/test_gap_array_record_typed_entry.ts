@@ -20,10 +20,10 @@ for (const value of mutable) {
   seen += value + ",";
   if (value === 1) {
     mutable.push(3);
-    itp.next = () => ({done:true});
+    try { itp.next = () => ({done:true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   }
 }
-itp.next = next;
+try { itp.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("captured", seen);
 const overrides: number[] = [1,2];
 (overrides as any)[Symbol.iterator] = function() {

@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Function receivers at warmed, untyped method sites (#12227).
 function callSite(f: any, x: any, n: number): any { return f.call(x, n); }
 function applySite(f: any, x: any, args: any): any { return f.apply(x, args); }
@@ -53,12 +54,12 @@ const applyKey = ["app", "ly"].join("");
 const oldCall = fp[callKey];
 const oldApply = fp[applyKey];
 for (let i = 0; i < 40; i++) applySite(target, receiver, [i]);
-fp[callKey] = function(this: any, x: any, n: number) { return "call-patch:" + n; };
+locked(() => { fp[callKey] = function(this: any, x: any, n: number) { return "call-patch:" + n; }; });
 const patchedCall = callSite(target, receiver, 7);
-fp[callKey] = oldCall;
-fp[applyKey] = function(this: any, x: any, args: any[]) { return "apply-patch:" + args[0]; };
+locked(() => { fp[callKey] = oldCall; });
+locked(() => { fp[applyKey] = function(this: any, x: any, args: any[]) { return "apply-patch:" + args[0]; }; });
 const patchedApply = applySite(target, receiver, [8]);
-fp[applyKey] = oldApply;
+locked(() => { fp[applyKey] = oldApply; });
 console.log("patched", patchedCall, patchedApply);
 console.log("restored", callSite(target, receiver, 7), applySite(target, receiver, [8]));
 

@@ -12,8 +12,8 @@
 // "Unknown native method" fallback returned 0.0 without calling
 // `js_net_socket_*`. The fix made the lookup module-aware.
 //
-// Requires the python echo server at 127.0.0.1:17891 (run_parity_tests.sh
-// spawns it before invoking gap tests).
+// Requires the python echo server at 127.0.0.1:17891 (scripts/parity.py
+// starts it for any case that names its port).
 
 import { createConnection } from 'net';
 

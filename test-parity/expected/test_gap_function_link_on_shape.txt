@@ -1,0 +1,15 @@
+1 true from-proto fn:plain undefined 1
+2 true from-proto fn:bound bound plain 0 undefined
+3 true from-proto undefined
+4 true Base.m g:callable true 42
+5 null undefined undefined n false
+6 second undefined false
+7 true undefined function
+8 true own-acc from-proto
+9 true undefined from-proto
+10 fresh undefined own-acc
+11 own true
+12 true false
+DEC 250: Cannot add member Function.prototype.fpx: built-in objects are read-only in a compiled program
+13 undefined undefined undefined
+14 false false false undefined true

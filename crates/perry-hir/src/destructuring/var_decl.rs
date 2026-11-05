@@ -16,7 +16,6 @@ pub(crate) mod type_infer;
 /// `lower_decl/body_stmt.rs`, which that change did not reach.
 pub(crate) use type_infer::for_init_decl_type;
 
-pub(crate) use alias_tracking::builtin_proto_method_alias;
 use alias_tracking::track_decl_aliases;
 use binding_guards::apply_binding_guards;
 use native_fetch::register_native_fetch_and_streams;
@@ -394,9 +393,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     _ => {}
                 }
             }
-            if matches!(&init, Some(Expr::NativeModuleRef(module)) if module == "undici") {
-                ctx.undici_namespace_locals.insert(id);
-            }
             result.push(Stmt::Let {
                 id,
                 name,
@@ -545,9 +541,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
             ctx.record_local_source_span(id, decl.name.span());
             if !mutable {
                 ctx.mark_local_immutable(id);
-            }
-            if matches!(&init, Some(Expr::NativeModuleRef(module)) if module == "undici") {
-                ctx.undici_namespace_locals.insert(id);
             }
             result.push(Stmt::Let {
                 id,

@@ -1,0 +1,1 @@
+Runtime: `MessageEvent` is a key of the static `GLOBAL_OBJECT` layout, so the global object is born with all of its builtin names as image atoms (the `MessageEvent` global was a 130th, heap-string key beside the layout's 129).

@@ -1,0 +1,32 @@
+DEC 250: Cannot replace built-in member String.prototype.slice: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member String.prototype.slice: built-in objects are read-only in a compiled program (adding a new member is allowed)
+pristine push 4 4 4 1-2-3 1 true
+pristine slice [2,3] ell 4
+pristine map 1 true true 2 true false
+pristine set true true true false
+pristine fn object,1,2 u,3, object,5,6 object,7,8
+pristine obj obj.push:9 obj.get:k
+pristine num 12.5
+alias 100 99 100 99 100
+own-array own.push:3 2
+own-fn own.call plain
+own-map own.get
+relinked proto.push proto.pop
+patched push patched.push:1 3 3 1-2 1 false
+patched slice [2] ell 4
+patched map patched.get true true patched.get true false
+patched set false false true false
+patched fn object,1,2 u,3, object,5,6 object,7,8
+patched obj obj.push:9 obj.get:k
+patched num 12.5
+patched-call patched.call
+restored push 4 4 4 1-2-3 1 true
+restored slice [2,3] ell 4
+restored map 1 true true 2 true false
+restored set true true true false
+restored fn object,1,2 u,3, object,5,6 object,7,8
+restored obj obj.push:9 obj.get:k
+restored num 12.5
+frozen true
+class-call true
+late 2

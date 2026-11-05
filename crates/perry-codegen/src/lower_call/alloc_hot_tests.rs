@@ -76,7 +76,6 @@ fn ir_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -515,8 +514,8 @@ fn a_self_recursive_function_inlines_its_bump_allocator() {
     );
 }
 
-#[test]
-fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
+/// Whole-module IR with every inline-birth flavour the invariant covers.
+fn every_inline_birth_ir() -> String {
     assert_inline_new_not_forced();
     let mut module = walk_module(true);
     // Whole module: both numeric branches, noted pointer elements, different
@@ -539,9 +538,42 @@ fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
         vec![Expr::Array(vec![Expr::Number(2.0)], None)],
         None,
     )));
-    let ir = ir_for(module);
-    inline_birth_invariant::check(&ir);
-    inline_birth_invariant::sabotage_controls(&ir);
+    ir_for(module)
+}
+
+#[test]
+fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
+    inline_birth_invariant::check(&every_inline_birth_ir());
+}
+
+#[test]
+#[should_panic(expected = "header must depend on a LIVE birth flag load")]
+fn a_scalar_birth_header_without_its_live_color_is_refused() {
+    let ir = every_inline_birth_ir();
+    inline_birth_invariant::check(&inline_birth_invariant::sabotaged(
+        &ir,
+        inline_birth_invariant::Sabotage::HeaderColor { vector: false },
+    ));
+}
+
+#[test]
+#[should_panic(expected = "missing %color = shl i64 %wide_flags, 8")]
+fn a_vector_birth_header_without_its_live_color_is_refused() {
+    let ir = every_inline_birth_ir();
+    inline_birth_invariant::check(&inline_birth_invariant::sabotaged(
+        &ir,
+        inline_birth_invariant::Sabotage::HeaderColor { vector: true },
+    ));
+}
+
+#[test]
+#[should_panic(expected = "seed before ALL slots/header metadata initialized")]
+fn a_birth_seed_before_initialization_is_refused() {
+    let ir = every_inline_birth_ir();
+    inline_birth_invariant::check(&inline_birth_invariant::sabotaged(
+        &ir,
+        inline_birth_invariant::Sabotage::SeedBeforeInitialization,
+    ));
 }
 
 #[path = "inline_birth_invariant.rs"]

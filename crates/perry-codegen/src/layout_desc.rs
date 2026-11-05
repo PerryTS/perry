@@ -785,7 +785,9 @@ fn emit_desc(
     // Every key of a class family (case 2c) carries
     // `perry_abi::LAYOUT_KEY_OPTIONAL` (0x80): absent while its slot holds
     // the hole. A birth writes no key; a store adds it, and a private
-    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too).
+    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too). A key its
+    // constructor defines (`FamilyKey::Defined`) carries the definition's
+    // attributes, which its definition alone fills the hole with.
     let key_items: Vec<String> = keys
         .iter()
         .map(|(k, a, slot)| {
@@ -793,7 +795,7 @@ fn emit_desc(
                 | if k.is_private() {
                     crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
                 } else {
-                    0
+                    k.attrs()
                 };
             format!(
                 "{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 {}, i8 0, i16 {} }}",
@@ -835,7 +837,7 @@ fn emit_desc(
                     | if key.is_private() {
                         crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
                     } else {
-                        0
+                        key.attrs()
                     };
                 (atom.clone(), fnv1a(key.spelling().as_bytes()), attrs, *slot)
             })
@@ -940,6 +942,7 @@ pub(crate) fn emit_module_layouts(
             LAYOUT_ID_CARRIED,
             first_hash,
             "0",
+            fam.array_named,
         );
         // The id word on its own, so a function loads it once at entry.
         llmod.add_raw_global(format!(
@@ -1019,6 +1022,7 @@ pub(crate) fn emit_module_layouts(
             LAYOUT_ID_CARRIED,
             None,
             &format!("ptrtoint (ptr @{} to i64)", site.proto_global),
+            false,
         );
         llmod.add_raw_global(format!(
             "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
@@ -1051,6 +1055,7 @@ pub(crate) fn emit_module_layouts(
             0,
             None,
             "0",
+            false,
         );
         n += 1;
     }
@@ -1087,6 +1092,7 @@ pub(crate) fn emit_module_layouts(
             id,
             None,
             "0",
+            false,
         );
         n += 1;
     }
@@ -1374,6 +1380,7 @@ fn emit_descriptor(
     layout_id: u32,
     first_hash: Option<u64>,
     proto: &str,
+    array_named: bool,
 ) {
     {
         let count = keys.len();
@@ -1395,12 +1402,28 @@ fn emit_descriptor(
         }
         let keys_name = format!("perry_layout_keys_{suffix}");
         let index_name = format!("perry_layout_index_{suffix}");
+        // An array's named layout (`array_families`) lists the keys its
+        // store sites declare ahead of their first store, every slot born
+        // holding the hole: each such key carries
+        // `perry_abi::LAYOUT_KEY_OPTIONAL`, absent while its slot holds the
+        // hole, as a class family's late key does. Position 0 is the
+        // iterator key the runtime's `ARRAY_NAMED` layout leads with, which
+        // keeps its runtime attributes. A literal family's birth writes every
+        // key, so its keys carry none.
+        let attrs_at = |i: usize| -> u8 {
+            if array_named && i >= 1 {
+                crate::runtime_abi::LAYOUT_KEY_OPTIONAL
+            } else {
+                0
+            }
+        };
         let key_items: Vec<String> = atom_names
             .iter()
             .enumerate()
             .map(|(i, a)| {
                 format!(
-                    "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 0, i8 0, i16 {} }}",
+                    "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 {}, i8 0, i16 {} }}",
+                    attrs_at(i) as i8,
                     key_off(&triple, crate::target_layout::HeaderForm::Meta, i as u32)
                 )
             })
@@ -1443,7 +1466,9 @@ fn emit_descriptor(
                 .iter()
                 .zip(keys)
                 .enumerate()
-                .map(|(i, (atom, key))| (atom.clone(), fnv1a(key.as_bytes()), 0, i as u32))
+                .map(|(i, (atom, key))| {
+                    (atom.clone(), fnv1a(key.as_bytes()), attrs_at(i), i as u32)
+                })
                 .collect::<Vec<_>>(),
             &desc_name,
         );

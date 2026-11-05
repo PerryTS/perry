@@ -38,14 +38,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     declare_data_stores(module);
     // bcrypt/argon2, perry/ads, perry/thread, JWT, sharp, cron,
     // async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer,
-    // child_process, cheerio.
+    // child_process.
     declare_third_party(module);
     // URL / URLSearchParams + WebSocket.
     declare_web(module);
-    // @perryts/pdf, date libs, ethers, lodash.
+    // @perryts/pdf, date libs.
     declare_utilities(module);
-    // node:stream, EventEmitter, domain, StringDecoder, querystring, fastify,
-    // nodemailer, rate-limit, validator.
+    // node:stream, EventEmitter, domain, StringDecoder, querystring.
     declare_streams_events(module);
     // Date, String, Object, Math, Atomics, Number, JSON, Map/Set, Error,
     // Promise, text encoding, closures, NaN-boxing, GC, console, fetch, net,

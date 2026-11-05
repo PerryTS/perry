@@ -809,8 +809,12 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
+      # llvm-tools: scripts/check_std_symbolizer.sh (run by the archive
+      # freshness check on the runner) reads the archives with rustc's own
+      # llvm-nm. The container legs below install no LLVM on the runner, so
+      # without it the check has no nm of LLVM 22+ and fails closed.
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component llvm-tools --target ${{ matrix.target }}
       # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
       # Its host-side GTK4 build does not depend on perry-codegen, so avoid
       # installing a second LLVM copy on the noble runner for these two legs.
@@ -3376,14 +3380,16 @@ jobs:
           work="$RUNNER_TEMP/target-smoke"
           mkdir -p "$work"
           printf 'console.log("target package ok")\n' > "$work/hello.ts"
-          if "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
+          # A missing target package is fetched from the release by default;
+          # the release this build belongs to may not exist yet.
+          if PERRY_NO_AUTO_FETCH=1 "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
             echo "::error::perry compiled --target wasi with no target package installed" >&2
             exit 1
           fi
           grep -F "npm install -g @perryts/perry-target-wasm32-wasip2@" "$work/missing.log"
           npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund \
             "./$(tgz perry-target-wasm32-wasip2)"
-          "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
+          PERRY_NO_AUTO_FETCH=1 "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
           test -s "$work/hello.wasm"
 
       - name: Smoke-test the ext package from a global npm install

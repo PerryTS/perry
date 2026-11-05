@@ -399,16 +399,49 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
 /// Collect variable declarations that need to be hoisted to the outer scope.
 pub fn collect_hoisted_vars(stmts: &[Stmt]) -> Vec<(LocalId, String, Type)> {
     let mut vars = Vec::new();
-    collect_vars_recursive(stmts, &mut vars);
+    collect_vars_recursive(stmts, &mut |stmt| {
+        if let Stmt::Let { id, name, ty, .. } = stmt {
+            vars.push((*id, name.clone(), ty.clone()));
+        }
+    });
     vars
 }
 
-pub fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, Type)>) {
+/// What a hoisted binding's own declaration says about the binding, read
+/// from the source body before the state split: `immutable` holds the
+/// `const` declarations (`Stmt::Let { mutable: false }`), `tdz` the lexical
+/// bindings whose storage the HIR seeds with the TDZ sentinel
+/// (`Stmt::PreallocateTdzBoxes`). The transform keeps each declaration in its
+/// state body; the outer wrapper only reserves the storage, and it must not
+/// end a dead zone that only the declaration ends.
+pub struct HoistedDeclFacts {
+    pub immutable: std::collections::HashSet<LocalId>,
+    pub tdz: std::collections::HashSet<LocalId>,
+}
+
+pub fn collect_hoisted_decl_facts(stmts: &[Stmt]) -> HoistedDeclFacts {
+    let mut facts = HoistedDeclFacts {
+        immutable: Default::default(),
+        tdz: Default::default(),
+    };
+    collect_vars_recursive(stmts, &mut |stmt| match stmt {
+        Stmt::Let {
+            id, mutable: false, ..
+        } => {
+            facts.immutable.insert(*id);
+        }
+        Stmt::PreallocateTdzBoxes(ids) => facts.tdz.extend(ids.iter().copied()),
+        _ => {}
+    });
+    facts
+}
+
+/// Visit every statement of the function's own hoisting scope: the body and
+/// every nested control-flow body, never a nested closure.
+fn collect_vars_recursive(stmts: &[Stmt], vars: &mut dyn FnMut(&Stmt)) {
     for stmt in stmts {
+        vars(stmt);
         match stmt {
-            Stmt::Let { id, name, ty, .. } => {
-                vars.push((*id, name.clone(), ty.clone()));
-            }
             Stmt::If {
                 then_branch,
                 else_branch,

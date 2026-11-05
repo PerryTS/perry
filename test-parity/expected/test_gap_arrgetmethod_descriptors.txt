@@ -1,0 +1,28 @@
+getter true
+factory true
+getter-call 10
+missing true
+getter-absent true
+no-getter true
+noncallable true
+nonobject true
+nonobject-empty true
+array-result true
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+getter-call 10
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+getter-absent 10
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+no-getter 10
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+noncallable 10
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+nonobject 10
+nonobject-empty false
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+array-result 10
+DEC 250: Cannot delete built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+custom-get true
+factory true
+custom-prototype 10

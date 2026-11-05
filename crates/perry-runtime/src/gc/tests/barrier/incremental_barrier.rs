@@ -319,7 +319,7 @@ fn test_mark_invariant_verifier_rejects_incremental_barrier_bypass() {
         *fields = ptr_bits(child);
     }
 
-    let result = std::panic::catch_unwind(verify_marked_heap_no_unmarked_children);
+    let result = crate::test_support::child_unwind(verify_marked_heap_no_unmarked_children);
 
     assert!(
         result.is_err(),

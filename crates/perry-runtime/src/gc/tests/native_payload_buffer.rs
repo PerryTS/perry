@@ -105,12 +105,8 @@ fn full_collection() {
 
 /// The bytes this object's own cell states.
 fn cell_bytes(value: f64) -> u64 {
-    let obj = crate::native_payload::any_object(value).unwrap();
-    unsafe {
-        let cell = ((*(*obj).meta).native_state & POINTER_MASK)
-            as *const crate::native_handle::NativeHandleHeader;
-        (*cell).external_bytes
-    }
+    let cell = crate::native_payload::payload_cell_of_value(value).unwrap();
+    unsafe { (*cell).external_bytes }
 }
 
 const WINDOW: usize = 4 << 20;

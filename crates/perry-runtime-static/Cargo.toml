@@ -34,7 +34,6 @@ wasi-node-modules = [
     "dep:perry-stdlib",
     "dep:perry-ext-http",
     "dep:perry-http-server",
-    "dep:perry-ext-undici",
     "dep:perry-ext-zlib",
     "dep:perry-ext-ws",
     "perry-stdlib/async-bridge",
@@ -66,6 +65,5 @@ perry-ext-net = { path = "../perry-ext-net" }
 perry-stdlib = { path = "../perry-stdlib", default-features = false, optional = true }
 perry-ext-http = { path = "../perry-ext-http", optional = true }
 perry-http-server = { path = "../perry-http-server", optional = true }
-perry-ext-undici = { path = "../perry-ext-undici", optional = true }
 perry-ext-zlib = { path = "../perry-ext-zlib", optional = true }
 perry-ext-ws = { path = "../perry-ext-ws", optional = true }

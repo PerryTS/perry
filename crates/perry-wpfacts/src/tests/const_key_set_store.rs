@@ -44,7 +44,11 @@ fn a_key_of_the_constant_set_is_written() {
 }
 
 #[test]
-fn an_unknown_key_store_writes_every_key() {
+fn an_unknown_key_store_writes_no_index_key_of_the_array_chain() {
+    // DEC 250: the runtime refuses an index add on `Array.prototype` and
+    // `Object.prototype`, so a store under an unknown key writes no index
+    // key the element read `a[0]` consults (named keys stay open: the
+    // `forWriting` test above).
     let v = verdict("h[w ? name : \"forReading\"] = 1;", "size");
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }

@@ -21,9 +21,9 @@ for (const value of record) {
 }
 console.log(other, record.length);
 const holey: any = [1, , 3];
-Object.defineProperty(Array.prototype, "1", {
+try { Object.defineProperty(Array.prototype, "1", {
     configurable: true, get() { return 7; }
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 let sum = 0;
 for (let i = 0; i < holey.length; i++) sum += holey[i];
 delete Array.prototype[1];

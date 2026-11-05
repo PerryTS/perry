@@ -246,6 +246,8 @@ mod ic_miss;
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
 mod map_set_receiver;
+#[cfg(test)]
+mod map_set_receiver_tests;
 mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
 /// `get_field_by_name_tail.rs` for the 2000-line cap.

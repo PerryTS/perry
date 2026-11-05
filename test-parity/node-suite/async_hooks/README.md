@@ -89,8 +89,7 @@ but its current `createHook` is a no-op and its provider table remains mutable
 with an ordinary object prototype. These divergences are recorded as comparison
 evidence, not used to weaken the Node oracle.
 
-The current focused result is **195/195** and is recorded in
-`node_suite_baseline.json`. This locks the deterministic curated surface at full
+The focused result was **195/195** when the curated surface reached full
 parity, including hook delivery and lifecycle ordering, provider resources,
 context propagation, callback contracts, validation, and reflected API shape.
 Provider fixtures use platform-native subprocess and temporary-directory paths,

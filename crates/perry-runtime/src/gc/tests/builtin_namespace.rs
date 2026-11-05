@@ -27,6 +27,11 @@ fn builtin_namespace_survives_copying_and_is_independent_per_thread() {
                 };
                 let abs = scope.root_nanbox_f64(get("abs"));
                 assert!(crate::JSValue::from_bits(abs.get_nanbox_u64()).is_pointer());
+                assert_eq!(
+                    get("added").to_bits(),
+                    crate::value::TAG_UNDEFINED,
+                    "the previous realm's addition must not be visible"
+                );
                 let pointer = crate::value::js_nanbox_get_pointer(math.get_nanbox_f64());
                 assert_eq!(
                     unsafe {
@@ -60,11 +65,13 @@ fn builtin_namespace_survives_copying_and_is_independent_per_thread() {
                 assert_eq!(get("PI"), std::f64::consts::PI);
                 {
                     let _no_move = GcSuppressScope::new();
-                    let key = crate::string::canonical_key(b"abs");
+                    // A program may add to a built-in but not replace a member
+                    // (DEC 250): the added key must not leak into the next realm.
+                    let key = crate::string::canonical_key(b"added");
                     let ptr = crate::value::js_nanbox_get_pointer(math.get_nanbox_f64());
                     crate::object::js_object_set_field_by_name(ptr as *mut _, key, 19.0);
                 }
-                assert_eq!(get("abs"), 19.0);
+                assert_eq!(get("added"), 19.0);
             })
             .expect("spawn realm")
             .join()
@@ -123,11 +130,20 @@ fn json_reflect_namespace_methods_survive_copying_and_thread_mutation() {
                     assert_eq!(result.to_bits(), expected, "detached call after moving GC");
                     {
                         let _no_move = GcSuppressScope::new();
-                        let key = crate::string::canonical_key(method.as_bytes());
+                        // Adding is allowed, replacing a member is not (DEC 250).
+                        let key = crate::string::canonical_key(b"added");
                         let ptr = crate::value::js_nanbox_get_pointer(ns.get_nanbox_f64());
                         crate::object::js_object_set_field_by_name(ptr as *mut _, key, 19.0);
                     }
-                    assert_eq!(get(), 19.0);
+                    let added = unsafe {
+                        crate::value::js_dynamic_object_get_property(
+                            ns.get_nanbox_f64(),
+                            b"added".as_ptr().cast(),
+                            5,
+                        )
+                    };
+                    assert_eq!(added, 19.0);
+                    assert_eq!(get().to_bits(), function.get_nanbox_u64());
                 })
                 .expect("spawn namespace realm")
                 .join()

@@ -406,7 +406,10 @@ fn site_nested_in_loop_after_toplevel_let_is_proven() {
 }
 
 #[test]
-fn sites_inside_closures_are_never_judged() {
+fn sites_inside_closures_are_judged_as_their_own_body() {
+    // A closure body runs at an unknown time, so it is judged as its own body:
+    // its literals are judged, and no binding of the enclosing body is ready
+    // there unless `definite_init` proves it for the closure at entry.
     let closure = Expr::Closure {
         func_id: 99,
         params: vec![],
@@ -424,7 +427,7 @@ fn sites_inside_closures_are_never_judged() {
     };
     let m = module_with_init(vec![let_stmt(4, false, closure)]);
     let facts = collect_spec_abi_facts(&m);
-    assert!(facts.call_sites.get(&7).is_none());
+    assert_eq!(facts.call_sites.get(&7), Some(&vec![vec![SpecParamRep::I32]]));
 }
 
 #[test]

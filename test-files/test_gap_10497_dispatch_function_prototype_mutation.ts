@@ -30,7 +30,12 @@ console.log('FP.hasOwnProperty(apply)', FP.hasOwnProperty('apply'));
 
 // 3. Add a user method to Function.prototype and call it hot through plain
 // and arrow function receivers.
-(FP as any).mainHelper10497 = function (this: any) { return 'helper:' + (this.name || '(anon)'); };
+// DEC 250: Function.prototype refuses program adds; the mechanism runs on a
+// user function prototype between the receivers and %Function.prototype%.
+const UFP: any = Object.create(FP);
+Object.setPrototypeOf(named, UFP);
+Object.setPrototypeOf(arrow, UFP);
+UFP.mainHelper10497 = function (this: any) { return 'helper:' + (this.name || '(anon)'); };
 let helperLog = '';
 for (let i = 0; i < 500; i++) {
     const a = (named as any).mainHelper10497();
@@ -38,12 +43,12 @@ for (let i = 0; i < 500; i++) {
     if (i === 0 || i === 499) helperLog += a + ',' + c + ';';
 }
 console.log('added helper', helperLog);
-console.log('hasOwn added', Object.hasOwn(FP, 'mainHelper10497'));
+console.log('hasOwn added', Object.hasOwn(UFP, 'mainHelper10497'));
 
 // 4. Replace the helper mid-loop; the next call must see the new one.
 let swapLog = '';
 for (let i = 0; i < 400; i++) {
-    if (i === 200) (FP as any).mainHelper10497 = function () { return 'replaced'; };
+    if (i === 200) UFP.mainHelper10497 = function () { return 'replaced'; };
     const r = (named as any).mainHelper10497();
     if (i === 199 || i === 200 || i === 399) swapLog += i + ':' + r + ';';
 }
@@ -51,10 +56,10 @@ console.log('replaced helper', swapLog);
 
 // 5. Redefine an inherited Object.prototype method as an OWN property of
 // Function.prototype -- it becomes own.
-Object.defineProperty(FP, 'valueOf', {
+Object.defineProperty(UFP, 'valueOf', {
     value: function () { return 'fp-valueOf'; }, writable: true, configurable: true,
 });
-console.log('hasOwn valueOf after define', Object.hasOwn(FP, 'valueOf'));
+console.log('hasOwn valueOf after define', Object.hasOwn(UFP, 'valueOf'));
 console.log('obj.valueOf unaffected', typeof ({} as any).valueOf());
 
 // 6. An own property on ONE function beats Function.prototype.
@@ -72,7 +77,7 @@ const altProto = { greet() { return 'alt-greet'; }, mainHelper10497() { return '
 Object.setPrototypeOf(h, altProto);
 console.log('setPrototypeOf', h.greet(), h.mainHelper10497(), typeof h.call, typeof h.bind);
 console.log('h still callable', h());
-Object.setPrototypeOf(h, FP);
+Object.setPrototypeOf(h, UFP);
 console.log('restored', typeof h.greet, h.mainHelper10497(), h.call(null));
 
 // 8. Plain objects: object-literal methods named like builtins (the qs
@@ -111,7 +116,7 @@ re.test = (x: string) => 'own-test:' + x;
 console.log('regexp own test', re.test('b'));
 
 // 10. Delete the helper; dispatch must see it gone.
-delete (FP as any).mainHelper10497;
+delete UFP.mainHelper10497;
 console.log('after delete', typeof (named as any).mainHelper10497, typeof g.mainHelper10497);
 
 // 11. A worker is its own realm.

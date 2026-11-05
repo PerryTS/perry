@@ -96,6 +96,13 @@ pub(super) fn emit_module_artifacts(
 
     // The body and its value wrapper share the synthetic-arguments ABI.
     for f in &hir.functions {
+        if hir.non_constructor_funcs.contains(&f.id) {
+            if let Some(name) = func_names.get(&f.id) {
+                llmod.note_fn_info(&format!("__perry_wrap_{name}"), |info| {
+                    info.set_non_constructor()
+                });
+            }
+        }
         let flags = super::arguments::arguments_object_flags(&f.params, &f.body);
         if flags != 0 {
             if let Some(name) = func_names.get(&f.id) {
@@ -104,6 +111,11 @@ pub(super) fn emit_module_artifacts(
         }
     }
     for (fid, expr) in closures {
+        if hir.non_constructor_funcs.contains(fid) {
+            llmod.note_fn_info(&crate::symbol_names::closure(&module_prefix, fid), |info| {
+                info.set_non_constructor()
+            });
+        }
         // Await lowering rewrites the body and clears Expr::Closure.is_async;
         // its retained source-kind set still describes the function object.
         if hir.async_step_closures.contains(fid) {
@@ -676,6 +688,13 @@ pub(super) fn emit_module_artifacts(
         }
         for (prop, _) in &class.setters {
             let _ = strings.intern(prop);
+        }
+        // THR1: a known-symbol instance member's declaration names it by
+        // its symbol's spelling.
+        for m in class.computed_members.iter().filter(|m| !m.is_static) {
+            if let Some(name) = m.known_symbol() {
+                let _ = strings.intern(name);
+            }
         }
     }
 

@@ -15,12 +15,12 @@ const run = (label: string) => {
 run("pristine");
 
 // Object.prototype definitions: no effect.
-Object.defineProperty(Object.prototype, "exec", {
+try { Object.defineProperty(Object.prototype, "exec", {
   configurable: true, writable: true, value: function () { log.push("object exec"); return null; },
-});
-Object.defineProperty(Object.prototype, Symbol.replace, {
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(Object.prototype, Symbol.replace, {
   configurable: true, writable: true, value: function () { log.push("object replace"); return "object"; },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run("object proto");
 delete (Object.prototype as any).exec;
 delete (Object.prototype as any)[Symbol.replace];
@@ -29,22 +29,22 @@ run("object proto removed");
 // RegExp.prototype exec override that delegates.
 const execDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec")!;
 const exec = RegExp.prototype.exec;
-RegExp.prototype.exec = function (this: RegExp, s: string) { log.push("proto exec " + s); return exec.call(this, s); };
+try { RegExp.prototype.exec = function (this: RegExp, s: string) { log.push("proto exec " + s); return exec.call(this, s); }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run("proto exec");
-Object.defineProperty(RegExp.prototype, "exec", execDesc);
+try { Object.defineProperty(RegExp.prototype, "exec", execDesc); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run("proto exec restored");
 
 // RegExp.prototype exec that never matches.
-RegExp.prototype.exec = function (this: RegExp, s: string) { log.push("null exec " + s); return null; };
+try { RegExp.prototype.exec = function (this: RegExp, s: string) { log.push("null exec " + s); return null; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run("proto exec null");
-Object.defineProperty(RegExp.prototype, "exec", execDesc);
+try { Object.defineProperty(RegExp.prototype, "exec", execDesc); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
 // RegExp.prototype Symbol.replace override.
 const replDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.replace)!;
-Object.defineProperty(RegExp.prototype, Symbol.replace, {
+try { Object.defineProperty(RegExp.prototype, Symbol.replace, {
   configurable: true, writable: true,
   value: function (s: string, r: string) { log.push("proto replace " + s); return "patched:" + s; },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run("proto symbol replace");
-Object.defineProperty(RegExp.prototype, Symbol.replace, replDesc);
+try { Object.defineProperty(RegExp.prototype, Symbol.replace, replDesc); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run("restored");

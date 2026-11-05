@@ -71,7 +71,6 @@ fn ir_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -688,10 +687,10 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
         "the gate must require a GC_TYPE_OBJECT receiver:\n{deref}"
     );
     // The store arm is the ordinary class-field store, i.e. the static-key
-    // store site (#12483): its inline shape-checked store, and the
-    // descriptor-aware `[[Set]]` miss behind it.
+    // store site (#12483): the store probe and the descriptor-aware
+    // `[[Set]]` behind it, one out-of-line call.
     assert!(
-        body.contains("@perry_probe_set(") && body.contains("@js_put_value_set("),
+        body.contains("@perry_store_or_put("),
         "the write-back arm must be the class-field store:\n{body}"
     );
     // Between the header gate and the store: `this.items` is re-read and its

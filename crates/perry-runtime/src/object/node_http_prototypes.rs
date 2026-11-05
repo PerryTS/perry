@@ -387,14 +387,8 @@ fn native_receiver(receiver: f64) -> Option<f64> {
         return Some(receiver);
     }
     let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)?;
-    // A1_UNPROVEN: record-first: native payload receiver (kind-A/B question for S0f).
     // SAFETY: a live ordinary object.
-    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
-    if meta.is_null() {
-        return None;
-    }
-    // SAFETY: the meta record of a live object.
-    crate::native_payload::payload_cell_of_word(unsafe { (*meta).native_state }).map(|_| receiver)
+    unsafe { crate::native_payload::payload_cell_of_object(obj) }.map(|_| receiver)
 }
 
 /// An ordinary receiver layout carrying the response payload's native type
@@ -416,12 +410,7 @@ pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
         {
             return 0;
         }
-        // A1_UNPROVEN: record-first: receiver layout (kind-A/B question for S0f).
-        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        if meta.is_null() {
-            return 0;
-        }
-        let Some(cell) = crate::native_payload::payload_cell_of_word((*meta).native_state) else {
+        let Some(cell) = crate::native_payload::payload_cell_of_object(obj) else {
             return 0;
         };
         ((*cell).type_id as u32 == crate::codegen_abi::native_class_ids::HTTP_SERVER_RESPONSE)

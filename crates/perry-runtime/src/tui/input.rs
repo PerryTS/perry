@@ -140,8 +140,8 @@ mod termios_impl {
 /// the render-loop entry.
 pub fn enable_raw_mode() {
     let _ = termios_impl::enable();
-    // wasm32-wasip1 cannot spawn the reader thread: no terminal input.
-    if cfg!(all(target_os = "wasi", target_env = "p1")) {
+    // WASI cannot spawn the reader thread: no terminal input.
+    if cfg!(target_os = "wasi") {
         return;
     }
     READING.store(true, Ordering::Release);

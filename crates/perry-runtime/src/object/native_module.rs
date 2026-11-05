@@ -50,6 +50,14 @@ pub(crate) mod worker_environment;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
+
+pub(crate) fn worker_constructor_value() -> f64 {
+    // Lowered Worker construction can bypass every namespace/export read.
+    // Arm the existing decorator before its canonical constructor is minted.
+    super::native_module_registry::js_nm_install_worker_threads();
+    bound_native_callable_export_value("worker_threads", "Worker")
+}
+
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
 pub(crate) use callable_exports::minted_native_callable_export;
@@ -1125,7 +1133,13 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             false,
         )
     };
-    if live || value.to_bits() == crate::value::TAG_UNDEFINED {
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        if observe_namespace_writes && is_namespace_inherited_method(&property) {
+            return object_prototype_member(&property);
+        }
+        return value;
+    }
+    if live {
         return value;
     }
     NATIVE_ESM_EXPORT_VALUES.with(|values| {
@@ -1133,6 +1147,33 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     value
+}
+
+/// `Object.prototype` methods a native-module default object inherits rather
+/// than exports (`buffer.hasOwnProperty`, which safer-buffer calls). Neither
+/// a read nor a call by one of these names belongs to the module's export
+/// table or dispatch bucket, which answer a name they lack with `undefined`.
+pub(crate) fn is_namespace_inherited_method(name: &str) -> bool {
+    matches!(
+        name,
+        "toString"
+            | "toLocaleString"
+            | "valueOf"
+            | "hasOwnProperty"
+            | "isPrototypeOf"
+            | "propertyIsEnumerable"
+            | "constructor"
+    )
+}
+
+fn object_prototype_member(name: &str) -> f64 {
+    let (_, proto) = crate::object::ensure_object_intrinsics();
+    if proto.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(proto, key);
+    f64::from_bits(value.bits())
 }
 
 /// Mutable property read used by native-module default and namespace objects.

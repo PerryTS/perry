@@ -623,7 +623,7 @@ fn constfn_verifier_valid_stale_deprecated_and_lifecycle() {
         ] {
             // GC_STORE_AUDIT(INIT): deliberate sabotage, no collection before verification.
             *fields = bits;
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify));
+            let failure = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(verify));
             let message = failure.expect_err("stale SPECIAL must fail");
             let text = message
                 .downcast_ref::<String>()

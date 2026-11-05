@@ -1,0 +1,33 @@
+forward ok:1,2,3
+mapped 1
+alias 8
+mapped:9
+unmapped 8 9
+escape 1 9 0
+proto true
+inherited-in true true true
+own-constructor-proto true
+edited:12
+inherited:71
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+changed x:4,5
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+restored r:6
+call call:3,4
+string:10
+spread-string:10
+iter:21,22
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+next:1,2
+lookup
+own true
+retained 31 2 false
+deleted-own-apply deleted:33,34
+own-call true:41,42
+deleted-own-call deleted-call:43,44
+caught body
+caught index
+caught iterator
+caught disabled-iterator
+wide 65:64

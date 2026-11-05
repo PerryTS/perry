@@ -80,7 +80,7 @@ console.log("accessor", withSetter[1]);
 
 // Array.prototype index setter (prototype pollution) sees holes.
 const holey: number[] = [1, , 3] as number[];
-Object.defineProperty(Array.prototype, 1, {
+try { Object.defineProperty(Array.prototype, 1, {
   set(v: number) {
     console.log("proto setter saw", v);
   },
@@ -88,7 +88,7 @@ Object.defineProperty(Array.prototype, 1, {
     return undefined;
   },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 put(holey, 1, 7);
 console.log("proto setter", JSON.stringify(holey), Object.prototype.hasOwnProperty.call(holey, 1));
 delete (Array.prototype as any)[1];

@@ -22,10 +22,10 @@ for (let i = 0; i < 3; i++) {
 console.log(log.join(" "));
 
 // A setter added to Object.prototype intercepts too.
-Object.defineProperty(Object.prototype, "viaObjectProto", {
+try { Object.defineProperty(Object.prototype, "viaObjectProto", {
   set(v: number) { log.push("op:" + v); },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const c = Object.assign(Object.create(Plain), { viaObjectProto: 5, z: 1 });
 console.log(Object.keys(c).join(","), log[log.length - 1]);
 delete (Object.prototype as any).viaObjectProto;

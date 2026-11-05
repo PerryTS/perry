@@ -59,9 +59,8 @@ pub fn build_macos_profile(ctx: &CompilationContext) -> String {
         || imports_module(ctx, "net")
         || imports_module(ctx, "tls")
         || imports_module(ctx, "dns")
-        || imports_module(ctx, "ws")
+        || imports_module(ctx, "perry/websocket")
         || imports_module(ctx, "node-fetch")
-        || imports_module(ctx, "undici")
         || ctx.uses_fetch;
     let needs_fs_write = imports_module(ctx, "fs")
         // The HIR-level FsWriteFileSync / FsMkdirSync / FsAppendFileSync
@@ -193,14 +192,6 @@ mod tests {
     fn http_import_unlocks_network() {
         let mut ctx = empty_ctx();
         ctx.native_module_imports.insert("http".into());
-        let profile = build_macos_profile(&ctx);
-        assert!(profile.contains("(allow network*)"));
-    }
-
-    #[test]
-    fn undici_import_unlocks_network() {
-        let mut ctx = empty_ctx();
-        ctx.native_module_imports.insert("undici".into());
         let profile = build_macos_profile(&ctx);
         assert!(profile.contains("(allow network*)"));
     }

@@ -31,12 +31,12 @@ function array_side_mask_covers_a_pointer_stored_at_a_late_index(
   // public slice path is forced through its observable-read loop as well as
   // splice's hole lookup. Restore the prior descriptor in finally.
   const previousIndex11 = Object.getOwnPropertyDescriptor(Array.prototype, "11");
-  Object.defineProperty(Array.prototype, "11", {
+  try { Object.defineProperty(Array.prototype, "11", {
     configurable: true,
     get() {
       throw new Error(operation + "-stop");
     },
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
   function SpeciesResult(): any[] {
     return destination;

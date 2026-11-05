@@ -1,0 +1,29 @@
+1 undefined base getter
+1 2 derived getter
+3 4 none undefined
+undefined 5 none undefined
+undefined undefined none undefined
+proto-x proto-kind
+own-x
+proto-x
+proto-x2
+undefined undefined
+DEC 250: Cannot add member Object.prototype.probeAdded: built-in objects are read-only in a compiled program
+undefined undefined
+undefined
+function function true
+bare undefined undefined
+1 1 undefined
+sym-value k
+acc-kind
+set 7
+acc-kind
+set 8
+frozen store: TypeError
+frozen
+ro store: TypeError
+ro
+10,11,12,13,14,15 0,2,4,6,8,10
+proto-extra p
+proto-kind-store p
+function function function function function

@@ -1,0 +1,22 @@
+order reserved first,next,after,reserved 7
+sloppy reserved 7
+strict true
+reflect false
+order dynamic first,next,after,dynamic 7
+sloppy dynamic 7
+strict true
+reflect false
+omitted first,next first,next,reserved undefined false false false
+data first,next first,next,reserved 17 true false true
+redefine first,next first,next,reserved 23 true false true
+closed false false
+DEC 250: Cannot add member Object.prototype.reserved: built-in objects are read-only in a compiled program
+inherited 0 29 true
+accessor 31 true
+converted first,next first,next,reserved 37 false false true
+first-outside first,next,first_dynamic 41 false true false false
+first-omitted first,next,first_omitted undefined false false false
+first-getter 47 function
+read-fallbacks 59 55 57 undefined undefined true
+sealed-read-fallbacks true false 55 57 false
+first-outside-frozen true 41 false false

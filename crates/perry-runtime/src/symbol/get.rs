@@ -511,7 +511,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // Check the class's static symbols first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         // A legacy class word names the same function object as its minted
         // pointer. Resolve its own bag through the ordinary symbol slot
         // evaluator before consulting declaration metadata.

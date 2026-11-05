@@ -328,6 +328,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 16);
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
     assert!(std::mem::size_of::<SetHeader>() == 40);
@@ -339,6 +340,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 12);
     assert!(std::mem::offset_of!(SetHeader, used) == 16);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 20);
     assert!(std::mem::size_of::<SetHeader>() == 28);
@@ -1863,9 +1865,11 @@ pub(crate) fn set_init_iterable(set: *mut SetHeader, value: f64) -> *mut SetHead
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter);
+                let next = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(element) = next else {
                     break;
                 };

@@ -449,13 +449,13 @@ pub(super) fn module_facts(hir: &HirModule, limits: Limits) -> ModuleFacts {
         let cap_params = c.constructor.as_ref().is_some_and(|ctor| {
             ctor.params
                 .iter()
-                .any(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .any(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
         });
         let cap_fields = c
             .fields
             .iter()
             .chain(c.static_fields.iter())
-            .any(|f| f.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX));
+            .any(|f| f.origin.is_capture());
         if cap_params || cap_fields {
             capturing_classes.insert(c.name.clone());
         }

@@ -32,12 +32,10 @@ pub extern "C" fn js_array_set_string_key(
     if arr.is_null() || key.is_null() {
         return arr;
     }
-    // A class-ref value (INT32 tag 0x7FFE) reaching this polymorphic setter
-    // (`C[name] = v` where `C` is a runtime class-ref value) is not an array —
-    // its high bits are set, so the `is_array` GC-header probe below would
-    // dereference unmapped memory. Route to the by-name object setter, which
-    // detects the class-ref tag and stores into the static-field tables.
-    if crate::object::class_value::legacy_class_ptr_word(arr as u64).is_some() {
+    // Class constructor/prototype references are not arrays. Route their
+    // boxed values and raw constructor pointers through the class-aware
+    // by-name setter before probing an ArrayHeader.
+    if crate::object::class_value::class_ref_ptr_word(arr as u64).is_some() {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,
             key,
@@ -416,6 +414,16 @@ pub(crate) fn js_array_set_index_or_string_with_strictness(
             } else {
                 crate::array::js_array_set_f64_extend_sloppy(arr, i, value)
             };
+        }
+        // A Number key that is not an array index (1.5, NaN, -1, 2**32) on
+        // an integer-indexed receiver is still its numeric index: coerce the
+        // value, drop the store. An index key reached the element store above.
+        if crate::typedarray_props::typed_array_set_number_key(
+            super::header::array_receiver_addr(arr),
+            idx,
+            value,
+        ) {
+            return arr;
         }
     }
     js_array_set_index_or_string(arr, idx, value)

@@ -11,10 +11,10 @@ fn super_heritage_proof_tracks_the_constructor_target() {
     );
     assert!(!pf
         .super_unrelinked
-        .contains(&tmpl(&pf, "B").class_id.unwrap()));
+        .contains_key(&tmpl(&pf, "B").class_id.unwrap()));
     assert!(pf
         .super_unrelinked
-        .contains(&tmpl(&pf, "C").class_id.unwrap()));
+        .contains_key(&tmpl(&pf, "C").class_id.unwrap()));
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn super_heritage_proof_declines_unknown_proto_writes() {
     );
     assert!(!pf
         .super_unrelinked
-        .contains(&tmpl(&pf, "B").class_id.unwrap()));
+        .contains_key(&tmpl(&pf, "B").class_id.unwrap()));
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn super_heritage_unknown_target_does_not_kill_unreachable_constructors() {
     );
     assert!(pf
         .super_unrelinked
-        .contains(&tmpl(&pf, "Hidden").class_id.unwrap()));
+        .contains_key(&tmpl(&pf, "Hidden").class_id.unwrap()));
 }
 
 #[test]
@@ -86,7 +86,11 @@ fn super_heritage_specialized_layout_uses_source_constructor() {
     }));
     let pf = compute(&[("t.ts".into(), &hir)], &FactsConfig::default());
     assert!(!tmpl(&pf, &name).prefix_stable, "{}", pf.dump_text());
-    assert!(!pf.super_unrelinked.contains(&9001), "{}", pf.dump_text());
+    assert!(
+        !pf.super_unrelinked.contains_key(&9001),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A derived class without a constructor gets `constructor(...a) {
@@ -192,4 +196,35 @@ fn class_self_cell_holds_the_class_in_its_element() {
             pf.dump_text()
         );
     }
+}
+
+/// DEC 251 B: the heritage proof names the class the evaluated `extends`
+/// value is, so codegen constructs through that one parent (body and fields).
+/// A class whose `extends` value is not one class publishes no proof.
+#[test]
+fn super_heritage_proof_names_the_evaluated_parent() {
+    let pf = facts(
+        r#"
+        class P { p1 = 1; }
+        function mk(): typeof P { return P; }
+        class D extends (mk() as any) { g1 = "g1"; }
+        class Q { q = 1; }
+        function pick(b: boolean): any { return b ? P : Q; }
+        class X extends pick(Math.random() > 2) { x = 1; }
+        console.log(new D(), new X());
+    "#,
+    );
+    let id = |n: &str| tmpl(&pf, n).class_id.unwrap();
+    assert_eq!(
+        pf.super_unrelinked.get(&id("D")),
+        Some(&Some(id("P"))),
+        "{}",
+        pf.dump_text()
+    );
+    assert_eq!(pf.super_unrelinked.get(&id("P")), Some(&None));
+    assert!(
+        !pf.super_unrelinked.contains_key(&id("X")),
+        "{}",
+        pf.dump_text()
+    );
 }

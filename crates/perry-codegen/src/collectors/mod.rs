@@ -141,7 +141,7 @@ pub(crate) use receiver_regions::{
     ReceiverArrayValidationKind, ReceiverDescriptorTable, RegionEnder,
 };
 pub(crate) use refs::{
-    collect_free_ref_ids_in_stmts, collect_let_ids, collect_ref_ids_in_expr,
+    collect_free_ref_ids_in_stmts, collect_let_ids, collect_own_binding_ids, collect_ref_ids_in_expr,
     collect_ref_ids_in_stmts, is_clamp_call,
 };
 pub(crate) use safepoint_sites::{count_body_nodes, count_safepoint_sites};
@@ -154,7 +154,7 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    callee_demoted_params, collect_spec_abi_facts, guarded_number_array_param_eligible,
+    callee_demoted_params, collect_spec_abi_facts_with, guarded_number_array_param_eligible,
     reassigned_locals, reassigned_locals_in_module, rebound_locals, string_accumulator_locals,
     SpecParamRep, SpecTaBinding,
 };

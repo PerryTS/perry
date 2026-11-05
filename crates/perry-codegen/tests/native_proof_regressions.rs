@@ -71,7 +71,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -169,6 +168,7 @@ fn module_with_classes_and_params(
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -176,6 +176,7 @@ fn module_with_classes_and_params(
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -362,6 +363,21 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
     });
+    class
+}
+
+/// A class with an instance getter whose key is evaluated at run time
+/// (`get ["dyn" + "amicKey"]()`): the compiler cannot name it, so it may be
+/// the accessor of any key and intercepts a named read or store.
+fn class_with_evaluated_accessor(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    let mut class = class_with_computed_member(id, name, fields);
+    let member = &mut class.computed_members[0];
+    member.key_expr = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::String("dyn".to_string())),
+        right: Box::new(Expr::String("amicKey".to_string())),
+    };
+    member.kind = ClassComputedMemberKind::Getter;
     class
 }
 
@@ -9032,6 +9048,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9039,6 +9056,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9215,6 +9233,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9222,6 +9241,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9314,6 +9334,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9321,6 +9342,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     };
     match case {
         "positive" => {}
@@ -9435,6 +9457,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9442,6 +9465,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9519,6 +9543,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9526,6 +9551,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9652,6 +9678,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9659,6 +9686,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -15435,7 +15463,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
     // rejects a non-writable slot by throwing, which is correct only for a
     // strict `PutValue`; the sloppy tail is asserted by the twin below. The
     // READ side is strictness-independent and is asserted in both.
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = strict_module_with_classes_and_params(
         "property_id_static_access.ts",
         vec![dynamic],
@@ -15482,7 +15510,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
 /// test from passing on an empty program.
 #[test]
 fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = module_with_classes_and_params(
         "property_id_static_access_sloppy.ts",
         vec![dynamic],
@@ -15519,10 +15547,10 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
     // the assignment's own strictness (sloppy here: Throw = 0), reached only
     // after `perry_probe_set` declines.
     assert!(
-        ir.contains("call i32 @perry_probe_set(")
+        ir.contains("call double @perry_store_or_put(")
             && ir
                 .lines()
-                .any(|l| l.contains("call double @js_put_value_set(") && l.ends_with(", i32 0)")),
+                .any(|l| l.contains("call double @perry_store_or_put(") && l.ends_with(", i32 0)")),
         "a sloppy store should reach the strictness-aware [[Set]]:\n{ir}"
     );
     assert!(
@@ -15924,23 +15952,20 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     );
 }
 
-/// A static-key `PutValue` is ONE `perry_probe_set` over the receiver's layout
-/// (an own plain writable slot is stored by the runtime, which owns the
-/// barrier) and, only when the probe declines, the complete receiver-aware
-/// `[[Set]]` (`js_put_value_set`). A key the compiler cannot prove constant
-/// never reaches the probe (`js_put_value_set_dynamic`).
+/// A static-key `PutValue` is ONE `perry_store_or_put` call over the
+/// receiver's layout: the store probe (an own plain writable slot is stored
+/// by the runtime, which owns the barrier) and, only when the probe declines,
+/// the complete receiver-aware `[[Set]]`, both out of line. A key the
+/// compiler cannot prove constant never reaches the probe
+/// (`js_put_value_set_dynamic`).
 fn assert_static_key_store_site(ir: &str, what: &str) {
     assert!(
-        ir.contains("call i32 @perry_probe_set("),
+        ir.contains("call double @perry_store_or_put("),
         "{what} must be the layout store probe:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
-        "{what} must keep the complete [[Set]] as its one miss entry:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.pic.set") && ir.contains("put.pic.merge"),
-        "{what} must branch a declined probe to the semantic miss and merge:\n{ir}"
+        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("put.pic.merge"),
+        "{what}: the probe and its miss are one out-of-line call, not an inline branch:\n{ir}"
     );
     assert!(
         !ir.contains("call double @js_put_value_set_dynamic(")
@@ -16118,7 +16143,7 @@ fn mutable_string_key_rejects_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        !ir.contains("call i32 @perry_probe_set("),
+        !ir.contains("call double @perry_store_or_put("),
         "a mutable key must retain dynamic PropertyKey semantics, not a constant-key probe:\n{ir}"
     );
     assert!(
@@ -16161,7 +16186,7 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 // write-barrier IR assertion is the ONLY detector for a deleted barrier — so
 // it has to live where the next PR to move that store will run it.
 
-/// The `js_put_value_set_packed_miss` entries of `module`'s IR, counted per
+/// The static-key store-site entries (`perry_store_or_put`) of `module`'s IR, counted per
 /// literal key `0..keys` (the key operand traced back to the load of
 /// `@<module>_.str.K.handle`). A miss entry whose key is not such a literal
 /// fails the test.
@@ -16186,11 +16211,12 @@ fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
             traced(rest.split(' ').next())
         } else if let Some(rest) = rhs.strip_prefix("and i64 ") {
             traced(rest.split(',').next())
-        } else if let Some(args) = rhs.strip_prefix("call double @js_put_value_set(") {
+        } else if let Some(args) = rhs.strip_prefix("call double @perry_store_or_put(") {
+            // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`
             match traced(
                 args.split(", ")
-                    .nth(1)
-                    .and_then(|a| a.strip_prefix("double ")),
+                    .nth(2)
+                    .and_then(|a| a.strip_prefix("i64 ")),
             ) {
                 Some(k) if k < keys => counts[k] += 1,
                 _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
@@ -16371,7 +16397,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             "the fast clone should contain {field_count} direct numeric field stores:\n{fast_body}"
         );
         assert!(
-            ir.matches("call double @js_put_value_set(").count() >= field_count,
+            ir.matches("call double @perry_store_or_put(").count() >= field_count,
             "a failed whole-array proof must retain every original PutValue site:\n{ir}"
         );
         if field_count == 4 {
@@ -16422,7 +16448,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     assert!(
         nonzero_start.contains("object_array_write.loop.slow.preheader")
             && nonzero_start
-                .matches("call double @js_put_value_set(")
+                .matches("call double @perry_store_or_put(")
                 .count()
                 >= 2,
         "guard failure must retain both original semantic PutValue sites:\n{nonzero_start}"
@@ -16468,7 +16494,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         "a runtime bound below the start has distinct final-counter semantics and must remain on the semantic loop:\n{nonzero_dynamic_bound}"
     );
     assert!(
-        nonzero_dynamic_bound.contains("call double @js_put_value_set("),
+        nonzero_dynamic_bound.contains("call double @perry_store_or_put("),
         "the rejected dynamic-bound form must retain its original PutValue site:\n{nonzero_dynamic_bound}"
     );
 
@@ -16512,7 +16538,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let nonfinite = compile_ir("nested_object_write_nonfinite_loop", nonfinite_body);
     assert!(
         !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
-            && nonfinite.contains("call double @js_put_value_set("),
+            && nonfinite.contains("call double @perry_store_or_put("),
         "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
     );
 }
@@ -16670,7 +16696,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("call i32 @perry_probe_set("),
+            body.contains("call double @perry_store_or_put("),
             "strict={strict}: a number-field store must reach the store probe;              the #6542 `!strict` bail was wider than the hazard it guarded              (#7288):\n{body}"
         );
         assert!(
@@ -16680,7 +16706,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         // Matched on the CALL, not the module's extern `declare` line.
         let miss_call = body
             .lines()
-            .find(|line| line.contains("call double @js_put_value_set("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
         let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
@@ -16758,13 +16784,13 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("call i32 @perry_probe_set(") && !body.contains("class_field_sloppy_set"),
+            body.contains("call double @perry_store_or_put(") && !body.contains("class_field_sloppy_set"),
             "strict={strict}: a pointer-field store must reach the store probe \
              (#5094 P1, #12483):\n{body}"
         );
         let miss_call = body
             .lines()
-            .find(|line| line.contains("call double @js_put_value_set("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
         let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
@@ -16774,12 +16800,12 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         // The GC half. An opaque parameter can carry a heap pointer, so the
         // pointer-tested bookkeeping (write barrier into the remembered set)
         // must happen for it. Under the probe design that bookkeeping is the
-        // runtime's, inside `perry_probe_set` (and the `[[Set]]` miss); the
+        // runtime's, inside `perry_store_or_put` (the probe and the `[[Set]]` miss); the
         // site must therefore pass the VALUE to the probe and must not store
         // it into the slot itself, or a barrier-free store would be possible.
         let probe = body
             .lines()
-            .find(|line| line.contains("call i32 @perry_probe_set("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap();
         assert!(
             probe.ends_with(", double %arg2)") || probe.contains(", double %"),

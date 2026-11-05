@@ -55,8 +55,8 @@ fn server_response_namespace_call_and_apply_keep_this() {
 }
 
 #[test]
-fn free_namespace_functions_still_use_direct_dispatch() {
-    let module = lower("import * as path from 'node:path'; function join() { return path.join.call(null, 'a', 'b'); }".into());
+fn borrowed_namespace_functions_keep_reflective_dispatch() {
+    let module = lower("import * as path from 'node:path'; function join() { return path.join.call(null, 'a', 'b'); } function direct() { return path.join('a', 'b'); }".into());
     let body = format!(
         "{:?}",
         module
@@ -67,7 +67,20 @@ fn free_namespace_functions_still_use_direct_dispatch() {
             .body
     );
     assert!(
-        body.contains("PathJoin"),
-        "free functions retain intrinsic lowering: {body}"
+        body.contains("property: \"call\""),
+        "borrowed namespace calls retain the selected function: {body}"
+    );
+    let direct = format!(
+        "{:?}",
+        module
+            .functions
+            .iter()
+            .find(|f| f.name == "direct")
+            .unwrap()
+            .body
+    );
+    assert!(
+        direct.contains("PathJoin"),
+        "direct namespace calls retain intrinsic lowering: {direct}"
     );
 }

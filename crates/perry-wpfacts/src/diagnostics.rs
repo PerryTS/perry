@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
 pub(crate) struct Trace {
+    pub census: Option<BirthCensus>,
     pub pred: BTreeMap<NodeId, (NodeId, String)>,
     pub contract_inputs: BTreeMap<NodeId, (String, String)>,
     pub seeds: BTreeMap<NodeId, String>,
@@ -26,6 +27,8 @@ pub(crate) struct Trace {
     pub sink_by: BTreeMap<NodeId, SinkBy>,
     /// Each token's first escape (where it first became escaped).
     pub esc_first: BTreeMap<Tok, EscFirst>,
+    /// EUC1 (dump only): each call bound to an unknown callee, with the callee node whose rule bound it.
+    pub unknown_calls: BTreeMap<CallId, (Option<NodeId>, bool)>,
     /// Every (token, cause) of an escape attempt, taking effect or not.
     pub esc_causes: BTreeSet<(Tok, Cause)>,
     /// Every (function, transfer kind, cause) that reached a body, with the
@@ -44,6 +47,77 @@ pub(crate) struct Trace {
     pub stand_in_params: Vec<(NodeId, String, u32, Option<String>)>,
     /// `Model::top_predecessors`, built when a chain needs it.
     pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
+}
+
+/// Diagnostic data only; never consulted by ordinary facts.
+#[derive(Default)]
+pub(crate) struct BirthCensus {
+    pub injections: BTreeSet<(
+        NodeId,
+        String,
+        u32,
+        String,
+        NodeId,
+        u32,
+        Tok,
+        u32,
+        Option<(Tok, Atom)>,
+    )>,
+    pub top_edges: BTreeSet<(NodeId, NodeId)>,
+    pub escapes: BTreeSet<(Tok, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
+    pub sinks: BTreeSet<(NodeId, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
+    pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok)>,
+    pub reads: BTreeSet<(Tok, Atom, bool, u32)>,
+    pub pending_gate: Option<(Tok, Atom, bool, u32)>,
+    pub active_gate: Option<(Tok, Atom)>,
+    pub injecting: bool,
+    pub suppress: Option<String>,
+    pub suppressed: usize,
+}
+
+impl BirthCensus {
+    pub fn node_gate(&mut self, n: NodeId) -> Option<(Tok, Atom)> {
+        self.active_gate.or_else(|| {
+            let (t, a, call, id) = self.pending_gate?;
+            if !call && id == n {
+                self.pending_gate = None;
+                Some((t, a))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl Model {
+    pub(crate) fn census_native_read(&mut self, t: Tok, a: Atom, miss: NativeMiss) {
+        if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+            return;
+        }
+        let written = crate::builtins::census_native_written(self, t, a);
+        let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
+        let (call, id) = match miss {
+            NativeMiss::Load(n) | NativeMiss::Global(n, _) => (false, n),
+            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
+        };
+        c.reads.insert((t, a, call, id));
+        c.pending_gate = written.then_some((t, a, call, id));
+    }
+    pub(crate) fn census_native_write(&mut self, t: Tok, k: Option<Atom>) {
+        let Some(d) = self.diagnostic.as_mut() else {
+            return;
+        };
+        let Some(c) = d.census.as_mut() else {
+            return;
+        };
+        c.writes.insert((
+            t,
+            k.unwrap_or(u32::MAX),
+            d.cause_node.unwrap_or(NO_NODE),
+            d.cur_call.unwrap_or(u32::MAX),
+            d.escaping.last().copied().unwrap_or(u32::MAX),
+        ));
+    }
 }
 
 /// The operation an event belongs to: a function body's (`Fn`), a token's
@@ -327,6 +401,16 @@ impl Model {
         let cause = self.diagnostic_escape_cause();
         let d = self.diagnostic.as_mut()?;
         d.esc_causes.insert((t, cause));
+        if let Some(c) = &mut d.census {
+            c.escapes.insert((
+                t,
+                d.cause_node.unwrap_or(NO_NODE),
+                d.cur_call.unwrap_or(u32::MAX),
+                d.escaping.last().copied().unwrap_or(u32::MAX),
+                reason,
+                c.active_gate,
+            ));
+        }
         let cand = (!was).then(|| EscFirst {
             reason,
             cause,
@@ -357,7 +441,7 @@ impl Model {
         self.mark_use(t, crate::model::MARK_ESCAPE);
         self.diagnostic.as_mut().unwrap().esc_ctx.pop();
     }
-    pub(crate) fn diagnostic_sink(&mut self, n: NodeId) {
+    pub(crate) fn diagnostic_sink(&mut self, n: NodeId, reason: u32) {
         let gen_fn = self.cur_fn;
         if let Some(d) = self.diagnostic.as_mut() {
             let s = SinkBy {
@@ -366,6 +450,16 @@ impl Model {
                 gen_fn,
             };
             d.sink_by.entry(n).or_insert(s);
+            if let Some(c) = &mut d.census {
+                c.sinks.insert((
+                    n,
+                    d.cause_node.unwrap_or(NO_NODE),
+                    d.cur_call.unwrap_or(u32::MAX),
+                    d.escaping.last().copied().unwrap_or(u32::MAX),
+                    reason,
+                    c.active_gate,
+                ));
+            }
         }
     }
     /// A transfer reached the body of `f` (`call`: `u32::MAX` for none).
@@ -892,6 +986,11 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     };
     let src_call = |c: Option<CallId>| c.map(|c| m.diagnostic_source_call(c).unwrap_or(c));
     if let Some(d) = m.diagnostic.as_ref() {
+        for (c, (n, top)) in &d.unknown_calls {
+            let (root, origin) = n.map_or((NO_NODE, String::new()), |n| m.diagnostic_root(n));
+            out.push(format!("{{\"record\":\"unknown-call\",\"call\":{c},\"source\":{},\"node\":{},\"top\":{top},\"root\":{root},\"rootFunction\":{},\"label\":{},\"origin\":{}}}",
+                opt(src_call(Some(*c))), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
+        }
         for (t, e) in &d.esc_first {
             out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{}}}",
                 quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node)));
@@ -981,6 +1080,50 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             ));
         }
     }
+    if let Some(c) = m.diagnostic.as_ref().and_then(|d| d.census.as_ref()) {
+        for (n, v) in m.nodes.iter().enumerate() {
+            if v.pts.contains_tok(TOP) {
+                nodes.insert(n as NodeId);
+            }
+        }
+        out.push(format!(
+            "{{\"record\":\"birth-meta\",\"suppressed\":{},\"globalInTop\":{},\"starKey\":{},\"numKey\":{},\"objectProto\":{}}}",
+            c.suppressed,m.global_in_top,quote(crate::STAR_KEY),quote(NUM_KEY),opt(m.tok_index.get(&TokKind::ObjectProto).copied())
+        ));
+        for (id, call) in m.calls.iter().enumerate() {
+            out.push(format!("{{\"record\":\"birth-call\",\"id\":{id},\"sourceCall\":{},\"result\":{},\"args\":{}}}", opt(m.diagnostic_source_call(id as CallId)),call.ret,nums(&call.args)));
+        }
+        for (&inst, &orig) in &m.diagnostic.as_ref().unwrap().inst_orig {
+            out.push(format!(
+                "{{\"record\":\"birth-edge\",\"source\":{orig},\"target\":{inst}}}"
+            ));
+        }
+        for (n, file, line, why, source, call, escape, owner, gate) in &c.injections {
+            out.push(format!("{{\"record\":\"birth-injection\",\"node\":{n},\"injector\":{},\"line\":{line},\"why\":{},\"source\":{source},\"call\":{call},\"escape\":{escape},\"owner\":{owner},\"gate\":{}}}", quote(file),quote(why),birth_gate(m,*gate)));
+        }
+        for (a, b) in &c.top_edges {
+            out.push(format!(
+                "{{\"record\":\"birth-edge\",\"source\":{a},\"target\":{b}}}"
+            ));
+        }
+        for (t, n, call, parent, reason, gate) in &c.escapes {
+            out.push(format!("{{\"record\":\"birth-escape\",\"token\":{t},\"source\":{n},\"call\":{call},\"parent\":{parent},\"why\":{},\"gate\":{}}}",quote(&m.reasons[*reason as usize]),birth_gate(m,*gate)));
+        }
+        for (n, source, call, parent, reason, gate) in &c.sinks {
+            out.push(format!("{{\"record\":\"birth-sink\",\"node\":{n},\"source\":{source},\"call\":{call},\"parent\":{parent},\"why\":{},\"gate\":{}}}",quote(&m.reasons[*reason as usize]),birth_gate(m,*gate)));
+        }
+        for (t, k, n, call, parent) in &c.writes {
+            let key = if *k == u32::MAX {
+                "null".into()
+            } else {
+                quote(&m.atoms[*k as usize])
+            };
+            out.push(format!("{{\"record\":\"birth-write\",\"token\":{t},\"key\":{key},\"source\":{n},\"call\":{call},\"parent\":{parent},\"numeric\":{}}}", *k != u32::MAX && crate::solve::numeric_key(&m.atoms[*k as usize])));
+        }
+        for (t, k, call, id) in &c.reads {
+            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
+        }
+    }
     let roots: Vec<_> = nodes.iter().map(|&n| m.diagnostic_root(n).0).collect();
     nodes.extend(roots);
     for n in nodes {
@@ -1005,6 +1148,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                         BuiltinNs::Json
                             | BuiltinNs::Math
                             | BuiltinNs::Console
+                            | BuiltinNs::Stdout
+                            | BuiltinNs::Stderr
+                            | BuiltinNs::Stdin
                             | BuiltinNs::GlobalThis
                             | BuiltinNs::Process
                             | BuiltinNs::Other
@@ -1051,4 +1197,10 @@ pub(crate) fn why_json(c: &crate::units::ValueContract) -> String {
         ),
         _ => "null".into(),
     }
+}
+
+fn birth_gate(m: &Model, gate: Option<(Tok, Atom)>) -> String {
+    gate.map_or("null".into(), |(t, a)| {
+        format!("{{\"token\":{t},\"key\":{}}}", quote(&m.atoms[a as usize]))
+    })
 }

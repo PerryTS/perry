@@ -19,6 +19,11 @@ impl Model {
         for &c in &fresh {
             self.virt_by_class.entry(c).or_default().push(t);
         }
+        if self.shadowed_classed.contains(&t) {
+            for &c in &fresh {
+                self.shadowed_by_class.entry(c).or_default().push(t);
+            }
+        }
         if !fresh.is_empty() {
             self.flush_shadowed(Some(t));
         }
@@ -335,9 +340,10 @@ impl Model {
                     }
                     Some(a)
                 }
+                // The keys an instance gains take none away (`class_holds`
+                // does not read `virt_open`): no shadow to re-check.
                 None => {
                     self.virt_open.insert(p);
-                    self.flush_shadowed(None);
                     None
                 }
             };

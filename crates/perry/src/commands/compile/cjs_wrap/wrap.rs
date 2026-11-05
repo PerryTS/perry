@@ -114,7 +114,7 @@ fn resolve_compiled_require_target(
 /// it to a file it compiles and wraps as CommonJS (the same `is_commonjs`
 /// test the walk applies). Builtins, addons, ES modules, JSON and missing
 /// files keep their `require` function arms.
-fn static_edge_target(
+pub(crate) fn static_edge_target(
     specifier: &str,
     source_path: &Path,
     compile_packages: Option<&HashSet<String>>,
@@ -1664,14 +1664,17 @@ function __perry_require_static_{i}() {{
         );
     }
     // Hoisted classes run at module scope before the body: a target whose
-    // binding they can read (an alias of it) is evaluated first, as before.
-    // Its edge in the body then only links it.
+    // binding they can read is evaluated first, as before. That binding is an
+    // alias the wrap surfaced at module scope, whose declaration it blanked
+    // (`blanked_alias_ranges`); a function-local or conditional alias stays in
+    // the body, no class can read it, and its target loads when the body's
+    // edge runs. The edge in the body then only links it.
     if !hoisted_class_block.is_empty() {
         for i in 0..edge_targets.len() {
             if edge_fn[i] == Some(i)
-                && raw_aliases
-                    .iter()
-                    .any(|(_, spec, _)| spec == &require_specs[i])
+                && raw_aliases.iter().any(|(_, spec, range)| {
+                    spec == &require_specs[i] && blanked_alias_ranges.contains(range)
+                })
             {
                 let _ = writeln!(cjs_link_decls, "__perry_cjs_init(__perry_cjs_rec_{i});");
             }

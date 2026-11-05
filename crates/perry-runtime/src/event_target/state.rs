@@ -25,6 +25,11 @@ pub(crate) const DOM_NAME: u32 = 22;
 pub(crate) const DOM_MESSAGE: u32 = 23;
 pub(crate) const DISPATCHED: u32 = 24;
 pub(crate) const PASSIVE: u32 = 25;
+pub(crate) const MESSAGE_DATA: u32 = 26;
+pub(crate) const MESSAGE_ORIGIN: u32 = 27;
+pub(crate) const MESSAGE_ID: u32 = 28;
+pub(crate) const MESSAGE_SOURCE: u32 = 29;
+pub(crate) const MESSAGE_PORTS: u32 = 30;
 const KEYS: &[(&str, bool)] = &[
     ("type", false),
     ("kTarget", false),
@@ -52,6 +57,11 @@ const KEYS: &[(&str, bool)] = &[
     ("message", true),
     ("kIsBeingDispatched", false),
     ("kInPassiveListener", false),
+    ("data", true),
+    ("origin", true),
+    ("lastEventId", true),
+    ("source", true),
+    ("ports", true),
 ];
 crate::perry_thread_local! {
     static SYMBOLS: RefCell<[u64; KEYS.len()]> = const { RefCell::new([0; KEYS.len()]) };
@@ -201,6 +211,8 @@ pub(crate) fn transfer_family(owner: *mut ObjectHeader) -> Option<&'static str> 
         Some("AbortController")
     } else if has(owner, SIGNAL_ABORTED) {
         Some("AbortSignal")
+    } else if has(owner, MESSAGE_DATA) {
+        Some("MessageEvent")
     } else if has(owner, DETAIL) {
         Some("CustomEvent")
     } else if has(owner, CANCELABLE) {

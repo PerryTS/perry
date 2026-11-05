@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate TypeScript FFI surface inventory fixtures.
 
-The generated fixtures are executable by run_parity_tests.sh, but their main
+The generated fixtures are executable by scripts/parity.py, but their main
 purpose is to keep TypeScript-side coverage accounting attached to related FFI
 surfaces. They should shrink over time as entries move into behavioral tests.
 """

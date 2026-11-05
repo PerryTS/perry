@@ -193,3 +193,77 @@ fn terminating_an_exited_worker_resolves_undefined() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn installed_async_dispose_awaits_the_existing_exit_pump() {
+    std::thread::spawn(|| {
+        enter_worker_agent();
+        perry_runtime::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let worker = thread_exit_probe::insert_worker_for_test(
+            JSValue::undefined().bits(),
+            JSValue::undefined().bits(),
+        );
+        let object = scope.root_raw_mut_ptr(worker_surface::worker_object(
+            worker,
+            &WorkerOptions::default(),
+        ));
+        let receiver = scope.root_nanbox_f64(object_value(object.get_raw_mut_ptr()));
+        let symbol = perry_runtime::symbol::well_known_symbol("asyncDispose");
+        let method = scope.root_nanbox_f64(unsafe {
+            perry_runtime::symbol::js_object_get_symbol_property(
+                receiver.get_nanbox_f64(),
+                object_value(symbol.cast()),
+            )
+        });
+        let dispose = || unsafe {
+            perry_runtime::closure::call_value(
+                method.get_nanbox_f64(),
+                perry_runtime::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                &[],
+            )
+        };
+        let first = scope.root_nanbox_f64(dispose());
+        let second = scope.root_nanbox_f64(dispose());
+        assert_ne!(first.get_nanbox_u64(), second.get_nanbox_u64());
+        let pointer = |value: f64| {
+            JSValue::from_bits(value.to_bits())
+                .as_pointer::<perry_runtime::Promise>()
+                .cast_mut()
+        };
+        for result in [&first, &second] {
+            assert_eq!(
+                perry_runtime::js_promise_state(pointer(result.get_nanbox_f64())),
+                0
+            );
+        }
+        push_parent_event(
+            perry_runtime::agent::current_agent(),
+            WorkerEvent::Exit(worker, 1),
+        );
+        js_worker_threads_process_pending();
+        async_shim::js_stdlib_process_pending();
+        perry_runtime::promise::js_promise_run_microtasks();
+        for result in [&first, &second] {
+            let promise = pointer(result.get_nanbox_f64());
+            assert_eq!(perry_runtime::js_promise_state(promise), 1);
+            assert_eq!(
+                perry_runtime::js_promise_value(promise).to_bits(),
+                JSValue::undefined().bits()
+            );
+        }
+        let after = scope.root_nanbox_f64(dispose());
+        assert_eq!(
+            perry_runtime::js_promise_state(pointer(after.get_nanbox_f64())),
+            0
+        );
+        perry_runtime::promise::js_promise_run_microtasks();
+        assert_eq!(
+            perry_runtime::js_promise_state(pointer(after.get_nanbox_f64())),
+            1
+        );
+        WORKERS.lock().unwrap().remove(&worker);
+    })
+    .join()
+    .unwrap();
+}

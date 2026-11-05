@@ -21,17 +21,21 @@ const original = arrProto[Symbol.iterator];
 // #7760: the value reads `this` at CALL time, so a borrowed reference works.
 console.log("values.call:", JSON.stringify(Array.from(original.call([7, 8]) as any)));
 
-arrProto[Symbol.iterator] = function* () {
+// DEC 250 locks Array.prototype: the arrays adopt a user prototype UAP below
+// it, and the replacements go there.
+const UAP: any = Object.create(Array.prototype);
+const adopt = <T,>(a: T[]): T[] => Object.setPrototypeOf(a, UAP);
+UAP[Symbol.iterator] = function* () {
   yield "patched";
 };
 
-const src = [1, 2, 3];
+const src = adopt([1, 2, 3]);
 function count(...xs: any[]) {
   return xs.length;
 }
 
 // #7542: every spread form drives the patched method.
-console.log("spread literal:", JSON.stringify([...[1, 2, 3]]));
+console.log("spread literal:", JSON.stringify([...adopt([1, 2, 3])]));
 console.log("spread variable:", JSON.stringify([...src]));
 console.log("spread into array:", JSON.stringify([0, ...src, 9]));
 console.log("call spread:", count(...src));
@@ -56,7 +60,7 @@ function viaParam(a: number[]): string[] {
 }
 const fromConst: string[] = [];
 for (const v of src) fromConst.push(String(v));
-const typedLocal: number[] = [1, 2, 3];
+const typedLocal: number[] = adopt([1, 2, 3]);
 const fromLocal: string[] = [];
 for (const v of typedLocal) fromLocal.push(String(v));
 console.log("for-of const:", JSON.stringify(fromConst));
@@ -64,7 +68,7 @@ console.log("for-of local:", JSON.stringify(fromLocal));
 console.log("for-of param:", JSON.stringify(viaParam(src)));
 
 let pulled = 0;
-arrProto[Symbol.iterator] = function* () {
+UAP[Symbol.iterator] = function* () {
   for (let i = 0; i < 100; i++) {
     pulled++;
     yield i;
@@ -78,10 +82,10 @@ for (const _v of src) {
 console.log("lazy break: seen", seen, "pulled", pulled);
 
 // #7760: restore by reference, and by descriptor round-trip.
-arrProto[Symbol.iterator] = original;
+UAP[Symbol.iterator] = original;
 console.log("restored spread:", JSON.stringify([...src]));
 console.log("restored Array.from:", JSON.stringify(Array.from(src as any)));
 console.log("restored call spread:", count(...src));
 
-Object.defineProperty(arrProto, Symbol.iterator, desc);
+Object.defineProperty(UAP, Symbol.iterator, desc);
 console.log("after defineProperty:", JSON.stringify([...src]));

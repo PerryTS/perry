@@ -134,50 +134,6 @@ pub extern "C" fn js_array_destructure_needs_iterator(value: f64) -> i32 {
     i32::from(dense_spread_source(value).is_none())
 }
 
-/// Copy a short, exact packed-array spread tail into caller-owned storage.
-///
-/// Returns the element count (`0..=4`) on success and `-1` when spread must use
-/// the generic iterator path. In addition to [`dense_spread_source`]'s exact
-/// ordinary-array proof, this rejects holes: the general dense-copy path may
-/// normalize a hole to `undefined`, while a direct-call arm promises that each
-/// value came from a present packed slot.
-///
-/// This helper is deliberately non-allocating. Generated code evaluates and
-/// roots `receiver`, fixed arguments, and the spread expression before calling
-/// it, then uses the copied values only when the returned arity is nonnegative.
-#[no_mangle]
-pub unsafe extern "C" fn js_short_packed_spread_values(value: f64, out: *mut f64) -> i32 {
-    // Call/new spread lowering has historically routed nullish sources through
-    // `js_array_like_to_array`, where they contribute no arguments. Preserve
-    // that established Perry behaviour in the guarded path as well: otherwise
-    // taking the optimization would turn an accepted call into a TypeError in
-    // the fallback materializer. This also matches old TypeScript's emitted
-    // `[fixed].concat(optionalArgs)` shape used by perform-ecs@0.7.8.
-    if matches!(
-        value.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return 0;
-    }
-    let Some(arr) = dense_spread_source(value) else {
-        return -1;
-    };
-    let len = (*arr).length as usize;
-    if len > 4 || (len != 0 && out.is_null()) {
-        return -1;
-    }
-    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
-    for index in 0..len {
-        let bits = std::ptr::read(elements.add(index));
-        if bits == crate::value::TAG_HOLE {
-            return -1;
-        }
-        // GC_STORE_AUDIT(STACK): caller-owned generated stack storage; the
-        // rooted spread operand keeps copied heap values live during the guard.
-        std::ptr::write(out.add(index), f64::from_bits(bits));
-    }
-    len as i32
-}
 
 /// Element-copy an array [`dense_spread_source`] has already proven ordinary.
 ///

@@ -1,0 +1,29 @@
+true 7 true
+true
+DEC 250: Cannot replace built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member WeakMap.prototype.has: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member WeakMap.prototype.set: built-in objects are read-only in a compiled program (adding a new member is allowed)
+7 true true undefined
+DEC 250: Cannot replace built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member WeakMap.prototype.has: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member WeakMap.prototype.set: built-in objects are read-only in a compiled program (adding a new member is allowed)
+9 true true 11
+DEC 250: Cannot delete built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+function
+DEC 250: Cannot redefine built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+11
+DEC 250: Cannot redefine built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+11
+29
+11
+41
+11
+proxy-get
+43
+11
+true
+undefined
+11
+true 31 true
+true
+37 true true

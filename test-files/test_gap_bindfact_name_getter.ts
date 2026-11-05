@@ -10,14 +10,14 @@ interface C { m: any; after: number; }
 function f() { return 1; }
 const out: string[] = [];
 out.push(["before", f.bind(null).name, new C().m.name].join(" "));
-Object.defineProperty(Function.prototype, "name", { get() { return "G"; }, configurable: true });
+try { Object.defineProperty(Function.prototype, "name", { get() { return "G"; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const c = new C();
 out.push(["getter", f.bind(null).name, c.m.name, c.m(), c.after].join(" "));
 const original = Function.prototype.bind;
-delete (Function.prototype as any).bind;
+try { delete (Function.prototype as any).bind; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 try { (f as any).bind(null); out.push("no throw"); }
 catch (e: any) { out.push("deleted bind throws " + (e instanceof TypeError)); }
 try { new C(); out.push("no throw"); }
 catch (e: any) { out.push("ctor bind throws " + (e instanceof TypeError)); }
-Function.prototype.bind = original;
+try { Function.prototype.bind = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const l of out) console.log(l);

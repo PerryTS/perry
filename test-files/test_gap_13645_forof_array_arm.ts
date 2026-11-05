@@ -30,7 +30,7 @@ console.log("ahead", late.join(","));
 const holey: any[] = [1, , 3];
 const holes: string[] = [];
 for (const x of holey) holes.push(String(x));
-(Array.prototype as any)[1] = "P";
+try { (Array.prototype as any)[1] = "P"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const x of holey) holes.push(String(x));
 delete (Array.prototype as any)[1];
 console.log("holes", holes.join(","));

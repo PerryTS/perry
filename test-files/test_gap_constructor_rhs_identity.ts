@@ -49,10 +49,10 @@ Object.defineProperty(SavedArray.prototype, "constructor", arrayDescriptor);
 const fn: any = function Probe() {};
 console.log("absent", fn.isBuffer === undefined);
 let calls = 0;
-Object.defineProperty(Function.prototype, "isBuffer", {
+try { Object.defineProperty(Function.prototype, "isBuffer", {
   configurable: true,
   get() { calls++; return this === fn ? replacement : undefined; }
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("inherited getter", fn.isBuffer === replacement, calls);
 Object.defineProperty(fn, "isBuffer", { configurable: true, value: 19 });
 console.log("own", fn.isBuffer, calls);

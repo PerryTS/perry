@@ -96,8 +96,13 @@ pub(crate) unsafe fn array_named_property_set(
 ) -> *mut ArrayHeader {
     let arr = clean_arr_ptr_mut(arr);
     // A named write to `%Array.prototype%` sets its shadow bit, so every
-    // `Pristine(Array)` site takes the generic path.
-    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "named property");
+    // `Pristine(Array)` site takes the generic path. The bag's own slot and
+    // stamp funnels decide the key (DEC 250): this report only precedes them.
+    crate::object::builtin_proto::note_array_prototype_write(
+        arr as usize,
+        crate::object::builtin_proto::Mutation::Restructure,
+        "named property",
+    );
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let key = scope.root_string_ptr(key);
@@ -209,6 +214,7 @@ pub(crate) unsafe fn array_named_property_enumeration_names(
 ) -> Vec<String> {
     array_named_property_names(arr, enumerable)
         .into_iter()
+        .filter(|name| name != "length")
         .filter(|name| crate::object::canonical_array_index(name).is_none_or(|i| i >= covered))
         .collect()
 }

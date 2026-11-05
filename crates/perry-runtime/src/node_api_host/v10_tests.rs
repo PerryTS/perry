@@ -153,8 +153,11 @@ fn typeof_classifies_every_value_kind_like_javascript_typeof() {
     let bound = handle(env, bound.to_bits());
 
     unsafe { crate::object::js_register_class_id(REGISTERED_CLASS) };
-    // A class declaration's value: `INT32_TAG | class_id` (#10461).
-    let class_ref = handle(env, JSValue::int32(REGISTERED_CLASS as i32).bits());
+    // A class declaration's value is its constructor function object.
+    let class_ref = handle(
+        env,
+        crate::object::class_value::class_value(REGISTERED_CLASS).to_bits(),
+    );
     // A class expression's value: an object stamped as a class.
     let class_object = crate::object::js_object_alloc(REGISTERED_CLASS, 0);
     let class_object = handle(env, JSValue::pointer(class_object.cast()).bits());
@@ -197,7 +200,8 @@ fn created_integers_stay_numbers_when_a_class_id_shares_their_value() {
         unsafe { napi_create_uint32(env, REGISTERED_CLASS, &mut uint32) },
         NapiStatus::Ok
     );
-    for value in [int32, uint32] {
+    let tagged_int32 = handle(env, JSValue::int32(REGISTERED_CLASS as i32).bits());
+    for value in [int32, uint32, tagged_int32] {
         assert_eq!(type_of(env, value), NapiValueType::Number);
         let mut read = 0;
         assert_eq!(
@@ -209,7 +213,10 @@ fn created_integers_stay_numbers_when_a_class_id_shares_their_value() {
 
     // The constructor itself is not a number: Node reports
     // napi_number_expected for a function, and ToObject returns it unchanged.
-    let class_ref = handle(env, JSValue::int32(REGISTERED_CLASS as i32).bits());
+    let class_ref = handle(
+        env,
+        crate::object::class_value::class_value(REGISTERED_CLASS).to_bits(),
+    );
     let mut int_out = 0;
     assert_eq!(
         unsafe { napi_get_value_int32(env, class_ref, &mut int_out) },

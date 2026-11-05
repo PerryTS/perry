@@ -4,11 +4,14 @@ impl Model {
     pub(super) fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
             Cons::Load { key, dst } => {
-                if prim != 0 {
-                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
-                }
+                // The token loop (⊤ first) runs before the primitive load, so a ⊤
+                // receiver's read keeps the receiver's own root cause instead of being
+                // booked to the String/Number/Boolean.prototype chain it also reads.
                 for &t in toks {
                     self.load_from(t, t, key, dst);
+                }
+                if prim != 0 {
+                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
                 }
             }
             Cons::CjsPublish { dst } => {
@@ -23,6 +26,11 @@ impl Model {
                     } else {
                         self.add_tok(dst, t);
                     }
+                }
+            }
+            Cons::IndexHole => {
+                for &t in toks {
+                    self.mark_hole(t);
                 }
             }
             Cons::OwnValues { dst } => {
@@ -339,9 +347,9 @@ impl Model {
                     }
                 }
             }
-            Cons::Defined { dst } | Cons::NotNullish { dst } => {
+            Cons::Defined { dst } | Cons::NotNullish { dst } | Cons::NotUndefined { dst } => {
                 let strip = match c {
-                    Cons::Defined { .. } => prim::UNDEF,
+                    Cons::Defined { .. } | Cons::NotUndefined { .. } => prim::UNDEF,
                     _ => prim::NULL | prim::UNDEF,
                 };
                 for &t in toks {
@@ -405,6 +413,11 @@ impl Model {
             }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
+                    // Defining an index or `length` may leave a hole (`hole`).
+                    let k = &self.atoms[key as usize];
+                    if crate::solve::numeric_key(k) || k == "length" {
+                        self.mark_hole(t);
+                    }
                     if self.is_marker(t) {
                         self.note_inst(t, true);
                         self.note_marker_define(t, Some(key), data);
@@ -553,6 +566,17 @@ impl Model {
                         self.add_prim(dst, prim::NUM);
                         continue;
                     }
+                    // The same final-read decision as chain_load: the
+                    // collapsed token also holds stores onto add-open
+                    // prototypes, which this receiver's chain never sees.
+                    if let Key::Named(a) = key {
+                        if matches!(self.toks[q as usize], TokKind::ObjectProto)
+                            && builtins::locked_chain_read(self, of, a)
+                        {
+                            self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
+                            continue;
+                        }
+                    }
                     let f = match key {
                         Key::Named(a) => self.field(q, a),
                         Key::Any => self.all_fields(q),
@@ -679,7 +703,10 @@ impl Model {
                     }
                     let f = match key {
                         Key::Named(a) => self.field(t, a),
-                        Key::Any => self.any_key_node(t),
+                        // A birth's `Key::Any` is the literal's elements
+                        // (summary/build.rs): the element slot, never an
+                        // array's named-key node.
+                        Key::Any => self.field_any(t),
                     };
                     self.edge(src, f);
                 }
@@ -804,7 +831,7 @@ impl Model {
                                 self.atoms[key as usize]
                             );
                         }
-                        self.objproto_accessor = true;
+                        self.note_objproto_accessor();
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
                 }
@@ -1159,6 +1186,8 @@ impl Model {
                 if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
+                    // `a[i] = v` may write past the end; `push` appends.
+                    self.cons(o, Cons::IndexHole);
                 }
                 if (prim & !prim::NUM != 0 || !toks.is_empty())
                     && self.index_store_done.insert((n, site, false))

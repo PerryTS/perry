@@ -12,6 +12,7 @@ mod constructors;
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
+pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
@@ -59,27 +60,6 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     })
 }
 
-const CONSOLE_METHODS: &[&str] = &[
-    "log",
-    "error",
-    "warn",
-    "info",
-    "debug",
-    "trace",
-    "dir",
-    "dirxml",
-    "table",
-    "time",
-    "timeEnd",
-    "timeLog",
-    "assert",
-    "group",
-    "groupCollapsed",
-    "groupEnd",
-    "count",
-    "countReset",
-];
-
 /// E14: interpreted code may run; it can patch `Object.prototype`.
 pub fn set_dyn_eval(m: &mut Model, why: &str) {
     interpreted_code_runs(m);
@@ -126,6 +106,30 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
 /// receiver (a builtin namespace's, a builtin function's), which gives that
 /// object to no one.
 fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
+    if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+        let d = m.diagnostic.as_mut().unwrap();
+        let c = d.census.as_mut().unwrap();
+        let saved = (d.cur_call.replace(call), c.active_gate);
+        c.active_gate = c
+            .pending_gate
+            .take()
+            .filter(|(_, _, is_call, id)| *is_call && *id == call)
+            .map(|(t, a, _, _)| (t, a));
+        unknown_method_proto_inner(m, call, why, proto, own);
+        let d = m.diagnostic.as_mut().unwrap();
+        d.cur_call = saved.0;
+        d.census.as_mut().unwrap().active_gate = saved.1;
+        return;
+    }
+    unknown_method_proto_inner(m, call, why, proto, own);
+}
+fn unknown_method_proto_inner(
+    m: &mut Model,
+    call: CallId,
+    why: &str,
+    proto: Option<usize>,
+    own: bool,
+) {
     m.diagnostic_builtin(call, |_| format!("opaque-summary:{why}"));
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
@@ -172,6 +176,44 @@ fn ret_prim(m: &mut Model, call: CallId, p: u16) {
 
 fn ret_tok(m: &mut Model, call: CallId, t: Tok) {
     let ret = m.calls[call as usize].ret;
+    if t == TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+        // All non-literal TOP returns here forward the native receiver.
+        // Prefer its actual node over the native callee's active rule node.
+        let this_node = match m.calls[call as usize].this {
+            ThisArg::Node(n) => Some(n),
+            _ => None,
+        };
+        let cause = m.diagnostic.as_ref().unwrap().cause_node;
+        let source = this_node
+            .into_iter()
+            .chain([m.cur_src])
+            .chain(cause)
+            .find(|&n| {
+                m.nodes
+                    .get(n as usize)
+                    .is_some_and(|v| v.pts.contains_tok(TOP))
+            });
+        if let Some(source) = source {
+            let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
+            c.top_edges.insert((source, ret));
+            let saved = std::mem::replace(&mut c.injecting, true);
+            m.add_tok(ret, t);
+            m.diagnostic
+                .as_mut()
+                .unwrap()
+                .census
+                .as_mut()
+                .unwrap()
+                .injecting = saved;
+        } else {
+            // A synthetic call can supply TOP as a token, with no value
+            // node: the first node receiving that external input is here.
+            m.add_top(ret, |_| {
+                "implicit native receiver from unmodeled code".into()
+            });
+        }
+        return;
+    }
     m.add_tok(ret, t);
 }
 
@@ -209,6 +251,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         TmplKind::Arr {
             module: u32::MAX,
             site,
+            hole_free: false,
         }
     } else {
         TmplKind::BObj {
@@ -235,7 +278,10 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
+        per_evaluation: false,
+        static_methods: Vec::new(),
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
@@ -387,6 +433,10 @@ pub(crate) enum NativeFamily {
     Array,
     /// Collections of one kind (`Map`, `Set`, `WeakMap`, `WeakSet`).
     Collection(&'static str),
+    /// RegExp objects. Their chain's members here are the methods the
+    /// solve's RegExp call model describes (`regexp_described`): the one
+    /// predicate both read.
+    RegExp,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -398,12 +448,20 @@ pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> boo
         NativeFamily::Str => members::intrinsic_member(Family::Str, name),
         NativeFamily::Array => members::intrinsic_member(Family::Array, name),
         NativeFamily::Collection(what) => members::collection_member(what, name),
+        NativeFamily::RegExp => string_methods::regexp_described(name).then_some(Mem::Fn),
     };
     match mem {
         Some(Mem::Fn) => true,
         Some(Mem::Prim(_)) => !call,
         _ => false,
     }
+}
+
+/// `Object.prototype`'s intrinsic description (`members`) lacks `name`
+/// (`derive::absent_key`): `constructor`, `toString`, `__proto__` and the
+/// other members are not absent.
+pub(crate) fn object_proto_lacks(name: &str) -> bool {
+    members::member(members::Family::Object, name).is_none()
 }
 
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
@@ -423,12 +481,97 @@ pub fn intrinsic_written(m: &mut Model, a: Atom) -> bool {
 /// (`replay_native_missing`). `false`: it may be written already, the
 /// caller gives the opaque answer now.
 fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
+    if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+        let op = m.tok(TokKind::ObjectProto);
+        m.census_native_read(op, a, miss.clone());
+    }
     if intrinsic_written(m, a) {
         return false;
     }
     let op = m.tok(TokKind::ObjectProto);
     m.native_missing.push((op, a, miss));
     true
+}
+
+/// [`intrinsic_miss`] for a lookup on the chain of a value of family `fam`
+/// (a collection of kind `what`): a final read (`members::locked_read`,
+/// DEC 250) is never written and needs no replay.
+fn intrinsic_unwritten(
+    m: &mut Model,
+    fam: Family,
+    what: Option<&str>,
+    a: Atom,
+    miss: NativeMiss,
+) -> bool {
+    members::locked_read(fam, what, &m.atoms[a as usize]) || intrinsic_miss(m, a, miss)
+}
+
+/// DEC 250: is the read of named key `a` on the intrinsic chain of builtin
+/// receiver `t` final (`members::locked_read` of its family)? A native
+/// prototype (a native class a program class extends) is not: past it the
+/// collapsed token may stand for an add-open prototype (`%TypedArray%`,
+/// `Error.prototype`), not `Object.prototype`.
+pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
+    if matches!(m.toks[t as usize], TokKind::NativeProto(_)) {
+        return false;
+    }
+    if let TokKind::Builtin(ns) = m.toks[t as usize] {
+        let description = members::ns_statics(ns);
+        // A concrete Function.prototype -> Object.prototype chain passes
+        // only locked prototypes. A constructor on the chain is mutable;
+        // an undescribed chain supplies no final read. Unknown own statics
+        // do not change the described prototype chain.
+        return matches!(
+            description.prototype,
+            members::NsProto::Function | members::NsProto::Object
+        ) && members::locked_read(Family::Object, None, &m.atoms[a as usize]);
+    }
+    let what = match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what, .. } => Some(*what),
+            _ => None,
+        },
+        TokKind::ClassObj(_) => Some(members::CLASS_CTOR),
+        _ => None,
+    };
+    lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
+}
+
+/// The family whose intrinsic chain the lock sees on `t`: `seed_family`'s,
+/// and for an instance of a parentless class (an object literal's shape
+/// class included) `Object`: past its class prototype the chain is
+/// `Object.prototype`, as for that prototype itself (`TokKind::Proto`).
+fn lock_family(m: &Model, t: Tok) -> Option<Family> {
+    match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) if !m.virt_protos.contains_key(&t) => match &m.tmpls[*tm as usize] {
+            tm if matches!(tm.kind, TmplKind::Class { .. }) => {
+                (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
+                    .then_some(Family::Object)
+            }
+            _ => seed_family(m, t),
+        },
+        _ => seed_family(m, t),
+    }
+}
+
+/// DEC 250 (Q2): no program write defines named key `name` on
+/// `Object.prototype` (`members::locked_read` of the Object family: an add
+/// there is refused, a member is locked, `constructor` is exempt).
+pub(crate) fn object_final_read(name: &str) -> bool {
+    members::locked_read(Family::Object, None, name)
+}
+
+/// DEC 250: is a read of key `a` on every value of native family `fam`
+/// (`derive`'s NativeMember receivers) final?
+pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
+    let name = m.atoms[a as usize].as_str();
+    match fam {
+        NativeFamily::Str => members::locked_read(Family::Str, None, name),
+        NativeFamily::Array => members::locked_read(Family::Array, None, name),
+        NativeFamily::Collection(w) => members::locked_read(Family::Collection, Some(w), name),
+        // RegExp.prototype is not in the lock: no member of it is final.
+        NativeFamily::RegExp => false,
+    }
 }
 
 /// The opaque builtin function value; in explain mode, counted by the
@@ -536,8 +679,11 @@ fn is_site_builtin(m: &Model, t: Tok) -> bool {
 /// builtin functions, data kinds), `Object.prototype`'s methods
 /// (`BuiltinNs::ObjectProtoMethod`), and what a store into ⊤ wrote. Not
 /// `__proto__`: the prototype would be `ObjectProto`, which stands for
-/// every builtin prototype, as a value (an open gap, as before).
-fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
+/// every builtin prototype, as a value (an open gap, as before). Where the
+/// chain of `of` is final under any key (`locked_chain_read` of
+/// `STAR_KEY`, DEC 250), only `constructor`, which the lock exempts, may
+/// have been written there.
+fn family_any(m: &mut Model, of: Tok, fam: Family, dst: NodeId) {
     family_ctor(m, fam, dst);
     let (fns, prims) = members::any_member(fam);
     if fns {
@@ -547,7 +693,14 @@ fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
     m.add_prim(dst, prims | prim::UNDEF);
     let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
     m.add_tok(dst, f);
-    any_written(m, dst);
+    let star = m.atom(crate::STAR_KEY);
+    if !locked_chain_read(m, of, star) {
+        return any_written(m, dst);
+    }
+    let ctor = m.atom("constructor");
+    if !intrinsic_miss(m, ctor, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+    }
 }
 
 /// A computed read of a builtin prototype may find any key a store into ⊤
@@ -593,6 +746,81 @@ fn runtime_global_fn(n: &str) -> bool {
     )
 }
 
+/// The host object a member access on a token of `ns` under `name` reads:
+/// `console` and the stdio streams themselves, and `console` for a call of
+/// one of its methods on the global sentinel (`console.log(x)` lowers to a
+/// call on `GlobalGet(0)`).
+pub(crate) fn host_of(ns: BuiltinNs, name: &str, call: bool) -> Option<BuiltinNs> {
+    match ns {
+        BuiltinNs::Other
+            if call
+                && matches!(
+                    members::ns_member(BuiltinNs::Console, name),
+                    Some(Some(Mem::Fn))
+                ) =>
+        {
+            Some(BuiltinNs::Console)
+        }
+        ns if members::is_host(ns) => Some(ns),
+        _ => None,
+    }
+}
+
+/// DECISIONS 255 store funnel on a host object: may the program (or code
+/// holding the object as ⊤) have stored into host `h` under key `a`? Until
+/// then a described member is the runtime's own. The solver's host calls
+/// and loads and `derive`'s site verdict read this one predicate.
+pub(crate) fn host_written(m: &Model, h: BuiltinNs, a: Atom) -> bool {
+    let t = m
+        .tok_index
+        .get(&TokKind::Builtin(h))
+        .copied()
+        .unwrap_or(TOP);
+    native_written(m, t, a)
+}
+
+/// The site verdict's half of [`host_written`]: member `a` of host `h` is
+/// described as a function (any access) or a data member (a read), and
+/// unwritten.
+pub(crate) fn host_native(m: &Model, h: BuiltinNs, a: Atom, call: bool) -> bool {
+    let described = match members::ns_member(h, &m.atoms[a as usize]) {
+        Some(Some(Mem::Fn)) => true,
+        Some(Some(Mem::Prim(_))) => !call,
+        _ => false,
+    };
+    described && !host_written(m, h, a)
+}
+
+/// A call of member `n` of host `h`: the runtime's own method (`native`)
+/// until a store reaches the key, then an unknown method of the host (`this`). A write
+/// later in the solve replays it (`NativeMiss::Call`).
+fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl FnOnce(&mut Model)) {
+    let t = m.tok(TokKind::Builtin(h));
+    let a = m.atom(n);
+    if host_written(m, h, a) {
+        let prev = m.cur_this.replace(t);
+        unknown_method(
+            m,
+            call,
+            &format!("argument of written host member {h:?}.{n}"),
+        );
+        m.cur_this = prev;
+    } else {
+        m.native_missing.push((t, a, NativeMiss::Call(t, call)));
+        native(m);
+    }
+}
+
+fn console_args(m: &mut Model, call: CallId) {
+    implicit_args(
+        m,
+        call,
+        "console argument (formatted by the runtime)",
+        Protocol::Any,
+    );
+    ret_prim(m, call, prim::UNDEF);
+}
+
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     if let Some(name) = name {
         if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
@@ -618,23 +846,17 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         );
     };
     match (ns, name) {
-        (BuiltinNs::Other, n) if CONSOLE_METHODS.contains(&n) => {
-            implicit_args(
-                m,
-                call,
-                "console argument (formatted by the runtime)",
-                Protocol::Any,
-            );
-            ret_prim(m, call, prim::UNDEF);
+        (BuiltinNs::Other | BuiltinNs::Console, n)
+            if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
+        {
+            host_call(m, BuiltinNs::Console, n, call, |m| console_args(m, call))
         }
-        (BuiltinNs::Console, _) => {
-            implicit_args(
-                m,
-                call,
-                "console argument (formatted by the runtime)",
-                Protocol::Any,
-            );
-            ret_prim(m, call, prim::UNDEF);
+        // A stream method: the runtime's own, which hands its receiver to no
+        // one; a listener it registers is called by the runtime (escaped).
+        (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, n) => {
+            host_call(m, ns, n, call, |m| {
+                unknown_method_proto(m, call, &format!("argument of host {ns:?}.{n}"), None, true)
+            })
         }
         (BuiltinNs::Other, "setTimeout" | "setInterval" | "setImmediate" | "queueMicrotask") => {
             let c = m.calls[call as usize].clone();

@@ -196,7 +196,6 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());
     set_object_field(obj, "name", name_value);
-    set_object_field(obj, "__perryBroadcastChannelId", f64::from_bits(id));
     BROADCAST_CHANNELS.with(|channels| {
         channels.borrow_mut().insert(
             id,

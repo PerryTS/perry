@@ -292,29 +292,20 @@ pub(crate) fn iterator_close(iter: f64) {
     });
 }
 
-pub(crate) fn iterator_next_value(iter: f64) -> Option<f64> {
-    let result = unsafe {
-        crate::object::js_native_call_method(
-            iter,
-            b"next".as_ptr() as *const i8,
-            "next".len(),
-            std::ptr::null(),
-            0,
-        )
-    };
-    if !is_entry_object(result) {
-        crate::array::iter_bt_dump("collection_iter_next_value", result);
-        throw_type_error("Iterator result is not an object");
-    }
-    let result_ptr = js_nanbox_get_pointer(result) as *const crate::object::ObjectHeader;
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let done = crate::object::js_object_get_field_by_name_f64(result_ptr, done_key);
-    if crate::value::js_is_truthy(done) != 0 {
+/// IteratorStepValue on the record `(iter, next)`: the one step
+/// ([`crate::array::js_iterator_step`]). `next` was read once, at GetIterator
+/// ([`iterator_next_method`]). `None` when done.
+pub(crate) fn iterator_next_value(iter: f64, next: f64) -> Option<f64> {
+    let mut value = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if unsafe { crate::array::js_iterator_step(iter, next, &mut value) } != 0 {
         return None;
     }
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let value = crate::object::js_object_get_field_by_name_f64(result_ptr, value_key);
     Some(value)
+}
+
+/// The iterator record's `next` read: once per record, before any step.
+pub(crate) fn iterator_next_method(iter: f64) -> f64 {
+    unsafe { crate::array::js_iterator_next_method(iter) }
 }
 
 /// True if a yielded value is a JS *object* (array, plain object, function,

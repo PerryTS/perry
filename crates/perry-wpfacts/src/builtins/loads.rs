@@ -45,7 +45,7 @@ pub(super) fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
 /// from its intrinsic chain: the described member, or the opaque member
 /// once the key may have been written (own data fields come from the field
 /// storage, `load_from`; an absent key reads nothing more).
-pub(super) fn family_load(m: &mut Model, fam: Family, a: Atom, dst: NodeId) {
+pub(super) fn family_load(m: &mut Model, fam: Family, what: Option<&str>, a: Atom, dst: NodeId) {
     let name = m.atoms[a as usize].clone();
     if fam == Family::Opaque {
         undescribed_member(m, dst);
@@ -68,8 +68,8 @@ pub(super) fn family_load(m: &mut Model, fam: Family, a: Atom, dst: NodeId) {
         None => {}
     }
     // Described or not, a key a store into ⊤ may have written onto the
-    // chain reads what was stored (a described member may be replaced).
-    if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+    // chain reads what was stored, unless the read is final (DEC 250).
+    if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
         opaque_member(m, dst);
     }
 }
@@ -80,6 +80,7 @@ pub(super) fn family_load(m: &mut Model, fam: Family, a: Atom, dst: NodeId) {
 /// program may have written onto the namespace itself, or onto a builtin
 /// prototype of its chain, reads the opaque member.
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
+    m.census_native_read(t, a, NativeMiss::Load(dst));
     let name = m.atoms[a as usize].clone();
     let Some(mem) = members::ns_member(ns, &name) else {
         undescribed_member(m, dst);
@@ -112,7 +113,8 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
     }
     // Absent on the namespace and on its chain: a key the program writes
     // onto a builtin prototype is a member of the chain then.
-    if mem.is_none() && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+    if mem.is_none() && !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst))
+    {
         opaque_member(m, dst);
     }
 }
@@ -123,6 +125,12 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return; // TypeError
     }
+    // A primitive is no builtin `IterResult`: its protocol value is `value`.
+    let key = if m.is_yield_key(key) {
+        Key::Named(m.atom("value"))
+    } else {
+        key
+    };
     let a = match key {
         // The elements of a string: its characters.
         k if m.is_elem_key(k) || m.is_iter_key(k) => {
@@ -277,7 +285,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let main = m.cjs_main;
                 m.edge(main, dst);
             }
-            if name.as_deref() != Some("mainModule") {
+            // `process.argv` is the one array the runtime made (or what the
+            // program stored there); a computed key may name it.
+            if matches!(name.as_deref(), Some("argv") | None) {
+                let a = m.process_argv;
+                m.edge(a, dst);
+            }
+            if !matches!(name.as_deref(), Some("mainModule") | Some("argv")) {
                 m.add_top(dst, |_| {
                     format!("process.{}", name.as_deref().unwrap_or("[computed]"))
                 });
@@ -306,7 +320,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             // Its `constructor` is its chain's (`Function` for a
             // constructor, E14; `Object` for a namespace object).
-            Some(n) if members::ns_member(ns, n).is_some() => {
+            Some(n) if members::ns_member(ns, n).is_some() || members::is_host(ns) => {
                 let Key::Named(a) = key else { unreachable!() };
                 ns_load(m, t, ns, a, dst);
             }
@@ -400,7 +414,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.edge(all, dst);
                     m.add_prim(dst, prim::UNDEF);
                 }
-                (Key::Named(a), Some(_)) => family_load(m, Family::Array, a, dst),
+                (Key::Named(a), Some(_)) => family_load(m, Family::Array, None, a, dst),
                 (Key::Any, Some(_)) => unreachable!(),
             },
             TmplKind::BObj { what, .. } => {
@@ -460,7 +474,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         if what == "primbox" || what == "arraybox" {
                             m.add_prim(dst, prim::ALL);
                         }
-                        family_load(m, fam, a, dst);
+                        family_load(m, fam, Some(what), a, dst);
                     }
                     (Key::Any, Some(_)) => unreachable!(),
                 }
@@ -496,7 +510,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         // `Function.prototype`; a computed key may name any of them.
         TokKind::BuiltinFn | TokKind::Bound(_) if matches!(key, Key::Named(_)) => {
             let Key::Named(a) = key else { unreachable!() };
-            family_load(m, Family::Function, a, dst);
+            family_load(m, Family::Function, None, a, dst);
         }
         TokKind::NativeProto(_) | TokKind::BuiltinFn | TokKind::Bound(_) => {
             let bf = builtin_fn(m, "native proto / builtin fn computed key");
@@ -525,15 +539,33 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
 /// (DECISIONS 213). A site builtin object's chain (a typed array's ...)
 /// under a computed key stays `tok_load`'s.
 pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
+    // DEC 250: where `of`'s family makes the read final, no store (through
+    // ⊤ or onto the collapsed token) wrote the key there: the unwritten
+    // answer, with no replay.
+    if let Key::Named(a) = key {
+        if matches!(m.toks[q as usize], TokKind::ObjectProto)
+            && !m.is_constructor_key(key)
+            && locked_chain_read(m, of, a)
+        {
+            m.add_prim(dst, prim::UNDEF);
+            return;
+        }
+    }
     if !matches!(m.toks[q as usize], TokKind::ObjectProto) || !m.is_constructor_key(key) {
         return tok_load(m, q, key, dst);
     }
     let Some(fam) = seed_family(m, of) else {
+        // A parentless class's instance under a computed key: its chain's
+        // `Object.prototype`, final but for `constructor` (DEC 250).
+        let star = m.atom(crate::STAR_KEY);
+        if key == Key::Any && locked_chain_read(m, of, star) {
+            return family_any(m, of, Family::Object, dst);
+        }
         return tok_load(m, q, key, dst);
     };
     match key {
-        Key::Named(a) => family_load(m, fam, a, dst),
+        Key::Named(a) => family_load(m, fam, None, a, dst),
         Key::Any if is_site_builtin(m, of) => tok_load(m, q, key, dst),
-        Key::Any => family_any(m, fam, dst),
+        Key::Any => family_any(m, of, fam, dst),
     }
 }

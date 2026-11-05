@@ -1,0 +1,1 @@
+Whole-program facts prove method calls on defaulted parameters: an `undefined` a call passes is no longer a value of the parameter, the default replaces it (chess tests 785 to 786 of 806 sites, tssrc 22,792 to 23,108 of 66,746).

@@ -13,7 +13,7 @@ pub(crate) use global_this_webassembly::{
 pub(crate) use global_this_webassembly::{
     register_extern_wrapper as register_wasm_extern_wrapper,
     register_module_wrapper as register_wasm_module_wrapper, registered_extern_handle,
-    registered_module_handle,
+    registered_module_handle, wrapper_prototype as wasm_wrapper_prototype,
 };
 
 // Topical sub-modules split out of the original monolithic `global_this.rs`

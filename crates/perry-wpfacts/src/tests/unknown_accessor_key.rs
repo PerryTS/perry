@@ -54,13 +54,15 @@ fn an_unknown_setter_under_a_named_key_writes_that_key_only() {
 fn an_unknown_getter_writes_its_own_key() {
     // `Object.prototype.k` may now be the accessor: `l.k` reads ⊤.
     let v = kind_verdict(r#"Object.defineProperty(h, "k", { get: g });"#, "k");
-    assert!(!proven(&v), "{v:?}");
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there (an accessor is a key add too).
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
 fn an_unknown_getter_under_a_computed_key_writes_every_key() {
     let v = kind_verdict("Object.defineProperty(h, name, { get: g });", "cache");
-    assert!(!proven(&v), "{v:?}");
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there (an accessor is a key add too).
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]

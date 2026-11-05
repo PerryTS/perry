@@ -20,7 +20,7 @@ use crate::closure::{is_closure_ptr, ClosureHeader, JsThis};
 // shared-shape constructor in `crate::iter_result`.
 use crate::iter_result::make_iter_result;
 use crate::object::{
-    js_object_alloc, js_object_get_field, js_object_get_field_by_name, js_object_set_field,
+    js_object_alloc, js_object_get_field, js_object_set_field,
     ObjectHeader,
 };
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
@@ -187,51 +187,21 @@ fn truthy(value: f64) -> bool {
     crate::value::js_is_truthy(value) != 0
 }
 
-/// IteratorStepValue on `(iter, next)`; `None` when done.
-///
-/// #7564: the keys are interned (allocation-free after the first call per
-/// thread) and every pointer is re-read from a handle after each call that
-/// can collect, so no pre-collection address is nameable.
+/// IteratorStepValue on `(iter, next)`: the one step
+/// ([`crate::array::js_iterator_step`]); `None` when done. A `next` the record
+/// could not read as a property (a perry-native iterator) is resolved the way
+/// every other record resolves it.
 unsafe fn step_value(iter: f64, next: f64) -> Option<f64> {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let iter_h = scope.root_nanbox_f64(iter);
-    let result = if JSValue::from_bits(next.to_bits()).is_undefined() {
-        // A Perry-native iterator whose `next` is not a readable property.
-        crate::object::js_native_call_method(
-            iter_h.get_nanbox_f64(),
-            b"next".as_ptr() as *const i8,
-            4,
-            std::ptr::null(),
-            0,
-        )
+    let next = if JSValue::from_bits(next.to_bits()).is_undefined() {
+        crate::array::js_iterator_next_method(iter)
     } else {
-        if !crate::object::value_is_callable(next) {
-            type_error("Iterator next method is not a function");
-        }
-        call(next, iter_h.get_nanbox_f64(), &[])
+        next
     };
-    if !is_object(result) {
-        type_error("Iterator result is not an object");
-    }
-    // `js_object_get_field_by_name` (getters, shape work) can collect between
-    // the two reads, so the second read does not reuse the first's address.
-    let result_h = scope.root_nanbox_f64(result);
-    let (done_key, result_now) =
-        result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"done"));
-    let done = js_object_get_field_by_name(
-        js_nanbox_get_pointer(result_now) as *const ObjectHeader,
-        done_key,
-    );
-    if truthy(f64::from_bits(done.bits())) {
+    let mut value = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if crate::array::js_iterator_step(iter, next, &mut value) != 0 {
         return None;
     }
-    let (value_key, result_now) =
-        result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"value"));
-    let value = js_object_get_field_by_name(
-        js_nanbox_get_pointer(result_now) as *const ObjectHeader,
-        value_key,
-    );
-    Some(f64::from_bits(value.bits()))
+    Some(value)
 }
 
 /// Allocate a helper. `iterated` and `arg` are rooted across the birth.
