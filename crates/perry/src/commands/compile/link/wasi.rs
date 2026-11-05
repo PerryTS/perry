@@ -23,6 +23,23 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use super::super::wasi_flavour::Flavour;
 
+#[path = "wasi_addon.rs"]
+mod addon;
+
+/// The objects and sysroot archives that link the program's approved
+/// Node-API addons into it (none without addons).
+pub(crate) fn addon_link_inputs(
+    flavour: Flavour,
+    ctx: &super::super::CompilationContext,
+    directory: &Path,
+    verbose: u8,
+) -> Result<Vec<PathBuf>> {
+    if ctx.native_addons.is_empty() {
+        return Ok(Vec::new());
+    }
+    addon::addon_link_inputs(flavour, ctx, &wasi_sdk(flavour)?, directory, verbose)
+}
+
 /// Linear-memory stack size. Perry's shadow stack and deep recursion need
 /// more than wasi-libc's 64 KiB default; placing the stack first also keeps
 /// every heap address above the runtime's small-handle band.

@@ -761,6 +761,10 @@ pub struct CompilationContext {
     /// addons. Unlike the older compile/native-library policy lists this set
     /// deliberately has no wildcard syntax.
     pub native_addon_packages: BTreeSet<String>,
+    /// The wasm32 archives of `perry.nativeAddons` packages whose addons a
+    /// WASI program links statically: package name -> addon entry (the
+    /// `.node` path inside the package) -> archives.
+    pub native_addon_wasm: BTreeMap<String, BTreeMap<String, Vec<PathBuf>>>,
     /// Approved `.node` entries reached by the compile graph, keyed by their
     /// relocatable package-relative logical id.
     pub native_addons: BTreeMap<String, NativeAddonModule>,
@@ -1421,6 +1425,7 @@ impl CompilationContext {
             project_root,
             native_libraries: Vec::new(),
             native_addon_packages: BTreeSet::new(),
+            native_addon_wasm: BTreeMap::new(),
             native_addons: BTreeMap::new(),
             native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
@@ -1572,6 +1577,9 @@ pub struct NativeAddonModule {
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,
+    /// WASI: the addon's wasm32 archives, linked into the program; empty for
+    /// a loaded (sidecar) addon.
+    pub wasm_archives: Vec<PathBuf>,
 }
 
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field

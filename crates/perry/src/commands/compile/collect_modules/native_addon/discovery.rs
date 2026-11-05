@@ -63,6 +63,33 @@ pub(in crate::commands::compile) fn collect_declared_addons(
             }
         }
     }
+    if triple.starts_with("wasm32-") {
+        // WASI links addons from their declared wasm32 archives; a `.node`
+        // file is never a payload here.
+        for root in roots {
+            let Some(name) = package_name_from_package_json(&root) else {
+                continue;
+            };
+            let declared = ctx
+                .native_addon_wasm
+                .get(&name)
+                .cloned()
+                .unwrap_or_default();
+            if !declared.is_empty() {
+                if let Some(owner) = approved_owner_package(ctx, &root, &name) {
+                    required.insert(owner);
+                }
+            }
+            for (entry, archives) in declared {
+                collect_linked_wasm_addon(ctx, &root, &entry, archives)?;
+            }
+        }
+        for owner in required {
+            anyhow::ensure!(ctx.native_addons.values().any(|addon| addon.package == owner),
+                "approved package `{owner}` has no Node-API addon for target `{triple}`. Declare its wasm32 archives: `\"nativeAddons\": [{{\"name\": \"{owner}\", \"wasm\": {{\"build/Release/<addon>.node\": [\"<archive>.a\", ...]}}}}]`");
+        }
+        return Ok(());
+    }
     for root in roots {
         if has_perry_native_library(&root) {
             continue;
@@ -123,8 +150,10 @@ pub(super) fn is_other_target_addon(path: &Path, target: Option<&str>) -> bool {
     else {
         return false;
     };
-    (triple.starts_with("aarch64-") || triple.starts_with("x86_64-"))
-        && matches!(matches_target(path, triple), Ok(false))
+    // A `.node` file is never a WASI payload: those link from wasm32 archives.
+    triple.starts_with("wasm32-")
+        || ((triple.starts_with("aarch64-") || triple.starts_with("x86_64-"))
+            && matches!(matches_target(path, triple), Ok(false)))
 }
 
 fn matches_target(path: &Path, triple: &str) -> Result<bool> {
