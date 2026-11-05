@@ -414,6 +414,17 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+    // A Number key on a typed array is its numeric index, answered before
+    // the ordinary-object probes below read the receiver as an ObjectHeader.
+    if (target.to_bits() & !POINTER_MASK) == POINTER_TAG
+        && crate::typedarray_props::typed_array_set_number_key(
+            (target.to_bits() & POINTER_MASK) as usize,
+            key,
+            value,
+        )
+    {
+        return value;
+    }
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
         Err(key) => key,
