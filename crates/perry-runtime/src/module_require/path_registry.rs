@@ -642,6 +642,20 @@ fn register_init_addr(key: &str, init_addr: usize) -> bool {
     })
 }
 
+/// The canonical key an initializer address was registered under (the SNAP
+/// census check run names an init by its address).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(super) fn key_of_init_addr(addr: usize) -> Option<String> {
+    register_pending_path_inits();
+    PATH_MODULE_INIT_ADDRS.with(|addrs| {
+        addrs
+            .borrow()
+            .iter()
+            .find(|(_, &a)| a == addr)
+            .map(|(k, _)| k.clone())
+    })
+}
+
 fn lookup_init_addr(key: &str) -> Option<usize> {
     PATH_MODULE_INIT_ADDRS.with(|addrs| addrs.borrow().get(key).copied())
 }

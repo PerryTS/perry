@@ -590,6 +590,11 @@ struct State {
     /// slot of D's arrives poisoned, and an importer's registration of it is
     /// the duplicate registration, never ownership. `PERRY_SNAP_SLOTOWNER=0`.
     slot_owner_rule: bool,
+    /// Check order rule: an imaged init the census entered inside the body
+    /// of a member of D runs in the check where that body is skipped, in
+    /// entry order (`<census>.dkids`, beside the D file the check reads).
+    /// `PERRY_SNAP_DKIDS=0`.
+    dkids: Vec<(usize, usize)>,
     /// D-written slot rule: a module-global slot a member of D wrote is
     /// left out of the census digest and named in `.wd` (`0<TAB>slot`, the
     /// dig's own name for a slot), so the check leaves it out too, as a
@@ -862,6 +867,25 @@ unsafe fn start_census(out: String) {
         first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
         realm_rule: !std::env::var("PERRY_SNAP_REALM").is_ok_and(|v| v == "0"),
         slot_owner_rule: !std::env::var("PERRY_SNAP_SLOTOWNER").is_ok_and(|v| v == "0"),
+        dkids: if std::env::var("PERRY_SNAP_DKIDS").is_ok_and(|v| v == "0") {
+            Vec::new()
+        } else {
+            std::env::var("PERRY_SNAP_SKIP")
+                .ok()
+                .and_then(|p| std::fs::read_to_string(format!("{}kids", p)).ok())
+                .map(|t| {
+                    t.lines()
+                        .filter_map(|l| {
+                            let (a, b) = l.split_once('\t')?;
+                            Some((
+                                usize::from_str_radix(a, 16).ok()?,
+                                usize::from_str_radix(b, 16).ok()?,
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        },
         wd_slot: !std::env::var("PERRY_SNAP_WDSLOT").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
@@ -3918,7 +3942,23 @@ pub(super) fn skip_body() -> bool {
         Some(f) if f.kind == FrameKind::Init => {
             let i = &mut st.inits[f.init as usize];
             if !i.entry_module && st.skip.binary_search(&i.addr).is_ok() {
+                let first = !i.skipped;
                 i.skipped = true;
+                if first {
+                    // The imaged inits the census entered inside this body,
+                    // evaluated here in entry order (the image holds them
+                    // initialized: a later importer finds them done).
+                    let addr = i.addr;
+                    let kids: Vec<usize> = st
+                        .dkids
+                        .iter()
+                        .filter(|k| k.0 == addr)
+                        .map(|k| k.1)
+                        .collect();
+                    for kid in kids {
+                        crate::module_require::snap_evaluate_init(kid);
+                    }
+                }
                 return true;
             }
             false
@@ -4169,6 +4209,27 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
         for (id, i) in st.inits.iter().enumerate().skip(1) {
             if i.in_d && !i.skipped && i.addr != ENTRY_BODY_ADDR && !i.entry_module {
                 let _ = writeln!(f, "#checkfail\tjoined_d\t{id}\t{:x}", i.addr);
+            }
+        }
+    }
+    // The next check run's order: per member of D whose body the check skips,
+    // the imaged inits entered inside it (directly or through members of D it
+    // entered), in entry order.
+    if st.skip.is_empty() {
+        if let Ok(mut d) = std::fs::File::create(format!("{}.dkids", st.out)) {
+            let skipped = |id: u32| {
+                let i = &st.inits[id as usize];
+                id != 0 && i.in_d && !i.entry_module && i.addr != ENTRY_BODY_ADDR && i.addr != 0
+            };
+            for (id, i) in st.inits.iter().enumerate().skip(1) {
+                if in_d(id as u32) || i.addr == 0 || i.addr == ENTRY_BODY_ADDR {
+                    continue;
+                }
+                let mut p = i.parent;
+                while skipped(p) {
+                    let _ = writeln!(d, "{:x}\t{:x}", addr_of(p), i.addr);
+                    p = st.inits[p as usize].parent;
+                }
             }
         }
     }

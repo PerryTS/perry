@@ -1338,6 +1338,18 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
     outcome
 }
 
+/// The SNAP census check run: evaluate the module whose initializer is
+/// `addr` (an imaged init the census entered inside a skipped body of D),
+/// once, through the registry, as a `require` of it would.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn snap_evaluate_init(addr: usize) {
+    let Some(key) = path_registry::key_of_init_addr(addr) else {
+        return;
+    };
+    let _require = crate::snap_census::require_scope();
+    let _ = require_path_key(&key);
+}
+
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
     path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY.with(|r| r.require_with(key, &run_path_initializer))
