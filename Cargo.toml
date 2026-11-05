@@ -11,6 +11,7 @@ members = [
     "crates/perry-api-manifest",
     "crates/perry-hir",
     "crates/perry-wpfacts",
+    "crates/perry-realm-table",
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
@@ -561,6 +562,7 @@ perry-parser = { path = "crates/perry-parser" }
 perry-api-manifest = { path = "crates/perry-api-manifest" }
 perry-hir = { path = "crates/perry-hir" }
 perry-wpfacts = { path = "crates/perry-wpfacts" }
+perry-realm-table = { path = "crates/perry-realm-table" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }

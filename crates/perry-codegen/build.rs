@@ -1,5 +1,5 @@
-// The compiler realm table is generated once, by perry-hir's build script
-// (`perry_hir::realm_table`), and read from there.
+// The compiler realm table is generated once, by the build script of the
+// leaf crate perry-realm-table (`perry_realm_table::REALM`), and read from there.
 fn main() {
     println!("cargo:rerun-if-env-changed=LLVM_SYS_221_PREFIX");
     println!("cargo:rerun-if-changed=src/wasm32/target_options.cpp");
