@@ -444,14 +444,22 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     }
     let modeled = accessor_receiver(m, origin);
     if modeled {
-        let key = m
-            .call_lit
-            .get(&call)
-            .copied()
+        let key = c
+            .spread
+            .is_empty()
+            .then(|| m.call_lit.get(&call).copied())
+            .flatten()
             .unwrap_or_else(|| m.atom(crate::STAR_KEY));
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
-        for &f in c.args.iter().skip(1).take(1) {
+        // Spread positions are not retained in CallSite: any direct or
+        // spread value may be argument 1, and its key is not known here.
+        let direct = if c.spread.is_empty() {
+            &c.args[1..2]
+        } else {
+            &c.args[..]
+        };
+        for &f in direct {
             m.cons(
                 f,
                 Cons::Accessor {

@@ -295,3 +295,16 @@ fn noncallable_namespace_installs_nothing() {
         true,
     );
 }
+
+#[test]
+fn spread_prefix_does_not_drop_the_accessor_function() {
+    check(
+        r#"
+        const key = ["witness"];
+        const o: any = { witness: 1 };
+        o.__defineGetter__(...key, () => 2);
+        console.log(o.witness);
+    "#,
+        false,
+    );
+}
