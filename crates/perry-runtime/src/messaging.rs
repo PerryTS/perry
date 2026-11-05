@@ -764,6 +764,17 @@ pub(crate) extern "C" fn js_message_channel_constructor_call_error(
 }
 
 #[no_mangle]
+pub extern "C" fn js_broadcast_channel_new_counted(name: f64, argc: u32) -> f64 {
+    if argc == 0 {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"name\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    js_broadcast_channel_new(name)
+}
+
+#[no_mangle]
 pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
     if let Some(factory) = worker_threads_broadcast_channel_factory() {
         return factory(name);
@@ -775,15 +786,11 @@ pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
         "constructor",
         get_global_constructor("BroadcastChannel"),
     );
-    // #6949(b): `js_string_coerce` allocates for every shape except an
-    // already-heap STRING_TAG value, so it can collect and EVACUATE — and
-    // `obj`, allocated a few lines up, is a raw Rust local: neither a GC root
-    // nor a shadow slot. Every `set_field`/`install_method` below writes
-    // through it. Root it across the coercion and re-read.
+    // The wrapper must survive user-defined name conversion.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let (name_ptr, obj) = obj_handle
-        .across_mut::<object::ObjectHeader, _>(|| crate::builtins::js_string_coerce(name));
+        .across_mut::<object::ObjectHeader, _>(|| crate::builtins::js_template_string_coerce(name));
     let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
     set_field(obj, "name", name_value);
     install_method(obj, "close", crate::fn_info!(noop0, 0; with_declared(0)), 0);

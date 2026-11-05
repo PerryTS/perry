@@ -8,6 +8,14 @@ Use `parallelMap`, `parallelFilter` and `spawn` to run native work on OS threads
 
 Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
+## BroadcastChannel names
+
+`BroadcastChannel` requires a name argument. Explicit `undefined` is a valid name
+and becomes `"undefined"`; omission throws `TypeError` with `ERR_MISSING_ARGS`.
+Names use implicit string conversion, including a string hint for object
+conversion. Symbols (including an object's conversion result) throw before a
+channel is registered. A throwing conversion propagates its original value.
+
 ## Message events
 
 `MessageEvent` extends `Event`. Its constructor accepts `data`, `origin`,

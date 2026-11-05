@@ -442,7 +442,10 @@ pub(super) unsafe fn construct(
                 .first()
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::messaging_hook_slots::js_broadcast_channel_new(name));
+            return Some(crate::messaging_hook_slots::js_broadcast_channel_new(
+                name,
+                args.len() as u32,
+            ));
         }
         BuiltinConstructorIdentity::URL => {
             if let Some(value) = crate::object::global_this::web_hooks::construct(

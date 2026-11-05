@@ -16,6 +16,24 @@ fn result(module: &Module) -> &Expr {
         .expect("result is initialized")
 }
 
+fn is_messaging_constructor(expr: &Expr, export: &str) -> bool {
+    match expr {
+        Expr::NewDynamic { callee, .. } if export == "BroadcastChannel" => {
+            matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
+                if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "worker_threads")
+                    && property == export)
+        }
+        Expr::NativeMethodCall {
+            module,
+            class_name: None,
+            object: None,
+            method,
+            ..
+        } => module == "worker_threads" && method == export && export == "MessageChannel",
+        _ => false,
+    }
+}
+
 #[test]
 fn messaging_imports_select_the_export_not_the_local_constructor_name() {
     for (export, local) in [
@@ -29,8 +47,7 @@ fn messaging_imports_select_the_export_not_the_local_constructor_name() {
     ] {
         let hir = lower(&format!("import {{ {export} as {local} }} from 'node:worker_threads'; const result = new {local}('name');"));
         assert!(
-            matches!(result(&hir), Expr::NativeMethodCall { module, class_name: None, object: None, method, .. }
-            if module == "worker_threads" && method == export),
+            is_messaging_constructor(result(&hir), export),
             "{export} as {local}: {:?}",
             result(&hir)
         );
@@ -53,7 +70,7 @@ fn renamed_workers_keep_entry_discovery_and_eval_mode() {
 }
 
 #[test]
-fn canonical_and_namespace_constructors_keep_specialised_hir() {
+fn canonical_and_namespace_constructors_keep_their_construction_paths() {
     for namespace in [false, true] {
         let (imports, prefix) = if namespace {
             ("import * as wt from 'node:worker_threads';", "wt.")
@@ -70,9 +87,7 @@ fn canonical_and_namespace_constructors_keep_specialised_hir() {
             if name == "Worker" {
                 assert!(matches!(result(&hir), Expr::WorkerNew { .. }));
             } else {
-                assert!(
-                    matches!(result(&hir), Expr::NativeMethodCall { module, method, .. } if module == "worker_threads" && method == name)
-                );
+                assert!(is_messaging_constructor(result(&hir), name));
             }
         }
     }
@@ -102,4 +117,19 @@ fn explicit_globals_ignore_colliding_import_bindings() {
             result(&hir)
         );
     }
+}
+
+#[test]
+fn broadcast_construction_preserves_missing_and_explicit_undefined_arguments() {
+    for (arguments, expected) in [("", 0), ("undefined", 1), ("undefined, 42", 2)] {
+        let hir = lower(&format!("import {{ BroadcastChannel as Channel }} from 'node:worker_threads'; const result = new Channel({arguments});"));
+        assert!(matches!(result(&hir), Expr::NewDynamic { args, .. } if args.len() == expected));
+    }
+}
+
+#[test]
+fn imported_broadcast_construction_preserves_spread_positions() {
+    let hir = lower("import { BroadcastChannel as Channel } from 'node:worker_threads'; const args = []; const result = new Channel(...args);");
+    assert!(matches!(result(&hir), Expr::NewDynamicSpread { args, .. }
+        if matches!(args.as_slice(), [crate::ir::CallArg::Spread(_)])));
 }
