@@ -204,6 +204,7 @@
 - [Codegen mechanisms and workload evidence](internals/codegen-mechanisms.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
+- [Runtime throw provenance](internals/typed-throws.md)
 - [Node-API host design](internals/node-api-host.md)
 - [Generic fallback diagnostics](internals/fallback-diagnostics.md)
 
