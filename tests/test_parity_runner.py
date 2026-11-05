@@ -201,6 +201,28 @@ class GapLane(Repo):
             mapping.get(cid, cid): status for cid, status in self.statuses(before).items()
         })
 
+    def test_worker_subject_paths_are_trackable(self):
+        shutil.copyfile(ROOT / ".gitignore", self.root / ".gitignore")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                       cwd=self.root, env=env, check=True, capture_output=True, timeout=10)
+        paths = {
+            "worker": True,
+            "examples/worker/source.ts": True,
+            "test-parity/perry/worker/test_gap_worker_not_compiled.ts": False,
+            "test-parity/expected/perry/worker/test_gap_worker_not_compiled.txt": False,
+            "test-parity/perry/worker/worker": True,
+        }
+        for relative, ignored in paths.items():
+            write(self.root / relative)
+            with self.subTest(path=relative):
+                result = subprocess.run(
+                    ["git", "-c", f"core.excludesFile={os.devnull}",
+                     "check-ignore", "--no-index", "--quiet", relative],
+                    cwd=self.root, env=env, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0 if ignored else 1, result.stderr)
+
     def test_gap_snapshot_artifact_includes_subject_snapshots(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
         upload = workflow.split("- name: Upload re-baselined gap snapshot", 1)[1]
