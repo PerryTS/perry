@@ -290,6 +290,7 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
         let mut checkpoint = 0;
         let mut floor = 0;
         let mut peak = 0;
+        let mut warm_peak = 0;
         let mut before = [0; 4];
         // Warm both allocation shapes and return to the sequential shape.
         // Each phase spans more than the collector's retained-block age
@@ -300,10 +301,19 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
                 // The last warm-up checkpoint has already collected. A
                 // second back-to-back full would cool the retained arena
                 // blocks and measure rewarming instead of steady churn.
+                // In steady churn the blocks the collector keeps cycle by
+                // a few 2 MiB blocks from one checkpoint to the next, so
+                // one sample is an arbitrary phase of that cycle: the
+                // floor is the highest checkpoint of the last warm-up
+                // phase, the same sequential shape the measurement starts
+                // with. Growth above that envelope is what a leak shows.
                 assert_eq!(checkpoint, 0);
-                floor = rss_kib(); peak = floor;
+                floor = warm_peak.max(rss_kib()); peak = floor;
                 before = test_census::snapshot();
                 eprintln!("N3 warm rss_kib={floor} counts={before:?}");
+            }
+            if warmup {
+                warm_peak = 0;
             }
             let mut done = 0;
             while done < total {
@@ -355,7 +365,9 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
                 if checkpoint >= 1024 {
                     checkpoint = 0;
                     perry_runtime::gc::native_payload_test_collect_full();
-                    if !warmup {
+                    if warmup {
+                        warm_peak = warm_peak.max(rss_kib());
+                    } else {
                         peak = peak.max(rss_kib());
                         assert!(peak.saturating_sub(floor) < 4096,
                             "N3 RSS grew by {} KiB after warm-up (total={total}, done={done}, counts={:?})", peak.saturating_sub(floor), test_census::snapshot());

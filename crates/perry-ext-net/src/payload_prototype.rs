@@ -374,10 +374,7 @@ pub(crate) unsafe extern "C" fn install_socket(raw: *mut c_void) {
     // The canonical net.Socket constructor already links this prototype to
     // Duplex.prototype. Keep that exact chain and its EventEmitter parent.
     methods!(proto;
-        "getProtocol" => tls_protocol/0/0, "getCipher" => tls_cipher/0/0,
-        "getPeerCertificate" => tls_peer_certificate/1/0, "getCertificate" => tls_own_certificate/0/0,
-        "getSession" => tls_session/0/0, "isSessionReused" => tls_session_reused/0/0,
-        "upgradeToTLS" => tls_upgrade/2/2, "connect" => connect/3/0, "write" => write/3/3, "end" => end/3/3,
+        "connect" => connect/3/0, "write" => write/3/3, "end" => end/3/3,
         "destroy" => destroy/1/1, "resetAndDestroy" => reset_destroy/0/0,
         "read" => read/1/1, "cork" => cork/0/0, "uncork" => uncork/0/0,
         "ref" => reference/0/0, "unref" => unreference/0/0,
@@ -390,9 +387,7 @@ pub(crate) unsafe extern "C" fn install_socket(raw: *mut c_void) {
         "prependListener" => prepend/2/2, "prependOnceListener" => prepend_once/2/2
     );
     getters!(proto;
-        "encrypted" => tls_encrypted, "authorized" => tls_authorized,
-        "servername" => tls_servername, "alpnProtocol" => tls_alpn,
-        "authorizationError" => tls_auth_error, "destroyed" => destroyed, "connecting" => connecting, "pending" => pending,
+        "destroyed" => destroyed, "connecting" => connecting, "pending" => pending,
         "writable" => writable, "readable" => readable, "writableEnded" => writable_ended,
         "readableEnded" => readable_ended, "writableFinished" => writable_finished,
         "writableNeedDrain" => need_drain, "bytesRead" => bytes_read, "bytesWritten" => bytes_written,
@@ -406,6 +401,37 @@ pub(crate) unsafe extern "C" fn install_socket(raw: *mut c_void) {
         "readableFlowing" => flowing, "closed" => closed,
         "writableObjectMode" => writable_object_mode, "readableObjectMode" => readable_object_mode,
         "readableLength" => readable_length
+    );
+    if let Some(install) = SOCKET_TLS_MEMBERS.get() {
+        install(&mut proto);
+    }
+}
+
+/// The TLS members of a socket, which only a program that reaches TLS links:
+/// the `tls` install (`js_ext_net_tls_install`) sets this before any
+/// socket prototype exists, so a `net` or `child_process` program keeps
+/// `net.Socket.prototype` as Node has it and links no TLS code through it.
+static SOCKET_TLS_MEMBERS: std::sync::OnceLock<unsafe fn(&mut PayloadPrototype)> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn enable_socket_tls_members() {
+    let _ = SOCKET_TLS_MEMBERS.set(install_socket_tls);
+}
+
+/// `upgradeToTLS` (perry's own) and the TLSSocket introspection a TLS socket
+/// answers. TLS sockets are this family's objects, so the members sit on its
+/// prototype.
+unsafe fn install_socket_tls(proto: &mut PayloadPrototype) {
+    methods!(proto;
+        "getProtocol" => tls_protocol/0/0, "getCipher" => tls_cipher/0/0,
+        "getPeerCertificate" => tls_peer_certificate/1/0, "getCertificate" => tls_own_certificate/0/0,
+        "getSession" => tls_session/0/0, "isSessionReused" => tls_session_reused/0/0,
+        "upgradeToTLS" => tls_upgrade/2/2
+    );
+    getters!(proto;
+        "encrypted" => tls_encrypted, "authorized" => tls_authorized,
+        "servername" => tls_servername, "alpnProtocol" => tls_alpn,
+        "authorizationError" => tls_auth_error
     );
 }
 

@@ -543,6 +543,8 @@ pub(crate) struct HandshakeFacts {
     pub(crate) own_certificate: Vec<u8>,
     pub(crate) authorized: bool,
     pub(crate) servername: String,
+    /// A client session's `checkServerIdentity` step; a server has none.
+    pub(crate) check_identity: Option<fn(f64) -> f64>,
 }
 
 impl HandshakeFacts {
@@ -564,6 +566,7 @@ impl HandshakeFacts {
             peer,
             own_certificate: own_certificate(data),
             servername: servername.to_string(),
+            check_identity: None,
         }
     }
 }
@@ -824,7 +827,12 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
     if let Ok(payload) =
         crate::payload_transport::socket_ptr(crate::payload_socket::link(owner.get()))
     {
-        (*payload).ext.direct_tls = Some((servername, verify, config));
+        (*payload).ext.direct_tls = Some(crate::payload_transport::DirectTls {
+            servername,
+            verify,
+            config,
+            begin: crate::payload_tls::begin_direct,
+        });
     }
     crate::payload_transport::raw_owner(owner.get())
 }

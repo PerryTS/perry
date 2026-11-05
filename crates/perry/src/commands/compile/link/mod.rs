@@ -59,6 +59,7 @@ pub(super) mod wasi;
 mod watchos_frameworks;
 mod windows_link;
 mod winui_assets;
+mod wrapper_hooks;
 
 use archive_cache::{prepare_well_known_archives, PreparedArchiveInputs};
 pub(super) use build_and_run::build_and_run_link;

@@ -399,6 +399,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     for hook in crate::ext_registry::wrapper_install_hooks() {
         module.declare_function(hook, VOID, &[]);
     }
+    // perry-ext-net's `tls.connect` provider, beside `net`'s hook for a `tls`
+    // import (perry `run_pipeline`).
+    module.declare_function("js_ext_net_tls_install", VOID, &[]);
     module.declare_function("js_nm_install_node_pty", VOID, &[]);
     module.declare_function("js_nm_install_os", VOID, &[]);
     module.declare_function("js_nm_install_path", VOID, &[]);
