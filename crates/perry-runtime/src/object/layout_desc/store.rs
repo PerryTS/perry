@@ -424,6 +424,42 @@ pub(crate) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
     }
 }
 
+/// The in-place add of late key `pos` (slot `slot`, holding the hole) of
+/// object `obj`, an add the caller has `admitted`. The overflow installed, a
+/// later key of the list present (`Err(true)`: the add is out of order) or
+/// an object something inherits from (it takes the overflow, whose install
+/// sets the shadow bit every inherited-read site tests, step 3) keeps the
+/// slot a hole. In order, the key's position is its enumeration order:
+/// `value` fills the slot. One rule for [`family_add`] and a definition's
+/// fill (`define_field::fill_defined`). `Err` changed nothing.
+pub(super) unsafe fn fill_in_order(
+    obj: *mut ObjectHeader,
+    pos: u32,
+    slot: u32,
+    admitted: bool,
+    value: u64,
+) -> Result<(), bool> {
+    if super::super::overflow::has_overflow(obj) {
+        return Err(false);
+    }
+    let record = super::super::shapes::object_shape_record(obj).unwrap();
+    let keys = record.keys() as usize as *const crate::array::ArrayHeader;
+    let out_of_order = later_late_key_present(obj, keys, record.logical_key_count(), pos);
+    if out_of_order && family_diag_pairs_on() {
+        note_out_of_order_pair(obj, pos);
+    }
+    if out_of_order
+        || !admitted
+        || slot >= super::super::object_inline_capacity(obj)
+        || (super::super::proto_validity::any_prototype_marked()
+            && super::super::proto_validity::object_is_marked_prototype(obj as usize))
+    {
+        return Err(out_of_order);
+    }
+    super::super::store_object_field_slot(obj, slot as usize, value);
+    Ok(())
+}
+
 /// Add the key `key_bits` to family object `obj` with `value` (see the
 /// section comment): a late key in order fills its slot in place; out of
 /// order, or with the overflow installed, it is appended to the overflow
@@ -434,27 +470,14 @@ pub(super) unsafe fn family_add(obj: *mut ObjectHeader, key_bits: u64, add: Fami
     let shadowed = super::super::overflow::has_overflow(obj);
     let mut out_of_order = false;
     if let FamilyAdd::Late { pos, slot, attrs } = add {
-        if !shadowed {
-            let record = super::super::shapes::object_shape_record(obj).unwrap();
-            let keys = record.keys() as usize as *const crate::array::ArrayHeader;
-            out_of_order = later_late_key_present(obj, keys, record.logical_key_count(), pos);
-            if out_of_order && family_diag_pairs_on() {
-                note_out_of_order_pair(obj, pos);
-            }
-            // In order: the key's position is its enumeration order. An
-            // object something inherits from takes the overflow, whose
-            // install sets the shadow bit every inherited-read site tests
-            // (step 3).
-            if !out_of_order
-                && attrs == LAYOUT_KEY_LATE
-                && slot < super::super::object_inline_capacity(obj)
-                && !(super::super::proto_validity::any_prototype_marked()
-                    && super::super::proto_validity::object_is_marked_prototype(obj as usize))
-            {
+        // `[[Set]]` and CreateDataProperty add a plain data property: only
+        // a plain key's slot takes it in place.
+        match fill_in_order(obj, pos, slot, attrs == LAYOUT_KEY_LATE, value) {
+            Ok(()) => {
                 FAMILY_DIAG.fills.fetch_add(1, Relaxed);
-                super::super::store_object_field_slot(obj, slot as usize, value);
                 return;
             }
+            Err(later) => out_of_order = later,
         }
     }
     if family_diag_on() {

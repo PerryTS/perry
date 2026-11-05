@@ -371,7 +371,7 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         kind: 0,
         integrity: 0,
         slot_count: 5,
-        layout_id: 0x80000089,
+        layout_id: 0x8000008a,
         rep: 0,
         proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
         keys: std::ptr::null(),

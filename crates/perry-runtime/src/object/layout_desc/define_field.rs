@@ -3,8 +3,8 @@
 //! `Object.defineProperty(this, k, {...})` of a key the layout carries with
 //! the definition's attributes.
 
-use super::store::{family_add_kind, FamilyAdd};
-use super::{family_desc_of, later_late_key_present, LAYOUT_KEY_LATE};
+use super::store::{family_add_kind, fill_in_order, FamilyAdd};
+use super::{family_desc_of, LAYOUT_KEY_LATE};
 use crate::object::ObjectHeader;
 
 /// DefineField (`js_class_field_add`) of string key `key` on family object
@@ -39,9 +39,10 @@ pub(crate) unsafe fn family_define_field(receiver: f64, key: f64, value: f64) ->
 /// and its slot holds the hole, the definition fills the slot in place. The
 /// object keeps its layout: the key list already carries the key with that
 /// entry, presence is the slot. Any other definition (other attributes, an
-/// accessor, a key out of order) is the ordinary one. The header bit then
-/// mirrors the present attributed key (an all-default definition fills a
-/// plain key and sets no bit).
+/// accessor, a key out of order) is the ordinary one. The fill sets no
+/// header bit: the shape carries the key's attributes (its summary and
+/// entry, what every attribute reader checks), as for an object born with
+/// them (`mark_layout_object_facts`), so field guards keep their fast path.
 ///
 /// # Safety
 /// As [`super::family_store`].
@@ -89,14 +90,7 @@ pub(super) unsafe fn family_define_own(
     } else {
         crate::value::TAG_UNDEFINED
     };
-    if !fill_defined(obj, key, LAYOUT_KEY_LATE | entry, f64::from_bits(value)) {
-        return false;
-    }
-    if entry != 0 {
-        let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
-    }
-    true
+    fill_defined(obj, key, LAYOUT_KEY_LATE | entry, f64::from_bits(value))
 }
 
 /// The object a NaN-boxed `receiver` points at, when `key` is a string.
@@ -114,9 +108,10 @@ unsafe fn layout_receiver(receiver: f64, key: f64) -> Option<*mut ObjectHeader> 
 
 /// Fill the hole of object `obj`'s key `key` (a string) with `value` when
 /// its layout names the key with attribute byte `attrs` ([`family_add_kind`]:
-/// a family layout or a layout with optional keys, the slot the hole). The
-/// receiver alone decides: extensible, not a prototype, and no later key of
-/// the list present (the fill keeps the key order). `false` changes nothing.
+/// a family layout or a layout with optional keys, the slot the hole) and
+/// the receiver takes the key: extensible, and the add in order
+/// ([`fill_in_order`], the rule `[[Set]]`'s add fills by). `false` changes
+/// nothing.
 unsafe fn fill_defined(obj: *mut ObjectHeader, key: f64, attrs: u8, value: f64) -> bool {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(bytes) =
@@ -133,27 +128,11 @@ unsafe fn fill_defined(obj: *mut ObjectHeader, key: f64, attrs: u8, value: f64) 
         return false;
     };
     let gc = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if a != attrs
-        || crate::object::overflow::has_overflow(obj)
-        || slot >= crate::object::object_inline_capacity(obj)
-        || (*gc)._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN
-                | crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
-            != 0
-        || (crate::object::proto_validity::any_prototype_marked()
-            && crate::object::proto_validity::object_is_marked_prototype(obj as usize))
-    {
-        return false;
-    }
-    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
-        return false;
-    };
-    let keys = record.keys() as usize as *const crate::array::ArrayHeader;
-    if later_late_key_present(obj, keys, record.logical_key_count(), pos) {
-        return false;
-    }
-    crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
-    true
+    (*gc)._reserved
+        & (crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+        == 0
+        && fill_in_order(obj, pos, slot, a == attrs, value.to_bits()).is_ok()
 }
