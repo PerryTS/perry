@@ -61,8 +61,20 @@ its directory.
 
 Legacy and subject roots accept `.ts`, `.cts`, `.mts` and `test_*.cjs`. Keep
 source extensions during migration: Node uses them to select the module mode.
-Case ids omit TypeScript-family suffixes and retain `.cjs`. Helpers remain in
-`fixtures/`, excluded regardless of their extension.
+Case ids omit TypeScript-family suffixes and retain `.cjs`. New helpers belong
+in `fixtures/`, excluded regardless of their extension. Legacy helper entry
+cases retain plain subject paths until their standalone coverage has an
+explicit replacement; moving an existing entry into `fixtures/` removes it
+from discovery, including the universal gap lane when its name starts with
+`test_gap_`.
+
+`test-parity/compile-smoke.txt` retains standalone TypeScript compilation for
+relocated legacy entries. The existing smoke selector combines its checked
+paths with top-level `test-files/*.ts`, sorting by basename to preserve shard
+assignment. Missing, duplicate or escaping manifest paths fail selection. Basenames must
+also be unique because CI names its output and result markers by basename.
+Add a relocated `.ts` entry there when it already participates in compile
+smoke; a parity skip does not imply a compile-smoke skip.
 
 The GC representation-selection corpus keeps its stable bare-basename IDs in
 `test-parity/gc_repsel_corpus.txt`. The matrix resolves each ID to exactly one

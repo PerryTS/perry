@@ -8,7 +8,7 @@
 // command class, so the client lost its EventEmitter ancestry and
 // `client.on("error", cb)` resolved to `events.on(emitter, name)`, throwing
 // `The "emitter" argument must be an instance of EventEmitter`.
-import { attachConfig } from "../../../test-files/gap_11042_class_expr_dynamic_heritage_helper.ts";
+import { attachConfig } from "./gap_11042_class_expr_dynamic_heritage_helper.ts";
 import * as node_events_1 from "node:events";
 
 // ── 1. plain mixin factory reached through a function VALUE (never

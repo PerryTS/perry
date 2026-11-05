@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream';
 import { createGunzip, gzipSync } from 'node:zlib';
-import { fixture } from '../../../test-files/fetch_stream_fixture.ts';
+import { fixture } from './fetch_stream_fixture.ts';
 async function* rest(iterator: AsyncIterator<Uint8Array>, first: Uint8Array) {
   yield first;
   for (;;) { const step = await iterator.next(); if (step.done) return; yield step.value; }

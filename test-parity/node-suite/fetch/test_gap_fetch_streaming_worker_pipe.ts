@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
-import { delay } from '../../../test-files/fetch_stream_fixture.ts';
+import { delay } from './fetch_stream_fixture.ts';
 async function main() {
-  const worker = new Worker(new URL('../../../test-files/fetch_stream_pipe_worker.ts', import.meta.url));
+  const worker = new Worker(new URL('./fetch_stream_pipe_worker.ts', import.meta.url));
   await new Promise(resolve => worker.once('message', resolve));
   const first = new Promise<any>(resolve => worker.once('message', resolve));
   worker.postMessage({start:true});

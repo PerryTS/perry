@@ -12,14 +12,14 @@
 // re-exports) already worked and must keep working.
 
 async function main(): Promise<void> {
-  const ns = await import("../../../test-files/dynamic_import_chunk_agent.ts");
+  const ns = await import("./dynamic_import_chunk_agent.ts");
   console.log("typeof ns:", typeof ns);
   console.log("typeof ns.run:", typeof ns.run);
   console.log("ns.run():", ns.run("agent"));
   // Re-export under a renamed key resolves to the shared chunk's binding.
   console.log("ns.version:", ns.version);
 
-  const w = await import("../../../test-files/dynamic_import_chunk_worker.ts");
+  const w = await import("./dynamic_import_chunk_worker.ts");
   console.log("typeof w.work:", typeof w.work);
   console.log("w.work():", w.work());
 }

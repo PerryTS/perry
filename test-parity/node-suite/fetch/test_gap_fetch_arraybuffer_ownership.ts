@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { fixture } from '../../../test-files/fetch_stream_fixture.ts';
+import { fixture } from './fetch_stream_fixture.ts';
 function pressure() {
   const live: any[] = [];
   let i = 0;

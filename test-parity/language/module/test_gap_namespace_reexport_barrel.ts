@@ -12,7 +12,7 @@
 // Importing the same names DIRECTLY from the declaring module (no barrel hop)
 // always worked — the bug is specifically about surviving the re-export hop.
 
-import { Token, estimate } from "../../../test-files/namespace_reexport_barrel.ts";
+import { Token, estimate } from "./namespace_reexport_barrel.ts";
 
 // Namespace-valued re-export: member access must dispatch through the namespace.
 console.log(Token.estimate("hello world"));
