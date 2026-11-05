@@ -176,8 +176,8 @@ fn object_string(value: f64, name: &[u8]) -> Option<String> {
     object_property(value, name).and_then(value_to_string)
 }
 
-fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, crate::exception::Caught> {
-    crate::exception::catch_thrown(f)
+fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
+    crate::exception::catch_js_throw(f)
 }
 
 fn throw_error_with_code(message: &str, code: &'static str) -> ! {
@@ -788,7 +788,7 @@ fn record_mock_call(id: i64, args_value: f64, this_value: f64, result: f64, erro
     set_field(call, "this", this_handle.get_nanbox_f64());
     set_field(call, "target", undefined_value());
     set_field(call, "result", result_handle.get_nanbox_f64());
-    set_field(call, "error", error_handle.value());
+    set_field(call, "error", error_handle.get_nanbox_f64());
     set_field(call, "stack", stack_handle.get_nanbox_f64());
     let call_handle = scope.root_nanbox_f64(boxed_ptr(call));
 
@@ -857,7 +857,7 @@ extern "C" fn mock_function_invoke(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let call_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     let this_handle = scope.root_nanbox_f64(this_value);
-    let call_result = catch_js(|| unsafe {
+    let call_result = crate::exception::catch_thrown(|| unsafe {
         crate::closure::native_call_value_this(
             implementation_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
