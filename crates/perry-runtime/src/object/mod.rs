@@ -328,7 +328,7 @@ mod with_env;
 // helpers that lived directly in `object/mod.rs`.
 mod class_meta_registry;
 pub(crate) mod descriptor_state;
-mod this_binding;
+pub(crate) mod this_binding;
 mod to_string_tag;
 pub use alloc::*;
 pub use arguments::*;
@@ -416,9 +416,9 @@ pub(crate) use descriptor_state::{
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use field_get_set::private_lexical_brand_depth;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use field_get_set::private_member_access_hints_depth;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -430,7 +430,7 @@ pub(crate) use field_get_set::{
 };
 #[cfg(test)]
 pub(crate) use this_binding::derived_super_scope_push_at;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use this_binding::static_private_owner_depth;
 #[cfg(test)]
 pub(crate) use this_binding::static_private_owner_push_at;
@@ -752,7 +752,7 @@ pub(crate) use keys_lookup::*;
 
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use call_method_depth::call_method_depth;
 #[cfg(test)]
 pub(crate) use call_method_depth::test_enter_catch_method;
@@ -1958,5 +1958,7 @@ pub(crate) use field_get_set::{
     private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
 };
 
+#[cfg(test)]
+pub(crate) use native_call_method::namespace_override_depth;
 #[cfg(any(test, target_os = "wasi"))]
-pub(crate) use native_call_method::{namespace_override_depth, namespace_override_restore_depth};
+pub(crate) use native_call_method::namespace_override_restore_depth;

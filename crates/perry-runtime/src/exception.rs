@@ -31,7 +31,6 @@
 mod wasm;
 
 pub(crate) mod marks;
-pub(crate) use marks::CatchStack;
 pub use marks::{caller_frame_mark, frame_mark};
 mod native_call;
 pub(crate) use native_call::catch_native_callback;

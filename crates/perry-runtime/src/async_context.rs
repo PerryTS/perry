@@ -411,10 +411,10 @@ pub enum ContextGuardAction {
 }
 
 // `perry_thread_local!` for the reason given at `ACTIVE_CONTEXT`.
-crate::perry_thread_local! {
-    static CONTEXT_GUARDS: RefCell<crate::exception::CatchStack<ContextGuardAction>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static CONTEXT_GUARDS: crate::exception::marks::CatchStackKey<ContextGuardAction> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.context_guards);
 
 /// Register `action` for the scope the calling frame owns (or, called from a
 /// helper the owner calls directly, the owner's: see

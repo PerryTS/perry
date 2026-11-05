@@ -3,7 +3,7 @@
 
 use super::*;
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 crate::perry_thread_local! {
     pub(crate) static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
@@ -18,12 +18,15 @@ crate::perry_thread_local! {
     // Direct compiled calls never arm it, so they keep the lexical class-ref.
     static STATIC_THIS_OVERRIDE: Cell<(bool, u64)> =
         const { Cell::new((false, crate::value::TAG_UNDEFINED)) };
-    /// Lexical ClassDefinitionEvaluation owner for static method/accessor
-    /// dispatch. Unlike the `this` argument, this is not replaced by `.call`'s
-    /// visible receiver. A stack makes nested dispatch frame-local.
-    static STATIC_PRIVATE_OWNER_STACK: RefCell<crate::exception::CatchStack<u64>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
 }
+/// Lexical ClassDefinitionEvaluation owner for static method/accessor
+/// dispatch. Unlike the `this` argument, this is not replaced by `.call`'s
+/// visible receiver. A stack makes nested dispatch frame-local.
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static STATIC_PRIVATE_OWNER_STACK: crate::exception::marks::CatchStackKey<u64> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.static_private_owner);
 
 /// Push the static-private owner for the calling frame's dispatch.
 #[inline(always)]
@@ -65,7 +68,7 @@ pub(crate) fn static_private_owner_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn static_private_owner_depth() -> usize {
     STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow().len())
 }
@@ -347,20 +350,21 @@ pub(crate) struct DerivedSuperBinding {
     class_id: u32,
 }
 
-crate::perry_thread_local! {
-    /// Active derived-constructor `super()` binding cells. An arrow created
-    /// inside a constructor has its own codegen context, so it cannot name the
-    /// outer function's alloca directly; this stack gives it the exact live
-    /// binding cell without turning the state into a process-global boolean.
-    ///
-    /// An arrow finds ITS constructor's entry by the receiver it captured and
-    /// the class it was written in, never by position: the top entry belongs
-    /// to whichever derived constructor is running now, which is another
-    /// object's when the arrow (written in a constructor that finished long
-    /// ago) runs inside a different constructor's `super()`.
-    static DERIVED_SUPER_BINDING_STACK: std::cell::RefCell<crate::exception::CatchStack<DerivedSuperBinding>> =
-        const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// Active derived-constructor `super()` binding cells. An arrow created
+/// inside a constructor has its own codegen context, so it cannot name the
+/// outer function's alloca directly; this stack gives it the exact live
+/// binding cell without turning the state into a process-global boolean.
+///
+/// An arrow finds ITS constructor's entry by the receiver it captured and
+/// the class it was written in, never by position: the top entry belongs
+/// to whichever derived constructor is running now, which is another
+/// object's when the arrow (written in a constructor that finished long
+/// ago) runs inside a different constructor's `super()`.
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static DERIVED_SUPER_BINDING_STACK: crate::exception::marks::CatchStackKey<DerivedSuperBinding> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.derived_super_binding);
 
 /// The binding cell of the innermost active activation constructing
 /// `this_bits` as class `class_id` (0 on either side matches any class), or
