@@ -556,8 +556,8 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
             // The whole-program field contract already licenses a canonical
             // raw-f64 load. Carry that same proof through arithmetic instead
             // of reclassifying the value from its erased field annotation.
-            // Guarded/absent/non-F64 fields are refused by proves_raw_f64.
-            if crate::expr::wpfacts_access::proves_raw_f64(ctx, expr) {
+            // Guarded/absent/non-F64 fields are refused by proves_number.
+            if crate::expr::wpfacts_access::proves_number(ctx, expr) {
                 return false;
             }
 
