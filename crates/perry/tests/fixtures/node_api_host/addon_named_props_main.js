@@ -61,3 +61,65 @@ for (const packet of made) ports += packet.port === 4433 ? 1 : 0;
 console.log("made", made.length, JSON.stringify(made[999]), JSON.stringify(Object.keys(made[0])), ports, made[7].length);
 addon.setNamed(made[1], "extra", true);
 console.log("made extra", JSON.stringify(Object.keys(made[1])), addon.hasNamed(made[1], "extra"), addon.hasNamed(made[2], "extra"));
+
+// WTF26: a named access is an unknown-receiver fixed-key site (the layout probe first, the complete
+// operation on a decline); every probe decline below must still answer as node does.
+
+const ownGetter = { get k() { return "own getter"; } };
+console.log("own getter", addon.getNamed(ownGetter, "k"), addon.setNamedStatus(ownGetter, "k", 1), ownGetter.k, addon.hasNamed(ownGetter, "k"));
+let captured = 5;
+const bindingGetter = { get k() { return captured; } };
+captured = 6;
+console.log("binding getter", addon.getNamed(bindingGetter, "k"), addon.getNamed(Object.create(bindingGetter), "k"));
+const ownSetter = { set k(value) { this.seen = value; } };
+addon.setNamed(ownSetter, "k", 3);
+console.log("own setter", ownSetter.seen, String(addon.getNamed(ownSetter, "k")), JSON.stringify(Object.keys(ownSetter)));
+const throwing = { set k(value) { throw new Error("no " + value); } };
+console.log("throwing setter", addon.setNamedStatus(throwing, "k", 1));
+
+const nonWritable = Object.defineProperty({}, "ro", { value: 1, writable: false, enumerable: true });
+console.log("own non-writable", addon.setNamedStatus(nonWritable, "ro", 2), nonWritable.ro);
+const hidden = Object.defineProperty({}, "h", { value: 1, writable: true, enumerable: false });
+addon.setNamed(hidden, "h", 2);
+console.log("non-enumerable writable", hidden.h, Object.keys(hidden).length, addon.getNamed(hidden, "h"));
+const sealed = Object.seal({ k: 1 });
+console.log("sealed", addon.setNamedStatus(sealed, "k", 2), sealed.k, addon.setNamedStatus(sealed, "z", 3), "z" in sealed);
+const closed = Object.preventExtensions({ k: 1 });
+console.log("non-extensible", addon.setNamedStatus(closed, "k", 2), closed.k, addon.setNamedStatus(closed, "z", 3), "z" in closed, String(addon.getNamed(closed, "z")));
+
+const shadowBase = { inherited: "base" };
+const shadowChild = Object.create(shadowBase);
+addon.setNamed(shadowChild, "inherited", "own");
+console.log("shadowing store", addon.getNamed(shadowChild, "inherited"), shadowBase.inherited, Object.keys(shadowChild).length);
+
+const rep = { n: 1, m: 2 };
+const twin = { n: 1, m: 2 };
+addon.setNamed(rep, "n", "text");
+addon.setNamed(rep, "m", 1.5);
+console.log("representation", rep.n, rep.m, twin.n, twin.m, addon.getNamed(rep, "n"), addon.getNamed(rep, "m"));
+
+const trapLog = [];
+const proxy = new Proxy({ t: 1 }, {
+  get(target, key) { trapLog.push("get " + String(key)); return 42; },
+  set(target, key, value) { trapLog.push("set " + String(key) + " " + value); return true; },
+  has(target, key) { trapLog.push("has " + String(key)); return key === "t"; },
+});
+console.log("proxy", addon.getNamed(proxy, "t"), addon.setNamedStatus(proxy, "t", 9), addon.hasNamed(proxy, "zz"), JSON.stringify(trapLog));
+
+class Fields { constructor() { this.x = 1; this.y = 2; } get sum() { return this.x + this.y; } }
+const fields = new Fields();
+addon.setNamed(fields, "y", 10);
+console.log("class instance", addon.getNamed(fields, "x"), addon.getNamed(fields, "sum"), fields.y, addon.hasNamed(fields, "sum"));
+
+function fn() {}
+addon.setNamed(fn, "custom", 1);
+console.log("function", addon.getNamed(fn, "name"), addon.getNamed(fn, "length"), fn.custom, addon.getNamed(fn, "custom"));
+
+const bytes = new Uint8Array(4);
+addon.setNamed(bytes, "1", 7);
+addon.setNamed(bytes, "-0", 5);
+addon.setNamed(bytes, "tag", "t");
+console.log("typed array", addon.getNamed(bytes, "1"), String(addon.getNamed(bytes, "-0")), addon.hasNamed(bytes, "-0"), addon.getNamed(bytes, "length"), String(addon.getNamed(bytes, "1.5")), bytes.tag, JSON.stringify(Array.from(bytes)));
+
+const hooks = require("async_hooks");
+console.log("async_hooks", typeof addon.getNamed(hooks, "createHook"), addon.hasNamed(hooks, "createHook"));
