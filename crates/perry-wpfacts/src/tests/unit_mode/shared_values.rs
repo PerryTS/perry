@@ -828,11 +828,17 @@ pub(super) fn a_store_beside_top_writes_no_builtin_function_value() {
         !builtin_fn_read_top("const h: any = c ? x : g; h.k = 1;"),
         "a store into ⊤ marked builtin function values written"
     );
-    // A store into a builtin function value itself still marks them written
-    // (one token for every one): the read is ⊤.
+    // A store into a builtin function value itself still marks its key
+    // written on every one (one token for every one): the read under that
+    // key is ⊤ (rule R2).
     assert!(
-        builtin_fn_read_top("g.k = 1;"),
-        "a store into a builtin function value must mark them written"
+        builtin_fn_read_top("g.foo = 1;"),
+        "a store into a builtin function value must mark its key written"
+    );
+    // Rule R2: a store under another key leaves `foo`.
+    assert!(
+        !builtin_fn_read_top("g.k = 1;"),
+        "a store under `k` marked `foo` written"
     );
 }
 

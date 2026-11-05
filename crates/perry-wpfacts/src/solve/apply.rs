@@ -811,6 +811,7 @@ impl Model {
                     if t == TOP {
                         continue;
                     }
+                    self.accessor_on_builtin_fn(t, key, f);
                     if key == star {
                         // A computed-key accessor: it may answer any key, so
                         // it runs as unknown code and every key read through
