@@ -435,8 +435,8 @@ fn throw_tracing_channel_symbol(value: f64) -> ! {
     );
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     register_error_code(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(boxed_ptr(err))
+    let err = crate::error::CoreError::type_error(s);
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool {
@@ -659,14 +659,14 @@ pub(crate) fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     register_error_code(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(boxed_ptr(err))
+    let err = crate::error::CoreError::type_error(s);
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn throw_type_error_no_code(message: &[u8]) -> ! {
     let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(boxed_ptr(err))
+    let err = crate::error::CoreError::type_error(s);
+    crate::exception::throw_core(err)
 }
 
 /// Build (but do not throw) the `TypeError: transform is not a function`
@@ -735,7 +735,7 @@ pub(crate) extern "C" fn throw_captured_error(
     _this: crate::closure::JsThis,
 ) -> f64 {
     let err = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
-    crate::exception::js_throw(err)
+    crate::exception::throw_program_value(err)
 }
 
 pub(crate) fn schedule_uncaught(err: UncaughtError) {
