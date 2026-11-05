@@ -180,7 +180,7 @@ pub(super) fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
 /// Rule R1's fields (`Model::builtin_field`): every field of a holder that
 /// took one under a key it does not declare (the native function values'
 /// shared holder: all of its fields), the ten largest by set size.
-pub(super) fn builtin_fields(m: &model::Model) -> (usize, Vec<(String, usize)>) {
+pub(super) fn builtin_fields(m: &model::Model) -> (usize, Vec<(String, usize)>, [u64; 4]) {
     let any = m
         .tok_index
         .get(&model::TokKind::BuiltinFn(model::Native::Any))
@@ -201,5 +201,6 @@ pub(super) fn builtin_fields(m: &model::Model) -> (usize, Vec<(String, usize)>) 
     }
     let count = v.len();
     v.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    (count, v.into_iter().take(10).map(|(n, l)| (l, n)).collect())
+    let top = v.into_iter().take(10).map(|(n, l)| (l, n)).collect();
+    (count, top, m.r1_sinks)
 }

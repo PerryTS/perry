@@ -1,6 +1,7 @@
 //! The runtime's shared stand-in tokens are not merge points: a container
-//! of primitives is one object per producing site, and a builtin function
-//! value has no field storage of its own.
+//! of primitives is one object per producing site. A builtin function value
+//! keeps a store under a key no native declares in the one field every
+//! native function value shares under that key (rule R1).
 
 use super::*;
 
@@ -42,9 +43,11 @@ fn primitive_containers_are_per_site() {
 }
 
 #[test]
-fn builtin_function_values_hold_nothing() {
-    // A store onto one builtin function value is not read back from another
-    // (there is no shared storage); the read is ⊤, not the stored object.
+fn builtin_function_values_share_one_field_per_key() {
+    // A store onto one builtin function value under a key no native
+    // declares is read back from another (rule R1: natives alias, so every
+    // native function value shares the field): the read holds the stored
+    // object, not ⊤.
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -56,11 +59,6 @@ fn builtin_function_values_hold_nothing() {
         "#,
     );
     let s = site(&pf, "a");
-    assert!(
-        classes(s).is_empty(),
-        "{:?}\n{}",
-        s.receivers,
-        pf.dump_text()
-    );
-    assert!(s.top, "{}", pf.dump_text());
+    assert_eq!(classes(s), ["A"], "{}", pf.dump_text());
+    assert!(!s.top, "{}", pf.dump_text());
 }

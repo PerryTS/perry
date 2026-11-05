@@ -1345,6 +1345,9 @@ pub struct Model {
     /// Reads and calls through native function values waiting for the
     /// shared field of their key (`Atom::MAX`: a computed key).
     pub r1_waits: FxHashMap<Atom, Vec<R1Wait>>,
+    /// Rule R1 sinks (`builtin_fields_sink`): [namespace holders, of them
+    /// holding fields; native function values, of them holding fields].
+    pub r1_sinks: [u64; 4],
     /// Stores into a builtin function value at a node, with their reason:
     /// the node decides once the worklist is empty (`settle_bf_written`). The
     /// opaque builtin function value (one token for every one) runs as

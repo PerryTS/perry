@@ -144,9 +144,9 @@ pub struct Stats {
     pub pts_entries: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
-    /// Rule R1: the program fields of built-in objects, the largest
-    /// first (`holder.key`, set size), and how many there are.
-    pub builtin_fields: (usize, Vec<(String, usize)>),
+    /// Rule R1: how many program fields of built-in objects, the largest
+    /// first (`holder.key`, set size), the sinks (`Model::r1_sinks`).
+    pub builtin_fields: (usize, Vec<(String, usize)>, [u64; 4]),
 }
 
 #[derive(Clone, Debug, Default)]
