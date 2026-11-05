@@ -301,6 +301,28 @@ pub(crate) fn lower_worker_messaging_new(
     class_name: &str,
     args: Option<&[ast::ExprOrSpread]>,
 ) -> Result<Expr> {
+    if class_name == "BroadcastChannel" {
+        let callee = Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
+            property: class_name.to_string(),
+        });
+        if let Some(args) = args.filter(|args| args.iter().any(|arg| arg.spread.is_some())) {
+            return Ok(Expr::NewDynamicSpread {
+                byte_end: 0,
+                callee,
+                args: lower_new_spread_args(ctx, args)?,
+                byte_offset: 0,
+            });
+        }
+        return Ok(Expr::NewDynamic {
+            byte_end: 0,
+            callee,
+            args: lower_optional_args(ctx, args)?,
+            byte_offset: 0,
+        });
+    }
     Ok(Expr::NativeMethodCall {
         module: "worker_threads".to_string(),
         class_name: None,

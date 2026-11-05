@@ -594,6 +594,7 @@ js_boxed_number_new	f64	f64
 js_boxed_string_new	f64	f64,i32s
 js_boxed_symbol_new	f64	f64
 js_broadcast_channel_new	f64	f64
+js_broadcast_channel_new_counted	f64	f64,i32u
 js_btoa	ptr	f64
 js_buffer_alloc	ptr	i32s,i32s
 js_buffer_alloc_fill_value	ptr	i32s,f64,i32s

@@ -127,6 +127,12 @@ extern "C" fn broadcast_remove_event_listener(
 /// new worker_threads.BroadcastChannel(name)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let name = scope.root_nanbox_f64(name);
+    let name_value = scope.root_nanbox_f64(perry_runtime::builtins::js_template_string_coerce_box(
+        name.get_nanbox_f64(),
+    ));
+    let name_string = string_value_to_string(name_value.get_nanbox_f64()).unwrap_or_default();
     ensure_environment_data_gc_scanner();
     super::async_shim::ensure_pump_registered();
     let id = NEXT_BROADCAST_ID.with(|n| {
@@ -135,67 +141,65 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
         *n += 1;
         id
     });
-    let name_value = string_coerce(name);
-    let name_string = string_value_to_string(name_value).unwrap_or_default();
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_prototype(obj, constructor_prototype("BroadcastChannel"));
-    let object_bits = object_value(obj).to_bits();
-    set_object_field(
-        obj,
-        "constructor",
-        get_global_constructor("BroadcastChannel"),
-    );
-    set_object_field(
-        obj,
+    let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    let prototype = constructor_prototype("BroadcastChannel");
+    set_object_prototype(obj.get_raw_mut_ptr(), prototype);
+    let set = |name: &str, value: f64| {
+        let value = scope.root_nanbox_f64(value);
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        perry_runtime::object::js_object_set_field_by_name(
+            obj.get_raw_mut_ptr(),
+            key,
+            value.get_nanbox_f64(),
+        );
+    };
+    set("constructor", get_global_constructor("BroadcastChannel"));
+    set(
         "postMessage",
         port_bound_closure(
             perry_runtime::fn_info!(native_args broadcast_post_message, 1),
             id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "close",
         port_bound_closure(
             perry_runtime::fn_info!(broadcast_close, 0; with_declared(0)),
             id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "ref",
         port_bound_closure(
             perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
             id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "unref",
         port_bound_closure(
             perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
             id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "addEventListener",
         port_bound_closure(
             perry_runtime::fn_info!(broadcast_add_event_listener, 3; with_declared(3)),
             id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "removeEventListener",
         port_bound_closure(
             perry_runtime::fn_info!(broadcast_remove_event_listener, 2; with_declared(2)),
             id,
         ),
     );
-    set_object_field(obj, "onmessage", js_null());
-    set_object_field(obj, "onmessageerror", js_null());
-    set_object_field(obj, "name", name_value);
+    set("onmessage", js_null());
+    set("onmessageerror", js_null());
+    set("name", name_value.get_nanbox_f64());
+    let object_bits = object_value(obj.get_raw_mut_ptr()).to_bits();
     BROADCAST_CHANNELS.with(|channels| {
         channels.borrow_mut().insert(
             id,
@@ -206,5 +210,49 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
             },
         );
     });
-    object_value(obj)
+    object_value(obj.get_raw_mut_ptr())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_names_leave_broadcast_admission_unchanged() {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let symbol = scope.root_nanbox_f64(unsafe { perry_runtime::symbol::js_symbol_new_empty() });
+        let before = (
+            NEXT_BROADCAST_ID.with(|id| *id.borrow()),
+            BROADCAST_CHANNELS.with(|channels| channels.borrow().len()),
+        );
+        assert!(perry_runtime::exception::catch_js_throw(|| {
+            js_worker_threads_broadcast_channel_new(symbol.get_nanbox_f64())
+        })
+        .is_err());
+        assert!(perry_runtime::exception::catch_js_throw(|| {
+            perry_runtime::messaging::js_broadcast_channel_new_counted(js_undefined(), 0)
+        })
+        .is_err());
+        assert_eq!(
+            before,
+            (
+                NEXT_BROADCAST_ID.with(|id| *id.borrow()),
+                BROADCAST_CHANNELS.with(|channels| channels.borrow().len()),
+            )
+        );
+        let value = scope.root_nanbox_f64(js_worker_threads_broadcast_channel_new(js_undefined()));
+        assert_eq!(
+            BROADCAST_CHANNELS.with(|channels| channels
+                .borrow()
+                .get(&before.0)
+                .unwrap()
+                .name
+                .clone()),
+            "undefined"
+        );
+        BROADCAST_CHANNELS.with(|channels| {
+            let removed = channels.borrow_mut().remove(&before.0).unwrap();
+            assert_eq!(removed.object_bits, value.get_nanbox_f64().to_bits());
+        });
+    }
 }
