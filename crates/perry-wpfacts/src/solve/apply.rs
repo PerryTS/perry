@@ -815,7 +815,7 @@ impl Model {
                     if t == TOP {
                         continue;
                     }
-                    if key == star && !builtins::accessor_receiver(self, t) {
+                    if key == star && !builtins::accessor_receiver(self, t, key) {
                         // A computed-key accessor: it may answer any key, so
                         // it runs as unknown code and every key read through
                         // this holder may yield anything (derive kills the

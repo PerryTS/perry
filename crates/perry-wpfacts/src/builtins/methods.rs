@@ -442,14 +442,13 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
             },
         );
     }
-    let modeled = accessor_receiver(m, origin);
-    if modeled {
-        let key = c
-            .spread
-            .is_empty()
-            .then(|| m.call_lit.get(&call).copied())
-            .flatten()
-            .unwrap_or_else(|| m.atom(crate::STAR_KEY));
+    let key = c
+        .spread
+        .is_empty()
+        .then(|| m.call_lit.get(&call).copied())
+        .flatten()
+        .unwrap_or_else(|| m.atom(crate::STAR_KEY));
+    if accessor_receiver(m, origin, key) {
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
         // Spread positions are not retained in CallSite: any direct or
@@ -500,12 +499,12 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
 }
 
 /// Receiver shapes for which descriptor accessors have modeled holder groups.
-pub(crate) fn accessor_receiver(m: &Model, t: Tok) -> bool {
+pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
     !m.is_marker(t)
         && (matches!(
             m.toks[t as usize],
             TokKind::Obj(..) | TokKind::Func(..) | TokKind::Proto(_) | TokKind::ClassObj(_)
-        ) || super::builtin_function(m, t))
+        ) || super::undeclared(m, t, key))
 }
 
 /// Callable values whose bodies the accessor groups cannot bind precisely.

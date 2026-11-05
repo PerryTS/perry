@@ -310,13 +310,26 @@ fn spread_prefix_does_not_drop_the_accessor_function() {
 }
 
 #[test]
-fn native_function_receiver_uses_accessor_result() {
+fn native_function_computed_receiver_keeps_conservative_path() {
+    // Computed native keys are outside the ordinary program-field predicate.
     check(
         r#"
         declare const key: string;
         const o: any = Object.assign;
         Object.defineProperty(o, key, { get() { return { witness: 1 }; } });
         console.log(o.other.witness);
+    "#,
+        false,
+    );
+}
+
+#[test]
+fn native_function_receiver_uses_accessor_result() {
+    check(
+        r#"
+        const o: any = Object.assign;
+        Object.defineProperty(o, "k", { get() { return { witness: 1 }; } });
+        console.log(o.k.witness);
     "#,
         true,
     );
@@ -388,4 +401,20 @@ fn a_late_install_replays_prior_inherited_reads() {
             "key={key}: prior reads must observe the installed getter"
         );
     }
+}
+
+#[test]
+fn an_installed_native_namespace_member_call_runs_the_getter_result() {
+    let setup = r#"
+        declare function unknown(value: any): void;
+        class Cell { witness = 1; }
+        const o = new Cell();
+        function g(value: any) { unknown(value); }
+    "#;
+    let call = "(Object as any).zap(o); console.log(o.witness);";
+    check(&format!("{setup}{call}"), true);
+    check(
+        &format!("{setup}(Object as any).__defineGetter__(\"zap\", () => g);{call}"),
+        false,
+    );
 }
