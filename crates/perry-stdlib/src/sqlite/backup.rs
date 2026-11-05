@@ -99,8 +99,8 @@ pub(crate) unsafe fn sqlite_core_error(
 ) -> perry_runtime::error::CoreError {
     let msg = js_string_from_bytes(error.message.as_ptr(), error.message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_SQLITE_ERROR");
-    let err = perry_runtime::error::CoreError::error(msg);
-    let err_obj = perry_runtime::value::js_nanbox_get_pointer(err.value()) as *mut ObjectHeader;
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let err = perry_runtime::error::CoreError::error(msg).root(&scope);
 
     if let Some(errcode) = error.errcode {
         let key = js_string_from_bytes(b"errcode".as_ptr(), "errcode".len() as u32);
@@ -108,22 +108,25 @@ pub(crate) unsafe fn sqlite_core_error(
         // collide with registered class ids, which makes `typeof e.errcode`
         // report "function" (see node_sqlite_integer_value, #6561).
         js_object_set_field_by_name(
-            err_obj,
+            perry_runtime::value::js_nanbox_get_pointer(err.value()) as *mut ObjectHeader,
             key,
             f64::from_bits(JSValue::number(errcode as f64).bits()),
         );
     }
     if let Some(errstr) = error.errstr {
-        let key = js_string_from_bytes(b"errstr".as_ptr(), "errstr".len() as u32);
+        let key = scope.root_string_ptr(js_string_from_bytes(
+            b"errstr".as_ptr(),
+            "errstr".len() as u32,
+        ));
         let value = js_string_from_bytes(errstr.as_ptr(), errstr.len() as u32);
         js_object_set_field_by_name(
-            err_obj,
-            key,
+            perry_runtime::value::js_nanbox_get_pointer(err.value()) as *mut ObjectHeader,
+            key.get_raw_mut_ptr(),
             f64::from_bits(JSValue::string_ptr(value).bits()),
         );
     }
 
-    err
+    err.error()
 }
 
 /// Throw a synchronous `ERR_SQLITE_ERROR` carrying Node's `errcode`
