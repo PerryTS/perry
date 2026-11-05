@@ -1288,6 +1288,8 @@ pub(super) fn compile_closure(
             })
             .map(|name| class_ids.get(name.as_str()).copied().unwrap_or(0)),
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         methods,
         module_globals,
         import_function_prefixes,

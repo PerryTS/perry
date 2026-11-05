@@ -1056,6 +1056,11 @@ pub(crate) struct FnCtx<'a> {
     /// new-expression then loads `result_slot` as its value. One entry per
     /// nested inline ctor; the innermost (`last()`) governs a `return`.
     pub inline_ctor_return: Vec<InlineCtorReturn>,
+    /// The receiver run in flight (`layout_read::RecvRun`).
+    pub recv_run: Option<crate::expr::layout_read::RecvRun>,
+    /// The by-name store being lowered was a 2c member of the run
+    /// (`layout_read::RunTransparency::Store`).
+    pub recv_run_store_member: bool,
 
     /// Cross-module function declarations to add to `LlModule` after
     /// lowering finishes. Each entry is `(llvm_name, return_type, param_types)`.

@@ -47,6 +47,7 @@ pub(crate) fn emit_static_store_ic(
     value_is_scalar: bool,
     this_receiver: bool,
     run: Option<&crate::expr::layout_read::RunArm>,
+    receiver: Option<crate::expr::layout_read::RunReceiver>,
 ) -> String {
     // Object model step 5 (case 2c): a coloured key's store through any
     // receiver writes the colour slot when the receiver's layout admits it
@@ -72,16 +73,22 @@ pub(crate) fn emit_static_store_ic(
         value_double,
         value_bits,
         value_is_scalar,
+        receiver,
     );
+    // A 2c store is a run member (an overwrite on its hit, the
+    // site's call on its miss); a family init store may add a key.
+    let member = arm.is_some() && init.is_none();
     let value = emit_static_store_ic_site(ctx, obj_box, property, value_double, strict);
     let value = match arm {
         Some(arm) => crate::expr::layout_read::finish_store(ctx, arm, value_double, &value),
         None => value,
     };
-    match init {
+    let value = match init {
         Some(init) => crate::expr::layout_read::finish_store(ctx, init, value_double, &value),
         None => value,
-    }
+    };
+    ctx.recv_run_store_member = member;
+    value
 }
 
 /// [`emit_static_store_ic`]'s ordinary site: one call,
