@@ -1,6 +1,7 @@
 //! Builtin summaries: the function protocol, iterators, arrays and other
 //! builtin data structures.
 
+use super::effects;
 use super::*;
 
 // ------------------------------------------------- function protocol
@@ -598,7 +599,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
         // on every iterable).
         Some("next" | "return" | "throw") => {}
-        Some("push" | "unshift") => {
+        Some("unshift") => {
             for &a in &c.args {
                 m.edge(a, elems);
             }
@@ -636,7 +637,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_tok(m, call, t);
         }
         // In place: the receiver itself.
-        Some("reverse" | "copyWithin") => ret_tok(m, call, t),
+        Some("copyWithin") => ret_tok(m, call, t),
         // A new array, born at this call site, holding the receiver's
         // elements and what the call adds. It is not the receiver: a write
         // into the copy never reaches the source (`args.slice()` then
@@ -678,6 +679,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             }
             ret_tok(m, call, out);
         }
+        // Declared, kept here: the comparator's result is converted
+        // (ToNumber), which no declaration can say yet (`coerce` takes no
+        // `returned(N)`).
         Some("sort" | "toSorted") => {
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
@@ -699,9 +703,15 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 ret_tok(m, call, t);
             }
         }
+        // `forEach` is declared, kept here: its declaration passes the
+        // callback a Map/Set receiver's key as the second argument
+        // (`prim(num) | elems(this)`), an array's is a number. `map` and
+        // `filter` are declared, kept here: the runtime builds their result
+        // by ArraySpeciesCreate (`js_array_map` / `js_array_filter` read
+        // the receiver's `constructor` and `@@species`), which their
+        // declarations (`fresh(Array.prototype, ..)`) do not say.
         Some(
-            "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex" | "findLast"
-            | "findLastIndex" | "flatMap",
+            "forEach" | "map" | "filter" | "findIndex" | "findLast" | "findLastIndex" | "flatMap",
         ) => {
             let Some(&cb) = c.args.first() else {
                 return;
@@ -732,12 +742,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     m.edge(elems, ofa);
                     ret_tok(m, call, out);
                 }
-                Some("find" | "findLast") => {
+                Some("findLast") => {
                     m.edge(elems, c.ret);
                     ret_prim(m, call, prim::UNDEF);
                 }
                 Some("forEach") => ret_prim(m, call, prim::UNDEF),
-                Some("some" | "every") => ret_prim(m, call, prim::BOOL),
                 _ => ret_prim(m, call, prim::NUM),
             }
         }
@@ -754,10 +763,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             m.edge(r, acc);
             m.edge(acc, c.ret);
         }
-        Some("indexOf" | "lastIndexOf" | "includes" | "findIndexOf") => {
+        Some("lastIndexOf" | "findIndexOf") => {
             ret_prim(m, call, prim::NUM | prim::BOOL);
         }
-        Some("join" | "toString" | "toLocaleString") => {
+        Some("toString" | "toLocaleString") => {
             let why = m.reason("array join (element ToString)");
             m.cons(
                 elems,
@@ -785,18 +794,23 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        // A name `Array.prototype` does not define is no method of the
-        // array: `Object.prototype`'s run through the chain, any other is
-        // absent (`split`, `valueOf` through ToPrimitive, a class's method
-        // name on a value that may also be an array).
-        Some(n) => undescribed_method(
-            m,
-            Family::Array,
-            t,
-            n,
-            call,
-            &format!("argument of unmodeled array method {n}"),
-        ),
+        // A method the runtime declares the effects of (and no arm above
+        // models): its declaration runs (`effects::run_native`). A name
+        // `Array.prototype` does not define is no method of the array:
+        // `Object.prototype`'s run through the chain, any other is absent
+        // (`split`, `valueOf` through ToPrimitive, a class's method name on
+        // a value that may also be an array).
+        Some(n) => match effects::declared(Family::Array, n) {
+            Some(e) => effects::run_native(m, e, t, call),
+            None => undescribed_method(
+                m,
+                Family::Array,
+                t,
+                n,
+                call,
+                &format!("argument of unmodeled array method {n}"),
+            ),
+        },
     }
 }
 

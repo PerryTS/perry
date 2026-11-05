@@ -9,6 +9,15 @@ use crate::model::*;
 
 mod collections;
 mod constructors;
+mod effects;
+#[cfg(test)]
+pub(crate) mod effects_for_tests {
+    pub(crate) use super::effects::interpretable;
+    /// `Array.prototype.<name>` is declared in forms the interpreter runs.
+    pub(crate) fn declared_array_method(name: &str) -> bool {
+        super::effects::declared(super::Family::Array, name).is_some()
+    }
+}
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;

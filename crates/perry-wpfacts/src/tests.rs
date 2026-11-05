@@ -39,6 +39,7 @@ mod const_key_set_store;
 mod ctor_observed;
 mod ctor_return;
 mod dead_dynamic_import;
+mod declared_effects;
 mod default_params;
 mod diagnostics;
 mod dynamic_code;

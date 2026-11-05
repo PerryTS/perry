@@ -234,6 +234,14 @@ impl Model {
             "perry: wpfacts sets logical={logical} stored={stored} distinct={distinct} copies={}",
             self.sets.copies
         );
+        let mut natives: Vec<_> = p.natives.iter().collect();
+        natives.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, (runs, sites)) in natives {
+            eprintln!(
+                "perry: wpfacts native-effects {name} runs={runs} sites={}",
+                sites.len()
+            );
+        }
         let mut ks: Vec<_> = p.kind.iter().collect();
         ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
         for (k, (n, w, rn, rw)) in ks.iter().take(25) {
