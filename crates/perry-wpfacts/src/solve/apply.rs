@@ -754,37 +754,10 @@ impl Model {
                 setter,
             } => {
                 for &t in toks {
-                    match self.toks[t as usize] {
-                        TokKind::Func(_, _) => {
-                            self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
-                        }
-                        _ if builtins::unknown_accessor_callable(self, t) => {
-                            // An unknown accessor: the key it is installed
-                            // under (any key, when computed) reads ⊤ on the
-                            // holder, and the holder escapes to the code that
-                            // runs. It defines that one key: on a holder from
-                            // unmodeled code, a builtin prototype may hold it
-                            // under that key only.
-                            let r = self.reason("accessor of unknown function value");
-                            let fa = self.node_l("acc-unknown");
-                            self.add_top(fa, |_| "accessor of unknown function value".into());
-                            let site = self.anon_post_site("unknown accessor");
-                            let k = if self.atoms[key as usize] == crate::STAR_KEY {
-                                Key::any()
-                            } else {
-                                Key::Named(key)
-                            };
-                            self.cons(
-                                holder,
-                                Cons::Store {
-                                    key: k,
-                                    src: fa,
-                                    site,
-                                },
-                            );
-                            self.cons(holder, Cons::TopSink { reason: r });
-                        }
-                        _ => {}
+                    if matches!(self.toks[t as usize], TokKind::Func(..))
+                        || builtins::unknown_accessor_callable(self, t)
+                    {
+                        self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                     }
                 }
             }
@@ -795,6 +768,32 @@ impl Model {
             }
             Cons::AccessorInstall { key, f, setter } => {
                 for &t in toks {
+                    if builtins::unknown_accessor_callable(self, f) {
+                        // Opaque callbacks share the holder/key's existing
+                        // accessor result. Repeated installs do not allocate
+                        // another unknown value for the same accessor group.
+                        let group = Key::Named(key);
+                        self.acc_group(t, group);
+                        let fa = self.acc_groups[&(t, group)].ar;
+                        self.add_top(fa, |_| "accessor of unknown function value".into());
+                        let site = self.anon_post_site("unknown accessor");
+                        let k = if self.atoms[key as usize] == crate::STAR_KEY {
+                            Key::any()
+                        } else {
+                            group
+                        };
+                        self.cons(
+                            n,
+                            Cons::Store {
+                                key: k,
+                                src: fa,
+                                site,
+                            },
+                        );
+                        let reason = self.reason("accessor of unknown function value");
+                        self.cons(n, Cons::TopSink { reason });
+                        continue;
+                    }
                     if let Some(s) = self.shared_of(t) {
                         let k = self.atoms[key as usize].clone();
                         if self.explain && !self.shared_replay && s != Shared::Top {
