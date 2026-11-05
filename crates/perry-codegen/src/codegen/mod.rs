@@ -3182,6 +3182,7 @@ fn lower_module(
         compiler_private_async_i1_control_locals,
         scope_map: Default::default(),
         string_accumulator_locals: Default::default(),
+        contents_stable_bindings: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
@@ -3405,6 +3406,7 @@ fn lower_module(
     cross_module.scope_map =
         crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
     cross_module.string_accumulator_locals = crate::collectors::string_accumulator_locals(hir);
+    cross_module.contents_stable_bindings = crate::collectors::contents_stable_bindings(hir);
     cross_module.capture_type_proofs =
         crate::collectors::typed_locals::capture_proofs(hir, &module_boxed_vars, &module_globals);
     cross_module.definite_init = crate::collectors::definite_init::collect(hir);
@@ -3846,18 +3848,23 @@ fn lower_module(
             // on `demoted`, `fill(values: Float64Array, nodes: number)` loses
             // `fill$spec_ta7x10000_i32` entirely, because writing an element
             // reads as "mutation" of the typed-array parameter.
-            let body_calls = crate::collectors::body_contains_call(&f.body);
+            //
+            // Both halves are the definition of a contents-stable binding
+            // (`collectors::contents_stable_bindings`), shared with the
+            // let-binding proofs: a parameter is an entry-aliased binding, so
+            // it is stable only when no write reaches it (through it, an
+            // alias or an escape) and the body runs no unknown code and stores
+            // through no foreign root. A primitive keeps only the rebinding
+            // half: no callee can reach the caller's copy.
             let guard_blocked: Vec<bool> = f
                 .params
                 .iter()
                 .map(|p| {
-                    crate::collectors::has_any_mutation(&f.body, p.id)
-                        || (body_calls
-                            && spec_return_proof::is_reference_like(
-                                &cross_module.type_aliases,
-                                &p.ty,
-                                0,
-                            ))
+                    if spec_return_proof::is_reference_like(&cross_module.type_aliases, &p.ty, 0) {
+                        !cross_module.contents_stable_bindings.contains(&p.id)
+                    } else {
+                        crate::collectors::has_any_mutation(&f.body, p.id)
+                    }
                 })
                 .collect();
             let declaration_guards = param_guard::declaration_guards(
