@@ -148,6 +148,7 @@ pub(crate) extern "C" fn thunk_fs_promises_readFile(
     promise_from_result_value(|| unsafe {
         let text_encoding = crate::fs::read_file_encoding(encoding);
         crate::fs::read_file_value_result(path, encoding, text_encoding.as_deref())
+            .map_err(|error| error.value())
     })
 }
 
@@ -175,7 +176,7 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
                 let _ = ids;
                 promise.get_nanbox_f64()
             }
-            Err(err_val) => crate::fs::promise_rejected_fs(err_val),
+            Err(err_val) => crate::fs::promise_rejected_fs(err_val.value()),
         }
     }) {
         Ok(promise) => promise,
@@ -224,7 +225,9 @@ pub(crate) extern "C" fn thunk_fs_promises_chmod(
     path: f64,
     mode: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_chmod_result(path, mode) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_chmod_result(path, mode).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_chown(
@@ -234,7 +237,9 @@ pub(crate) extern "C" fn thunk_fs_promises_chown(
     uid: f64,
     gid: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_chown_result(path, uid, gid, true) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_chown_result(path, uid, gid, true).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_lchown(
@@ -245,7 +250,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lchown(
     gid: f64,
 ) -> f64 {
     promise_from_result_undefined(|| unsafe {
-        crate::fs::js_fs_chown_result(path, uid, gid, false)
+        crate::fs::js_fs_chown_result(path, uid, gid, false).map_err(|error| error.value())
     })
 }
 
@@ -263,7 +268,9 @@ pub(crate) extern "C" fn thunk_fs_promises_lchmod(
         let err = crate::error::js_error_new_with_message(msg);
         return crate::fs::promise_rejected_fs(crate::value::js_nanbox_pointer(err as i64));
     }
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_lchmod_result(path, mode) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_lchmod_result(path, mode).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_mkdir(
@@ -322,7 +329,9 @@ pub(crate) extern "C" fn thunk_fs_promises_rm(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_rm_result(path, options) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_rm_result(path, options).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_rmdir(
@@ -331,7 +340,9 @@ pub(crate) extern "C" fn thunk_fs_promises_rmdir(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_rmdir_result(path, options) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_rmdir_result(path, options).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_unlink(
@@ -349,7 +360,9 @@ pub(crate) extern "C" fn thunk_fs_promises_unlink(
             Err(err) => crate::fs::promise_rejected_fs(err),
         };
     }
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_unlink_result(path) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_unlink_result(path).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_rename(
@@ -358,7 +371,9 @@ pub(crate) extern "C" fn thunk_fs_promises_rename(
     from: f64,
     to: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_rename_result(from, to) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_rename_result(from, to).map_err(|error| error.value())
+    })
 }
 
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
@@ -369,7 +384,9 @@ pub(crate) extern "C" fn thunk_fs_promises_copyFile(
     to: f64,
     flags: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_copy_file_result(from, to, flags) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_copy_file_result(from, to, flags).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_cp(
@@ -388,7 +405,9 @@ pub(crate) extern "C" fn thunk_fs_promises_truncate(
     path: f64,
     len: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_truncate_result(path, len) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_truncate_result(path, len).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_utimes(
@@ -421,7 +440,9 @@ pub(crate) extern "C" fn thunk_fs_promises_link(
     from: f64,
     to: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_link_result(from, to) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_link_result(from, to).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_symlink(
@@ -431,7 +452,9 @@ pub(crate) extern "C" fn thunk_fs_promises_symlink(
     path: f64,
     _type: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_symlink_result(target, path) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_symlink_result(target, path).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_readlink(
@@ -440,7 +463,9 @@ pub(crate) extern "C" fn thunk_fs_promises_readlink(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_from_result_value(|| crate::fs::js_fs_readlink_value_result(path, options))
+    promise_from_result_value(|| {
+        crate::fs::js_fs_readlink_value_result(path, options).map_err(|error| error.value())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_realpath(
@@ -487,7 +512,7 @@ pub(crate) extern "C" fn thunk_fs_promises_opendir(
             );
             crate::fs::promise_value_fs(directory.get_nanbox_f64())
         }
-        Err(err) => crate::fs::promise_rejected_fs(err),
+        Err(err) => crate::fs::promise_rejected_fs(err.value()),
     }
 }
 
@@ -515,7 +540,9 @@ pub(crate) extern "C" fn thunk_fs_promises_access(
     path: f64,
     mode: f64,
 ) -> f64 {
-    promise_from_result_undefined(|| unsafe { crate::fs::js_fs_access_result(path, mode) })
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_access_result(path, mode).map_err(|error| error.value())
+    })
 }
 
 const RL_IF_INPUT: &[u8] = b"__perryReadlinePromisesInput";

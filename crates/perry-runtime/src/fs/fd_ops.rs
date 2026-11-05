@@ -192,9 +192,7 @@ pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
     unsafe {
         match fs_open_sync_result(path_value, flags_value) {
             Ok(fd) => fd as f64,
-            Err((err, path)) => {
-                crate::exception::js_throw(build_fs_error_value(&err, "open", &path))
-            }
+            Err((err, path)) => crate::exception::throw_core(fs_error(&err, "open", &path)),
         }
     }
 }
@@ -242,9 +240,7 @@ pub extern "C" fn js_fs_read_sync(
         // Node surfaces the syscall error (EAGAIN on a non-blocking fd with no
         // data ready, EISDIR, EIO…). Collapsing every failure to 0 made it
         // indistinguishable from a clean EOF.
-        Err(err) => unsafe {
-            crate::exception::js_throw(build_fs_error_value_no_path(&err, "read"))
-        },
+        Err(err) => unsafe { crate::exception::throw_core(fs_error_no_path(&err, "read")) },
     }
 }
 
@@ -345,9 +341,7 @@ pub extern "C" fn js_fs_write_string_sync_options(
     crate::fs::validate::validate_fd_open(fd_value, "write");
     match write_string_sync_result(fd_value as i32, data_value, position_value) {
         Ok(bytes) => bytes,
-        Err(err) => unsafe {
-            crate::exception::js_throw(build_fs_error_value_no_path(&err, "write"))
-        },
+        Err(err) => unsafe { crate::exception::throw_core(fs_error_no_path(&err, "write")) },
     }
 }
 
@@ -397,9 +391,7 @@ pub extern "C" fn js_fs_write_buffer_sync(
         position_value,
     ) {
         Ok(bytes) => bytes,
-        Err(err) => unsafe {
-            crate::exception::js_throw(build_fs_error_value_no_path(&err, "write"))
-        },
+        Err(err) => unsafe { crate::exception::throw_core(fs_error_no_path(&err, "write")) },
     }
 }
 
@@ -819,7 +811,7 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
                 // The type was accepted by `validate_path` but could not be
                 // decoded — treat as a missing target rather than fake stats.
                 let err = std::io::Error::from(std::io::ErrorKind::NotFound);
-                crate::exception::js_throw(build_fs_error_value(&err, "statfs", ""))
+                crate::exception::throw_core(fs_error(&err, "statfs", ""))
             }
         };
         #[cfg(unix)]
@@ -831,7 +823,7 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
                         std::io::ErrorKind::InvalidInput,
                         "path contained an interior null byte",
                     );
-                    crate::exception::js_throw(build_fs_error_value(&err, "statfs", &path))
+                    crate::exception::throw_core(fs_error(&err, "statfs", &path))
                 }
             };
             let mut stat: libc::statvfs = std::mem::zeroed();
@@ -853,7 +845,7 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
             // statvfs failed — surface the OS error (ENOENT, EACCES, …) the way
             // Node does instead of swallowing it into default stats.
             let err = std::io::Error::last_os_error();
-            crate::exception::js_throw(build_fs_error_value(&err, "statfs", &path))
+            crate::exception::throw_core(fs_error(&err, "statfs", &path))
         }
         #[cfg(not(unix))]
         {
@@ -899,21 +891,19 @@ pub(crate) fn dir_id_of(closure: *const ClosureHeader) -> usize {
     crate::closure::js_closure_get_capture_ptr(closure, 0) as usize
 }
 
-fn dir_closed_error_value() -> f64 {
+fn dir_closed_error_value() -> crate::error::CoreError {
     let message = "Directory handle was closed";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_DIR_CLOSED");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::error(msg)
 }
 
-fn dir_concurrent_operation_error_value() -> f64 {
+fn dir_concurrent_operation_error_value() -> crate::error::CoreError {
     let message =
         "Cannot do synchronous work on directory handle with concurrent asynchronous operations";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_DIR_CONCURRENT_OPERATION");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::error(msg)
 }
 
 pub(crate) fn dir_mark_closed(id: usize) {
@@ -926,7 +916,7 @@ pub(crate) fn dir_mark_closed(id: usize) {
     });
 }
 
-pub(crate) fn dir_close_result(id: usize) -> Result<(), f64> {
+pub(crate) fn dir_close_result(id: usize) -> Result<(), crate::error::CoreError> {
     DIR_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(state) = reg.get_mut(&id) else {
@@ -941,7 +931,7 @@ pub(crate) fn dir_close_result(id: usize) -> Result<(), f64> {
     })
 }
 
-fn dir_close_sync_result(id: usize) -> Result<(), f64> {
+fn dir_close_sync_result(id: usize) -> Result<(), crate::error::CoreError> {
     DIR_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(state) = reg.get_mut(&id) else {
@@ -959,7 +949,7 @@ fn dir_close_sync_result(id: usize) -> Result<(), f64> {
     })
 }
 
-pub(crate) fn dir_read_next_result(id: usize) -> Result<Option<f64>, f64> {
+pub(crate) fn dir_read_next_result(id: usize) -> Result<Option<f64>, crate::error::CoreError> {
     DIR_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(state) = reg.get_mut(&id) else {
@@ -977,7 +967,7 @@ pub(crate) fn dir_read_next_result(id: usize) -> Result<Option<f64>, f64> {
     })
 }
 
-fn dir_read_next_sync_result(id: usize) -> Result<Option<f64>, f64> {
+fn dir_read_next_sync_result(id: usize) -> Result<Option<f64>, crate::error::CoreError> {
     DIR_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(state) = reg.get_mut(&id) else {
@@ -1003,7 +993,7 @@ pub(crate) fn dir_read_next(id: usize) -> f64 {
     match dir_read_next_sync_result(id) {
         Ok(Some(value)) => value,
         Ok(None) => f64::from_bits(TAG_NULL),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -1027,11 +1017,11 @@ pub(crate) extern "C" fn dir_close_sync_impl(
     let id = dir_id_of(closure);
     match dir_close_sync_result(id) {
         Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
-fn dir_begin_async_operation(id: usize) -> Result<(), f64> {
+fn dir_begin_async_operation(id: usize) -> Result<(), crate::error::CoreError> {
     DIR_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(state) = reg.get_mut(&id) else {
@@ -1071,13 +1061,16 @@ extern "C" fn dir_finish_read_promise_impl(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-fn dir_pending_read_promise(id: usize, result: Result<Option<f64>, f64>) -> f64 {
+fn dir_pending_read_promise(
+    id: usize,
+    result: Result<Option<f64>, crate::error::CoreError>,
+) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let promise = crate::promise::js_promise_new();
     let (value, is_error) = match result {
         Ok(Some(value)) => (value, false),
         Ok(None) => (f64::from_bits(TAG_NULL), false),
-        Err(err) => (err, true),
+        Err(err) => (err.value(), true),
     };
     let closure = crate::closure::js_closure_alloc(
         crate::fn_info!(dir_finish_read_promise_impl, 0; with_declared(0)),
@@ -1133,13 +1126,13 @@ extern "C" fn dir_finish_read_callback_impl(
 fn dir_schedule_read_callback(
     id: usize,
     callback: *const ClosureHeader,
-    result: Result<Option<f64>, f64>,
+    result: Result<Option<f64>, crate::error::CoreError>,
 ) {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let (value, kind) = match result {
         Ok(Some(value)) => (value, 0.0),
         Ok(None) => (f64::from_bits(TAG_NULL), 1.0),
-        Err(err) => (err, 2.0),
+        Err(err) => (err.value(), 2.0),
     };
     let closure = crate::closure::js_closure_alloc(
         crate::fn_info!(dir_finish_read_callback_impl, 0; with_declared(0)),
@@ -1191,7 +1184,7 @@ pub(crate) extern "C" fn dir_read_impl(
                     crate::closure::js_closure_call2(
                         cb,
                         crate::closure::plain_call_receiver(),
-                        err,
+                        err.value(),
                         f64::from_bits(TAG_NULL),
                     );
                 }
@@ -1205,7 +1198,7 @@ pub(crate) extern "C" fn dir_read_impl(
     match entry {
         Ok(Some(value)) => promise_value_fs(value),
         Ok(None) => promise_value_fs(f64::from_bits(TAG_NULL)),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -1220,14 +1213,14 @@ pub(crate) extern "C" fn dir_close_impl(
     if !cb.is_null() {
         let err = match closed {
             Ok(()) => f64::from_bits(TAG_NULL),
-            Err(err) => err,
+            Err(err) => err.value(),
         };
         crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     match closed {
         Ok(()) => promise_undefined_fs(),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -1272,7 +1265,7 @@ extern "C" fn dir_iterator_next_impl(
                 true,
             ))
         }
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 

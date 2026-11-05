@@ -361,7 +361,11 @@ where
     Err(write_file_data_type_error(data))
 }
 
-pub(crate) fn write_fd_chunk_result(fd: i32, bytes: &[u8], force_append: bool) -> Result<(), f64> {
+pub(crate) fn write_fd_chunk_result(
+    fd: i32,
+    bytes: &[u8],
+    force_append: bool,
+) -> Result<(), crate::error::CoreError> {
     let result = FD_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
         let Some(file) = registry.get_mut(&fd) else {
@@ -374,7 +378,7 @@ pub(crate) fn write_fd_chunk_result(fd: i32, bytes: &[u8], force_append: bool) -
         }
         file.write_all(bytes)
     });
-    result.map_err(|err| unsafe { build_fs_error_value_no_path(&err, "write") })
+    result.map_err(|err| unsafe { fs_error_no_path(&err, "write") })
 }
 
 pub(crate) unsafe fn write_file_to_fd_result(
@@ -386,7 +390,7 @@ pub(crate) unsafe fn write_file_to_fd_result(
     validate::validate_string_or_object_options("options", options);
     validate_write_file_data_source(data)?;
     consume_write_file_input(data, options, |bytes| {
-        write_fd_chunk_result(fd, bytes, force_append)
+        write_fd_chunk_result(fd, bytes, force_append).map_err(|error| error.value())
     })
 }
 
@@ -403,7 +407,7 @@ pub(crate) unsafe fn write_file_path_or_fd_result(
 
     if let Some(fd) = numeric_fd_value(path_value) {
         return consume_write_file_input(data, options, |bytes| {
-            write_fd_chunk_result(fd, bytes, false)
+            write_fd_chunk_result(fd, bytes, false).map_err(|error| error.value())
         });
     }
 

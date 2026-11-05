@@ -107,9 +107,9 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
             || crate::object::prototype_chain::object_static_prototype(addr)
                 == Some(crate::value::TAG_NULL)
         {
-            let empty = header.is_some_and(|h| unsafe {
-                crate::gc_type_is_object!((*h.as_ptr()).obj_type)
-            }) && !received_has_enumerable_own_keys(value.get_nanbox_f64());
+            let empty = header
+                .is_some_and(|h| unsafe { crate::gc_type_is_object!((*h.as_ptr()).obj_type) })
+                && !received_has_enumerable_own_keys(value.get_nanbox_f64());
             return received_text(if empty {
                 "[Object: null prototype] {}"
             } else {
@@ -119,9 +119,8 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         // `inspect(value, { depth: -1 })` of an object with no enumerable own
         // keys (string or symbol) prints its braces, `{}`; any key makes the
         // depth cut-off print `[Object]`.
-        let ordinary = header.is_some_and(|h| unsafe {
-            crate::gc_type_is_object!((*h.as_ptr()).obj_type)
-        });
+        let ordinary =
+            header.is_some_and(|h| unsafe { crate::gc_type_is_object!((*h.as_ptr()).obj_type) });
         if ordinary && !received_has_enumerable_own_keys(value.get_nanbox_f64()) {
             return received_text("{}");
         }
@@ -131,9 +130,6 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
 }
 
 /// Build a received-value error without round-tripping through UTF-8 Rust text.
-pub(crate) fn build_received_type_error(prefix: &str, value: f64) -> f64 {
-    received_type_error(prefix, value).value()
-}
 
 pub(crate) fn received_type_error(prefix: &str, value: f64) -> crate::error::CoreError {
     let scope = crate::gc::RuntimeHandleScope::new();

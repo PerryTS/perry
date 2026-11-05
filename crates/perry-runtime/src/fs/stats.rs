@@ -534,8 +534,8 @@ pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -
                 )
             }
             Err(err) => {
-                let err_val = build_fs_error_value(&err, "stat", &path_str);
-                crate::exception::js_throw(err_val)
+                let err_val = fs_error(&err, "stat", &path_str);
+                crate::exception::throw_core(err_val)
             }
         }
     }
@@ -597,8 +597,8 @@ pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) 
                 )
             }
             Err(err) => {
-                let err_val = build_fs_error_value(&err, "lstat", &path_str);
-                crate::exception::js_throw(err_val)
+                let err_val = fs_error(&err, "lstat", &path_str);
+                crate::exception::throw_core(err_val)
             }
         }
     }

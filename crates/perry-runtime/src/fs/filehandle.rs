@@ -231,7 +231,7 @@ fn live_filehandle_fd_or_ebadf(
     let fd = live_filehandle_fd(closure);
     if fd < 0 || !crate::fs::fd_is_registered(fd) {
         return Err(promise_rejected_fs(
-            crate::fs::validate::build_ebadf_error_value(syscall),
+            (crate::fs::validate::ebadf_error(syscall)).value(),
         ));
     }
     Ok(fd)
@@ -582,15 +582,14 @@ fn parse_stream_iter_options(options: f64) -> (bool, Option<u64>, Option<u64>, u
     (auto_close, start, limit, chunk_size)
 }
 
-fn build_range_error_with_code_value(message: &str, code: &'static str) -> f64 {
+fn range_error_with_code(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::range_error(msg)
 }
 
-fn writer_limit_error() -> f64 {
-    build_range_error_with_code_value(
+fn writer_limit_error() -> crate::error::CoreError {
+    range_error_with_code(
         "The value of \"chunk\" is out of range. It exceeds the writer limit.",
         "ERR_OUT_OF_RANGE",
     )
@@ -650,7 +649,7 @@ fn maybe_close_iter_handle(close: Option<(i32, f64)>) {
 enum StreamIterAction {
     Batch(Vec<u8>),
     Done(Option<(i32, f64)>),
-    Reject(f64),
+    Reject(crate::error::CoreError),
 }
 
 fn read_stream_iter_action(id: usize) -> StreamIterAction {
@@ -671,7 +670,7 @@ fn read_stream_iter_action(id: usize) -> StreamIterAction {
         let fd = filehandle_field_fd(state.handle).unwrap_or(state.fd);
         if fd < 0 || !fd_is_registered(fd) {
             state.done = true;
-            return StreamIterAction::Reject(crate::fs::validate::build_ebadf_error_value("read"));
+            return StreamIterAction::Reject(crate::fs::validate::ebadf_error("read"));
         }
         let max_len = state
             .remaining
@@ -682,16 +681,16 @@ fn read_stream_iter_action(id: usize) -> StreamIterAction {
         let read_result = FD_REGISTRY.with(|registry| {
             let mut registry = registry.borrow_mut();
             let Some(file) = registry.get_mut(&fd) else {
-                return Err(crate::fs::validate::build_ebadf_error_value("read"));
+                return Err(crate::fs::validate::ebadf_error("read"));
             };
             if let Some(position) = state.position {
                 if let Err(err) = file.seek(SeekFrom::Start(position)) {
-                    return Err(unsafe { build_fs_error_value_no_path(&err, "read") });
+                    return Err(unsafe { fs_error_no_path(&err, "read") });
                 }
             }
             match file.read(&mut bytes) {
                 Ok(n) => Ok(n),
-                Err(err) => Err(unsafe { build_fs_error_value_no_path(&err, "read") }),
+                Err(err) => Err(unsafe { fs_error_no_path(&err, "read") }),
             }
         });
         let n = match read_result {
@@ -729,7 +728,7 @@ extern "C" fn stream_iter_next_async_impl(
             maybe_close_iter_handle(close);
             promise_value_fs(build_read_lines_step(undefined_value(), true))
         }
-        StreamIterAction::Reject(err) => promise_rejected_fs(err),
+        StreamIterAction::Reject(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -759,7 +758,7 @@ extern "C" fn stream_iter_next_sync_impl(
             maybe_close_iter_handle(close);
             build_read_lines_step(undefined_value(), true)
         }
-        StreamIterAction::Reject(err) => crate::exception::js_throw(err),
+        StreamIterAction::Reject(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -894,14 +893,14 @@ fn writer_write_common(
     data: f64,
     is_vector: bool,
     reject_on_limit: bool,
-) -> Result<bool, f64> {
+) -> Result<bool, crate::error::CoreError> {
     WRITER_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
         let Some(state) = states.get_mut(&id) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         };
         if state.closed {
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         }
         let requested = if is_vector {
             buffers_total_len(data)
@@ -920,7 +919,7 @@ fn writer_write_common(
         let fd = filehandle_field_fd(state.handle).unwrap_or(state.fd);
         if fd < 0 || !fd_is_registered(fd) {
             state.closed = true;
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         }
         let position_value = state.position.map(|p| p as f64).unwrap_or_else(null_value);
         let written = if is_vector {
@@ -937,11 +936,11 @@ fn writer_write_common(
     })
 }
 
-fn writer_end_common(id: usize) -> Result<u64, f64> {
+fn writer_end_common(id: usize) -> Result<u64, crate::error::CoreError> {
     let (total, close) = WRITER_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
         let Some(state) = states.get_mut(&id) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         };
         if state.closed {
             return Ok((state.written, None));
@@ -964,7 +963,7 @@ extern "C" fn writer_write_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), data, false, true) {
         Ok(_) => promise_undefined_fs(),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -975,7 +974,7 @@ extern "C" fn writer_writev_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), buffers, true, true) {
         Ok(_) => promise_undefined_fs(),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -986,7 +985,7 @@ extern "C" fn writer_write_sync_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), data, false, false) {
         Ok(wrote) => bool_value(wrote),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -997,14 +996,14 @@ extern "C" fn writer_writev_sync_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), buffers, true, false) {
         Ok(wrote) => bool_value(wrote),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
 extern "C" fn writer_end_impl(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     match writer_end_common(writer_id(closure)) {
         Ok(total) => promise_value_fs(total as f64),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -1014,7 +1013,7 @@ extern "C" fn writer_end_sync_impl(
 ) -> f64 {
     match writer_end_common(writer_id(closure)) {
         Ok(total) => total as f64,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -1253,7 +1252,7 @@ pub(crate) extern "C" fn filehandle_read_file_impl(
         if let Err(err) = file.read_to_end(&mut bytes) {
             // #10452: a failed read rejects (`EISDIR ... read` for a directory)
             // instead of resolving with whatever was read before it failed.
-            return promise_rejected_fs(unsafe { build_fs_error_value_no_path(&err, "read") });
+            return promise_rejected_fs(unsafe { (fs_error_no_path(&err, "read")).value() });
         }
         if read_file_encoding(encoding).is_none() {
             promise_value_fs(crate::buffer::bytes::from_slice(
@@ -1516,7 +1515,9 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
             let start_for_len = start.unwrap_or(0);
             if end >= start_for_len {
                 let max_len = end.saturating_sub(start_for_len).saturating_add(1);
-                let _ = Read::by_ref(&mut **file).take(max_len).read_to_end(&mut bytes);
+                let _ = Read::by_ref(&mut **file)
+                    .take(max_len)
+                    .read_to_end(&mut bytes);
             }
         } else {
             let _ = file.read_to_end(&mut bytes);
@@ -1771,9 +1772,9 @@ pub extern "C" fn js_fs_filehandle_open(path_value: f64, flags_value: f64) -> f6
 pub(crate) unsafe fn js_fs_filehandle_open_result(
     path_value: f64,
     flags_value: f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::error::CoreError> {
     match fs_open_sync_result(path_value, flags_value) {
         Ok(fd) => Ok(build_filehandle_object(fd)),
-        Err((err, path)) => Err(build_fs_error_value(&err, "open", &path)),
+        Err((err, path)) => Err(fs_error(&err, "open", &path)),
     }
 }

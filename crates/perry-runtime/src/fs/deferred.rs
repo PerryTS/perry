@@ -303,7 +303,7 @@ extern "C" fn perform_deferred_fs_op(
             let _ = super::js_fs_append_file_sync_options(path, data, options);
             Ok(())
         } else if mode == MODE_UNLINK_PROMISE || mode == MODE_UNLINK_CALLBACK {
-            unsafe { super::js_fs_unlink_result(path) }
+            unsafe { super::js_fs_unlink_result(path).map_err(|error| error.value()) }
         } else {
             unsafe { super::write_file_path_or_fd_result(path, data, options) }
         };
