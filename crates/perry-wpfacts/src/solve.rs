@@ -123,7 +123,7 @@ impl Model {
             }
             if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
                 fresh.push(t);
-                node.delta.push_to(t, boundary);
+                self.pending.push_to(&mut node.delta, t, boundary);
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
@@ -139,7 +139,7 @@ impl Model {
                 for t in later {
                     if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
                         fresh.push(t);
-                        node.delta.push_to(t, boundary);
+                        self.pending.push_to(&mut node.delta, t, boundary);
                         changed = true;
                         self.pts_entries += 1;
                     }
@@ -296,7 +296,7 @@ impl Model {
             .map(|p| p * 4096 / (1 << 20))
             .unwrap_or(0);
         let succ_cap: usize = self.nodes.iter().map(|n| n.succ.capacity()).sum();
-        let delta_cap: usize = self.nodes.iter().map(|n| n.delta.capacity()).sum();
+        let delta_cap = self.pending.retained_bytes() / std::mem::size_of::<u32>();
         let big: usize = self.nodes.iter().filter(|n| n.pts.is_hashed()).count();
         let mut hubs: Vec<(usize, usize)> = self
             .nodes
@@ -574,6 +574,7 @@ impl Model {
         self.rel_phase = b'S';
         self.mark_params();
         self.members_settled.get_mut().clear();
+        let mut delta = crate::delta::Delta::default();
         loop {
             self.prof_mark(NO_NODE, "instances");
             self.fill_instances();
@@ -608,13 +609,11 @@ impl Model {
                     return;
                 }
             }
-            let (mut delta, dprim) = {
+            let dprim = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
-                (
-                    std::mem::take(&mut node.delta),
-                    std::mem::take(&mut node.dprim),
-                )
+                self.pending.take(&mut node.delta, &mut delta);
+                std::mem::take(&mut node.dprim)
             };
             if delta.is_empty() && dprim == 0 {
                 continue;
@@ -706,13 +705,7 @@ impl Model {
                 self.cur_why = u32::MAX;
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), dprim);
             }
-            // Hand the delta's storage back to the node (no reallocation).
-            let mut delta = delta;
             delta.clear();
-            let node = &mut self.nodes[n as usize];
-            if node.delta.is_empty() && delta.capacity() <= 256 {
-                node.delta = delta;
-            }
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;

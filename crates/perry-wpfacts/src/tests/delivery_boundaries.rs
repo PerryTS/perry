@@ -53,7 +53,7 @@ fn pending_event_across_pruning_uses_retained_prefix_rank() {
     m.edge(src, dst[2]);
     m.edge(src, dst[3]);
     m.prune_successors(src, &[false, true, true, true]);
-    let pending = &m.nodes[src as usize].delta;
+    let pending = m.pending.snapshot(&m.nodes[src as usize].delta);
     let deliveries: Vec<_> = m.nodes[src as usize]
         .succ
         .iter()
@@ -80,21 +80,87 @@ fn late_successor_receives_each_earlier_value_once() {
     m.add(src, &[a, b], prim::STR);
     m.edge(src, late);
     assert_eq!(
-        m.nodes[late as usize]
-            .delta
+        m.pending
+            .snapshot(&m.nodes[late as usize].delta)
             .iter()
             .copied()
             .collect::<Vec<_>>(),
         [a, b]
     );
-    assert_eq!(m.nodes[src as usize].delta.delivery_len(1), 0);
-    assert_eq!(m.nodes[src as usize].delta.delivery_len(0), 2);
+    assert_eq!(
+        m.pending
+            .snapshot(&m.nodes[src as usize].delta)
+            .delivery_len(1),
+        0
+    );
+    assert_eq!(
+        m.pending
+            .snapshot(&m.nodes[src as usize].delta)
+            .delivery_len(0),
+        2
+    );
     m.edge(src, late);
     assert_eq!(m.nodes[late as usize].delta.len(), 2);
     m.solve();
     assert!(!m.aborted);
     assert_eq!(m.nodes[late as usize].pts.to_sorted(), [a, b]);
     assert_eq!(m.nodes[late as usize].prim, prim::STR);
+}
+#[test]
+fn drained_event_storage_is_pending_only() {
+    let mut m = super::copy_solver_model();
+    let t = m.tok(TokKind::ModNs(1));
+    for _ in 0..1000 {
+        let src = m.node_l("source");
+        let dst = m.node_l("receiver");
+        m.edge(src, dst);
+        m.add_tok(src, t);
+    }
+    m.solve();
+    assert!(!m.aborted);
+    assert!(m.work >= 1000);
+    assert_eq!(
+        m.nodes.iter().filter(|n| n.pts.contains_tok(t)).count(),
+        2000
+    );
+    assert!(m.nodes.iter().all(|n| n.delta.is_empty()));
+    let bytes = m.pending.retained_bytes();
+    assert!(bytes < 4096, "drained event storage retains {bytes} bytes");
+}
+
+#[test]
+fn interleaved_pages_preserve_live_chains_and_release_empty_pages() {
+    use crate::delta::{Delta, EventQueue, Pending};
+    let mut queue = EventQueue::default();
+    let mut nodes = vec![Pending::default(); 1000];
+    for (i, n) in nodes.iter_mut().enumerate() {
+        queue.push_to(n, i as u32, 1);
+        queue.push_to(n, 1000 + i as u32, 2);
+    }
+    let mut delta = Delta::default();
+    for i in (0..1000).step_by(2) {
+        queue.take(&mut nodes[i], &mut delta);
+        assert_eq!(
+            delta.iter().copied().collect::<Vec<_>>(),
+            [i as u32, 1000 + i as u32]
+        );
+        delta.clear();
+    }
+    for i in (0..1000).step_by(2) {
+        queue.push_to(&mut nodes[i], 2000 + i as u32, 3);
+    }
+    for i in (0..1000).rev() {
+        queue.take(&mut nodes[i], &mut delta);
+        let expected = if i % 2 == 0 {
+            vec![2000 + i as u32]
+        } else {
+            vec![i as u32, 1000 + i as u32]
+        };
+        assert_eq!(delta.iter().copied().collect::<Vec<_>>(), expected);
+        delta.clear();
+    }
+    assert_eq!(queue.retained_bytes(), 0);
+    assert_eq!(std::mem::size_of::<Pending>(), 16);
 }
 #[test]
 fn duplicate_registration_preserves_pending_batch_work() {
@@ -110,7 +176,7 @@ fn duplicate_registration_preserves_pending_batch_work() {
         m.add_tok(src, a);
         m.edge(src, receivers[0]);
         m.add_tok(src, b);
-        let pending = &m.nodes[src as usize].delta;
+        let pending = m.pending.snapshot(&m.nodes[src as usize].delta);
         assert_eq!(
             pending.delivery_overhead(),
             u64::from(count > 16),
@@ -140,7 +206,7 @@ fn small_pending_capture_still_merges_after_pruning_later_edges() {
     keep[16] = false;
     m.prune_successors(src, &keep);
     m.add_tok(src, b);
-    let pending = &m.nodes[src as usize].delta;
+    let pending = m.pending.snapshot(&m.nodes[src as usize].delta);
     assert_eq!(pending.delivery_overhead(), 0);
     m.solve();
     assert!(!m.aborted);
