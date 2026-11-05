@@ -566,7 +566,7 @@ unsafe fn uint8_with(addr: usize, args: &[f64]) -> f64 {
     pointer_value(out as usize)
 }
 
-unsafe fn rest_values(rest_value: f64) -> Vec<f64> {
+pub(crate) unsafe fn rest_values(rest_value: f64) -> Vec<f64> {
     let rest = crate::value::JSValue::from_bits(rest_value.to_bits());
     if !rest.is_pointer() {
         return Vec::new();

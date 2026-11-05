@@ -470,6 +470,28 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
     f64::from_bits(JSValue::pointer(out as *mut u8).bits())
 }
 
+/// `Buffer.prototype.toString(encoding?, start?, end?)` on the buffer at
+/// `buf_ptr`, whatever brand the receiver carries.
+pub(crate) unsafe fn buffer_to_encoded_string(
+    buf_ptr: *mut crate::buffer::BufferHeader,
+    args: &[f64],
+) -> f64 {
+    let enc = if !args.is_empty() {
+        crate::buffer::js_encoding_tag_from_value(args[0])
+    } else {
+        0
+    };
+    let str_ptr = if args.len() >= 2 {
+        let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
+        let start = args[1] as i32;
+        let end = if args.len() >= 3 { args[2] as i32 } else { len };
+        crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end)
+    } else {
+        crate::buffer::js_buffer_to_string(buf_ptr, enc)
+    };
+    f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+}
+
 pub unsafe fn dispatch_buffer_method(
     addr: usize,
     method_name: &str,
@@ -592,22 +614,7 @@ pub unsafe fn dispatch_buffer_method(
         {
             super::typed_array_proto_thunks::uint8_array_to_string(addr)
         }
-        "toString" => {
-            let enc = if !args.is_empty() {
-                crate::buffer::js_encoding_tag_from_value(args[0])
-            } else {
-                0
-            };
-            let str_ptr = if args.len() >= 2 {
-                let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-                let start = arg_i32(1);
-                let end = if args.len() >= 3 { arg_i32(2) } else { len };
-                crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end)
-            } else {
-                crate::buffer::js_buffer_to_string(buf_ptr, enc)
-            };
-            f64::from_bits(JSValue::string_ptr(str_ptr).bits())
-        }
+        "toString" => buffer_to_encoded_string(buf_ptr, args),
         // TC39 Uint8Array base64/hex conversion APIs (#2901). Perry aliases
         // Uint8Array → Buffer, so these instance methods reach buffer dispatch.
         "toBase64" => {
