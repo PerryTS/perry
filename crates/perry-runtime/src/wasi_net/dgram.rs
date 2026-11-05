@@ -100,7 +100,7 @@ struct State {
     buf: Vec<u8>,
 }
 
-thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
+crate::perry_thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 
 fn node_error(err: &std::io::Error, syscall: &'static str) -> NodeError {
     match err.raw_os_error() {
