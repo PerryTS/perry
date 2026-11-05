@@ -155,8 +155,11 @@ fn a_store_into_top_reaches_the_seeded_chains() {
             d_escape(&format!("{TOP}const o: any = {recv}; o[k](d);")),
             None
         );
-        for (body, _) in cases(recv, "o[k](d);") {
-            assert!(d_escape(&body).is_some(), "{body}");
+        // DEC 250: a store under `constructor` or an unknown key may replace
+        // the exempt `constructor` a computed read can name; a store under
+        // another constant key is an add on the locked chain, refused.
+        for (body, want) in cases(recv, "o[k](d);") {
+            assert_eq!(d_escape(&body).is_some(), want, "{body}");
         }
     }
 }
@@ -188,24 +191,25 @@ fn a_numeric_key_names_no_object_prototype_method() {
 /// `tests/proto_value.rs`.
 #[test]
 fn a_store_through_a_literals_prototype_reaches_every_object() {
-    let sees_e = |get: &str| {
+    let sees_e = |get: &str, key: &str| {
         let pf = facts(&format!(
             "class E {{ z = 3; }}
             const k = String(Math.random());
             const o: any = {{ a: 1 }};
             const p: any = {get};
-            p.y = new E();
+            try {{ p.{key} = new E(); }} catch (e) {{}}
             const q: any = {{}};
-            const r = q.y;
+            const r = q.{key};
             if (r) console.log(r.z);"
         ));
         let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
         assert_eq!(s.len(), 1, "{}", pf.dump_text());
         s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E"))
     };
-    // Seen: the store names `Object.prototype` itself.
-    assert!(sees_e("Object.prototype"));
+    // DEC 250 refuses a new y; constructor is exempt and keeps the prototype-value mechanism live.
+    assert!(!sees_e("Object.prototype", "y"));
+    assert!(sees_e("Object.prototype", "constructor"));
     for get in ["o.__proto__", "o['__proto__']", "Object.getPrototypeOf(o)"] {
-        assert!(sees_e(get), "{get}");
+        assert!(sees_e(get, "constructor"), "{get}");
     }
 }

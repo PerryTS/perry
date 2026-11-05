@@ -81,6 +81,9 @@ pub(super) fn emit_string_pool(
     // entries, constructors, accessors) key each class by its ClassId, never
     // by a name (`classes` above maps names, and two classes may share one).
     module_classes: &[perry_hir::Class],
+    // The lowered module: class method entries take their function kind
+    // from `perry_hir::fn_proto::FnProtoKind`.
+    hir_module: &perry_hir::Module,
     layouts: &crate::layout_families::ProgramLayouts,
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
@@ -487,6 +490,7 @@ pub(super) fn emit_string_pool(
 
     // Class role descriptors must precede every role-dependent shape birth.
     let declarations = super::class_declarations::class_declaration_globals(
+        hir_module,
         &local_classes,
         strings,
         module_prefix,
@@ -495,6 +499,10 @@ pub(super) fn emit_string_pool(
             chunker.current_block().fn_info_ref(body)
         },
         layouts,
+        &fresh_class_templates
+            .iter()
+            .filter_map(|name| class_ids.get(name).copied())
+            .collect(),
     );
     for decl in declarations {
         for global in decl.globals {
@@ -918,7 +926,7 @@ pub(super) fn emit_string_pool(
                     &f.body,
                     fresh_class_templates.contains(class_name),
                 ),
-                generator: super::helpers::body_generator_record_kind(&f.body),
+                kind: perry_hir::fn_proto::FnProtoKind::of_function(hir_module, f),
             });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -1061,7 +1069,12 @@ pub(super) fn emit_string_pool(
             has_user_rest: has_rest,
             has_synth_args,
             home: home && method_entries::source_needs_home(&local_classes, cid, definition_order),
-            generator: method_entries::source_generator_kind(&local_classes, cid, definition_order),
+            kind: method_entries::source_fn_proto_kind(
+                hir_module,
+                &local_classes,
+                cid,
+                definition_order,
+            ),
             generator_owner: method_entries::source_needs_owner(
                 &local_classes,
                 cid,
@@ -1170,7 +1183,8 @@ pub(super) fn emit_string_pool(
                 has_user_rest,
                 has_synth_args,
                 home: fresh_cids.contains(&cid),
-                generator: method_entries::source_generator_kind(
+                kind: method_entries::source_fn_proto_kind(
+                    hir_module,
                     &local_classes,
                     cid,
                     definition_order,
@@ -1245,14 +1259,10 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Refs #618 / #420: register every class id with the runtime so
-    // `js_value_typeof` can distinguish a class ref (NaN-boxed INT32 with
-    // class_id payload) from a real int32 numeric value. Without this,
-    // `typeof <class>` returns "number" for classes that don't define any
-    // methods (the existing `js_register_class_method` loop only fires
-    // for classes with at least one method body). drizzle's `class
-    // FakePrimitiveParam { static [entityKind] = "FakePrimitiveParam" }`
-    // and similar method-less marker classes hit this.
+    // Refs #618 / #420: register every class id, including method-less marker
+    // classes. Class metadata and flagged prototype references use this
+    // registration; constructor values are their function objects, independent
+    // of any numerically equal INT32 word.
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
         // Also collect `(cid, name)` pairs so we can mirror Perry's
@@ -1313,8 +1323,8 @@ pub(super) fn emit_string_pool(
         );
     }
     // #9413: mirror each class's retained source text into the runtime so
-    // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
-    // ClosureHeader) answers with the class source. Same shape, and the same
+    // `Function.prototype.toString` on a constructor function object answers
+    // with the class source. Same shape, and the same
     // output-kind spelling choice, as the function-source loop above (#11501:
     // an executable lends its rodata instead of copying every class body).
     for (cid, source) in &class_source_constants {
@@ -1681,8 +1691,9 @@ pub(super) fn emit_string_pool(
     for e in &method_entries {
         emit_class_method_entry(&mut chunker, e);
     }
-    method_entries::emit_computed_generator_entries(
+    method_entries::emit_computed_method_entries(
         &mut chunker,
+        hir_module,
         &local_classes,
         &fresh_cids,
         module_prefix,
@@ -1773,5 +1784,5 @@ use fn_info_facts::{record_fn_info_facts, FnInfoFactSources};
 mod class_name_registration_tests;
 
 #[path = "method_entries.rs"]
-mod method_entries;
+pub(super) mod method_entries;
 use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};

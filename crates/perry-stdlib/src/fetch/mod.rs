@@ -124,9 +124,10 @@ static STREAM_HANDLES: std::sync::LazyLock<Mutex<HashMap<usize, StreamState>>> =
 static NEXT_STREAM_ID: std::sync::LazyLock<Mutex<usize>> =
     std::sync::LazyLock::new(|| Mutex::new(1));
 
-/// Global proxy override installed by `undici.setGlobalDispatcher(new
-/// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici),
-/// as `(uri, token)`. `None` = direct connections. The turnloop engine
+/// Global proxy override installed through `js_fetch_set_global_proxy`, as
+/// `(uri, token)`. (perry-ext-undici's `setGlobalDispatcher(new
+/// ProxyAgent(...))` was the caller; npm `undici` now compiles from source and
+/// its dispatcher does not reach Perry's global `fetch`.) `None` = direct connections. The turnloop engine
 /// reads it per request (`turnloop_client::proxy_for`) and runs the
 /// CONNECT tunnel itself.
 static GLOBAL_PROXY_URI: std::sync::LazyLock<std::sync::RwLock<Option<(String, Option<String>)>>> =
@@ -167,9 +168,9 @@ fn normalize_proxy(uri: &str, token: Option<&str>) -> Result<String, String> {
     Ok(parsed.to_string())
 }
 
-/// Install (or clear) the process-wide fetch proxy. Called by
-/// perry-ext-undici's `setGlobalDispatcher` glue; also exported so any
-/// other binding can reuse it. A null `uri_ptr` clears the proxy
+/// Install (or clear) the process-wide fetch proxy. Exported for native
+/// bindings; perry-ext-undici's `setGlobalDispatcher` glue was the caller
+/// until that binding was removed. A null `uri_ptr` clears the proxy
 /// (an undici `Agent` dispatcher = direct connections). Returns 1.0 on
 /// success, 0.0 when the proxy URI/token is invalid (the current proxy
 /// state is left unchanged in that case).

@@ -51,6 +51,7 @@ must still establish the new margin.
 | `gc-call-effects` | yes | yes | yes |
 | `gc-stress` | 1x pr | 4x all | 4x all |
 | `e2e-scoped` | yes |  |  |
+| `parity-scoped` | yes |  |  |
 | `security-audit` | deps only | yes | yes |
 | `windows-build` |  | yes | yes |
 | `windows-arm64-build` |  | yes | yes |
@@ -130,6 +131,13 @@ crates while sharing unchanged compilations.
 nonempty, every core PR reruns each excluded exact test and fails if it no
 longer fails. This catches fixes made in HIR, transform, or another dependency
 without adding Rust setup to docs-only PRs.
+
+`parity-scoped` runs the program cases a PR owns, in auto mode against
+`test-parity/snapshots/linux-auto/`: each changed case, the subject of each
+changed snapshot, and the node-suite modules that `scripts/test_owners.py`
+maps the changed source to. A source path no row owns is cross-cutting and adds
+nothing; the gap lane already runs for it. With nothing selected the job ends
+after computing the selection.
 
 An empty or failed file listing is treated as **core** and a failed `plan` job fails
 the gate outright — a broken planner must never turn into "everything skipped,
@@ -226,9 +234,10 @@ window (`previous sweep SHA .. this sweep SHA`), exactly as for the six-hourly g
 
 ## Re-baselining the gap snapshot
 
-The pull-request gap lane runs `scripts/parity.py run --suite test-files
---filter test_gap_ --mode fast` and is judged by
-`test-parity/snapshots/linux-fast/test-files.json`, a both-direction snapshot:
+The pull-request gap lane runs `scripts/parity.py run --suite all
+--filter test_gap_ --mode fast`, including migrated cases that retain their
+`test_gap_` basename. It is judged by the per-subject snapshots under
+`test-parity/snapshots/linux-fast/`, each checked in both directions:
 any divergence — a case that started failing OR started passing — is red. When
 `main` has legitimately moved (a triaged regression, an oracle change),
 regenerate it **from CI**, not from a laptop (the required baseline is Linux,
@@ -238,7 +247,7 @@ regenerate it **from CI**, not from a laptop (the required baseline is Linux,
 gh workflow run test.yml --ref <branch> -f tier=pr -f update_gap_snapshot=true
 # wait for the run, then:
 gh run download <run-id> -n gap-snapshot-update -D /tmp/snap
-cp /tmp/snap/test-files.json test-parity/snapshots/linux-fast/test-files.json
+cp -R /tmp/snap/. test-parity/snapshots/linux-fast/
 # fill in `issue` / `reason` for every new entry, then commit
 ```
 

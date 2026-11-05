@@ -6,9 +6,13 @@ use super::*;
 /// that names none of its members (a number, DECISIONS 217): only a number
 /// key a store into ⊤ wrote there, now or later in the solve
 /// (`native_written` of `NUM_KEY`), as a program prototype gives its
-/// numeric fields (`Model::num_fields`).
+/// numeric fields (`Model::num_fields`). None where the chain refuses the
+/// add (`locked_chain_read` of `NUM_KEY`, DEC 250): the key is absent.
 pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
     let num = m.atom(NUM_KEY);
+    if locked_chain_read(m, origin, num) {
+        return;
+    }
     match act {
         ChainAct::Load(dst) => {
             if !intrinsic_miss(m, num, NativeMiss::Load(dst)) {
@@ -61,6 +65,16 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
             }
             let r = m.reason("E20 stored on a builtin/global object");
             m.sink_node(src, r);
+            // `process.argv = v`: later reads of the property see `v`.
+            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
+                && match _key {
+                    Key::Named(a) => m.atoms[a as usize] == "argv",
+                    Key::Any => true,
+                }
+            {
+                let a = m.process_argv;
+                m.edge(src, a);
+            }
         }
         _ => {}
     }
@@ -89,8 +103,10 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     };
     let name = m.atoms[a as usize].clone();
     // A key a store into ⊤ may have written onto the chain: the call runs
-    // what was stored (a described method may be replaced too).
-    if !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
+    // what was stored (a described method may be replaced too), unless the
+    // read is final on every kind of the mask (DEC 250).
+    let locked = members::prim_families(prim).all(|f| members::locked_read(f, None, &name));
+    if !locked && !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
         unknown_method(
             m,
             call,
@@ -160,7 +176,7 @@ pub(super) fn undescribed_method(
         None if members::member(Family::Object, name).is_some() => {}
         None => {
             let a = m.atom(name);
-            if !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+            if !intrinsic_unwritten(m, fam, None, a, NativeMiss::Call(t, call)) {
                 unknown_method(m, call, why);
             }
         }
@@ -217,9 +233,10 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         n => n,
     };
     // A described receiver's method under a key a store into ⊤ may have
-    // written onto its chain runs what was stored, beside the description.
+    // written onto its chain runs what was stored, beside the description,
+    // unless the read is final (DEC 250).
     if let (true, Some(n), Key::Named(a)) = (described, name.as_deref(), key) {
-        if !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+        if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
             unknown_method(m, call, &format!("argument of a written method {n}"));
         }
     }
@@ -404,7 +421,16 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
             "__lookupGetter__" | "__lookupSetter__" => {
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 m.implicit(origin, 0, Protocol::Any);
-                ret_tok(m, call, TOP);
+                if origin != TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+                    // The unmodeled lookup creates a new unknown result;
+                    // it does not copy TOP from a mixed receiver node.
+                    let ret = m.calls[call as usize].ret;
+                    m.add_top(ret, |_| {
+                        "result of an unmodeled native accessor lookup".into()
+                    });
+                } else {
+                    ret_tok(m, call, TOP);
+                }
             }
             _ => {}
         },

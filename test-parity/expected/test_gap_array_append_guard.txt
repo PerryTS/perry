@@ -1,0 +1,23 @@
+grown 65 0 64
+string abcdefgh abcdefghchanged
+mixed 67 17
+holes 4 false true 4
+write true
+push true
+write true
+push true
+write true
+push true
+write true
+push true
+typed 2 1 2 undefined
+sub 1 2 3 4 true
+getter 2 2 7
+custom 0 12 false
+keys 1 1 2 3
+rhs length 1 22
+rhs grow 33 44 32
+rhs frozen true 1
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+prototype 12 1 true
+restored 2 31

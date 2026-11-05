@@ -10,7 +10,7 @@ console.log(accessor.some((x, i) => i === 2), accessor.some((x, i, a) => a.lengt
 console.log(accessor.some(() => true), [].some(() => true));
 const holes = [1, , 3];
 console.log(holes.some((x) => x === undefined), holes.some((x, i) => i === 1));
-Array.prototype[1] = 7;
+try { Array.prototype[1] = 7; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(holes.some((x) => x === 7), holes.some((x, i) => i === 3));
 delete Array.prototype[1];
 console.log(holes.some((x) => x === 7));

@@ -20,17 +20,17 @@ console.log('borrowed', call.call(add, receiver, 1), apply.call(add, receiver, [
 console.log('uncurry', Function.call.bind(add)(receiver, 4));
 const savedCall = Function.prototype.call;
 const replacement: any = function () { return 99; };
-(Function.prototype as any).call = replacement;
+try { (Function.prototype as any).call = replacement; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const inheritedReplacement = Object.call === replacement;
-(Function.prototype as any).call = savedCall;
+try { (Function.prototype as any).call = savedCall; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('patched', inheritedReplacement);
-Object.defineProperty(Function.prototype, 'call', {
+try { Object.defineProperty(Function.prototype, 'call', {
   configurable: true, get() { return this === Object ? replacement : savedCall; },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const getterReceiver = Object.call === replacement;
-Object.defineProperty(Function.prototype, 'call', {
+try { Object.defineProperty(Function.prototype, 'call', {
   configurable: true, writable: true, value: savedCall,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('getter-receiver', getterReceiver);
 (add as any).call = replacement;
 console.log('own', (add as any).call === replacement);
@@ -46,13 +46,13 @@ const proxyCall = proxied.call;
 console.log('proxy', proxyCall === savedCall, proxyCall.call(proxied, receiver, 5));
 
 let reads = 0;
-Object.defineProperty(Function.prototype, 'call', {
+try { Object.defineProperty(Function.prototype, 'call', {
   configurable: true, get() { reads++; return undefined; },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const missingCall = Object.call;
-Object.defineProperty(Function.prototype, 'call', {
+try { Object.defineProperty(Function.prototype, 'call', {
   configurable: true, writable: true, value: savedCall,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('undefined-getter', missingCall === undefined, reads);
 (add as any).call = undefined;
 console.log('own-undefined', (add as any).call === undefined);

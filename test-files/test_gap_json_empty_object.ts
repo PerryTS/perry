@@ -15,15 +15,15 @@ for (let i = 0; i < kept.length; i += 2) {
 console.log("retained", kept.length, failures);
 
 let calls = "";
-(Object.prototype as any).toJSON = function(key: string) {
+try { (Object.prototype as any).toJSON = function(key: string) {
   calls += "default:" + key + ",";
   return "default-result";
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("installed", JSON.stringify(empty));
 delete (Object.prototype as any).toJSON;
 console.log("removed", JSON.stringify(empty));
 
-Object.defineProperty(Object.prototype, "toJSON", {
+try { Object.defineProperty(Object.prototype, "toJSON", {
   configurable: true,
   get() {
     calls += "get,";
@@ -32,7 +32,7 @@ Object.defineProperty(Object.prototype, "toJSON", {
       return "getter-result";
     };
   }
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("getter", JSON.stringify(empty));
 delete (Object.prototype as any).toJSON;
 console.log("getter removed", JSON.stringify(empty));

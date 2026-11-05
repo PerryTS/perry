@@ -45,9 +45,14 @@ fn a_call_through_an_unrun_parameter_writes_no_builtin_prototype() {
 
 #[test]
 fn a_call_through_a_parameter_given_an_unknown_value_stays_unknown() {
-    // Node: prints `N 1` (N = argv length, or 3).
+    // `process.argv` is the one array of strings the runtime makes, a known
+    // value (its slice writes no builtin prototype); a value read from the
+    // global object under a computed key is unknown.
+    // Node: prints `3 1` (the key names no global: `undefined` is not run).
     let src = format!(
-        "{BODY}const m: any = (process as any).argv;\nconsole.log(e.order(m).length, us[0].a);"
+        "{BODY}const m: any = (globalThis as any)[\"hook\" + process.argv.length] ?? [3, 1, 2];\nconsole.log(e.order(m).length, us[0].a);"
     );
-    assert!(!proven(&units(&src), "a"));
+    // DEC 250: `r[0] = 5` into an unknown `r` is an index add on a locked
+    // chain at worst, refused: `us[0]` reads its own element.
+    assert!(proven(&units(&src), "a"));
 }

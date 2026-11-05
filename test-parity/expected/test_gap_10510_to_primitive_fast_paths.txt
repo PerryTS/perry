@@ -1,0 +1,18 @@
+true -2 12 [object Object] [object Object]
+3 4 S true number,default,string,number
+1700000000000 1000 true false true
+string true
+true
+1700000002000 2000
+42 40
+DEC 250: Cannot replace built-in member Date.prototype.valueOf: built-in objects are read-only in a compiled program (adding a new member is allowed)
+1700000000000 1000
+DEC 250: Cannot replace built-in member Date.prototype.valueOf: built-in objects are read-only in a compiled program (adding a new member is allowed)
+1700000000000
+DEC 250: Cannot redefine built-in member Date.prototype[Symbol(Symbol.toPrimitive)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+1700000000000 1000
+DEC 250: Cannot redefine built-in member Date.prototype[Symbol(Symbol.toPrimitive)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+1700000000000
+9 str str
+number true
+TypeError

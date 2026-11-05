@@ -1,0 +1,14 @@
+false false false true
+undefined undefined undefined undefined
+function function function function function
+2 plain object true
+caller throws true
+arguments throws true
+undefined undefined 2
+DEC 250: Cannot add member Function.prototype.shared: built-in objects are read-only in a compiled program
+undefined true undefined undefined undefined
+undefined undefined
+"" 0
+1 2 undefined object Derived 0
+bound plain 1 undefined undefined undefined
+T undefined

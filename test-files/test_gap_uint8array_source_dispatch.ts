@@ -1,6 +1,6 @@
 // Gap test: Uint8Array constructor source dispatch must distinguish real
 // Arrays from plain object/function array-likes and other iterable sources.
-// Run: ./run_parity_tests.sh --filter uint8array_source_dispatch
+// Run: python3 scripts/parity.py run test-files/test_gap_uint8array_source_dispatch.ts
 
 function bytes(source: any): string {
   return Array.from(new Uint8Array(source)).join(",");

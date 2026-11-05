@@ -415,9 +415,7 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
         .classes
         .iter()
         .filter(|class| {
-            class.getters.is_empty()
-                && class.setters.is_empty()
-                && class.computed_members.is_empty()
+            class.getters.is_empty() && class.setters.is_empty() && !class.has_evaluated_members()
         })
         .map(|class| class.name.as_str())
         .collect();

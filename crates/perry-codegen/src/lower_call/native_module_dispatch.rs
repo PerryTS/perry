@@ -5,7 +5,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{nanbox_bigint_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use crate::expr::{nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::native_value::{
     materialize_native_handle_to_js_value, materialize_promise_boundary_to_js_value, LoweredValue,
@@ -282,14 +282,11 @@ pub fn lower_native_module_dispatch(
             NativeRetKind::GcPtr
             | NativeRetKind::NullableGcPtr
             | NativeRetKind::HandleId
-            | NativeRetKind::JsValue
             | NativeRetKind::Promise
             | NativeRetKind::Str
-            | NativeRetKind::ObjFromJsonStr
-            | NativeRetKind::BigInt => I64,
+            | NativeRetKind::ObjFromJsonStr => I64,
             NativeRetKind::F64 => DOUBLE,
-            NativeRetKind::BoolI1 => crate::types::I1,
-            NativeRetKind::BoolI32 | NativeRetKind::I32Void => I32,
+            NativeRetKind::I32Void => I32,
             NativeRetKind::Void => crate::types::VOID,
         };
 
@@ -306,11 +303,6 @@ pub fn lower_native_module_dispatch(
                 Ok(crate::expr::nanbox_inline::nanbox_handle_inline(blk, &raw))
             }
 
-            NativeRetKind::JsValue => {
-                let blk = ctx.block();
-                let bits = blk.call(I64, sig.runtime, &arg_slices);
-                Ok(blk.bitcast_i64_to_double(&bits))
-            }
             NativeRetKind::NullableGcPtr => {
                 let blk = ctx.block();
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
@@ -403,21 +395,7 @@ pub fn lower_native_module_dispatch(
                 let parsed_bits = blk.call(I64, "js_json_parse_or_null", &[(I64, &raw)]);
                 Ok(blk.bitcast_i64_to_double(&parsed_bits))
             }
-            NativeRetKind::BigInt => {
-                // Returned raw *mut BigIntHeader — NaN-box with BIGINT_TAG (0x7FFA).
-                let blk = ctx.block();
-                let raw = blk.call(I64, sig.runtime, &arg_slices);
-                Ok(nanbox_bigint_inline(blk, &raw))
-            }
             NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, runtime, &arg_slices)),
-            NativeRetKind::BoolI1 | NativeRetKind::BoolI32 => {
-                let blk = ctx.block();
-                let raw = blk.call(ret_type, sig.runtime, &arg_slices);
-                let is_true = blk.icmp_ne(ret_type, &raw, "0");
-                let true_val = double_literal(f64::from_bits(crate::nanbox::TAG_TRUE));
-                let false_val = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
-                Ok(blk.select(crate::types::I1, &is_true, DOUBLE, &true_val, &false_val))
-            }
             NativeRetKind::I32Void => {
                 let _discard = ctx.block().call(I32, sig.runtime, &arg_slices);
                 Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))

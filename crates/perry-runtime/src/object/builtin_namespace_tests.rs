@@ -46,22 +46,20 @@ fn a_member_write_withdraws_only_its_namespace() {
     // SAFETY: the realm's Math object.
     unsafe {
         let math = member_holder("Math");
-        crate::object::js_object_set_field_by_name(math, key("max"), 1.0);
+        crate::object::js_object_set_field_by_name(math, key("added"), 1.0);
     }
     assert!(!pristine(ns("Math")));
     assert!(pristine(ns("JSON")) && pristine(ns("Object")));
 }
 
 #[test]
-fn a_constructor_static_delete_withdraws_its_namespace() {
+fn a_constructor_static_add_withdraws_its_namespace() {
     let g = global();
     // SAFETY: the realm's Object constructor.
     {
         let ctor = crate::object::js_object_get_field_by_name_f64(g, key("Object"));
         let addr = (ctor.to_bits() & crate::value::POINTER_MASK) as usize;
-        assert!(crate::closure::closure_delete_own_dynamic_prop(
-            addr, "keys"
-        ));
+        crate::closure::closure_set_dynamic_prop(addr, "added", 1.0);
     }
     assert!(!pristine(ns("Object")));
     assert!(pristine(ns("Array")));

@@ -28,6 +28,7 @@ pub fn map_cons(
     match *c {
         Load { key, dst } => Load { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
+        IndexHole => IndexHole,
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,
@@ -95,6 +96,8 @@ pub fn map_cons(
         },
         Defined { dst } => Defined { dst: n(dst) },
         NotNullish { dst } => NotNullish { dst: n(dst) },
+        Falsy { dst } => Falsy { dst: n(dst) },
+        NotUndefined { dst } => NotUndefined { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -343,6 +346,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | TopIfAny { .. }
             | Guard { .. }
             | NotNullish { .. }
+            | Falsy { .. }
+            | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }
             | DeleteKey { .. }

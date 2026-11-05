@@ -1,0 +1,24 @@
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+plain=["12-xy","12","xy",3]
+plain-lastIndex=5
+global=[["ab","b",0,2],["ab","b",3,5],null,["ab","b",0,2]]
+sticky-hit=[true,2]
+sticky-miss=[false,0]
+past-end=[true,0]
+recompiled-in-valueOf=["bbb",1,"b+",6]
+string-lastIndex=[false,3]
+string-lastIndex-hit=["x",3]
+valueOf-throws="boom"
+non-writable-global="TypeError"
+non-writable-nonglobal="a"
+extra-own-key="o"
+subclass=["s",1,2]
+own-exec=["q",1,true,2]
+symbol-replace="replaced"
+symbol-match=["matched"]
+patched-proto-test=[true,false]
+patched-proto-exec=["p",false]
+lead-excluded=[true,0]
+indices=[1,2]
+many=199990000

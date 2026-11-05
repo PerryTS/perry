@@ -1161,50 +1161,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Math.min(...args) --------
         // Two HIR shapes: variadic (Vec<Expr>) and spread-from-array
         // (single Expr that is an array). Both build/use an array and
-        // call js_math_min_array. The variadic form materializes a
-        // temporary fixed-size array via js_array_alloc + push.
+        // call js_math_min_array. The variadic form (no spread) folds inline.
         Expr::MathMin(values) => {
-            if values.len() == 2 {
-                return rooting::with_operands_rooted(
-                    ctx,
-                    &[&values[0], &values[1]],
-                    |ctx, vals| {
-                        Ok(lower_math_minmax2(
-                            ctx,
-                            [&values[0], &values[1]],
-                            [&vals[0], &vals[1]],
-                            "llvm.minimum.f64",
-                            "js_math_min2",
-                        ))
-                    },
-                );
-            }
-            let cap = (values.len() as u32).to_string();
-            let arr_handle_v = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-            // Push each value. push_f64 may realloc, so the returned pointer is
-            // threaded through — and #7615 slice 2: it was threaded through a
-            // RAW SSA register that stayed live across the NEXT argument's
-            // lowering, so `Math.min(f(), g(), h())` pushed into a pre-move
-            // address. The accumulator is the fix; being an `i64` derived above
-            // the window is exactly what #7280 cannot repair.
-            let protect = rooting::any_operand_may_collect(ctx, values.iter());
-            rooting::with_rooted_accumulator(
-                ctx,
-                Repr::Ptr,
-                &arr_handle_v,
-                protect,
-                |ctx, acc| {
-                    for v_expr in values {
-                        let v_box = lower_expr(ctx, v_expr)?;
-                        acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v_box)]);
-                    }
-                    Ok(())
-                },
-                |ctx, current| {
-                    let blk = ctx.block();
-                    Ok(blk.call(DOUBLE, "js_math_min_array", &[(I64, current)]))
-                },
-            )
+            lower_math_minmax_n(ctx, values, "llvm.minimum.f64", f64::INFINITY)
         }
         Expr::MathMinSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
@@ -1215,42 +1174,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.max(...args) — same shape as Math.min --------
         Expr::MathMax(values) => {
-            if values.len() == 2 {
-                return rooting::with_operands_rooted(
-                    ctx,
-                    &[&values[0], &values[1]],
-                    |ctx, vals| {
-                        Ok(lower_math_minmax2(
-                            ctx,
-                            [&values[0], &values[1]],
-                            [&vals[0], &vals[1]],
-                            "llvm.maximum.f64",
-                            "js_math_max2",
-                        ))
-                    },
-                );
-            }
-            let cap = (values.len() as u32).to_string();
-            let arr_handle_v = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-            // Same raw-accumulator window as `MathMin` above (#7615 slice 2).
-            let protect = rooting::any_operand_may_collect(ctx, values.iter());
-            rooting::with_rooted_accumulator(
-                ctx,
-                Repr::Ptr,
-                &arr_handle_v,
-                protect,
-                |ctx, acc| {
-                    for v_expr in values {
-                        let v_box = lower_expr(ctx, v_expr)?;
-                        acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v_box)]);
-                    }
-                    Ok(())
-                },
-                |ctx, current| {
-                    let blk = ctx.block();
-                    Ok(blk.call(DOUBLE, "js_math_max_array", &[(I64, current)]))
-                },
-            )
+            lower_math_minmax_n(ctx, values, "llvm.maximum.f64", f64::NEG_INFINITY)
         }
         Expr::MathMaxSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
@@ -1716,49 +1640,96 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
 }
 
-/// Two-argument `Math.max` / `Math.min`. When both operands are plain doubles
-/// (proven by construction, or by one signed compare per unproven operand),
-/// the answer is `llvm.maximum` / `llvm.minimum`: both propagate NaN and order
-/// `-0` below `+0`, which is exactly the JS definition. Anything else (int32
-/// boxes, strings, objects, BigInt, Symbol) keeps the coercing runtime helper.
-fn lower_math_minmax2(
+/// `Math.min/max(a1..an)` without spread. All arguments are evaluated first,
+/// in order (and rooted); then ToNumber runs on each in order (so `valueOf`
+/// side effects and a BigInt/Symbol TypeError keep their order, and a NaN does
+/// not stop later coercions); then the coerced values are folded left with
+/// `llvm.minimum/maximum.f64`, which propagate NaN and order -0 < +0 exactly
+/// as the spec does. Arguments proven to be plain doubles skip the coercion
+/// and the call is just the fold. Otherwise a plain-number test on the rest picks
+/// the inline fold, or one out-of-line `js_math_{min,max}_n` call that coerces
+/// and reduces the values (no array, no per-argument calls, no second fold).
+fn lower_math_minmax_n(
     ctx: &mut FnCtx<'_>,
-    exprs: [&Expr; 2],
-    vals: [&str; 2],
+    values: &[Expr],
     intrinsic: &str,
-    helper: &str,
-) -> String {
-    let mut plain: Option<String> = None;
-    for (expr, val) in exprs.iter().zip(vals.iter()) {
-        if super::dispatch::math_operand_is_proven_number(ctx, expr) {
-            continue;
-        }
-        let test = crate::codegen::emit_plain_number_test(ctx.block(), val);
-        plain = Some(match plain {
-            Some(prev) => ctx.block().and(crate::types::I1, &prev, &test),
-            None => test,
-        });
+    empty: f64,
+) -> Result<String> {
+    if values.is_empty() {
+        return Ok(crate::nanbox::double_literal(empty));
     }
-    let args = [(DOUBLE, vals[0]), (DOUBLE, vals[1])];
-    let Some(plain) = plain else {
-        return ctx.block().call(DOUBLE, intrinsic, &args);
-    };
-    let fast_idx = ctx.new_block("math.minmax.fast");
-    let slow_idx = ctx.new_block("math.minmax.slow");
-    let merge_idx = ctx.new_block("math.minmax.merge");
-    let fast_label = ctx.block_label(fast_idx);
-    let slow_label = ctx.block_label(slow_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    ctx.block().cond_br(&plain, &fast_label, &slow_label);
-    ctx.current_block = fast_idx;
-    let fast = ctx.block().call(DOUBLE, intrinsic, &args);
-    let fast_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-    ctx.current_block = slow_idx;
-    let slow = ctx.block().call(DOUBLE, helper, &args);
-    let slow_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-    ctx.current_block = merge_idx;
-    ctx.block()
-        .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)])
+    let exprs: Vec<&Expr> = values.iter().collect();
+    rooting::with_operands_rooted(ctx, &exprs, |ctx, vals| {
+        let mut plain: Option<String> = None;
+        for (expr, val) in exprs.iter().zip(vals.iter()) {
+            if super::dispatch::math_operand_is_proven_number(ctx, expr) {
+                continue;
+            }
+            let test = crate::codegen::emit_plain_number_test(ctx.block(), val);
+            plain = Some(match plain {
+                Some(prev) => ctx.block().and(crate::types::I1, &prev, &test),
+                None => test,
+            });
+        }
+        // The fold: n-1 intrinsics, emitted once.
+        fn fold(ctx: &mut FnCtx<'_>, intrinsic: &str, vals: &[String]) -> String {
+            let mut acc = vals[0].clone();
+            for v in &vals[1..] {
+                acc = ctx
+                    .block()
+                    .call(DOUBLE, intrinsic, &[(DOUBLE, &acc), (DOUBLE, v)]);
+            }
+            acc
+        }
+        let Some(plain) = plain else {
+            return Ok(fold(ctx, intrinsic, vals));
+        };
+        let fast_idx = ctx.new_block("math.minmax.fast");
+        let slow_idx = ctx.new_block("math.minmax.slow");
+        let merge_idx = ctx.new_block("math.minmax.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(slow_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&plain, &fast_label, &slow_label);
+        ctx.current_block = fast_idx;
+        let fast = fold(ctx, intrinsic, vals);
+        let fast_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        // Some argument is not a plain number: one out-of-line call does the
+        // ordered ToNumber and the reduction over the values on the stack.
+        ctx.current_block = slow_idx;
+        let is_min = intrinsic == "llvm.minimum.f64";
+        let slow = if (2..=4).contains(&vals.len()) {
+            // Up to four operands travel in registers to a fixed-arity helper:
+            // no stack buffer, no stores at the site.
+            let helper = format!(
+                "js_math_{}_{}",
+                if is_min { "min" } else { "max" },
+                vals.len()
+            );
+            let call_args: Vec<_> = vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
+            ctx.block().call(DOUBLE, &helper, &call_args)
+        } else {
+            let buffer = ctx.func.alloca_entry_array(DOUBLE, vals.len());
+            let blk = ctx.block();
+            for (i, v) in vals.iter().enumerate() {
+                let slot = blk.gep(DOUBLE, &buffer, &[(I64, &i.to_string())]);
+                blk.store(DOUBLE, v, &slot);
+            }
+            let helper = if is_min {
+                "js_math_min_n"
+            } else {
+                "js_math_max_n"
+            };
+            let n = vals.len().to_string();
+            blk.call(DOUBLE, helper, &[(PTR, &buffer), (I32, &n)])
+        };
+        let blk = ctx.block();
+        let slow_end = blk.label.clone();
+        blk.br(&merge_label);
+        ctx.current_block = merge_idx;
+        Ok(ctx
+            .block()
+            .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]))
+    })
 }

@@ -41,6 +41,11 @@ inputs before submission, so later mutations do not change the key.
 
 ## Ethers
 
+`ethers` has no native binding: `import { ethers } from "ethers"` compiles the
+real npm package (and `@noble/curves` / `@noble/hashes`) from source. Address,
+unit and hashing helpers and wallet creation match Node; ABI decoding (#13960)
+and transaction / message signing (#13961) do not work yet.
+
 ```typescript
 {{#include ../../examples/stdlib/crypto/snippets.ts:ethers}}
 ```

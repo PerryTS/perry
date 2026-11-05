@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Each entry site memoizes the intrinsic owners' validated ShapeIds. Every
 // mutation below lands after the site is warm; the next entry must observe it.
 function sum(a: number[]): any {
@@ -52,37 +53,37 @@ const replacement = function (this: any) {
 
 warm(); report("pristine");
 
-warm(); AP[Symbol.iterator] = replacement; report("store @@iterator");
-AP[Symbol.iterator] = values; warm(); report("restored @@iterator");
+warm(); locked(() => { AP[Symbol.iterator] = replacement; }); report("store @@iterator");
+locked(() => { AP[Symbol.iterator] = values; }); warm(); report("restored @@iterator");
 
 warm();
-Object.defineProperty(AP, Symbol.iterator, { get() { return replacement; }, configurable: true });
+locked(() => { Object.defineProperty(AP, Symbol.iterator, { get() { return replacement; }, configurable: true }); });
 report("accessor @@iterator");
-Object.defineProperty(AP, Symbol.iterator, { value: values, writable: true, configurable: true, enumerable: false });
+locked(() => { Object.defineProperty(AP, Symbol.iterator, { value: values, writable: true, configurable: true, enumerable: false }); });
 warm(); report("redefined @@iterator");
 
-warm(); delete AP[Symbol.iterator]; report("deleted @@iterator");
-AP[Symbol.iterator] = values; warm(); report("re-added @@iterator");
+warm(); locked(() => { delete AP[Symbol.iterator]; }); report("deleted @@iterator");
+locked(() => { AP[Symbol.iterator] = values; }); warm(); report("re-added @@iterator");
 
-warm(); Object.setPrototypeOf(AP, null); report("Array.prototype proto null");
-Object.setPrototypeOf(AP, Object.prototype); warm(); report("Array.prototype proto restored");
+warm(); locked(() => { Object.setPrototypeOf(AP, null); }); report("Array.prototype proto null");
+locked(() => { Object.setPrototypeOf(AP, Object.prototype); }); warm(); report("Array.prototype proto restored");
 
 warm();
-aip.next = function (this: any) { const r = next.call(this); if (!r.done) r.value = -r.value; return r; };
+locked(() => { aip.next = function (this: any) { const r = next.call(this); if (!r.done) r.value = -r.value; return r; }; });
 report("store next");
-aip.next = next; warm(); report("restored next");
+locked(() => { aip.next = next; }); warm(); report("restored next");
 
 warm();
-Object.defineProperty(aip, "next", { get() { return function (this: any) { const r = next.call(this); if (!r.done) r.value += 1000; return r; }; }, configurable: true });
+locked(() => { Object.defineProperty(aip, "next", { get() { return function (this: any) { const r = next.call(this); if (!r.done) r.value += 1000; return r; }; }, configurable: true }); });
 report("accessor next");
-Object.defineProperty(aip, "next", { value: next, writable: true, configurable: true, enumerable: false });
+locked(() => { Object.defineProperty(aip, "next", { value: next, writable: true, configurable: true, enumerable: false }); });
 warm(); report("redefined next");
 
-warm(); delete aip.next; report("deleted next");
-aip.next = next; warm(); report("re-added next");
+warm(); locked(() => { delete aip.next; }); report("deleted next");
+locked(() => { aip.next = next; }); warm(); report("re-added next");
 
-warm(); const iterProto = Object.getPrototypeOf(aip); Object.setPrototypeOf(aip, null); report("aip proto null");
-Object.setPrototypeOf(aip, iterProto); warm(); report("aip proto restored");
+warm(); const iterProto = Object.getPrototypeOf(aip); locked(() => { Object.setPrototypeOf(aip, null); }); report("aip proto null");
+locked(() => { Object.setPrototypeOf(aip, iterProto); }); warm(); report("aip proto restored");
 
 warm(); (AP as any).extra = 1; report("unrelated Array.prototype key");
 delete (AP as any).extra; warm(); report("unrelated key removed");

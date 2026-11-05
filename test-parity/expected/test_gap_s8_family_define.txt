@@ -1,0 +1,11 @@
+DEC 250: Cannot add member Object.prototype.viaSetter: built-in objects are read-only in a compiled program
+link to,transformation {"to":1,"transformation":2}
+short to,transformation {"to":1}
+link2 to,transformation,z {"to":1,"transformation":2,"z":3}
+reflect to,transformation true other
+field-over-setter viaSetter,other own=true calls=0
+store-over-setter a,viaSetter own=true calls=0
+after-seal TypeError
+with-method 500500 a,b
+escapes a,late,b,c seen=a
+many to,transformation,extra | to,transformation 0

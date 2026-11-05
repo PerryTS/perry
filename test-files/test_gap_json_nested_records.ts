@@ -95,7 +95,7 @@ console.log('retained', retained.length, checksum, hash(retained[0]), hash(retai
 
 const withGlobalPrototype = makeRows(3);
 const objectPrototype: any = Object.prototype;
-objectPrototype.toJSON = function(key: string) { return 'global:' + key; };
+try { objectPrototype.toJSON = function(key: string) { return 'global:' + key; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('global-prototype', JSON.stringify(withGlobalPrototype));
 delete objectPrototype.toJSON;
 console.log('global-restored', hash(JSON.stringify(withGlobalPrototype)));

@@ -241,6 +241,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64],
     );
+    // perry-runtime: `gc::barrier_store::js_slot_store_obligations`, an
+    // inline slot store's string alias demotion and gated slot barrier.
+    module.declare_function("js_slot_store_obligations", VOID, &[I64, I64, I64]);
     // perry-runtime: `gc::barrier_store::js_write_barrier_birth_slots` — the
     // barriers of one literal birth's slot stores, behind one parent gate.
     module.declare_function("js_write_barrier_birth_slots", VOID, &[I64, I64, I32, I32]);
@@ -275,13 +278,6 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length_strict", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
-    // #8772: non-allocating exact packed-array guard for a final spread tail.
-    // Writes at most four values to caller-owned stack storage and returns
-    // arity 0..4, or -1 for the generic iterator path.
-    module.declare_function("js_short_packed_spread_values", I32, &[DOUBLE, PTR]);
-    // Generic `fixed..., ...spread` materializer used after the short-array or
-    // guarded-method proof fails. It drives the complete iterator protocol.
-    module.declare_function("js_spread_tail_fallback_args", I64, &[PTR, I64, DOUBLE]);
     // #2773: Array.from(source) — throws TypeError for nullish sources, keeps
     // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
     // Takes the raw NaN-boxed value so the tag bits survive.
@@ -360,6 +356,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);
+    // The spread drain of an iterator the site obtained itself.
+    module.declare_function("js_array_spread_append_iterator", I64, &[I64, DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);

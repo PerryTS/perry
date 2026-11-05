@@ -24,8 +24,10 @@ show("depth.hasMid", 5 in arr);
 show("depth.hasAbsent", 9 in arr);
 
 // ── 2. a chain terminated with null must stop ────────────────────────────────
-(Array.prototype as any)[42] = "default-array-proto";
-(Object.prototype as any)[43] = "default-object-proto";
+// DEC 250: the default prototypes refuse program index adds (the refused add
+// is the expectation); a cut chain still reads nothing past null.
+try { (Array.prototype as any)[42] = "default-array-proto"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { (Object.prototype as any)[43] = "default-object-proto"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
 const cutProto: any = [];
 cutProto[1] = "cut-one";
@@ -69,6 +71,4 @@ show("strictSet.value", target[6]);
 show("strictSet.own", Object.prototype.hasOwnProperty.call(target, "6"));
 
 // Clean up so the trailing summary is not polluted for other readers.
-delete (Array.prototype as any)[42];
-delete (Object.prototype as any)[43];
 console.log("array-proto-depth-v1:done");

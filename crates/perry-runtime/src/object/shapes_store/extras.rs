@@ -17,6 +17,11 @@ pub(in crate::object) struct ShapeExtras {
     pub(in crate::object) brands: Box<[u64]>,
     pub(in crate::object) to_nopointer: std::sync::atomic::AtomicU32,
     pub(in crate::object) to_any: std::sync::atomic::AtomicU32,
+    /// Learned `to_any` words for ConstFn lanes at slot >= 32: word k holds
+    /// slots 32 * (k + 1) ..; one word per 32 slots the body list reaches.
+    /// Empty for every shape with no body past slot 31. The lane itself is
+    /// not stored: it is the body-list entry (`lane_is_constfn`).
+    pub(in crate::object) tail_to_any: Box<[std::sync::atomic::AtomicU32]>,
     /// Weak reverse key-add edge. Never shape identity or a GC carrier.
     pub(in crate::object) rollback_parent: std::sync::atomic::AtomicU32,
     /// Weak keyless receiver-birth ShapeId of this prototype's shape.
@@ -44,7 +49,8 @@ impl ShapeRecord {
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
         let bytes = std::mem::size_of::<ShapeExtras>()
             + std::mem::size_of_val(extras.constfn_infos.as_ref())
-            + std::mem::size_of_val(extras.brands.as_ref());
+            + std::mem::size_of_val(extras.brands.as_ref())
+            + std::mem::size_of_val(extras.tail_to_any.as_ref());
         (1, bytes, 0, 0)
     }
 

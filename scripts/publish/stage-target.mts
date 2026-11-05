@@ -72,8 +72,9 @@ export interface StageTargetOptions {
 /**
  * The UI archives of a target bundle: the ones that bundle rustup's
  * precompiled std rlibs with their LLVM bitcode (.llvmbc/.llvmcmd), which a
- * native link never reads. Apple targets are skipped: their archives are
- * BSD/Mach-O layout, which strip-archive-members.py does not handle.
+ * native link never reads. Apple targets are skipped: their UI archives carry
+ * no bitcode (libperry_ui_ios.a and libperry_ui_ios_sim.a: 0 bytes of
+ * __LLVM,__bitcode), so there is nothing to strip.
  */
 export function isStrippableUiArchive(triple: string, name: string): boolean {
   return !triple.includes('-apple-') && /^(lib)?perry_ui_[a-z0-9_]+\.(a|lib)$/.test(name)
@@ -84,10 +85,11 @@ export function isStrippableUiArchive(triple: string, name: string): boolean {
  * crates built under the profile's thin LTO, so every object carries its
  * LLVM bitcode (.llvmbc) beside the machine code, and the bundled std rlibs
  * carry theirs: about half of each archive, none of it read by a native link.
- * Same Apple exclusion as the UI archives.
+ * Apple hosts too: in Mach-O the bitcode is __LLVM,__bitcode, about 70% of
+ * each archive (strip-archive-members.py handles the BSD layout).
  */
-export function isStrippableExtArchive(triple: string, name: string): boolean {
-  return !triple.includes('-apple-') && /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/.test(name)
+export function isStrippableExtArchive(_triple: string, name: string): boolean {
+  return /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/.test(name)
 }
 
 function stripWithScript(archive: string, repoRoot: string): void {

@@ -499,9 +499,7 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
         mask[(bit / 64) as usize] |= 1u64 << (bit % 64);
         if store_layout
             && entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0
-            && (storage >= crate::object::field_rep::REP_SLOTS
-                || crate::object::field_rep::slot_rep(rec.rep, storage)
-                    != crate::object::field_rep::REP_SPECIAL)
+            && rec.lane(storage) != crate::object::field_rep::REP_SPECIAL
         {
             store[(bit / 64) as usize] |= 1u64 << (bit % 64);
         }
@@ -1959,6 +1957,38 @@ pub unsafe extern "C" fn perry_probe_set(
         SetPlan::Stored(stored) => stored,
         SetPlan::Add(obj, r, bits) => i32::from(probe_add(dir, obj, r, key_bits, hash, bits)),
     }
+}
+
+/// The static-key store site's out-of-line path
+/// (`expr/put_value_store_ic.rs`): the store probe ([`perry_probe_set`]),
+/// and when it declines, the complete strict-aware `[[Set]]`
+/// (`js_put_value_set`, the receiver being the target). Returns the
+/// assignment's value: `value` after a probe store, else the `[[Set]]`'s
+/// re-read of it from its own root. May collect (the `[[Set]]` runs
+/// setters and adds keys), so it is the site's one statepoint.
+///
+/// # Safety
+/// As for [`perry_probe_set`].
+#[no_mangle]
+pub unsafe extern "C" fn perry_store_or_put(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    if perry_probe_set(dir, obj_bits, key_bits, hash, value) != 0 {
+        return value;
+    }
+    let obj = f64::from_bits(obj_bits);
+    crate::object::property_ops::put_value::js_put_value_set(
+        obj,
+        f64::from_bits(key_bits),
+        value,
+        obj,
+        strict,
+    )
 }
 
 /// What the store probe found: the store it made (1) or its decline (0),

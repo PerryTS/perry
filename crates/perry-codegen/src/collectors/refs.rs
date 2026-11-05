@@ -61,6 +61,18 @@ pub fn collect_let_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     }
 }
 
+/// The bindings a body declares itself (closure bodies excluded): its `let`s
+/// and the ids of its preallocation statements. A `PreallocateBoxes` /
+/// `PreallocateTdzBoxes` allocates the binding's storage in this body, so it
+/// declares the binding here exactly as a `Let` does; the body never captures
+/// such a binding from its creation site. (The async/generator wrapper keeps
+/// only the preallocation of a hoisted `const`; its declarator sits in the
+/// step closure, which captures the wrapper's cell.)
+pub fn collect_own_binding_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+    collect_let_ids(stmts, out);
+    crate::scope_env::collect_shallow_prealloc_ids(stmts, out);
+}
+
 /// Walk a sequence of statements and collect all LocalIds referenced via
 /// `LocalGet`, `LocalSet`, or `Update`, including every reference inside a
 /// nested closure body. Used together with `collect_let_ids` to detect
@@ -76,7 +88,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
 /// The LocalIds `stmts` reads or writes from OUTSIDE themselves, as seen by a
 /// closure whose body they are: every reference at this level, plus what each
 /// nested closure needs from its creation site (its explicit captures and its
-/// own free references, minus its parameters and its own `let`s). A binding
+/// own free references, minus its parameters and its own bindings). A binding
 /// declared inside a nested closure is that closure's own and never a free
 /// reference of an enclosing one, however deep it is used.
 ///
@@ -89,7 +101,7 @@ pub fn collect_free_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSe
 
 /// What a nested closure needs from the scope that creates it: its explicit
 /// captures plus its free references that are neither its parameters nor its
-/// own `let`s. Mirrors `compute_auto_captures_with_globals` before module
+/// own bindings (`collect_own_binding_ids`). Mirrors `compute_auto_captures_with_globals` before module
 /// globals are dropped and scope groups collapse (the caller does both).
 fn nested_closure_free_ids(
     params: &[perry_hir::Param],
@@ -100,7 +112,7 @@ fn nested_closure_free_ids(
     let mut referenced = HashSet::new();
     refs_stmts::<true>(body, &mut referenced);
     let mut own = HashSet::new();
-    collect_let_ids(body, &mut own);
+    collect_own_binding_ids(body, &mut own);
     own.extend(params.iter().map(|p| p.id));
     out.extend(captures.iter().copied());
     out.extend(referenced.into_iter().filter(|id| !own.contains(id)));

@@ -54,6 +54,13 @@ impl Model {
                 false => self.field_any(t),
             };
             self.edge(any, n);
+            // A Number-valued key can name this field, including NaN,
+            // Infinity and exponent forms. Other named fields never read
+            // numeric-only writes. The range is a value fact, not a type.
+            if self.is_num_atom(a) && self.atoms[a as usize] != NUM_KEY {
+                let numeric = self.numeric_field(t);
+                self.edge(numeric, n);
+            }
             if let Some(srcs) = self.star_from.get(&t).cloned() {
                 for s in srcs {
                     self.star_key(t, s, a, n);
@@ -118,6 +125,8 @@ impl Model {
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
             _ => false,
         };
+        // Any key of the source may be an index of an Array target.
+        self.mark_hole(d);
         let fa_d = self.any_key_node(d);
         if opaque {
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
@@ -136,6 +145,10 @@ impl Model {
         }
         let fa_s = self.field_any(s);
         self.edge(fa_s, fa_d);
+        // Numeric-only source properties keep their range through a copy.
+        let numeric_s = self.numeric_field(s);
+        let numeric_d = self.numeric_field(d);
+        self.edge(numeric_s, numeric_d);
         // Getters of `s` (own and on the chain) run; their results have no
         // known key here.
         let act = ChainAct::Load(fa_d);
@@ -153,6 +166,38 @@ impl Model {
             Some(TokKind::Func(f, _)) => self.fn_joined.get(f).cloned(),
             _ => None,
         }
+    }
+
+    /// Values stored under an unknown Number key, plus arbitrary-key
+    /// writes that may name a number. This is the NUM_KEY range in the
+    /// ordinary field space, not a concrete own key: do not publish it as
+    /// a layout key or a definite key copied by a spread.
+    pub(super) fn numeric_field(&mut self, t: Tok) -> NodeId {
+        let a = self.atom(NUM_KEY);
+        let n = match self.fields.get(&(t, a)).copied() {
+            Some(n) => n,
+            None => {
+                let n = self.node_named("numericfield", || format!("numericfield({t})"));
+                self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+                self.nodes[n as usize].frame = self.fam_home(t);
+                self.nodes[n as usize].of_marker = self.is_marker(t);
+                self.fields.insert((t, a), n);
+                self.rel(|| format!("fieldnode {n} {t} {a}"));
+                n
+            }
+        };
+        let any = self.field_any(t);
+        self.edge(any, n);
+        if self.is_elem_array(t) {
+            // Array algorithms and iteration consume these properties too.
+            self.edge(n, any);
+        }
+        let all = self.all_fields(t);
+        self.edge(n, all);
+        if let Some(&numeric) = self.num_fields.get(&t) {
+            self.edge(n, numeric);
+        }
+        n
     }
 
     pub fn field_any(&mut self, t: Tok) -> NodeId {
@@ -314,6 +359,41 @@ impl Model {
         }
     }
 
+    /// What Array `t`'s iteration reads at a hole: `undefined` once `t`
+    /// may hold one. A birth may (`TmplKind::Arr` `hole_free` false; another
+    /// unit's array, whose stores this unit does not see); so does a store
+    /// under an index or a computed key, or of `length` (`mark_hole`). An
+    /// append (`push`, `unshift`, `splice`: the element key) fills the next
+    /// index and leaves none. Unknown code's writes (escape, HARD) put
+    /// every primitive among the elements already (`any_key_node`).
+    pub fn hole(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.holes.get(&t) {
+            return n;
+        }
+        let n = self.node_named("hole", || format!("hole({t})"));
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.holes.insert(t, n);
+        let born_dense = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => {
+                matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { hole_free: true, .. })
+                    && !self.foreign.contains_key(&tm)
+            }
+            _ => false,
+        };
+        if !born_dense {
+            self.add_prim(n, prim::UNDEF);
+        }
+        n
+    }
+
+    /// A write that may leave Array `t` with a hole (`hole`).
+    pub fn mark_hole(&mut self, t: Tok) {
+        if t != TOP && self.is_arr(t) {
+            let h = self.hole(t);
+            self.add_prim(h, prim::UNDEF);
+        }
+    }
+
     pub fn all_fields(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.all_fields.get(&t) {
             return n;
@@ -352,6 +432,8 @@ impl Model {
         self.num_fields.insert(t, n);
         let fa = self.field_any(t);
         self.edge(fa, n);
+        let numeric = self.numeric_field(t);
+        self.edge(numeric, n);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.is_num_atom(a) {
                 let f = self.field(t, a);

@@ -43,7 +43,7 @@ console.log("tdz", constBeforeUse());
 
 // An absent key that appears on Object.prototype must be seen, and must go
 // away again when it is deleted.
-(Object.prototype as any).x = 100;
+try { (Object.prototype as any).x = 100; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("proto-add", miss(16), O["x"]);
 delete (Object.prototype as any).x;
 console.log("proto-del", miss(16), O["x"]);

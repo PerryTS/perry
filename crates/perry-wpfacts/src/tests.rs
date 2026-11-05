@@ -7,12 +7,18 @@ mod array_ctor;
 mod array_elements;
 mod array_index_store;
 mod array_iteration;
+mod absent_key;
+mod host_objects;
+mod array_helper_nodes;
+mod array_holes;
+mod for_of_yield;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
 mod array_search;
 mod binding_write_gap;
+mod birth_elements;
 mod birth_site;
 mod body_activation;
 mod body_identity;
@@ -31,6 +37,7 @@ mod const_key_set_store;
 mod ctor_observed;
 mod ctor_return;
 mod dead_dynamic_import;
+mod default_params;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
@@ -39,7 +46,9 @@ mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
 mod field_array_push;
+mod rest_elements;
 mod for_in_keys;
+mod function_ctor_without_interp;
 mod function_values;
 mod getter_contract;
 mod global_gc;
@@ -56,6 +65,10 @@ mod named_accessors;
 mod native_fs;
 mod native_given_proto;
 mod native_member;
+mod locked_builtins;
+mod locked_delete;
+mod locked_store;
+mod logical_and;
 mod native_proto;
 mod num_key;
 mod own_key_shadow;
@@ -64,7 +77,9 @@ mod parent_value;
 mod plus_string;
 mod prim_result;
 mod private_field;
+mod process_argv;
 mod proof_receivers;
+mod proto_lock_keys;
 mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
@@ -79,6 +94,7 @@ mod runtime_helpers;
 mod spread_elements;
 mod summary;
 mod super_heritage;
+mod tdz_seed;
 mod top_element_key;
 mod type_export;
 mod typed_array_exact;
@@ -1374,6 +1390,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1440,6 +1457,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1495,6 +1513,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1544,6 +1563,7 @@ fn marker_model() -> crate::model::Model {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         forwards_super: false,
         parent: NO_FN,
         captures: Vec::new(),
@@ -1808,3 +1828,6 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
         .fnproto_borrow_written
         .is_none());
 }
+
+mod numeric_property_store;
+mod shared_sets;

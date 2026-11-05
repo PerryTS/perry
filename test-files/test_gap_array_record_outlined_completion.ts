@@ -15,10 +15,10 @@ function consume(a: any, action: number) {
 }
 const values: any = Array.prototype[Symbol.iterator];
 const aip: any = Object.getPrototypeOf(values.call([]));
-aip.return = function(this: any) {
+try { aip.return = function(this: any) {
   console.log("array close", this.next().value);
   return { done: true };
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (let i = 0; i < 5; i++) console.log("array", i, consume([1, 2], i));
 delete aip.return;
 function custom(failStep: boolean, failClose: boolean): any {
@@ -36,6 +36,6 @@ console.log("throw-close", consume(custom(false, true), 2));
 console.log("break-close", consume(custom(false, true), 1));
 const a: any = [1, 2];
 Object.defineProperty(a, "0", { get() { throw "get-error"; } });
-aip.return = function() { console.log("unexpected close"); return { done:true }; };
+try { aip.return = function() { console.log("unexpected close"); return { done:true }; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("get", consume(a, 2));
 delete aip.return;

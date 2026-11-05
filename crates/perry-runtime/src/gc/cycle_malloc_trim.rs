@@ -74,15 +74,22 @@ fn record_test_malloc_trim_executed() {
 /// collection under `MIMALLOC_PURGE_DELAY=0` returned 318 MB. The collector
 /// was already freeing the memory; mimalloc was holding the pages.
 ///
-/// `mi_collect(force = true)` is the mimalloc equivalent: it collects the
-/// thread's heaps and returns abandoned/free segments to the OS. It runs at
-/// the same point as the trim (Reclaim, outside the atomic tail) and only for
-/// MAJOR collections, so its cost is paid once per full cycle rather than on
-/// every free the way the `MIMALLOC_PURGE_DELAY=0` knob would.
+/// `mi_collect` is the mimalloc equivalent. It runs at the same point as the
+/// trim (Reclaim, outside the atomic tail) and only for MAJOR collections.
+///
+/// `force` says whether the memory is owed back NOW. A full that somebody
+/// asked for (`gc()`, an emergency full, critical memory pressure, idle
+/// reclaim) passes `true`: `mi_collect(true)` decommits every free page at
+/// once. An ordinary full the heap's own growth started passes `false`:
+/// `mi_collect(false)` collects the heaps and runs the purges whose delay has
+/// expired, and the pages freed since then follow through mimalloc's own
+/// `purge_delay`. Forcing there decommitted, at every full, the pages the
+/// next allocation window faults straight back in (measured on an HTTP
+/// server with 23 fulls: 82 ms of reclaim pause and ~40k page faults).
 ///
 /// Kill switch: `PERRY_GC_MALLOC_PURGE=0` (also `off`/`false`).
 #[inline(never)]
-pub(super) fn run_allocator_purge(major: bool) -> MallocTrimOutcome {
+pub(super) fn run_allocator_purge(major: bool, force: bool) -> MallocTrimOutcome {
     if !major {
         return MallocTrimOutcome {
             status: AllocatorMaintenanceStatus::Skipped,
@@ -105,18 +112,28 @@ pub(super) fn run_allocator_purge(major: bool) -> MallocTrimOutcome {
         // thread that allocates; the collector owns the heap here, and this
         // touches allocator metadata only, never a JS object.
         #[cfg(test)]
-        TEST_MIMALLOC_PURGES.with(|c| c.set(c.get().saturating_add(1)));
+        {
+            TEST_MIMALLOC_PURGES.with(|c| c.set(c.get().saturating_add(1)));
+            if force {
+                TEST_MIMALLOC_FORCED_PURGES.with(|c| c.set(c.get().saturating_add(1)));
+            }
+        }
         unsafe {
-            libmimalloc_sys::mi_collect(true);
+            libmimalloc_sys::mi_collect(force);
         }
         return MallocTrimOutcome {
             status: AllocatorMaintenanceStatus::Executed,
-            reason: AllocatorMaintenanceReason::ExplicitOrEmergency,
+            reason: if force {
+                AllocatorMaintenanceReason::ExplicitOrEmergency
+            } else {
+                AllocatorMaintenanceReason::OrdinaryBudgeted
+            },
             elapsed_us: start.elapsed().as_micros() as u64,
         };
     }
     #[cfg(not(all(target_pointer_width = "64", feature = "alloc-mimalloc")))]
     {
+        let _ = force;
         MallocTrimOutcome {
             status: AllocatorMaintenanceStatus::Unsupported,
             reason: AllocatorMaintenanceReason::NotSupported,
@@ -230,6 +247,19 @@ pub(crate) fn test_mimalloc_purge_count() -> usize {
 #[cfg(test)]
 pub(crate) fn reset_test_mimalloc_purge_count() {
     TEST_MIMALLOC_PURGES.with(|c| c.set(0));
+    TEST_MIMALLOC_FORCED_PURGES.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MIMALLOC_FORCED_PURGES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// How many of [`test_mimalloc_purge_count`]'s purges were forced
+/// (`mi_collect(true)`): the memory was owed back at once.
+#[cfg(test)]
+pub(crate) fn test_mimalloc_forced_purge_count() -> usize {
+    TEST_MIMALLOC_FORCED_PURGES.with(Cell::get)
 }
 
 /// Whether the reclaim tail's allocator purge reaches mimalloc on this build.
@@ -353,7 +383,7 @@ mod reclaim_purge_tests {
     #[test]
     fn minor_native_purge_is_a_negative_control() {
         reset_test_mimalloc_purge_count();
-        let outcome = run_allocator_purge(false);
+        let outcome = run_allocator_purge(false, true);
         assert_eq!(outcome.status, AllocatorMaintenanceStatus::Skipped);
         assert_eq!(outcome.reason, AllocatorMaintenanceReason::MinorCollection);
         assert_eq!(test_mimalloc_purge_count(), 0);
@@ -369,6 +399,11 @@ mod reclaim_purge_tests {
             assert_eq!(
                 test_mimalloc_purge_count(),
                 usize::from(mimalloc_purge_available())
+            );
+            assert_eq!(
+                test_mimalloc_forced_purge_count(),
+                usize::from(mimalloc_purge_available()),
+                "gc() asks for the memory back: its purge is forced"
             );
         })
         .join()

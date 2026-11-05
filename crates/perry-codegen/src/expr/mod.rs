@@ -289,9 +289,6 @@ mod bounded_array_index_tests;
 mod call_return_array_index_tests;
 #[cfg(test)]
 mod call_spread_rooting_tests;
-mod call_spread_short;
-#[cfg(test)]
-mod call_spread_short_tests;
 #[cfg(test)]
 mod issue7628_rooting_tests;
 #[cfg(test)]
@@ -616,13 +613,20 @@ pub(crate) struct FnCtx<'a> {
     /// `class_stack` names the owning class in a static body too (it is what
     /// `super.x` resolves against), and `receiver_class_name(Expr::This)`
     /// reads `class_stack.last()`. That answer is right for an instance
-    /// method and wrong here: a static body's `this` is the INT32-tagged
-    /// class ref `0x7FFE_0000_0000_00cc`, never a heap instance of the class.
+    /// method and wrong here: a static body's `this` is the constructor
+    /// function object, never an instance of the class.
     /// Lowerings that turn a proven receiver class into an INSTANCE-shaped
     /// access — anything that strips the NaN-box to a raw `ObjectHeader*`, or
     /// loads a packed field slot — must consult this flag before trusting
     /// `Expr::This` (#9369).
     pub in_static_member: bool,
+    /// The local an instance method binds its [[HomeObject]] to (the HIR
+    /// `let __perry_method_home = ClassMethodHome { class_stack.last(), .. }`
+    /// that `class_home::finish` puts first in the body). `super.m(...)`
+    /// through it is the class's home, so `super_method` can prove the call.
+    /// `(id, true)`: every read of it is such a proven call, so the binding
+    /// itself is not emitted (`super_method::elided_method_home`).
+    pub method_home_local: Option<(u32, bool)>,
     /// Method registry: `(class_name, method_name) → LLVM function name`.
     /// Built by `compile_module` from `hir.classes[*].methods`. Used by
     /// `lower_call` to dispatch `obj.method(args)` to the right
@@ -822,6 +826,10 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::string_accumulator_locals`): selected for the in-place
     /// self-append and demoted on ordinary reads, like a declared `string`.
     pub string_accumulator_locals: &'a std::collections::HashSet<u32>,
+    /// Module-wide contents-stable bindings
+    /// (`collectors::contents_stable_bindings`): the only bindings that may
+    /// keep a proof about their object's contents (`admits_contents_proof`).
+    pub contents_stable_bindings: &'a std::collections::HashSet<u32>,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,
@@ -990,10 +998,6 @@ pub(crate) struct FnCtx<'a> {
     pub method_has_synthetic_arguments: &'a std::collections::HashMap<(String, String), bool>,
     /// Methods whose producer emitted a scalar `arguments.length` direct ABI.
     pub method_arguments_length_only: &'a std::collections::HashMap<(String, String), bool>,
-    /// Whole-program reverse capabilities for guarded short-spread method
-    /// calls. See `CompileOptions::short_spread_method_candidates`.
-    pub short_spread_method_candidates:
-        &'a std::collections::HashMap<String, Vec<crate::ShortSpreadMethodCandidate>>,
     /// Whole-program exported object-literal candidates for dynamic receiver
     /// calls. See `CompileOptions::object_literal_method_candidates`.
     pub object_literal_method_candidates:
@@ -1052,6 +1056,11 @@ pub(crate) struct FnCtx<'a> {
     /// new-expression then loads `result_slot` as its value. One entry per
     /// nested inline ctor; the innermost (`last()`) governs a `return`.
     pub inline_ctor_return: Vec<InlineCtorReturn>,
+    /// The receiver run in flight (`layout_read::RecvRun`).
+    pub recv_run: Option<crate::expr::layout_read::RecvRun>,
+    /// The by-name store being lowered was a 2c member of the run
+    /// (`layout_read::RunTransparency::Store`).
+    pub recv_run_store_member: bool,
 
     /// Cross-module function declarations to add to `LlModule` after
     /// lowering finishes. Each entry is `(llvm_name, return_type, param_types)`.
@@ -2856,7 +2865,7 @@ mod inline_cache_name_tests {
 
 impl<'a> FnCtx<'a> {
     /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
-    /// the class CONSTRUCTOR (an INT32 class ref) rather than an instance?
+    /// the class CONSTRUCTOR function object rather than an instance?
     ///
     /// `receiver_class_name` answers `Some(<owning class>)` for `Expr::This`
     /// in a static body just as it does in an instance body, because both read
@@ -2895,6 +2904,42 @@ impl<'a> FnCtx<'a> {
     /// type after a non-dominating write is a wrong-code bug (#7846). Declared
     /// annotations are never inserted into this map, so a successful lookup is
     /// both provenance-checked and write-stable.
+    /// May binding `id` keep the runtime-derived `proof`?
+    ///
+    /// A proof about the CONTENTS of an object (its property types) is
+    /// established once, at the binding; a later `delete`, store or
+    /// `defineProperty` changes a property without touching the binding. Such
+    /// a proof is kept only for a binding whose object nothing writes for its
+    /// whole life (`collectors::contents_stable_bindings`). A class identity
+    /// claims no contents: its field reads are re-checked as declared-only.
+    pub(crate) fn admits_contents_proof(&self, id: u32, proof: &HirType) -> bool {
+        !self.proof_claims_contents(proof, 0) || self.contents_stable_bindings.contains(&id)
+    }
+
+    fn proof_claims_contents(&self, ty: &HirType, depth: usize) -> bool {
+        if depth > 16 {
+            return true;
+        }
+        match ty {
+            HirType::Object(_) => true,
+            HirType::Named(name) => {
+                if let Some(alias) = self.type_aliases.get(name) {
+                    self.proof_claims_contents(alias, depth + 1)
+                } else {
+                    self.interfaces.contains_key(name)
+                }
+            }
+            HirType::Union(variants) | HirType::Tuple(variants) => variants
+                .iter()
+                .any(|v| self.proof_claims_contents(v, depth + 1)),
+            HirType::Array(element) => self.proof_claims_contents(element, depth + 1),
+            HirType::Generic { base, type_args } if base == "Array" => type_args
+                .iter()
+                .any(|v| self.proof_claims_contents(v, depth + 1)),
+            _ => false,
+        }
+    }
+
     pub(crate) fn stable_local_type_proof(&self, id: &u32) -> Option<&HirType> {
         if self.reassigned_locals.contains(id) {
             self.typed_locals.get(id)
@@ -3291,6 +3336,7 @@ mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
 mod index_get;
+pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
 mod index_key;
@@ -3376,7 +3422,7 @@ pub(crate) mod static_method;
 pub(crate) mod store_census;
 mod string_regex_proc;
 pub(crate) mod super_constructor;
-mod super_method;
+pub(crate) mod super_method;
 #[cfg(test)]
 mod super_property_set_order_tests;
 pub(crate) mod this_super_call;

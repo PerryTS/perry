@@ -1017,6 +1017,9 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     sr.destroyed = true;
                     sr.turnloop
                 });
+            let socket_scope = perry_ffi::TransientRootScope::enter();
+            let socket =
+                socket_scope.root_nanbox(super::response::response_socket(response_root.get()));
             // A heap response: node's `destroyed` field and the socket's
             // destroy (whose `close` the response relays).
             if super::response_payload::destroy(response_root.get()) {
@@ -1025,7 +1028,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             // The socket closes immediately and an in-flight request gets a
             // reset, which is what Node's `socket.destroy()` does.
             if let Some((conn, _)) = turnloop {
-                crate::server::turnloop_route::destroy(&conn.root());
+                crate::server::turnloop_route::destroy(&conn.root(socket.get()));
             }
             handle_to_pointer_f64(response_root.get())
         }
@@ -1433,11 +1436,6 @@ fn response_socket_value(handle: i64) -> f64 {
         }
     }
     if let Some(sr) = super::response::response_state(handle) {
-        if let Some((crate::server::turnloop_route::ResponseConnection::Socket { owner, .. }, _)) =
-            sr.turnloop
-        {
-            return owner;
-        }
         if !JsValue::from_bits(sr.socket_value.to_bits()).is_undefined() {
             return sr.socket_value;
         }
@@ -1460,6 +1458,9 @@ mod response_socket_tests {
     #[test]
     fn response_socket_retains_initial_socket_after_request_reassignment() {
         perry_ffi::initialize_runtime_fixture();
+        // A heap response is born from the http module's ServerResponse
+        // constructor: install the module, as every heap-birth test does.
+        unsafe { crate::server::native_dispatch::js_ext_http_nm_install() };
         let scope = perry_ffi::TransientRootScope::enter();
         let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
             0,
@@ -1477,13 +1478,15 @@ mod response_socket_tests {
                 1234,
             ));
             assert!(incoming_socket_assign(request, socket));
-            let response = crate::server::response::alloc_http1_server_response_for_turnloop(
-                socket, 0, request,
+            let response = crate::server::server::object_handle(
+                crate::server::response::alloc_http1_server_response_for_turnloop(
+                    socket, 0, request, 0.0,
+                ),
             );
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
             assert!(incoming_socket_assign(request, 42.0));
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
-            drop_handle(response);
+            crate::server::response_payload::close(response);
             drop_handle(request);
         }
 

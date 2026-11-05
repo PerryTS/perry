@@ -230,10 +230,10 @@ test('stageTarget: a tampered, missing, unlisted or foreign bundle file is refus
   })
 })
 
-test('isStrippableExtArchive: ext archives of non-Apple hosts only', () => {
+test('isStrippableExtArchive: ext archives of every host', () => {
   assert.equal(isStrippableExtArchive('x86_64-unknown-linux-musl', 'libperry_ext_http.a'), true)
   assert.equal(isStrippableExtArchive('x86_64-pc-windows-msvc', 'perry_ext_http.lib'), true)
-  assert.equal(isStrippableExtArchive('aarch64-apple-darwin', 'libperry_ext_http.a'), false)
+  assert.equal(isStrippableExtArchive('aarch64-apple-darwin', 'libperry_ext_http.a'), true)
   assert.equal(isStrippableExtArchive('x86_64-unknown-linux-gnu', 'libperry_runtime.a'), false)
 })
 

@@ -217,6 +217,52 @@ pub(crate) fn non_expression_bound_locals(stmts: &[Stmt]) -> HashSet<u32> {
     ids
 }
 
+/// The typed-array class a construction births: `new K(..)` (and `K.of` /
+/// `K.from`, which lower to the same node) of a numeric kind, or
+/// `new Uint8Array(..)`. Every such value is a fresh object of class `K`,
+/// whatever the argument (a length, an array, an `ArrayBuffer` to view).
+pub(crate) fn typed_array_new_class(e: &Expr) -> Option<&'static str> {
+    match e {
+        Expr::TypedArrayNew { kind, .. } if spec_ta_kind_is_numeric(*kind) => {
+            super::pointer_locals::typed_array_class_name_for_kind(*kind)
+        }
+        Expr::Uint8ArrayNew(_) => Some("Uint8Array"),
+        _ => None,
+    }
+}
+
+fn note_write_class(scan: &mut ModuleScan, id: u32, class: Option<&'static str>) {
+    scan.write_classes
+        .entry(id)
+        .and_modify(|c| {
+            if *c != class {
+                *c = None;
+            }
+        })
+        .or_insert(class);
+}
+
+/// The module's write sets: every reassigned local (as
+/// [`reassigned_locals_in_module`]) and, among them, those whose EVERY write
+/// constructs one typed-array class (`V = new K(..)` only), with that class.
+pub(crate) struct ModuleWriteSets {
+    pub writes: HashSet<u32>,
+    pub typed_array_writes: HashMap<u32, &'static str>,
+}
+
+pub(crate) fn module_write_sets(hir: &Module) -> ModuleWriteSets {
+    let scan = scan_whole_module(hir);
+    let typed_array_writes = scan
+        .write_classes
+        .iter()
+        .filter_map(|(id, c)| c.map(|c| (*id, c)))
+        .collect();
+    ModuleWriteSets {
+        writes: scan.writes,
+        typed_array_writes,
+    }
+}
+
 /// Every local reassigned in any executable body in `hir`.
 ///
 /// Closure codegen seeds receiver types from module-wide declarations, so it
@@ -497,6 +543,11 @@ struct ModuleScan {
     self_appends: HashSet<u32>,
     /// Bindings initialised or assigned a string literal somewhere.
     string_literal_writes: HashSet<u32>,
+    /// Per write target: the typed-array class every write of it constructs
+    /// (`LocalSet(id, new K(..))`, [`typed_array_new_class`]), or `None` once
+    /// any write is something else (another class, any other value, a
+    /// `GlobalSet`, an `Update`, a `with` fallback).
+    write_classes: HashMap<u32, Option<&'static str>>,
     /// `(receiver, key)` for every `recv[key] = v` whose key is a bare local.
     /// A local key is length-safe only if it is provably an integer, which
     /// needs per-body facts this walk does not have; [`collect_spec_abi_facts`]
@@ -559,6 +610,11 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         Expr::LocalSet(id, value) | Expr::GlobalSet(id, value) => {
             scan.writes.insert(*id);
+            let class = match e {
+                Expr::LocalSet(..) => typed_array_new_class(value),
+                _ => None,
+            };
+            note_write_class(scan, *id, class);
             if matches!(e, Expr::GlobalSet(..)) {
                 scan.index_unknown_writers.insert(*id);
             }
@@ -583,6 +639,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         Expr::Update { id, .. } => {
             scan.writes.insert(*id);
+            note_write_class(scan, *id, None);
             scan.index_unknown_writers.insert(*id);
             if depth > 0 {
                 scan.closure_refs.insert(*id);
@@ -638,6 +695,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             | perry_hir::WithSetFallback::SloppyImplicit(id) = fallback
             {
                 scan.writes.insert(*id);
+                note_write_class(scan, *id, None);
                 scan.with_fallback_writes.insert(*id);
                 if depth > 0 {
                     scan.closure_refs.insert(*id);
@@ -989,35 +1047,58 @@ fn body_integer_locals(stmts: &[Stmt], params: &[perry_hir::Param]) -> HashSet<u
 fn judge_sites_in_body(
     stmts: &[Stmt],
     params: &[perry_hir::Param],
-    ta_bindings: &HashMap<u32, SpecTaBinding>,
-    number_array_bindings: &HashSet<u32>,
+    body: Option<u32>,
+    env: &JudgeEnv<'_>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
     // Use the same transitive, all-writes range proof as canonical i32 slots.
     // Empty auxiliary sets only under-approximate clamp/flat-array cases; they
     // cannot admit a local the integer-local provenance judge would reject.
     let integer_locals = body_integer_locals(stmts, params);
-    let mut ready: HashSet<u32> = HashSet::new();
+    let mut ready: HashSet<u32> = ta_ready_at_entry(env.ta, env.definite, body);
     for s in stmts {
-        judge_stmt(
-            s,
-            ta_bindings,
-            number_array_bindings,
-            &integer_locals,
-            &ready,
-            out,
-        );
+        judge_stmt(s, env, env.number_arrays, &integer_locals, &ready, out);
         if let Stmt::Let { id, .. } = s {
-            if ta_bindings.contains_key(id) || number_array_bindings.contains(id) {
+            if env.ta.contains_key(id) || env.number_arrays.contains(id) {
                 ready.insert(*id);
             }
         }
     }
 }
 
+/// What the call-site judge reads module-wide.
+pub(crate) struct JudgeEnv<'a> {
+    ta: &'a HashMap<u32, SpecTaBinding>,
+    number_arrays: &'a HashSet<u32>,
+    definite: &'a super::DefiniteInit,
+}
+
+/// The `TaPtr` bindings ready when `body` (`None` = module init, else the
+/// function or closure id) starts: those `collectors::definite_init` proves
+/// hold their typed array at every read in that body (the binding statement
+/// runs before any code that can run this body, and the class agrees with
+/// the binding's kind). A proven binding has one `Let` and no write, so the
+/// value at every read is that `Let`'s one array. The judge seeds a body's
+/// sequential `ready` set with it, and codegen seeds `FnCtx::spec_ta_ready`
+/// with the same set: the two dominance mirrors stay one rule.
+pub(crate) fn ta_ready_at_entry(
+    ta: &HashMap<u32, SpecTaBinding>,
+    definite: &super::DefiniteInit,
+    body: Option<u32>,
+) -> HashSet<u32> {
+    definite
+        .facts_for(body)
+        .filter_map(|(id, ty)| {
+            let binding = ta.get(&id)?;
+            let class = super::pointer_locals::typed_array_class_name_for_kind(binding.kind)?;
+            matches!(ty, perry_hir::types::Type::Named(n) if n == class).then_some(id)
+        })
+        .collect()
+}
+
 fn judge_stmt(
     s: &Stmt,
-    ta: &HashMap<u32, SpecTaBinding>,
+    env: &JudgeEnv<'_>,
     number_arrays: &HashSet<u32>,
     integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
@@ -1025,15 +1106,15 @@ fn judge_stmt(
 ) {
     match s {
         Stmt::Let { init: Some(e), .. } => {
-            judge_expr(e, ta, number_arrays, integer_locals, ready, out)
+            judge_expr(e, env, number_arrays, integer_locals, ready, out)
         }
         Stmt::Let { init: None, .. } => {}
         Stmt::Expr(e) | Stmt::Throw(e) => {
-            judge_expr(e, ta, number_arrays, integer_locals, ready, out)
+            judge_expr(e, env, number_arrays, integer_locals, ready, out)
         }
         Stmt::Return(opt) => {
             if let Some(e) = opt {
-                judge_expr(e, ta, number_arrays, integer_locals, ready, out);
+                judge_expr(e, env, number_arrays, integer_locals, ready, out);
             }
         }
         Stmt::If {
@@ -1041,20 +1122,20 @@ fn judge_stmt(
             then_branch,
             else_branch,
         } => {
-            judge_expr(condition, ta, number_arrays, integer_locals, ready, out);
+            judge_expr(condition, env, number_arrays, integer_locals, ready, out);
             for st in then_branch {
-                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                judge_stmt(st, env, number_arrays, integer_locals, ready, out);
             }
             if let Some(eb) = else_branch {
                 for st in eb {
-                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                    judge_stmt(st, env, number_arrays, integer_locals, ready, out);
                 }
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            judge_expr(condition, ta, number_arrays, integer_locals, ready, out);
+            judge_expr(condition, env, number_arrays, integer_locals, ready, out);
             for st in body {
-                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                judge_stmt(st, env, number_arrays, integer_locals, ready, out);
             }
         }
         Stmt::For {
@@ -1064,20 +1145,20 @@ fn judge_stmt(
             body,
         } => {
             if let Some(i) = init {
-                judge_stmt(i, ta, number_arrays, integer_locals, ready, out);
+                judge_stmt(i, env, number_arrays, integer_locals, ready, out);
             }
             if let Some(c) = condition {
-                judge_expr(c, ta, number_arrays, integer_locals, ready, out);
+                judge_expr(c, env, number_arrays, integer_locals, ready, out);
             }
             if let Some(u) = update {
-                judge_expr(u, ta, number_arrays, integer_locals, ready, out);
+                judge_expr(u, env, number_arrays, integer_locals, ready, out);
             }
             for st in body {
-                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                judge_stmt(st, env, number_arrays, integer_locals, ready, out);
             }
         }
         Stmt::Labeled { body, .. } => {
-            judge_stmt(body, ta, number_arrays, integer_locals, ready, out)
+            judge_stmt(body, env, number_arrays, integer_locals, ready, out)
         }
         Stmt::Try {
             body,
@@ -1085,16 +1166,16 @@ fn judge_stmt(
             finally,
         } => {
             for st in body {
-                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                judge_stmt(st, env, number_arrays, integer_locals, ready, out);
             }
             if let Some(c) = catch {
                 for st in &c.body {
-                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                    judge_stmt(st, env, number_arrays, integer_locals, ready, out);
                 }
             }
             if let Some(f) = finally {
                 for st in f {
-                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                    judge_stmt(st, env, number_arrays, integer_locals, ready, out);
                 }
             }
         }
@@ -1102,13 +1183,13 @@ fn judge_stmt(
             discriminant,
             cases,
         } => {
-            judge_expr(discriminant, ta, number_arrays, integer_locals, ready, out);
+            judge_expr(discriminant, env, number_arrays, integer_locals, ready, out);
             for case in cases {
                 if let Some(t) = &case.test {
-                    judge_expr(t, ta, number_arrays, integer_locals, ready, out);
+                    judge_expr(t, env, number_arrays, integer_locals, ready, out);
                 }
                 for st in &case.body {
-                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
+                    judge_stmt(st, env, number_arrays, integer_locals, ready, out);
                 }
             }
         }
@@ -1122,7 +1203,7 @@ fn judge_stmt(
 /// is the one that is load-bearing for soundness).
 pub(crate) fn judge_arg(
     arg: &Expr,
-    ta: &HashMap<u32, SpecTaBinding>,
+    env: &JudgeEnv<'_>,
     number_arrays: &HashSet<u32>,
     integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
@@ -1132,7 +1213,7 @@ pub(crate) fn judge_arg(
         Expr::Integer(_) => SpecParamRep::F64,
         Expr::Number(_) => SpecParamRep::F64,
         Expr::LocalGet(id) => {
-            if let Some(binding) = ta.get(id).filter(|_| ready.contains(id)) {
+            if let Some(binding) = env.ta.get(id).filter(|_| ready.contains(id)) {
                 SpecParamRep::TaPtr {
                     kind: binding.kind,
                     const_len: binding.const_len,
@@ -1151,7 +1232,7 @@ pub(crate) fn judge_arg(
 
 fn judge_expr(
     e: &Expr,
-    ta: &HashMap<u32, SpecTaBinding>,
+    env: &JudgeEnv<'_>,
     number_arrays: &HashSet<u32>,
     integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
@@ -1161,23 +1242,42 @@ fn judge_expr(
         if let Expr::FuncRef(fid) = callee.as_ref() {
             let judged: Vec<SpecParamRep> = args
                 .iter()
-                .map(|a| judge_arg(a, ta, number_arrays, integer_locals, ready))
+                .map(|a| judge_arg(a, env, number_arrays, integer_locals, ready))
                 .collect();
             out.entry(*fid).or_default().push(judged);
         }
     }
-    // Closures execute at unknown times relative to the bindings — never
-    // judge call sites inside them (their sites keep the boxed path).
-    if matches!(e, Expr::Closure { .. }) {
+    // A closure body runs at an unknown time relative to this body's
+    // bindings: it is judged as its own body, ready with only the bindings
+    // proven for it at entry ([`ta_ready_at_entry`]), never this body's set.
+    if let Expr::Closure {
+        func_id,
+        params,
+        body,
+        ..
+    } = e
+    {
+        judge_sites_in_body(body, params, Some(*func_id), env, out);
         return;
     }
     perry_hir::walker::walk_expr_children(e, &mut |c| {
-        judge_expr(c, ta, number_arrays, integer_locals, ready, out)
+        judge_expr(c, env, number_arrays, integer_locals, ready, out)
     });
 }
 
-/// Run the whole pre-pass on a module.
+/// [`collect_spec_abi_facts_with`] over the module's own definite-init facts.
+#[cfg(test)]
 pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
+    collect_spec_abi_facts_with(hir, &super::definite_init::collect(hir))
+}
+
+/// Run the whole pre-pass on a module. `definite` is the module's
+/// `collectors::definite_init` result: which typed-array bindings a body may
+/// pass as `TaPtr` before its own statements ([`ta_ready_at_entry`]).
+pub fn collect_spec_abi_facts_with(
+    hir: &Module,
+    definite: &super::DefiniteInit,
+) -> SpecAbiModuleFacts {
     let mut scan = scan_whole_module(hir);
 
     // An element store keyed by a local is length-safe only when that local is
@@ -1266,7 +1366,9 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
 
     // Proven typed-array bindings: single TOP-LEVEL `let`/`const` bound to a
     // provably-non-view `TypedArrayNew` of a numeric kind (or `Uint8ArrayNew`),
-    // never reassigned, never referenced by a closure.
+    // never reassigned. A closure or function body that names one is ready
+    // for it only when `definite_init` proves no reader there can run before
+    // the `Let` ([`ta_ready_at_entry`]).
     let mut ta_bindings: HashMap<u32, SpecTaBinding> = HashMap::new();
     // The callee hoists the data pointer and length through the header once,
     // so only a sealed binding may be passed: observing `.buffer` rebinds the
@@ -1323,7 +1425,6 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
             if exposed.contains(id)
                 || scan.let_counts.get(id).copied() != Some(1)
                 || scan.writes.contains(id)
-                || scan.closure_refs.contains(id)
                 || scan.boxed_prealloc.contains(id)
             {
                 continue;
@@ -1336,23 +1437,17 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
         collect_ta(&f.body);
     }
 
-    // Judge every direct call site in init + function bodies.
+    // Judge every direct call site in init + function bodies, and in the
+    // closure bodies they create (each as its own body).
     let mut call_sites: HashMap<u32, Vec<Vec<SpecParamRep>>> = HashMap::new();
-    judge_sites_in_body(
-        &hir.init,
-        &[],
-        &ta_bindings,
-        &number_array_bindings,
-        &mut call_sites,
-    );
+    let env = JudgeEnv {
+        ta: &ta_bindings,
+        number_arrays: &number_array_bindings,
+        definite,
+    };
+    judge_sites_in_body(&hir.init, &[], None, &env, &mut call_sites);
     for f in &hir.functions {
-        judge_sites_in_body(
-            &f.body,
-            &f.params,
-            &ta_bindings,
-            &number_array_bindings,
-            &mut call_sites,
-        );
+        judge_sites_in_body(&f.body, &f.params, Some(f.id), &env, &mut call_sites);
     }
 
     SpecAbiModuleFacts {

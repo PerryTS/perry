@@ -8,28 +8,28 @@ for (const item of [value(1), value(2)]) plain += item.n;
 console.log("plain", evaluations, plain);
 const proto: any = Array.prototype;
 const original = proto[Symbol.iterator];
-proto[Symbol.iterator] = function(this: any[]) {
+try { proto[Symbol.iterator] = function(this: any[]) {
   let i = 0;
   return { next: () => i < this.length ? {value: this[i++].n * 10, done: false} : {done: true} };
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 let custom = "";
 for (const item of [value(3), value(4)]) custom += item;
-proto[Symbol.iterator] = original;
+try { proto[Symbol.iterator] = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("override", evaluations, custom);
 const itp: any = Object.getPrototypeOf([][Symbol.iterator]());
 const next = itp.next;
-itp.next = function(this: any) {
+try { itp.next = function(this: any) {
   const result = next.call(this);
   if (!result.done) result.value *= 100;
   return result;
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 let patched = 0;
 for (const item of [5, 6]) patched += item;
-itp.next = next;
+try { itp.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("next", patched);
 let closeReceiver: any;
 for (const item of [7, 8, 9]) {
-  itp.return = function(this: any) { closeReceiver = this; return {done: true}; };
+  try { itp.return = function(this: any) { closeReceiver = this; return {done: true}; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   console.log("first", item);
   break;
 }

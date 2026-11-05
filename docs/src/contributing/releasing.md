@@ -31,7 +31,7 @@ git diff --exit-code -- docs/src/api/reference.md docs/api/perry.d.ts
 cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos \
   --exclude perry-ui-watchos --exclude perry-ui-gtk4 \
   --exclude perry-ui-android --exclude perry-ui-windows
-./run_parity_tests.sh
+python3 scripts/parity.py run --mode auto
 ./scripts/run_doc_tests.sh
 ```
 

@@ -77,9 +77,8 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
         || (slot >= to.live_inline_slot_count()
             && !crate::object::spill_store_would_be_in_capacity(obj as usize, slot as usize))
         || crate::object::field_rep::has_deprecated(to.rep())
-        || crate::object::field_rep::slot_rep(to.rep(), slot)
-            == crate::object::field_rep::REP_SPECIAL
-        || (crate::object::field_rep::slot_rep(to.rep(), slot) == crate::object::field_rep::REP_F64
+        || to.lane(slot as u32) == crate::object::field_rep::REP_SPECIAL
+        || (to.lane(slot as u32) == crate::object::field_rep::REP_F64
             && crate::object::field_rep::f64_slot_bits(value.to_bits()).is_none())
     {
         return false;

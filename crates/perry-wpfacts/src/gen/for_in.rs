@@ -254,6 +254,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: fx.f,

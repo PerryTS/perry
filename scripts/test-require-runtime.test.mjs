@@ -11,7 +11,7 @@ import test from 'node:test';
 const helper = new URL('./test-require-runtime.mjs', import.meta.url).href;
 const root = fileURLToPath(new URL('../', import.meta.url));
 const names = ['runtime', 'stdlib', 'ext_http', 'ext_net',
-  'ext_typescript', 'ext_ws', 'ext_zlib'];
+  'ext_bun', 'ext_ws', 'ext_zlib'];
 const filename = name => process.platform === 'win32' ? `perry_${name}.lib` : `libperry_${name}.a`;
 
 function fixture(t, omitted) {
@@ -95,7 +95,7 @@ function assertCoherentBuild(calls) {
     }
   }
   for (const name of ['perry', 'perry-runtime-static', 'perry-stdlib-static',
-    'perry-ext-http', 'perry-ext-net', 'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
+    'perry-ext-http', 'perry-ext-net', 'perry-ext-bun', 'perry-ext-ws', 'perry-ext-zlib']) {
     assert(args.some((arg, i) => arg === '-p' && args[i + 1] === name), name);
   }
   assert(!args.some(arg => arg === '--features' || arg.startsWith('--features=')),

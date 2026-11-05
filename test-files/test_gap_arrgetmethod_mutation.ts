@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 const a: any = [1,2,3,4];
 const original = Array.prototype[Symbol.iterator];
 function sum() { let s = 0; for(const x of a) s += x; return s; }
@@ -10,14 +11,14 @@ for(const kind of ["own", "prototype", "next"]) {
         s += x;
         if (x === 1) {
             if(kind === "own") a[Symbol.iterator] = other;
-            if(kind === "prototype") Array.prototype[Symbol.iterator] = other;
-            if(kind === "next") p.next = function() { return {done: true}; };
+            if(kind === "prototype") locked(() => { Array.prototype[Symbol.iterator] = other; });
+            if(kind === "next") locked(() => { p.next = function() { return {done: true}; }; });
         }
     }
     console.log(kind, s, sum());
     delete a[Symbol.iterator];
-    Array.prototype[Symbol.iterator] = original;
-    p.next = originalNext;
+    locked(() => { Array.prototype[Symbol.iterator] = original; });
+    locked(() => { p.next = originalNext; });
 }
 let captures = 0;
 a[Symbol.iterator] = function(this: any) {

@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Array.prototype data descriptors must not stand in for accessor history.
 // Each API runs at the same effectful call site, before and after warming it.
 let events = "";
@@ -19,21 +20,21 @@ function getter(this: any): any {
 }
 function setter(this: any, value: any): void {}
 function install(proto: any, api: number): void {
-  if (api === 0) Object.defineProperty(proto, "push", { configurable: true, get: getter });
-  if (api === 1) proto.__defineGetter__("push", getter);
+  if (api === 0) locked(() => { Object.defineProperty(proto, "push", { configurable: true, get: getter }); });
+  if (api === 1) locked(() => { proto.__defineGetter__("push", getter); });
   if (api === 2) {
-    proto.__defineSetter__("push", setter);
-    proto.__defineGetter__("push", getter);
+    locked(() => { proto.__defineSetter__("push", setter); });
+    locked(() => { proto.__defineGetter__("push", getter); });
   }
-  if (api === 3) Object.defineProperties(proto, { push: { configurable: true, get: getter } });
+  if (api === 3) locked(() => { Object.defineProperties(proto, { push: { configurable: true, get: getter } }); });
   if (api === 4) Reflect.defineProperty(proto, "push", { configurable: true, get: getter });
   if (api === 5) {
     const methods = { get push() { return getter.call(this); }, set push(v: any) {} };
-    Object.defineProperty(proto, "push", Object.getOwnPropertyDescriptor(methods, "push")!);
+    locked(() => { Object.defineProperty(proto, "push", Object.getOwnPropertyDescriptor(methods, "push")!); });
   }
   if (api === 6) {
     class Methods { get push() { return getter.call(this); } set push(v: any) {} }
-    Object.defineProperties(proto, { push: Object.getOwnPropertyDescriptor(Methods.prototype, "push")! });
+    locked(() => { Object.defineProperties(proto, { push: Object.getOwnPropertyDescriptor(Methods.prototype, "push")! }); });
   }
 }
 const arrayProto: any = Array.prototype;
@@ -47,12 +48,12 @@ for (let owner = 0; owner < 2; owner++) {
       record = false;
       gets = 0;
       if (timing === 0) {
-        if (owner === 1) delete arrayProto.push;
+        if (owner === 1) locked(() => { delete arrayProto.push; });
         install(proto, api);
       }
       for (let i = 0; i < 2000; i++) call(arr);
       if (timing === 1) {
-        if (owner === 1) delete arrayProto.push;
+        if (owner === 1) locked(() => { delete arrayProto.push; });
         install(proto, api);
       }
       events = "";
@@ -61,23 +62,23 @@ for (let owner = 0; owner < 2; owner++) {
       const result = call(arr);
       record = false;
       console.log(owner, api, timing, events, result, gets);
-      delete proto.push;
-      Object.defineProperty(arrayProto, "push", original);
+      locked(() => { delete proto.push; });
+      locked(() => { Object.defineProperty(arrayProto, "push", original); });
     }
   }
 }
 // Setter-only and empty accessor descriptors still shadow the builtin method.
 for (let api = 0; api < 3; api++) {
-  if (api === 0) arrayProto.__defineSetter__("push", setter);
-  if (api === 1) Object.defineProperty(arrayProto, "push", { configurable: true, get: undefined });
+  if (api === 0) locked(() => { arrayProto.__defineSetter__("push", setter); });
+  if (api === 1) locked(() => { Object.defineProperty(arrayProto, "push", { configurable: true, get: undefined }); });
   if (api === 2) Reflect.defineProperty(arrayProto, "push", { configurable: true, set: setter });
   events = "";
   record = true;
   try { call([]); } catch (e) { events += "t"; }
   record = false;
   console.log("empty", api, events);
-  delete arrayProto.push;
-  Object.defineProperty(arrayProto, "push", original);
+  locked(() => { delete arrayProto.push; });
+  locked(() => { Object.defineProperty(arrayProto, "push", original); });
 }
 // Same fact on a receiver with data descriptors, after it has grown.
 const own: any = [];
@@ -97,7 +98,7 @@ record = false;
 // Array.prototype itself can grow and leave forwarding aliases behind.
 const protoAlias: any = arrayProto;
 Object.defineProperty(protoAlias, "protoaccGrow", { configurable: true, get: getter });
-protoAlias[400] = 1;
+locked(() => { protoAlias[400] = 1; });
 events = "";
 record = true;
 const grownReceiver: any = [];
@@ -118,16 +119,16 @@ console.log("grown iterator", typeof ([] as any)[Symbol.iterator]);
 
 
 // An empty own accessor shadows a getter further up the prototype chain.
-Object.defineProperty(objectProto, "push", { configurable: true, get: getter });
-Object.defineProperty(arrayProto, "push", { configurable: true, get: undefined });
+locked(() => { Object.defineProperty(objectProto, "push", { configurable: true, get: getter }); });
+locked(() => { Object.defineProperty(arrayProto, "push", { configurable: true, get: undefined }); });
 events = "";
 record = true;
 try { call([]); } catch (e) { events += "t"; }
 record = false;
 console.log("undefined shadow", events);
 delete objectProto.push;
-delete arrayProto.push;
-Object.defineProperty(arrayProto, "push", original);
+locked(() => { delete arrayProto.push; });
+locked(() => { Object.defineProperty(arrayProto, "push", original); });
 
 
 // Rebinding the global constructor does not change an array's intrinsic chain.
@@ -152,16 +153,16 @@ delete arrayProto.protoaccFirst;
 delete arrayProto.protoaccSecond;
 
 // Own named and dense data must shadow a prepared inherited getter.
-Object.defineProperty(arrayProto, "push", { configurable: true, get: getter });
+locked(() => { Object.defineProperty(arrayProto, "push", { configurable: true, get: getter }); });
 const shadow: any = [];
 Object.defineProperty(shadow, "push", { configurable: true, value: function(x: number): number { if (record) events += "c"; return x + 10; } });
 events = "";
 record = true;
 console.log("own data shadow", call(shadow), events);
 record = false;
-delete arrayProto.push;
-Object.defineProperty(arrayProto, "push", original);
-Object.defineProperty(arrayProto, "0", { configurable: true, get: getter });
+locked(() => { delete arrayProto.push; });
+locked(() => { Object.defineProperty(arrayProto, "push", original); });
+locked(() => { Object.defineProperty(arrayProto, "0", { configurable: true, get: getter }); });
 const dense: any = [function(x: number): number { if (record) events += "c"; return x + 10; }];
 events = "";
 record = true;

@@ -16,6 +16,33 @@ ports. Worker and channel message listeners receive the same canonical event
 values, with dispatch targets and phases restored after callbacks return or throw.
 Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
 
+## Transferring MessagePorts
+
+Include every `MessagePort` reachable from a message in its transfer list:
+
+```typescript
+const channel = new MessageChannel();
+worker.postMessage({ port: channel.port1 }, [channel.port1]);
+```
+
+The receiving agent gets a new wrapper around the same native endpoint, including
+its pending FIFO messages. The source wrapper becomes inert; moving the endpoint
+back creates another wrapper rather than reactivating either old one. Listeners
+stay with their original wrappers. This applies to channel ports and a Worker's
+`parentPort`; transferring `parentPort` moves its data connection, not Worker
+termination or reload control.
+
+`postMessage`, `workerData` and `structuredClone` share the clone transaction.
+Graph aliases, cycles, Map/Set references and transferred buffer views retain
+identity. Admission and serialization must succeed before any port ownership or
+buffer backing moves. A getter's successful nested transfer remains committed
+when an outer transfer fails.
+
+Delivered `MessageEvent.ports` is frozen, ordered by the transfer list, and
+includes ports absent from `data`. Its entries are the same wrappers referenced
+by `data`; Node-style `on("message")` and synchronous receive still return only
+the message data.
+
 ## Three Primitives
 
 ### `parallelMap` — Data-Parallel Processing
@@ -273,6 +300,12 @@ Each `Worker.terminate()` call returns a distinct promise. Calls made before the
 `exit` event complete with the worker's exit code after that event is delivered.
 Calls made from an `exit` listener or later resolve to `undefined`.
 
+`Worker.prototype[Symbol.asyncDispose]()` dynamically calls the receiver's
+`terminate()` with no arguments and awaits it, fulfilling with `undefined`.
+Each call returns a fresh promise; errors from lookup, invocation, or awaiting
+reject that promise. It reuses termination's exit ordering and accepts borrowed
+receivers with a callable `terminate`, including overrides.
+
 ### Worker process exit
 
 Inside a Worker, `process.exit()` stops only that Worker; it does not terminate
@@ -304,3 +337,9 @@ constructor identity, including aliases named like another constructor.
 Worker aliases retain child-entry discovery and the same options/eval lowering
 as canonical imports. Lexical bindings, namespace imports and explicit global
 constructors keep their existing resolution rules.
+
+Worker module functions can be captured from named imports or CommonJS and
+invoked through `call`, `apply` or spread arguments. These callable values use
+the same environment, clone-marker, `receiveMessageOnPort` and
+`postMessageToThread` implementations as direct calls. Realm movement through
+`moveMessagePortToContext` remains unsupported on this callable path.

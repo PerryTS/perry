@@ -16,8 +16,8 @@ for (const fn of [function* () {}, async function* () {}]) {
 }
 let gets = 0;
 const fp: any = Function.prototype;
-fp.absent10366 = undefined;
-Object.defineProperty(fp, "getter10366", {get() { gets++; return undefined; }, configurable: true});
+try { fp.absent10366 = undefined; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(fp, "getter10366", {get() { gets++; return undefined; }, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("inherited", "absent10366" in ordinary, "getter10366" in ordinary, gets);
 delete fp.absent10366;
 delete fp.getter10366;

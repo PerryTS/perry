@@ -1,9 +1,12 @@
 // Separate program: Closed World must see a prototype iterator write.
-const a: any = [1, 2, 3];
+// DEC 250 locks Array.prototype: the array adopts a user array prototype UAP
+// (below Array.prototype), and the iterator write lands there.
+const UAP: any = Object.create(Array.prototype);
+const a: any = Object.setPrototypeOf([1, 2, 3], UAP);
 a.pos = 1;
 a.end = 2;
 const original = Array.prototype[Symbol.iterator];
-Array.prototype[Symbol.iterator] = function () {
+UAP[Symbol.iterator] = function () {
   let n = 0;
   const source: any = this;
   return { next() {
@@ -15,7 +18,7 @@ for (const value of a) seen.push(value);
 const spread = [...a];
 const from = Array.from(a);
 const [first, second, ...rest] = a;
-Array.prototype[Symbol.iterator] = original;
+UAP[Symbol.iterator] = original;
 console.log("prototype", JSON.stringify(seen), JSON.stringify(spread),
   JSON.stringify(from), JSON.stringify([first, second, rest]));
 console.log("properties", a.pos, a.end, Object.keys(a).join("|"), JSON.stringify(a));

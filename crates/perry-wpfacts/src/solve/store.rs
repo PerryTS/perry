@@ -145,7 +145,8 @@ impl Model {
             pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
         };
         match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(_, r)) => {
+            Some(&(n, r)) => {
+                self.census_bf_opened(Some(n), None);
                 self.write_builtin_fns(r);
                 true
             }
@@ -385,8 +386,8 @@ impl Model {
         }
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
-        // named non-index key reads (`is_elem_array`); on anything else it
-        // is a store under a computed key.
+        // named non-index key reads (`is_elem_array`); on another holder
+        // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::Any } else { key };
         // DECISIONS 242(2): a [[Set]] of a key the object does not own
@@ -479,7 +480,9 @@ impl Model {
         // into ⊤ they publish (`SharedWrite::Store(Top, _)`; a unit past the
         // bound publishes every key), and every unit replays it under its key.
         if !theirs {
+            self.census_store_ctx(Some((site, self.store_at)));
             builtins::note_native_write(self, t, Some(wkey), &what);
+            self.census_store_ctx(None);
         }
         // An element store's key is a number: it never names `__proto__`.
         if matches!(key, Key::Any) && !elem
@@ -515,8 +518,14 @@ impl Model {
             // worklist is empty. A store from no rule's node decides now.
             if self.bf_written.is_none() {
                 match self.store_at {
-                    Some(n) => self.bf_stores.push((n, r)),
-                    None => self.write_builtin_fns(r),
+                    Some(n) => {
+                        self.census_bf_site(n, site);
+                        self.bf_stores.push((n, r))
+                    }
+                    None => {
+                        self.census_bf_opened(None, Some(site));
+                        self.write_builtin_fns(r)
+                    }
                 }
             }
             return;
@@ -717,6 +726,15 @@ impl Model {
                 }
             }
         }
+        // An index past the end, a computed key or a `length` store may
+        // leave a hole; an append (`elem`) never does (`hole`).
+        let index = match key {
+            Key::Named(a) => numeric_key(&self.atoms[a as usize]) || self.is_array_length(t, key),
+            Key::Any => !elem,
+        };
+        if index {
+            self.mark_hole(t);
+        }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
             self.cons(
@@ -773,9 +791,12 @@ impl Model {
                 }
             }
             Key::Any => {
-                let f = match elem && self.is_elem_array(t) {
-                    true => self.field_any(t),
-                    false => self.any_key_node(t),
+                let f = if elem && self.is_elem_array(t) {
+                    self.field_any(t)
+                } else if elem {
+                    self.numeric_field(t)
+                } else {
+                    self.any_key_node(t)
                 };
                 self.edge(src, f);
                 if let Some(tm) = tm {

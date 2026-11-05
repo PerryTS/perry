@@ -38,6 +38,7 @@ pub(crate) mod methods;
 use crate::codegen_abi::{LayoutWord, ShapeId};
 use crate::string::StringHeader;
 pub(crate) use define_field::family_define_field;
+use define_field::family_define_own;
 
 /// Bit 30 of the layout word: THE shadow bit (object model §3.6, §6a). One
 /// bit, one meaning, one stamping rule, shared by step 3 and step 4.
@@ -866,7 +867,7 @@ unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) 
         || (d.key_count != 0
             && std::slice::from_raw_parts(d.keys, d.key_count as usize)
                 .iter()
-                .any(|key| key.attrs & !LAYOUT_KEY_LATE != 0))
+                .any(|key| key.attrs & LAYOUT_KEY_LATE == 0 && key.attrs != 0))
     {
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
     }
@@ -1837,12 +1838,10 @@ use diagnostics::FAMILY_DIAG;
 #[path = "layout_desc/store.rs"]
 mod store;
 pub(crate) use store::desc_own_key;
-use store::desc_position_by_bytes;
 pub(crate) use store::desc_position_hashed;
 pub(crate) use store::family_create;
 pub(crate) use store::family_own_key;
 pub(crate) use store::family_own_key_hashed;
-use store::family_slot_word;
 pub(crate) use store::family_store;
 pub(crate) use store::family_store_str;
 pub(crate) use store::family_store_value;
@@ -1852,20 +1851,31 @@ pub(crate) use store::later_late_key_present;
 /// definition runs: when the key is a layout's optional key whose slot holds
 /// the hole (absent, `key_view`), the object gets its overflow (§3.4), whose
 /// tombstone the hole then is. The definition meets an absent key and adds
-/// it, in definition order, with exactly the descriptor's attributes. May
+/// it, in definition order, with exactly the descriptor's attributes. A
+/// data definition whose attributes are exactly the ones the layout carries
+/// the key with fills the slot in place instead
+/// (`define_field::family_define_own`): `true`, the definition is done. May
 /// allocate: the caller holds its operands in handles.
 ///
 /// # Safety
 /// `receiver` is a live value.
-pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
+pub(crate) unsafe fn prepare_hole_define(
+    receiver: u64,
+    key: u64,
+    descriptor: &super::object_ops::DescView<'_>,
+) -> bool {
     if receiver & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return;
+        return false;
     }
     let obj = (receiver & crate::value::POINTER_MASK) as *mut ObjectHeader;
     if super::key_view::own_key_is_hole(obj, crate::JSValue::from_bits(key)) {
+        if family_define_own(obj, f64::from_bits(key), descriptor) {
+            return true;
+        }
         note_install_cause(install_cause::DEFINE);
         super::overflow::ensure(obj);
     }
+    false
 }
 
 // Program records use linker section bounds on every target. Runtime

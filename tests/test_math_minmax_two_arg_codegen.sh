@@ -99,13 +99,13 @@ if [[ ! -d "$TRACE_DIR" ]]; then
     exit 1
 fi
 
-if ! grep -R "call double @js_math_min2" "$TRACE_DIR" >/dev/null; then
-    echo "FAIL: expected js_math_min2 call in LLVM trace"
+if ! grep -R "@llvm.minimum.f64" "$TRACE_DIR" >/dev/null; then
+    echo "FAIL: expected inline llvm.minimum.f64 in LLVM trace"
     exit 1
 fi
 
-if ! grep -R "call double @js_math_max2" "$TRACE_DIR" >/dev/null; then
-    echo "FAIL: expected js_math_max2 call in LLVM trace"
+if ! grep -R "@llvm.maximum.f64" "$TRACE_DIR" >/dev/null; then
+    echo "FAIL: expected inline llvm.maximum.f64 in LLVM trace"
     exit 1
 fi
 

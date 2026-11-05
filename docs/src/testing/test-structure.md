@@ -1,13 +1,12 @@
 # Test Structure
 
-> **Status: proposal.** This page is the target structure for Perry's program
-> tests and the order in which it lands; the tools it names arrive with the
-> pull requests that implement each step.
+> **Status:** steps 1–3 of the [transition](#transition) are in place: one
+> runner, subject selection on pull requests, and no new `test_gap_*` files.
+> Steps 4 and 5, moving existing cases into their subjects, follow one subject
+> at a time.
 >
 > **A test's subject decides where it lives; one runner judges whether it
-> passes; a pull request runs the subjects it touches.** Today the directory
-> decides which gate protects a test, so every subject crowds into the one
-> directory that gates pull requests.
+> passes; a pull request runs the subjects it touches.**
 
 ## Where a test goes
 
@@ -33,7 +32,7 @@ must gate every change belongs beside the code or in `test-parity/`.
 
 ```text
 test-parity/
-  node/<module>/          one Node core module, named as Node names it
+  node-suite/<module>/   one Node core module, named as Node names it
   language/<area>/        JavaScript semantics: object, string, json, regex,
                           promise, class, iterator, bigint, intl, …
   typescript/<feature>/   TypeScript-only syntax: enum, namespace, decorators,
@@ -47,12 +46,19 @@ A case that exists to drive an optimization path still lives under the
 subject whose behavior it observes. Its purpose belongs in its header, not in
 its directory.
 
+The GC representation-selection corpus keeps its stable bare-basename IDs in
+`test-parity/gc_repsel_corpus.txt`. The matrix resolves each ID to exactly one
+runnable `.ts` case, whether it is still top-level in `test-files/` or has moved
+under a subject root. Fixtures are not cases; unknown or duplicate source IDs
+fail before the oracle or compiler runs. This keeps GC report names and flat
+artifacts stable while the case itself moves with its subject.
+
 `expected/` mirrors the test's path. A lookup by basename lets two subjects
 with the same case name overwrite each other.
 
 ## One runner
 
-The target is one runner, `scripts/parity.py`, for every program case. It
+One runner, `scripts/parity.py`, judges every program case. It
 takes subjects or paths, runs cases in parallel, and judges each one the same
 way: compiled, run, and compared with Node on stdout, stderr and exit status
 after one normalization profile. The compile mode is a flag: `--mode fast`
@@ -73,25 +79,29 @@ snapshot entry.
 | `parity_report_merge.py`, `parity_matrix_trend.py` | `parity.py` reading several reports |
 | two normalization profiles | one |
 
-Every snapshot entry keeps the provenance the allowlist already requires:
-`issue`, `added`, `category`, `reason`. A case that is nondeterministic is
+Every snapshot entry carries `issue`, `added`, `category` and `reason`;
+`--update` writes a new entry as `untriaged` for review to fill in. A case that is nondeterministic is
 listed as such, by name; it is never absorbed into a margin on a floor.
 
 ## What a pull request runs
 
 A table, `scripts/test_owners.py`, maps source paths to subjects, in the shape
-of `SOURCE_SUITE_MAP` in `scripts/ci_e2e_scope.py`. Its self-test fails when a
-tracked source file under `crates/` matches no row.
+of `SOURCE_SUITE_MAP` in `scripts/ci_e2e_scope.py`; the `parity-scoped` job
+runs what it selects. Its self-test fails on a row that matches no tracked file
+or names a subject that does not exist. A path no row owns is cross-cutting.
 
 | The pull request touches… | Program cases it runs |
 |---|---|
 | a test case or its expected output | that case |
 | source owned by one or more subjects | those subject directories |
-| cross-cutting source: compiler, CLI, runtime or stdlib core | every case the pull-request tier runs today |
+| cross-cutting source: compiler, CLI, runtime or stdlib core | nothing beyond the gap lane |
 | no source and no test | none |
 
-A cross-cutting change never runs less than the pull-request tier runs today;
-selection only narrows what a subject-owned change runs. Rust suites keep their
+Every core pull request also runs the gap lane, every `test_gap_*` in
+`test-files/` and the subject trees in fast mode, so selection only adds cases
+and never runs less than the gap lane did. Migrated cases retain their
+`test_gap_` basename to stay in this universal lane.
+A path no row of `scripts/test_owners.py` owns is cross-cutting. Rust suites keep their
 own selection (`scripts/ci_test_scope.py`, `scripts/ci_e2e_scope.py`). The
 nightly run executes every subject.
 
@@ -113,5 +123,4 @@ Nothing leaves it before its subject directory gates pull requests.
 5. **Rust parity duplicates** in `crates/perry/tests` become `.ts` cases;
    the suites that stay share one compile-and-run helper.
 
-Steps 1–3 land as a chain of stacked pull requests. Steps 4 and 5 follow,
-one subject at a time.
+Steps 1–3 are in place. Steps 4 and 5 follow, one subject at a time.

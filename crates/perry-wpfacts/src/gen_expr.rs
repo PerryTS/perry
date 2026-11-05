@@ -374,8 +374,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
@@ -445,21 +447,10 @@ impl<'a> Gen<'a> {
         let na = self.m.atom("next");
         let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
         let r2 = self.mcall(v, Key::Named(na), vec![], vec![]);
-        let va = self.m.atom("value");
-        self.m.cons(
-            r1,
-            Cons::Load {
-                key: Key::Named(va),
-                dst: out,
-            },
-        );
-        self.m.cons(
-            r2,
-            Cons::Load {
-                key: Key::Named(va),
-                dst: out,
-            },
-        );
+        // Only results seen not done: `Model::yield_key`.
+        let va = self.m.yield_key();
+        self.m.cons(r1, Cons::Load { key: va, dst: out });
+        self.m.cons(r2, Cons::Load { key: va, dst: out });
         out
     }
 
@@ -487,7 +478,21 @@ impl<'a> Gen<'a> {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
             }
-            Expr::LocalGet(id) => self.local(mi, *id),
+            Expr::LocalGet(id) => match self.for_binding {
+                Some((m, l, n)) if m == mi && l == *id => n,
+                _ => self.local(mi, *id),
+            },
+            // Program code never writes a `const` (lowering throws
+            // `Assignment to constant variable`): `undefined` written into
+            // one that was initialized is the compiler's release of a
+            // private binding after its last read (`IteratorRecord::release`),
+            // which no read sees.
+            Expr::LocalSet(id, v)
+                if matches!(v.as_ref(), Expr::Undefined)
+                    && self.initialized_consts.contains(&(mi, *id)) =>
+            {
+                self.prim_node(prim::UNDEF)
+            }
             Expr::LocalSet(id, v) => {
                 let vn = self.expr(fx, v);
                 let l = self.local_write(mi, *id);
@@ -696,10 +701,12 @@ impl<'a> Gen<'a> {
                 let l = self.expr(fx, left);
                 let r = self.expr(fx, right);
                 let out = self.tmp("logical");
-                // `l ?? r` is `l` when it is not nullish.
+                // `l ?? r` is `l` when it is not nullish; `l && r` is `l`
+                // when it is falsy.
                 match op {
                     LogicalOp::Coalesce => self.m.cons(l, Cons::NotNullish { dst: out }),
-                    _ => self.m.edge(l, out),
+                    LogicalOp::And => self.m.cons(l, Cons::Falsy { dst: out }),
+                    LogicalOp::Or => self.m.edge(l, out),
                 }
                 // The right operand is the result only when the left one
                 // selects it.
@@ -1211,7 +1218,7 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::Array(elems, _) => {
-                let tm = self.new_arr_template(mi, "lit");
+                let tm = self.new_arr_birth(mi, "lit", true);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
@@ -1221,7 +1228,8 @@ impl<'a> Gen<'a> {
                 self.tok_node(t)
             }
             Expr::ArraySpread(elems) => {
-                let tm = self.new_arr_template(mi, "spread");
+                let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
+                let tm = self.new_arr_birth(mi, "spread", dense);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
@@ -1267,7 +1275,10 @@ impl<'a> Gen<'a> {
 
             // -------------------------------------------- classes / new
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 // A chunked literal birth: its chunk calls receive the object
                 // being born, whose chunked slots they initialize.
@@ -1276,7 +1287,19 @@ impl<'a> Gen<'a> {
                     let x = self.tmp("literal chunk object");
                     self.chunk_objects.push(x);
                 }
-                let a = self.evaluate_all(fx, args);
+                // The appended capture forwards are snapshot reads.
+                let caps = args.len().saturating_sub(*cap_args_appended as usize);
+                let a: Vec<NodeId> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        if i >= caps {
+                            self.snapshot_read(fx, e)
+                        } else {
+                            self.expr(fx, e)
+                        }
+                    })
+                    .collect();
                 let x = if chunked {
                     self.chunk_objects.pop()
                 } else {
@@ -1395,7 +1418,7 @@ impl<'a> Gen<'a> {
                 captures,
             } => {
                 for (i, c) in captures.iter().enumerate() {
-                    let v = self.expr(fx, c);
+                    let v = self.snapshot_read(fx, c);
                     let env = self.class_env(mi, class_name, i);
                     self.m.edge(v, env);
                 }
@@ -1409,7 +1432,7 @@ impl<'a> Gen<'a> {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
                 for (i, c) in captures.iter().enumerate() {
-                    let v = self.expr(fx, c);
+                    let v = self.snapshot_read(fx, c);
                     let env = self.class_env(mi, &name, i);
                     self.m.edge(v, env);
                     if env_class.is_none() {
@@ -1546,7 +1569,7 @@ impl<'a> Gen<'a> {
                     self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
                 }
                 for (i, a) in captured_args.iter().enumerate() {
-                    let v = self.expr(fx, a);
+                    let v = self.snapshot_read(fx, a);
                     let env = self.class_env(mi, template, i);
                     self.m.edge(v, env);
                 }

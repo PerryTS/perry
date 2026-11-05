@@ -172,8 +172,10 @@ impl<'a> Gen<'a> {
                     parent_links: Vec::new(),
                     null_proto: false,
                     chain_miss: false,
+                    chain_miss_open: false,
                     species: None,
                     per_evaluation: false,
+                    static_methods: Vec::new(),
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);

@@ -431,7 +431,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // keys and CLASS_DYNAMIC_PROPS for string keys.
     {
         let bits = obj.to_bits();
-        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+        if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
             // Symbol key path.
             let found = if crate::object::class_prototype_ref_id(obj).is_some() {
                 crate::symbol::class_static_symbol_lookup(class_id, key)

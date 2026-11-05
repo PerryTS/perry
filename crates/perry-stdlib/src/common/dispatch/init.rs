@@ -113,6 +113,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             resource_limits: extern "C" fn() -> f64,
             thread_id: extern "C" fn() -> f64,
         );
+        fn js_register_worker_threads_callable_dispatch(
+            dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize, *mut f64) -> bool,
+        );
         fn js_register_worker_threads_environment_data(
             get: extern "C" fn(f64) -> f64,
             set: extern "C" fn(f64, f64) -> f64,
@@ -200,6 +203,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_resource_limits,
         crate::worker_threads::js_worker_threads_thread_id,
     );
+    js_register_worker_threads_callable_dispatch(
+        crate::worker_threads::dispatch_worker_threads_callable,
+    );
     js_register_worker_threads_environment_data(
         crate::worker_threads::js_worker_threads_get_environment_data,
         crate::worker_threads::js_worker_threads_set_environment_data,
@@ -211,6 +217,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_message_channel_new,
         crate::worker_threads::js_worker_threads_broadcast_channel_new,
     );
+    crate::worker_threads::register_message_port_codec();
     perry_runtime::messaging::js_register_worker_threads_message_port_dispatch(
         crate::worker_threads::dispatch_message_port_core_operation,
     );
@@ -528,6 +535,11 @@ pub(super) unsafe fn install_streams_registrations() {
             crate::streams::js_writer_write,
             crate::streams::js_writer_close,
             crate::streams::js_writer_abort,
+        );
+        perry_runtime::node_stream::js_register_web_stream_constructors(
+            crate::streams::js_readable_stream_new_from_source_object,
+            crate::streams::js_writable_stream_new_from_sink_object,
+            crate::streams::js_transform_stream_new_from_transformer_object,
         );
     }
 }

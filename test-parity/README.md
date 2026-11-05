@@ -1,19 +1,21 @@
 # test-parity/ — conformance gating artifacts
 
-Two gates read this directory. They cover different suites and work
-differently; the difference is the point.
+`scripts/parity.py` runs every program case and judges it against the
+snapshots in this directory. The node-suite cases and committed expected
+outputs live here too.
 
 ## Where runtime regression tests belong
 
-Self-contained programs whose stdout and exit status should match Node belong
-in `test-files/test_parity_<case>.ts`. Put supporting modules under
-`test-files/fixtures/` and import them from the single top-level entry point;
-the parity runner discovers that entry automatically.
+A new program case goes under the subject whose behavior it observes:
+`node-suite/<module>/` for one Node core module, `language/<area>/` for
+JavaScript semantics, `typescript/<feature>/` for TypeScript-only syntax,
+`perry/<api>/` for Perry-only APIs and `npm/<package>/` for a compiled package
+(`docs/src/testing/test-structure.md`). `test-files/test_gap_*` takes no new
+files; `lint` refuses one.
 
-Tests centered on one Node core module belong in
-`test-parity/node-suite/<module>/`. That tree is discovered recursively, so
-each `.ts` file there must be an independently runnable case rather than a
-helper module.
+Each of those trees is discovered recursively, so
+each `.ts` file there must be an independently runnable case; helpers go in a
+`fixtures/` directory, which the runner skips.
 
 When Perry intentionally differs from Node, commit the Perry output as
 `test-parity/expected/<test-name>.txt`; add an `expected-exit` file when the
@@ -23,11 +25,13 @@ compiler output, separating stdout from stderr, creating native libraries,
 driving a background service, enforcing a hard timeout or liveness contract,
 testing symlink layout, or running multiple compiler/GC configurations.
 
-## Gap snapshots — the gap suite (per-PR gate)
+## Snapshots
 
-The `gap-suite` job of `test.yml` runs every `test-files/test_gap_*.ts` in
-every tier in `fast` mode through `scripts/parity.py`, judged by
-`snapshots/linux-fast/test-files.json`. The `full` tier's `parity` job runs
+The `gap-suite` job of `test.yml` runs every `test_gap_*` case in `test-files/`
+and all subject trees in every core PR tier in `fast` mode through
+`scripts/parity.py run --suite all --filter test_gap_ --mode fast`, judged by
+`snapshots/linux-fast/<subject>.json`. Keep the `test_gap_` basename when
+moving a case into its subject so it stays in this universal lane. The `full` tier's `parity` job runs
 every case of `test-files/` and `node-suite/` in auto-optimize mode, judged by
 `snapshots/linux-auto/` — see `docs/src/testing/ci-tiers.md` and
 `docs/src/testing/test-structure.md`.
@@ -35,9 +39,8 @@ every case of `test-files/` and `node-suite/` in auto-optimize mode, judged by
 A snapshot lists every case that is **not passing**. A case absent from it is
 expected to pass. The check is **bidirectional**: a new failure is red, and so
 is a listed case that starts passing. That second direction is the whole
-reason the file exists — under the old one-directional gate a fixed test kept
-its entry forever, and the skip list decayed into orphans nobody could
-revalidate (#797).
+reason the file exists: a one-directional list keeps a fixed test's entry
+forever and decays into orphans nobody can revalidate (#797).
 
 Never hand-edit statuses. Re-baseline from CI (Linux, `fast` mode) as
 `docs/src/testing/ci-tiers.md` "Re-baselining the gap snapshot" describes, or
@@ -45,7 +48,7 @@ locally against your own build:
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
-python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast --update
+python3 scripts/parity.py run --suite all --filter test_gap_ --mode fast --update
 ```
 
 The runner refuses to run unless `node --version` exactly matches
@@ -69,10 +72,11 @@ that way (#6364). The oracle version is pinned in `.node-version` — it is a
 correctness input, so regenerate the snapshot on the pinned Node, on Linux
 (several failure classes are platform-specific).
 
-## `known_failures.json` — the old runner's allowlist
+## Case headers
 
-No CI job judges a run against it; `lint` still audits its provenance, and
-`run_parity_tests.sh` still reads it locally.
+`scripts/parity.py` reads `// parity-<key>: <value>` comment lines from a case:
+`argv`, `node-argv`, `env` (space-separated `KEY=VALUE`), `skip` and
+`rlimit-as-mb`.
 
 The full sweep executes a source file only when it is a self-contained,
 terminating program whose output can be compared with Node (or with a committed
@@ -82,51 +86,25 @@ drive a background server, or an external service must declare a non-empty
 smoke and the fixture's lifecycle-specific harness remain responsible for its
 coverage. Keep the reason concrete and name that harness when one exists.
 
-Its `lint` audit needs no parity run at all:
+### Triage fields (#797)
 
-```bash
-python3 scripts/parity_known_failures.py --audit
-```
+An entry carries `issue`, `added`, `category` and `reason` beside its
+`status`. `--update` writes a new entry as `untriaged` with today's date and
+keeps the fields of an entry that already exists; the runner does not validate
+them, so review is what keeps them honest. `issue` is a GitHub issue number as
+a string, `added` an ISO `YYYY-MM-DD` date, and `category` one of the values in
+the table below. When the tracking issue closes but the test still fails,
+re-triage: mark the entry `bug-stale` and file a new tracking issue.
 
-It enforces provenance (below), fails on an entry naming a test file that no
-longer exists, and cross-checks every `test_gap_*` entry against
-`gap_snapshot.json` — which is generated and bidirectional, so a gap entry
-absent from it is one the snapshot asserts passes. That check would have named
-the diagchannel entry on the day it was added.
+A failure specific to one operating system belongs in that platform's snapshot
+file, which only a run on that platform reads.
 
-### Provenance (#797)
-
-Every entry must carry `issue`, `added`, `category`, and `reason`; the checker
-rejects the file otherwise. `issue` is a GitHub issue number as a string,
-`added` an ISO `YYYY-MM-DD` date, and `category` one of the values in the table
-below — an undocumented category is a schema error (`toolchain` slipped in
-unvalidated and went unnoticed). When the tracking issue closes but the test
-still fails, re-triage: mark the entry `bug-stale` and file a new tracking
-issue.
-
-Entries apply on every host by default. A failure that is specific to one or
-more operating systems can add a `platforms` array containing `linux`, `macos`,
-`windows`, or `other`; `scripts/parity_known_failures.py` compares it with the
-`platform` recorded by `run_parity_tests.sh`. For example:
-
-```json
-"test_windows_only_gap": {
-  "issue": "1234",
-  "added": "2026-07-30",
-  "category": "bug-open",
-  "reason": "Fails only with the Windows runtime.",
-  "platforms": ["windows"]
-}
-```
-
-The parity runner also supports Git Bash on Windows. It uses the native
-`TEMP`/`TMP` directory, selects `.exe`/`.lib` artifacts, and does not require
-Unix-only `bc` or process-limit support. The remaining documented prerequisites
-(`cargo`, Node.js, Python, and the Windows linker toolchain) must be on `PATH`.
+The runner also works on Windows. `cargo`, the pinned Node.js, Python and the
+Windows linker toolchain must be on `PATH`.
 
 ## Category definitions
 
-Used by both files.
+The `category` field of a snapshot entry.
 
 | Category | Meaning |
 |---|---|
@@ -141,7 +119,4 @@ Used by both files.
 ## Generated, gitignored
 
 `reports/` and `output/` are per-run artifacts and are gitignored. The
-committed evidence that gates a run is `snapshots/<platform>-<mode>/`; the old
-runner's files (`gap_snapshot.json`, `known_failures.json`,
-`node_suite_baseline.json`, `parity_matrix_baseline.json`, `threshold.json`)
-remain only until that runner is deleted.
+committed evidence that gates a run is `snapshots/<platform>-<mode>/`.

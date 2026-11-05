@@ -367,7 +367,11 @@ unsafe fn stringify_object_walk(
     // fields and `is_object_pointer`'s `keys_len <= field_count` guard
     // returned false, so `JSON.stringify` emitted the literal string "null"
     // for any parsed object with ≥9 fields.
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    // The inline region is the object's own allocation, not the floor: a
+    // birth on a compiler-fixed layout has exactly its declared slots, so a
+    // one-slot birth that gained a key keeps it in overflow storage, and
+    // slot 1 lies past the object's end.
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_len);
     if !slotted {

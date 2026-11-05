@@ -99,8 +99,8 @@ for (const C of [F0, F1, F2, F3]) {
   mid.midValue = "mid";
   const leaf: any = Object.create(Object.create(mid));
   console.log("mid", leaf.midValue, leaf.present, typeof leaf.hasOwnProperty);
-  (Object.prototype as any).fromObjectProto = "op";
-  console.log("objproto", leaf.fromObjectProto);
-  delete (Object.prototype as any).fromObjectProto;
-  console.log("objproto-gone", String(leaf.fromObjectProto));
+  // DEC 250: Object.prototype refuses program adds; its own members are what
+  // the chain end answers.
+  console.log("objproto", leaf.propertyIsEnumerable === Object.prototype.propertyIsEnumerable);
+  console.log("objproto-absent", String(leaf.fromObjectProto));
 }

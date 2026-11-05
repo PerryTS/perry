@@ -111,7 +111,7 @@ console.log(attempt(() => fixedLen.push("c" + 2 + "d")), fixedLen.length);
 const writes: string[] = [];
 const proto: string[] = [];
 for (let i = 0; i < 3; i++) proto.push("m" + i + ";");
-Object.defineProperty(Array.prototype, "3", {
+try { Object.defineProperty(Array.prototype, "3", {
   configurable: true,
   set(v: any) {
     writes.push("setter:" + String(v));
@@ -119,7 +119,7 @@ Object.defineProperty(Array.prototype, "3", {
   get() {
     return "got";
   },
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(attempt(() => proto.push("n" + 3 + ";")), proto.length, writes.join("|"), Object.keys(proto).join(","));
 delete (Array.prototype as any)[3];
 const afterDelete: string[] = [];

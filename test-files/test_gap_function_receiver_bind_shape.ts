@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function bindAtSite(f: any, receiver: any, arg: number): any { return f.bind(receiver, arg); }
 function callAtSite(f: any, receiver: any, arg: number): any { return f.call(receiver, arg); }
 function applyAtSite(f: any, receiver: any, arg: number): any { return f.apply(receiver, [arg]); }
@@ -44,11 +45,11 @@ const observed = bindAtSite(getterTarget, null, 1);
 console.log("observable order", order.join(","), observed.name, observed.length);
 function replaceProperty(o: any, k: string, v: any) { o[k] = v; }
 const saved = Function.prototype.bind;
-replaceProperty(Function.prototype, "bind", function(this: any, receiver: any, arg: any) {
+locked(() => { replaceProperty(Function.prototype, "bind", function(this: any, receiver: any, arg: any) {
   return () => "patched:" + arg;
-} as any);
+} as any); });
 console.log("prototype patch", bindAtSite(arrow, null, 12)());
-replaceProperty(Function.prototype, "bind", saved);
+locked(() => { replaceProperty(Function.prototype, "bind", saved); });
 (arrow as any).bind = function(receiver: any, arg: any) { return () => "own:" + arg; };
 console.log("own patch", bindAtSite(arrow, null, 13)());
 replaceProperty(arrow, "bind", saved);
@@ -66,7 +67,7 @@ const beforeArgs = (untouched as any).bind(replaceDuringArg(), 4);
 console.log("read before args", beforeArgs());
 const oldProtoName = Object.getOwnPropertyDescriptor(Function.prototype, "name");
 let inheritedNameCalls = 0;
-Object.defineProperty(Function.prototype, "name", { value: () => { inheritedNameCalls++; return "wrong"; }, configurable: true });
+locked(() => { Object.defineProperty(Function.prototype, "name", { value: () => { inheritedNameCalls++; return "wrong"; }, configurable: true }); });
 function shadowedName() {}
 function ignoredArgument() { return 1; }
 function callOwnName(f: any) {
@@ -76,4 +77,4 @@ function callOwnName(f: any) {
 callOwnName(shadowedName);
 callOwnName(shadowedName);
 console.log("implicit own name", inheritedNameCalls, shadowedName.name);
-Object.defineProperty(Function.prototype, "name", oldProtoName!);
+locked(() => { Object.defineProperty(Function.prototype, "name", oldProtoName!); });

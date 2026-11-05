@@ -263,6 +263,12 @@ TRANSPARENT_RE = re.compile(
     r"#\[repr\(transparent\)\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)"
     r"\s*(?:\(\s*(?:pub(?:\([^)]*\))?\s+)?([^)]+?)\s*\)\s*;|\{\s*(?:pub(?:\([^)]*\))?\s+)?\w+\s*:\s*([^,}]+?)\s*,?\s*\})"
 )
+# A fieldless `#[repr(<int>)]` enum is that integer at the C ABI (for example
+# `NapiTypedarrayType`, passed by value to `napi_create_typedarray`).
+REPR_INT_ENUM_RE = re.compile(
+    r"#\[repr\(\s*([iu](?:8|16|32|64|size))\s*\)\]\s*(?:#\[[^\]]*\]\s*)*"
+    r"(?:pub(?:\([^)]*\))?\s+)?enum\s+(\w+)\s*\{"
+)
 EXTERN_FN_RE = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(\w+)\s*\(')
 EXPORT_NAME_RE = re.compile(r'#\[(?:unsafe\()?export_name\s*=\s*"([^"]+)"')
 
@@ -295,6 +301,11 @@ def parse_rust(files: dict[str, str]) -> tuple[dict[str, list[RustFn]], dict[str
             inner = m.group(2) or m.group(3)
             if inner:
                 aliases[m.group(1)].add(" ".join(inner.split()))
+        for m in REPR_INT_ENUM_RE.finditer(text):
+            close = balanced(text, m.end() - 1, "{", "}")
+            body = text[m.end() : close - 1] if close > 0 else "("
+            if "(" not in body and "{" not in body:
+                aliases[m.group(2)].add(m.group(1))
         scan_extern_fns(text, lambda off: f"{path}:{line_of(text, off)}", defs)
         for where_off, expanded in expand_macros(text) + expand_signature_macros(text):
             scan_extern_fns(expanded, lambda _off: f"{path}:{line_of(text, where_off)}", defs)
@@ -891,8 +902,14 @@ def base_type(ty: str, aliases: dict[str, set[str]], depth: int = 0) -> str:
     if last in RUST_SCALARS:
         return last
     targets = aliases.get(last)
-    if targets and len(targets) == 1:
-        return base_type(next(iter(targets)), aliases, depth + 1)
+    if targets:
+        # One name may have several spellings (`type S = c_int;` in one module,
+        # `#[repr(i32)] enum S` in another): they agree when their scalars do.
+        bases = {base_type(x, aliases, depth + 1) for x in targets}
+        if len(bases) == 1:
+            return bases.pop()
+        if "*" not in bases and len({b in SIGNED_BASES for b in bases}) == 1:
+            return min(bases)
     return t
 
 
@@ -1225,6 +1242,31 @@ def self_test() -> int:
         table = emit_wasm_abi(loaded)
         if "js_path_probe\ti64\ti64\n" not in table:
             failures.append("Windows sources must contribute WASI ABI signatures")
+    enums = emit_wasm_abi({"crates/perry-runtime/src/e.rs": """
+        #[repr(i32)]
+        #[derive(Clone, Copy)]
+        pub enum Kind { A = 0, B = 1 }
+        #[repr(u8)]
+        pub enum Small { X, Y }
+        #[repr(i32)]
+        pub enum Payload { V(u64), W }
+        #[no_mangle] pub unsafe extern "C" fn js_enum_probe(k: Kind, s: Small, n: usize) -> Kind {}
+        #[no_mangle] pub unsafe extern "C" fn js_payload_probe(p: Payload) -> i32 {}
+    """})
+    if "js_enum_probe\ti32s\ti32s,i8u,usize\n" not in enums:
+        failures.append("fieldless repr(int) enums must classify as their integer")
+    twice = emit_wasm_abi({
+        "crates/perry-runtime/src/a.rs": "pub type Status = c_int;",
+        "crates/perry-runtime/src/b.rs": """
+            #[repr(i32)]
+            pub enum Status { Ok = 0 }
+            #[no_mangle] pub extern "C" fn js_status_probe() -> Status {}
+        """,
+    })
+    if "js_status_probe\ti32s\t\n" not in twice:
+        failures.append("agreeing spellings of one integer type keep its signedness")
+    if "js_payload_probe" in enums:
+        failures.append("an enum with fields is not an FFI integer")
     try:
         emit_wasm_abi({})
         failures.append("empty WASI ABI emission must fail before overwriting the table")

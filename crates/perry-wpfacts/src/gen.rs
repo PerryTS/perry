@@ -78,6 +78,8 @@ pub(crate) enum ParamGuard {
 pub(crate) struct ModInfo {
     pub path: String,
     pub locals: FxHashMap<u32, NodeId>,
+    /// The dead-zone value of a local's cell (`Gen::dead_zone`).
+    pub dead_zones: FxHashMap<u32, NodeId>,
     pub globals: FxHashMap<u32, NodeId>,
     pub funcs: FxHashMap<u32, FnIdx>,
     pub classes: FxHashMap<String, TmplId>,
@@ -89,6 +91,9 @@ pub(crate) struct ModInfo {
     pub site_counter: u32,
     pub iterres: FxHashMap<FnIdx, NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
+    /// Per for-of loop (its value local): what its step yields
+    /// (`Gen::step_yield_node`).
+    pub stepyield: FxHashMap<(FnIdx, u32), NodeId>,
 }
 
 /// A body generation walks once its function is active (DECISIONS 225).
@@ -237,6 +242,11 @@ pub struct Gen<'a> {
     /// and the bindings whose stored values no contract describes
     /// (`Gen::contract_check`: they escaped).
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
+    /// While a for-of binding is walked (`Gen::stmts`): its value local
+    /// reads the value the loop's `arrayRecordForValue` just wrote.
+    pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The `const` bindings walked with an initializer (module, HIR id).
+    pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// DECISIONS 241: stores on a published function no contract describes
@@ -326,6 +336,10 @@ pub struct Gen<'a> {
     pub cell_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// Literal birth templates by expression (compiler data, `new_lit`).
     pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// A defaulted parameter's argument node by (module, local): what the
+    /// calls pass, before the default replaces `undefined` (compiler data,
+    /// `params_inner`).
+    pub(crate) default_args: FxHashMap<(u32, u32), NodeId>,
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
@@ -371,12 +385,33 @@ mod indexed_owner;
 
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
+        Self::new_observed(modules, relations, explain, false)
+    }
+
+    pub(crate) fn new_observed(
+        modules: Vec<(&'a str, &'a Module)>,
+        relations: bool,
+        explain: bool,
+        birth_census: bool,
+    ) -> Self {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
         m.explain = explain;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';
+        // Capture initialization origins too, before any solver propagation.
+        // This state exists only for an explicitly requested diagnostic dump.
+        if birth_census {
+            let mut d = crate::diagnostics::Trace::default();
+            d.census = Some(crate::diagnostics::BirthCensus {
+                suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
+                    .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())
+                    .flatten(),
+                ..Default::default()
+            });
+            m.diagnostic = Some(d);
+        }
         if relations {
             m.relations = Some(Vec::new());
         }
@@ -421,6 +456,9 @@ impl<'a> Gen<'a> {
         // An ESM entry installs no main record: `require.main` is undefined.
         m.cjs_main = m.node_l("CJSMAIN");
         m.add_prim(m.cjs_main, prim::UNDEF);
+        m.process_argv_tok = m.process_argv_array();
+        m.process_argv = m.node_l("PROCESSARGV");
+        m.add_tok(m.process_argv, m.process_argv_tok);
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -482,6 +520,8 @@ impl<'a> Gen<'a> {
             effect_srcs: Default::default(),
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
+            for_binding: None,
+            initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
@@ -521,6 +561,7 @@ impl<'a> Gen<'a> {
             chunk_objects: Vec::new(),
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
+            default_args: FxHashMap::default(),
             call_lit_arg: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
@@ -544,6 +585,7 @@ impl<'a> Gen<'a> {
             self.mods.push(ModInfo {
                 path: path.to_string(),
                 locals: FxHashMap::default(),
+                dead_zones: FxHashMap::default(),
                 globals: FxHashMap::default(),
                 funcs: FxHashMap::default(),
                 classes: FxHashMap::default(),
@@ -553,9 +595,14 @@ impl<'a> Gen<'a> {
                 site_counter: 0,
                 iterres: FxHashMap::default(),
                 iterout: FxHashMap::default(),
+                stepyield: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
-                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                let kind = Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    self.modules[mi as usize].1,
+                    f,
+                ));
+                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -1032,6 +1079,7 @@ impl<'a> Gen<'a> {
         params: &[perry_hir::Param],
         lexical_this: bool,
         is_closure: bool,
+        proto: Option<perry_hir::fn_proto::FnProtoKind>,
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
@@ -1105,7 +1153,17 @@ impl<'a> Gen<'a> {
                 ) {
                     self.param_ty.push((n, mi, p.ty.clone()));
                 }
-                ps.push(n);
+                if p.default.is_some() {
+                    // A defaulted parameter: the calls pass to its own
+                    // argument node; the local is that value without
+                    // `undefined`, plus the default (`params_inner`).
+                    let a = self.m.node_named("arg", || format!("arg({name})"));
+                    self.m.own(a);
+                    self.default_args.insert((mi, p.id), a);
+                    ps.push(a);
+                } else {
+                    ps.push(n);
+                }
             }
         }
         self.m.cur_fn = outer_fn;
@@ -1138,6 +1196,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto,
             captures: Vec::new(),
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
@@ -1148,6 +1207,7 @@ impl<'a> Gen<'a> {
     }
 
     fn register_class(&mut self, mi: u32, c: &Class) {
+        let module = self.modules[mi as usize].1;
         let tm = self.m.tmpls.len() as TmplId;
         let display = format!("{}:{}", self.mods[mi as usize].path_short(), c.name);
         let mut accessor_keys = Vec::new();
@@ -1218,8 +1278,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: c.declared_keys_null_proto(),
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1230,7 +1292,7 @@ impl<'a> Gen<'a> {
         }
         // Functions of the class.
         if let Some(ctor) = &c.constructor {
-            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false);
+            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false, None);
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
@@ -1264,7 +1326,15 @@ impl<'a> Gen<'a> {
         // `Set::contains` and `IdentitySet::contains` are two functions.
         for meth in &c.methods {
             let name = format!("{}::{}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(proto, a);
@@ -1275,16 +1345,33 @@ impl<'a> Gen<'a> {
         }
         for meth in &c.static_methods {
             let name = format!("{}::static {}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(cobj, a);
                 self.m.add_tok(n, t);
+                self.m.tmpls[tm as usize].static_methods.push(a);
             }
         }
         for (name, g) in &c.getters {
             let fname = format!("{}::get {name}", c.name);
-            let f = self.register_fn(mi, g.id, &fname, &g.params, false, false);
+            let f = self.register_fn(
+                mi,
+                g.id,
+                &fname,
+                &g.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, g)),
+            );
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1295,7 +1382,15 @@ impl<'a> Gen<'a> {
         }
         for (name, s) in &c.setters {
             let fname = format!("{}::set {name}", c.name);
-            let f = self.register_fn(mi, s.id, &fname, &s.params, false, false);
+            let f = self.register_fn(
+                mi,
+                s.id,
+                &fname,
+                &s.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, s)),
+            );
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1312,6 +1407,10 @@ impl<'a> Gen<'a> {
                 &cm.function.params,
                 false,
                 false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    module,
+                    &cm.function,
+                )),
             );
             if let Some((a, setter)) = named {
                 // Under a constant key: that key's accessor.
@@ -1378,6 +1477,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
@@ -1590,6 +1690,39 @@ impl<'a> Gen<'a> {
         found
     }
 
+    /// What a local's cell holds before its declaration runs: the TDZ seed
+    /// (`Stmt::PreallocateTdzBoxes`) writes `undefined` here, not into the
+    /// local. The seed is not a value of the binding: a program read that
+    /// finds it throws a ReferenceError (`js_box_get_bits`), so only
+    /// initialized values flow out of a read. Only the compiler's own
+    /// capture snapshots read a cell in its dead zone without throwing
+    /// (`js_tdz_suppress_begin`): they take `undefined` (`snapshot_read`).
+    pub(crate) fn dead_zone(&mut self, mi: u32, id: u32) -> NodeId {
+        if let Some(&n) = self.mods[mi as usize].dead_zones.get(&id) {
+            return n;
+        }
+        let n = self
+            .m
+            .node_named("dead zone", || format!("dead_zone({mi},{id})"));
+        self.mods[mi as usize].dead_zones.insert(id, n);
+        n
+    }
+
+    /// A class capture snapshot's read of `e` (codegen brackets it in a
+    /// TDZ-suppression window): what the read sees, and when `e` reads a
+    /// local, the `undefined` its cell holds in the dead zone.
+    pub(crate) fn snapshot_read(&mut self, fx: &Fx, e: &perry_hir::Expr) -> NodeId {
+        let v = self.expr(fx, e);
+        let perry_hir::Expr::LocalGet(id) = e else {
+            return v;
+        };
+        let z = self.dead_zone(fx.module, *id);
+        let out = self.tmp("capture snapshot");
+        self.m.edge(v, out);
+        self.m.edge(z, out);
+        out
+    }
+
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
         if let Some(n) = self.for_in_key_param(mi, id) {
             return n;
@@ -1705,8 +1838,19 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
+        self.new_arr_birth(mi, what, false)
+    }
+
+    /// An array born with every index below its length (`TmplKind::Arr`
+    /// `hole_free`) or not.
+    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
         let site = self.next_site(mi);
-        self.new_indexed_template(mi, TmplKind::Arr { module: mi, site }, what, site)
+        let kind = TmplKind::Arr {
+            module: mi,
+            site,
+            hole_free,
+        };
+        self.new_indexed_template(mi, kind, what, site)
     }
 
     /// A function's `arguments` object: not an Array (`TmplKind::Args`).
@@ -1742,8 +1886,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1782,8 +1928,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }

@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Function.prototype.apply/call on function receivers: builtin entries, the
 // arguments forward, async/generator kinds, overrides, and folds under a
 // program-written Function.prototype method.
@@ -74,11 +75,11 @@ log(gg.apply(o, [8]).next().value, viaG.call(o, 9))
 af.call(o, 10).then((v: any) => console.log("async", JSON.stringify(v)))
 // Function.prototype.apply/call overwritten (last, it is global)
 const origApply = Function.prototype.apply, origCall = Function.prototype.call
-;(Function.prototype as any).apply = function (this: any, t: any, l: any) { return ["patched-apply", l ? l.length : -1] }
-;(Function.prototype as any).call = function (this: any, t: any, x: any) { return ["patched-call", x] }
+;locked(() => { (Function.prototype as any).apply = function (this: any, t: any, l: any) { return ["patched-apply", l ? l.length : -1] }; });
+;locked(() => { (Function.prototype as any).call = function (this: any, t: any, x: any) { return ["patched-call", x] }; });
 log(who.apply(o, [1, 2]), who.call(o, 7), f1(1, 2), viaB(1), Math.max.apply(null, [1]), EE.prototype.emit.call(e, "x", 1))
 log(Array.prototype.join.call([1, 2], "-"), String.prototype.toUpperCase.call("ab"), (function (this: any, x: any) { return x }).call(null, "iife"), Math.max.call(null, 4), Object.prototype.hasOwnProperty.call(o, "tag"))
 log(path.join.apply(null, ["a", "b"]), path.join.call(null, "a", "c"), Promise.resolve.call(Promise, 1) instanceof Promise)
-;(Function.prototype as any).apply = origApply; (Function.prototype as any).call = origCall
+;locked(() => { (Function.prototype as any).apply = origApply; }); locked(() => { (Function.prototype as any).call = origCall; });
 log(who.apply(o, [1, 2]), who.call(o, 7), f1(1, 2))
 console.log(out.join("\n"))

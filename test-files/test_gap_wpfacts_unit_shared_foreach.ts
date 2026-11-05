@@ -9,10 +9,10 @@ function add(x: any): void {
 add(Object.prototype);
 function patch(): void {
   list.forEach(function (p: any): void {
-    p.toLocaleString = function (this: any): string {
+    try { p.toLocaleString = function (this: any): string {
       this.u = "w";
       return "x";
-    };
+    }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   });
 }
 patch();

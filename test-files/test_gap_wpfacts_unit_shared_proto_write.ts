@@ -5,14 +5,19 @@
 // literal. The literal's unit must see that write: claiming `cache.n` a
 // readonly number made `twice()` read the string as a number ("sz" instead
 // of NaN).
+//
+// DEC 250 locks Object.prototype: the shared object is a user one, `base`,
+// read by the module scope the same way; no contract describes what `patch`
+// installs on it either.
+const base: any = {};
 function patch(): void {
-  (Object.prototype as any).hasOwnProperty = function (this: any, k: string): boolean {
+  base.hasOwnProperty = function (this: any, k: string): boolean {
     this.n = "s" + k;
     return true;
   };
 }
 patch();
-var hop = Object.prototype.hasOwnProperty;
+var hop = base.hasOwnProperty;
 var cache = { n: 1, m: 2 };
 function check(k: string): boolean {
   return hop.call(cache, k);

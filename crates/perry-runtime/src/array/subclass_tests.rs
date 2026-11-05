@@ -462,15 +462,15 @@ fn dense_array_subclass_numeric_tail_store_preserves_tagged_fallbacks() {
         Some(sso.to_bits())
     );
 
-    // Class references deliberately share INT32_TAG with small integers. The
-    // class registry is the disambiguating guard used by value_bits_to_number.
+    // A constructor is its function object and must retain its pointer bits
+    // through the barriered array path.
     unsafe { crate::object::js_register_class_id(class_id) };
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | u64::from(class_id));
+    let class_ref = crate::object::class_value::class_value(class_id);
     assert_eq!(array_subclass_fast_push_one(receiver, class_ref), Some(1.0));
     assert_eq!(
         array_subclass_fast_index_get(receiver, 0).map(f64::to_bits),
         Some(class_ref.to_bits()),
-        "a ClassRef must keep its tag for downstream property dispatch"
+        "a class function object must keep its pointer for property dispatch"
     );
     assert_eq!(
         array_subclass_fast_pop(receiver).map(f64::to_bits),

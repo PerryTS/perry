@@ -20,16 +20,16 @@ const values = ap[Symbol.iterator];
 const aip: any = Object.getPrototypeOf(values.call([]));
 const next = aip.next;
 warm("proven");
-ap[Symbol.iterator] = function(this: any) {
+try { ap[Symbol.iterator] = function(this: any) {
   let i = 0; const a = this;
   return { next() { return i < a.length ? { done: false, value: 10 * a[i++] } : { done: true }; } };
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 warm("refused iterator");
-ap[Symbol.iterator] = values;
+try { ap[Symbol.iterator] = values; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 warm("restored iterator");
-aip.next = function(this: any) {
+try { aip.next = function(this: any) {
   const r = next.call(this); if (!r.done) r.value *= -1; return r;
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 warm("refused next");
-aip.next = next;
+try { aip.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 warm("restored next");

@@ -59,6 +59,19 @@ pub(crate) fn lower_let(
     // class-alias chain resolution below (and any other site
     // that needs id → name) can use it.
     ctx.local_id_to_name.insert(id, name.to_string());
+    if let Some(perry_hir::Expr::ClassMethodHome {
+        class_name,
+        is_static: false,
+    }) = init
+    {
+        if ctx.method_home_local == Some((id, true)) {
+            // Read only by proven `super.m()` sites: no home value is needed.
+            return Ok(());
+        }
+        if !mutable && !ctx.in_static_member && ctx.class_stack.last() == Some(class_name) {
+            ctx.method_home_local = Some((id, false));
+        }
+    }
     if !mutable && !ctx.reassigned_locals.contains(&id) {
         if let Some(perry_hir::Expr::FuncRef(func_id)) = init {
             ctx.local_func_ref_ids.insert(id, *func_id);
@@ -326,7 +339,9 @@ pub(crate) fn lower_let(
         } else {
             proven
         };
-        ctx.proven_local_types.insert(id, proven);
+        if ctx.admits_contents_proof(id, &proven) {
+            ctx.proven_local_types.insert(id, proven);
+        }
     }
 
     // #7773/#7506: a numeric local inherits a DECLARED-ONLY proof from its
@@ -409,7 +424,17 @@ pub(crate) fn lower_let(
     // storage is the i32 slot tracked through `local_slot_reps` — so the
     // reuse guard must consider the rep map too, or a redeclaration would
     // re-run the allocation path and leave the local with two slots.
-    if ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id) {
+    //
+    // A binding that lives in an enclosing activation reaches here too: the
+    // async/generator state machine keeps a hoisted binding's declaration in
+    // its state body, and in the step closure the binding is a capture (its
+    // cell is the activation's). The declaration initializes that cell, the
+    // same `LocalSet` store every write of the capture takes; a fresh slot
+    // would shadow the cell the other states and closures read.
+    if ctx.locals.contains_key(&id)
+        || ctx.local_slot_reps.contains_key(&id)
+        || ctx.closure_captures.contains_key(&id)
+    {
         // A birth table already bore this declaration's closure and stored it
         // in the binding's scope slot (`closure_births`). Record what the
         // store records; the binding is a preallocated cell, so its type

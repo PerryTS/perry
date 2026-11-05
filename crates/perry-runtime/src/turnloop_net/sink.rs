@@ -99,6 +99,10 @@ pub const NET_FLAG_STALE: i32 = 2;
 pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
 /// TLS plaintext, already decoded, delivered on the socket's current route.
 pub const NET_FLAG_PLAINTEXT: i32 = 8;
+/// A `Wrote` for a write the kernel took whole when the caller wrote it
+/// (libuv's `uv_try_write`): Node's `req.async === false`, so the write
+/// callback runs from `process.nextTick`, as a `TickObject`.
+pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;

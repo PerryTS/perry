@@ -136,6 +136,40 @@ Remaining known gaps:
   but the result is not yet visible to `instanceof` (`… instanceof Array`
   reports `false`).
 
+### Built-in objects are read-only
+
+The members of the built-in prototypes are read-only in a compiled program:
+replacing, deleting or redefining a member of `Object.prototype`,
+`Array.prototype`, `String.prototype`, `Map.prototype`, `Date.prototype`, … (the
+prototypes of the built-in constructors and the iterator prototypes) throws a
+`TypeError` at the store (`Array.prototype.push = …`,
+`delete Object.prototype.toString`,
+`Object.defineProperty(Array.prototype, "push", …)`,
+`Object.setPrototypeOf(Array.prototype, …)`). Adding new members works
+(`Array.prototype.myHelper = …`), and so does re-pointing `constructor`, with
+two exceptions: no key may be added to `Object.prototype`,
+`Function.prototype`, `Iterator.prototype` or the array iterator prototype, and
+no array index to `Array.prototype` (`Array.prototype[5] = 1`), because compiled
+code relies on those keys being absent (a plain object is not iterable, an
+array hole reads `undefined`). The typed-array, `TypeError` and `URL`
+prototypes are outside the lock set.
+Namespace and constructor members stay patchable (`Math.random = …`,
+`Date.now = …`, `JSON.stringify = …`), as do the global bindings, `console`,
+`process`, `fetch`, `globalThis` and the prototypes of the Node API classes
+(`URL`, `EventEmitter`, …). Polyfills that only add keep working; a shim that
+overwrites an existing prototype method must be removed or guarded.
+
+```typescript,no-test
+Array.prototype.myHelper = function () { /* … */ };   // works
+Math.random = () => 0.5;       // works (namespace members stay patchable)
+(Object.prototype as any).extra = 1;       // TypeError: Cannot add member
+                               // Object.prototype.extra: built-in objects are read-only in a
+                               // compiled program
+(Array.prototype as any).push = () => 0;   // TypeError: Cannot replace built-in member
+                               // Array.prototype.push: built-in objects are read-only in a
+                               // compiled program (adding a new member is allowed)
+```
+
 ## Weak references and finalization
 
 WeakMap, WeakSet, WeakRef and FinalizationRegistry participate in weak processing. Weak targets are excluded from the strong trace, forwarded addresses are repaired, dead targets can be cleared and cleanup callbacks can be queued. Collection and callback timing are not deterministic. See [GC weak processing](../internals/garbage-collector.md#barriers-and-weak-references).

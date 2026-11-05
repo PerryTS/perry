@@ -756,9 +756,15 @@ unsafe fn populate_from_iterable(
                 ),
                 None => crate::symbol::js_get_iterator(items.get_nanbox_f64()),
             });
+            let next = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(
+                iter.get_nanbox_f64(),
+            ));
             let mut k = 0usize;
             loop {
-                match crate::collection_iter::iterator_next_value(iter.get_nanbox_f64()) {
+                match crate::collection_iter::iterator_next_value(
+                    iter.get_nanbox_f64(),
+                    next.get_nanbox_f64(),
+                ) {
                     None => return finish_length(result, k, array_result),
                     Some(value) => {
                         let mapped = if mapping {

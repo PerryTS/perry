@@ -10,7 +10,7 @@ extern "C" fn listener(
 ) -> f64 {
     assert_eq!(value, 42.0);
     // Removal happens before invocation: reentrant dispatch cannot repeat it.
-    assert!(!message_port::port_is_refed(PARENT_PORT_HANDLE as u64));
+    assert!(!message_port::port_is_refed(parent_port::id()));
     CALLS.fetch_add(1, Ordering::Relaxed);
     js_undefined()
 }
@@ -45,12 +45,12 @@ fn parent_port_once_consumes_its_reference_before_calling_js() {
         let callback =
             scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(closure as i64));
         message_port::add_node_listener(
-            PARENT_PORT_HANDLE as u64,
+            parent_port::id(),
             string_value("message"),
             callback.get_nanbox_f64(),
             true,
         );
-        assert!(message_port::port_is_refed(PARENT_PORT_HANDLE as u64));
+        assert!(message_port::port_is_refed(parent_port::id()));
         assert_eq!(js_worker_threads_channels_has_pending(), 1);
         let mut roots = Vec::new();
         scan_environment_data_roots_mut(&mut perry_runtime::gc::RuntimeRootVisitor::for_copy(
@@ -87,10 +87,7 @@ fn parent_port_close_and_unref_use_the_message_port_handle_state() {
                 closure,
                 perry_runtime::closure::JsThis::from_f64(port.get_nanbox_f64()),
             );
-            assert_eq!(
-                message_port::port_is_refed(PARENT_PORT_HANDLE as u64),
-                expected
-            );
+            assert_eq!(message_port::port_is_refed(parent_port::id()), expected);
         }
         assert!(parent_port::is_closed());
         assert_eq!(
@@ -101,11 +98,7 @@ fn parent_port_close_and_unref_use_the_message_port_handle_state() {
         assert_eq!(js_worker_threads_channels_process_pending(), 1);
         assert_eq!(js_worker_threads_channels_has_pending(), 0);
         deliver_parent_port_message(SerializedValue::Inline(42.0f64.to_bits()));
-        MESSAGE_PORTS.with(|ports| {
-            assert!(ports.borrow()[&(PARENT_PORT_HANDLE as u64)]
-                .inbox
-                .is_empty())
-        });
+        MESSAGE_PORTS.with(|ports| assert!(!ports.borrow()[&parent_port::id()].pending()));
     });
 }
 
@@ -115,6 +108,9 @@ fn a_worker_does_not_count_its_parents_worker_record_as_its_own_work() {
         let (tx, _rx) = mpsc::channel();
         let id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let mut record = WorkerRecord {
+            data_port: port_transport::pair().0,
+            thread_name: Arc::from("metadata-test"),
+            resource_limits: WorkerResourceLimits::node_default(),
             owner_agent: perry_runtime::agent::PRIMARY_AGENT,
             sender: WorkerSender::new(tx),
             object_bits: JSValue::undefined().bits(),

@@ -30,6 +30,10 @@ pub(crate) enum Unknown {
     /// A key the program itself writes (or may write) onto a builtin
     /// prototype: the builtin member it names may be replaced.
     IntrinsicPrototypeWrite,
+    /// A member of a runtime-born host object (console, process.stdout/stderr/
+    /// stdin) the compiler-internal description does not list, or a key the
+    /// program writes onto that object.
+    HostMemberOpen,
     /// A result of, or callback argument from, an opaque or unmodeled
     /// builtin.
     OpaqueBuiltin,
@@ -100,6 +104,7 @@ impl Unknown {
             UnknownCalleeEscape => "unknown-callee-escape",
             IntrinsicPrototypeTopStore => "intrinsic-prototype-top-store",
             IntrinsicPrototypeWrite => "intrinsic-prototype-write",
+            HostMemberOpen => "host-member-open",
             OpaqueBuiltin => "opaque-builtin",
             ComputedKey => "computed-key",
             EscapedObjectField => "escaped-object-field",
@@ -352,6 +357,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("structuredClone/transfer result")
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
+            || starts("result of an unmodeled native accessor lookup")
         {
             OpaqueBuiltin
         } else if starts("global ")
@@ -447,6 +453,8 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         AccessorKey
     } else if starts("native member: the program writes") {
         IntrinsicPrototypeWrite
+    } else if starts("host member undescribed or written") {
+        HostMemberOpen
     } else if starts("native member: a store into ⊤") {
         IntrinsicPrototypeTopStore
     } else if starts("native member: a builtin prototype may be redefined") {

@@ -1247,14 +1247,14 @@ const third = NodeModule.createRequire(import.meta.url)("node-pty");
         let source = r#"
 import { createRequire } from "node:module";
 const req = createRequire(import.meta.url);
-const ws = req("ws");
+const bcrypt = req("bcrypt");
 "#;
         let got = transform_static_literal_requires(source, &HashSet::new(), dir.path());
         assert!(
-            got.contains(r#"import * as __perry_static_require_0 from "ws";"#),
+            got.contains(r#"import * as __perry_static_require_0 from "bcrypt";"#),
             "got:\n{got}"
         );
-        assert!(got.contains("const ws = __perry_static_require_0;"));
+        assert!(got.contains("const bcrypt = __perry_static_require_0;"));
     }
 
     /// Opting the package into `perry.compilePackages` keeps its npm files

@@ -35,10 +35,10 @@ const proxied = { ...proxy };
 console.log(proxied.x, proxied.y, proxied.z, log.join(','));
 console.log(JSON.stringify({ ...'ab', ...[7, 11], ...null, ...undefined }));
 
-Object.defineProperty(Object.prototype, 'spreadInherited', {
+try { Object.defineProperty(Object.prototype, 'spreadInherited', {
   get() { throw new Error('spread must define its own key'); },
   configurable: true
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const own: any = {};
 Object.defineProperty(own, 'spreadInherited', { value: 17, enumerable: true });
 const copied: any = { ...own, spreadInherited: 19 };

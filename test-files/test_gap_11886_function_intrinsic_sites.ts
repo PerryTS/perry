@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // #11886 / #11932: `fn.call(...)`, `fn.apply(...)` and `fn.bind(...)` at hot
 // method sites. The site's emitted hit runs the intrinsic only while
 // %Function.prototype%'s CURRENT call/apply/bind slot holds it, so a patch
@@ -120,16 +121,16 @@ const kCall = ["c", "a", "l", "l"].join("");
 const kApply = "app" + "ly";
 const kBind = "bi" + "nd";
 const saved = { call: FP[kCall], apply: FP[kApply], bind: FP[kBind] };
-FP[kCall] = function (this: any, t: any, ...a: any[]) { log.push("call"); return Reflect.apply(this, t, a); };
-FP[kApply] = function (this: any, t: any, a: any) { log.push("apply"); return Reflect.apply(this, t, a == null ? [] : a); };
-FP[kBind] = function (this: any, t: any, ...pre: any[]) { log.push("bind"); const f = this; return (...a: any[]) => Reflect.apply(f, t, pre.concat(a)); };
+locked(() => { FP[kCall] = function (this: any, t: any, ...a: any[]) { log.push("call"); return Reflect.apply(this, t, a); }; });
+locked(() => { FP[kApply] = function (this: any, t: any, a: any) { log.push("apply"); return Reflect.apply(this, t, a == null ? [] : a); }; });
+locked(() => { FP[kBind] = function (this: any, t: any, ...pre: any[]) { log.push("bind"); const f = this; return (...a: any[]) => Reflect.apply(f, t, pre.concat(a)); }; });
 hot("patched-call", (i) => viaCall(plain, obj, i, "p"));
 hot("patched-call-arrow", (i) => viaCall(arrow, obj, i, "p"));
 hot("patched-apply", (i) => viaApply(plain, obj, [i, "p"]));
 hot("patched-bind", (i) => viaBind(plain, obj, i)("p"));
 hot("patched-direct", (i) => (plain as any).call(other, i, "d"));
 out.push("log=" + log.length + ":" + [...new Set(log)].join(","));
-FP[kCall] = saved.call; FP[kApply] = saved.apply; FP[kBind] = saved.bind;
+locked(() => { FP[kCall] = saved.call; }); locked(() => { FP[kApply] = saved.apply; }); locked(() => { FP[kBind] = saved.bind; });
 log.length = 0;
 hot("restored-call", (i) => viaCall(plain, obj, i, "r"));
 hot("restored-apply", (i) => viaApply(plain, obj, [i, "r"]));
@@ -139,8 +140,8 @@ out.push("log-after-restore=" + log.length);
 // 3. A patch applied in the middle of a hot loop takes effect on the next call.
 let mid = "";
 for (let i = 0; i < 60; i++) {
-  if (i === 30) FP[kCall] = function (this: any) { return "mid-patched"; };
-  if (i === 45) FP[kCall] = saved.call;
+  if (i === 30) locked(() => { FP[kCall] = function (this: any) { return "mid-patched"; }; });
+  if (i === 45) locked(() => { FP[kCall] = saved.call; });
   const r = viaCall(plain, obj, i, "m");
   if (i === 29 || i === 30 || i === 44 || i === 45) mid += i + "=" + r + ";";
 }
@@ -148,19 +149,19 @@ out.push("mid-loop=" + mid);
 
 // 4. Swapping intrinsics between slots: `call` now runs `apply`'s semantics,
 // both at a site primed before the swap and at one first reached after it.
-FP[kCall] = saved.apply;
+locked(() => { FP[kCall] = saved.apply; });
 out.push("swapped=" + viaCall(plain, obj, ["s1", "s2"], "ignored"));
 function viaCallSwapped(f: any, t: any, a: any, b: any): any { return f.call(t, a, b); }
 hot("swapped-fresh-site", (i) => viaCallSwapped(plain, obj, [i, "w"], "ignored"));
-FP[kCall] = saved.call;
+locked(() => { FP[kCall] = saved.call; });
 out.push("unswapped=" + viaCall(plain, obj, "u1", "u2"));
 hot("unswapped-fresh-site", (i) => viaCallSwapped(plain, obj, i, "w"));
 
 // 5. A non-callable value in the slot is a TypeError.
-FP[kCall] = 42;
+locked(() => { FP[kCall] = 42; });
 try { out.push("noncallable=" + viaCall(plain, obj, 1, 2)); }
 catch (e) { out.push("noncallable=" + (e as Error).constructor.name); }
-FP[kCall] = saved.call;
+locked(() => { FP[kCall] = saved.call; });
 out.push("after-noncallable=" + viaCall(plain, obj, 1, 2));
 
 setTimeout(() => {

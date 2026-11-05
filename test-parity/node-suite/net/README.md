@@ -30,11 +30,7 @@ fixtures that each print one contract.
 ## Run
 
 ```sh
-NODE_BIN=/path/to/node-v26.5.0/bin/node \
-python3 scripts/node_suite_run.py "$PWD/target/release/perry" "$PWD" net
-
-PATH=/path/to/node-v26.5.0/bin:$PATH \
-./run_parity_tests.sh --suite node-suite --module net
+python3 scripts/parity.py run node-suite/net --mode auto
 ```
 
 `EVIDENCE.md` fixes the source revisions, maps fixtures to upstream contracts,
@@ -72,7 +68,7 @@ duplicates. Arbitrary native address-map traversal and repeated or mapped-family
 address deduplication remain unresolved; this is not general BlockList parity.
 
 ```sh
-./run_parity_tests.sh --suite node-suite --module net --filter node-suite/net/classes/block-list-json-validation
+python3 scripts/parity.py run test-parity/node-suite/net/classes/block-list-json-validation.ts --mode auto
 ```
 
 Use the full fixture ID: the shorter `block-list-json` substring also selects

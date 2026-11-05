@@ -37,6 +37,14 @@ const ADDON_SCOPE_RETURN_MAIN: &str =
 #[cfg(unix)]
 const ADDON_SCOPE_RETURN_EXPECTED: &str =
     include_str!("fixtures/node_api_host/addon_scope_return_expected.txt");
+#[cfg(target_os = "linux")]
+const ADDON_LAZY_SYMBOL_C: &str = include_str!("fixtures/node_api_host/addon_lazy_symbol.c");
+#[cfg(target_os = "linux")]
+const ADDON_LAZY_SYMBOL_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_lazy_symbol_main.js");
+#[cfg(target_os = "linux")]
+const ADDON_LAZY_SYMBOL_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_lazy_symbol_expected.txt");
 #[cfg(windows)]
 const ADDON_DEF: &str = include_str!("fixtures/node_api_host/addon.def");
 const HOST_SYMBOLS: &str =
@@ -878,6 +886,96 @@ fn objects_built_in_a_closed_callback_scope_are_returned() {
         assert_eq!(
             String::from_utf8_lossy(&node.stdout),
             ADDON_SCOPE_RETURN_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// An addon that references a symbol nothing defines, on a path it never
+/// calls, loads with the default binding and runs (Node's `process.dlopen`
+/// defaults to `RTLD_LAZY`; prebuilt addons built against another ICU major
+/// rely on it), while an explicit `os.constants.dlopen.RTLD_NOW` still
+/// rejects it at load. Linux only: the fixture leaves the symbol undefined
+/// in an ELF shared object linked with `-z lazy`.
+#[cfg(target_os = "linux")]
+#[test]
+fn addon_with_an_undefined_symbol_on_an_unused_path_loads_lazily() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-lazy-symbol");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-lazy-symbol-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-lazy-symbol"],
+    "allow": { "compilePackages": ["fixture-lazy-symbol"] },
+    "nativeAddons": ["fixture-lazy-symbol"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-lazy-symbol","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_lazy_symbol.c");
+    std::fs::write(&source, ADDON_LAZY_SYMBOL_C).expect("write lazy symbol fixture");
+    let mut clang = Command::new("clang");
+    clang
+        .current_dir(root)
+        .args(["-shared", "-fPIC", "-Wl,-z,lazy", "-o"])
+        .arg(package.join("addon.node"))
+        .arg(&source);
+    run(clang, "lazy symbol fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_LAZY_SYMBOL_MAIN).expect("write lazy symbol entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "lazy symbol compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run lazy symbol executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_LAZY_SYMBOL_EXPECTED,
+        "Perry must bind addon symbols as Node does\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "lazy symbol Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_LAZY_SYMBOL_EXPECTED,
             "the checked-in transcript must still be Node's"
         );
     } else {

@@ -4,10 +4,10 @@
 // must see that store: `cache.n` is written with a string.
 var P: any = Object.prototype;
 function put(): void {
-  P.hasOwnProperty = function (this: any, k: string): boolean {
+  try { P.hasOwnProperty = function (this: any, k: string): boolean {
     this.n = "s" + k;
     return true;
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 }
 put();
 var hop = Object.prototype.hasOwnProperty;

@@ -1,1 +1,1 @@
-const p:any={...{},key:"p",use(){return()=>this.key}}; (Function.prototype as any).use=p.use; class T{static key="class"} console.log((T as any).use()()); delete (Function.prototype as any).use;
+const p:any={...{},key:"p",use(){return()=>this.key}}; /* DEC 250: Function.prototype refuses adds; the method sits on a user constructor link */ class B{} (B as any).use=p.use; class T extends B{static key="class"} console.log((T as any).use()()); delete (B as any).use;

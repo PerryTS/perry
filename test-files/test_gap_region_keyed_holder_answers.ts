@@ -20,7 +20,7 @@ console.log(probe(child, fixed), events.join(''));
 delete proto.rowSpan;
 Object.setPrototypeOf(child, {x:8,rowSpan:3}); warm(child);
 const polluted: any = {x:3}; warm(polluted);
-(Object.prototype as any).rowSpan=7; warm(polluted); delete (Object.prototype as any).rowSpan; warm(polluted);
+try { (Object.prototype as any).rowSpan=7; } catch (e) { console.log("DEC 250: " + (e as Error).message); } warm(polluted); delete (Object.prototype as any).rowSpan; warm(polluted);
 const nil: any = Object.create(null); nil.x=2; warm(nil); nil.rowSpan=0; warm(nil);
 const missing: any = Object.create(null); warm(missing);
 function undefinedMath(a:any,b:any) {

@@ -116,6 +116,24 @@ pub(super) fn to_object(recv: f64) -> f64 {
     recv
 }
 
+/// The receiver of an `Array.prototype` method value: step 1 of every method
+/// is `O = ToObject(this value)`. The method value runs it at its receiver
+/// boundary, because a reflective call (`Array.prototype.m.call(prim, ...)`,
+/// a held `m.call(...)`, `Reflect.apply`) hands it the raw `this`. A heap value
+/// is already an object and keeps every dense and typed path (one tag compare);
+/// anything else goes through [`to_object`]: `null` / `undefined` throw, a
+/// primitive boxes into its wrapper. The wrapper's shape decides the rest: a
+/// `String` wrapper's indices and `length` are non-writable (the mutators
+/// throw), `Number` / `Boolean` wrappers are ordinary length-0 objects.
+#[inline(always)]
+pub(crate) fn array_receiver(this: f64) -> f64 {
+    if top16(this.to_bits()) == 0x7FFD {
+        this
+    } else {
+        to_object(this)
+    }
+}
+
 /// Validate `cb` is callable, returning its `ClosureHeader*` (throws a
 /// `TypeError` otherwise, reusing the array-method renderer for parity with the
 /// specialised paths).
@@ -1473,14 +1491,10 @@ pub fn dispatch_arraylike_read_method(
 /// engine; any other receiver yields `undefined`. `recv` is the call-site
 /// `this` (the receiver parameter) the thunk read.
 pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
-    // #6908: every mutator's step 1 is `ToObject(this value)`, which throws
-    // for a nullish receiver. This is the receiver-less thunk invocation
-    // (`const f = arr.push; f(3)` — a plain call passes `undefined`), which previously fell through every normalization below and
-    // silently no-opped; node throws.
-    let bits = recv.to_bits();
-    if bits == TAG_UNDEFINED || bits == TAG_NULL {
-        crate::collection_iter::throw_type_error("Cannot convert undefined or null to object");
-    }
+    // #6908: every mutator's step 1 is `ToObject(this value)`: a nullish
+    // receiver (`const f = arr.push; f(3)`) throws, and a primitive one
+    // (`Array.prototype.push.call(true, 1)`) mutates its wrapper.
+    let recv = array_receiver(recv);
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { real_array_mutator(arr, method, args_ptr, args_len) };

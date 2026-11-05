@@ -16,9 +16,9 @@ Object.defineProperty(holder, "lane12015", { get() { return 41; }, configurable:
 console.log("memo", read(receiver), desc(holder, "lane12015"));
 for (const proto of [Object.prototype, Array.prototype]) {
   let writes = 0;
-  Object.defineProperty(proto, "lane12015", {
+  try { Object.defineProperty(proto, "lane12015", {
     get() { return 42; }, set(v: any) { writes += v; }, configurable: true, enumerable: false
-  });
+  }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const literal: any = {};
   if (proto === Array.prototype) Object.setPrototypeOf(literal, proto);
   console.log("proto-read", literal.lane12015);

@@ -20,9 +20,12 @@ function hoisted(input: any) {
 }
 console.log(JSON.stringify([direct("x"), blockLet("x"), hoisted("xy")]));
 const original = String.prototype.charCodeAt;
-(String.prototype as any).charCodeAt = function (this: string, i: number) { return i === 0 ? 1.5 : original.call(this, i) % 3; };
+// DEC 250 (intrinsic-only): a primitive string's methods come only from
+// String.prototype. The replace is refused now (expected file); the reads
+// after it still run.
+try { (String.prototype as any).charCodeAt = function (this: string, i: number) { return i === 0 ? 1.5 : original.call(this, i) % 3; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(JSON.stringify([direct("x"), blockLet("x"), hoisted("xy"), "x".charCodeAt(0)]));
-(String.prototype as any).charCodeAt = function () { return NaN; };
+try { (String.prototype as any).charCodeAt = function () { return NaN; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(JSON.stringify([direct("x"), blockLet("x"), hoisted("xy")]));
-(String.prototype as any).charCodeAt = original;
+try { (String.prototype as any).charCodeAt = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(JSON.stringify([direct("x"), blockLet("x"), hoisted("xy")]));

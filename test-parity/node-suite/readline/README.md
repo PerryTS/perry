@@ -131,9 +131,8 @@ so it remains reproducible.
 Run the focused Perry comparison with:
 
 ```sh
-NODE_BIN="$HOME/.nvm/versions/node/v26.5.0/bin/node" \
-python3 scripts/node_suite_run.py \
-  "$PWD/target/perry-dev/perry" "$PWD" readline
+PERRY_BIN="$PWD/target/perry-dev/perry" \
+  python3 scripts/parity.py run node-suite/readline --mode auto
 ```
 
 Reproduce the per-fixture cross-runtime classification and digest from the

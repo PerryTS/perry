@@ -618,10 +618,20 @@ impl<'a> Gen<'a> {
             if let Some(d) = &p.default {
                 // The default is the parameter's value only when a call
                 // passes `undefined` or nothing (missing arguments are
-                // `undefined`, `bind_args`).
+                // `undefined`, `bind_args`). The calls pass to the argument
+                // node (`register_fn`): the local holds what they pass but
+                // `undefined`, and the default when one may pass it.
                 let v = self.expr(fx, d);
+                let arg = self
+                    .default_args
+                    .get(&(fx.module, p.id))
+                    .copied()
+                    .unwrap_or(n);
+                if arg != n {
+                    self.m.cons(arg, Cons::NotUndefined { dst: n });
+                }
                 self.m.cons(
-                    n,
+                    arg,
                     Cons::Guard {
                         test: crate::model::guard::UNDEF,
                         from: v,
@@ -876,8 +886,26 @@ impl<'a> Gen<'a> {
     // ---------------------------------------------------------- statements
 
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
-        for s in ss {
-            self.stmt(fx, s);
+        let mut i = 0;
+        while i < ss.len() {
+            if let Some(value) = for_of_binding(&ss[i..]) {
+                // `value = arrayRecordForValue(…); state = n; let s = value`:
+                // the binding reads the value just written, not every write
+                // of the value local (its `undefined` initializer and
+                // release, the step's output).
+                let Stmt::Expr(set) = &ss[i] else { unreachable!() };
+                let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+                let n = self.expr(fx, set);
+                self.m.cur_fn = prev;
+                self.stmt(fx, &ss[i + 1]);
+                self.for_binding = Some((fx.module, value, n));
+                self.stmt(fx, &ss[i + 2]);
+                self.for_binding = None;
+                i += 3;
+                continue;
+            }
+            self.stmt(fx, &ss[i]);
+            i += 1;
         }
     }
 
@@ -922,8 +950,17 @@ impl<'a> Gen<'a> {
 
     fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
-            Stmt::Let { id, init, ty, .. } => {
+            Stmt::Let {
+                id,
+                init,
+                ty,
+                mutable,
+                ..
+            } => {
                 let n = self.local(fx.module, *id);
+                if !*mutable && init.is_some() {
+                    self.initialized_consts.insert((fx.module, *id));
+                }
                 if matches!(ty, perry_hir::types::Type::Array(_)) {
                     self.cell_locals.insert((fx.module, *id));
                 }
@@ -1011,7 +1048,7 @@ impl<'a> Gen<'a> {
             | Stmt::ReleaseBoxes(_) => {}
             Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
-                    let n = self.local(fx.module, *id);
+                    let n = self.dead_zone(fx.module, *id);
                     self.m.add_prim(n, prim::UNDEF);
                 }
             }
@@ -1077,4 +1114,34 @@ pub(crate) fn variant_name(e: &Expr) -> String {
     let mut h = Head(String::new(), false);
     let _ = std::fmt::write(&mut h, format_args!("{e:?}"));
     h.0
+}
+
+/// The head of a for-of body as HIR lowers it (`IteratorRecord::drive`,
+/// the shape codegen's `record_binding_prefix` reads): `value =
+/// arrayRecordForValue(mode, value, element); state = n; let s = value`.
+/// The value local.
+fn for_of_binding(ss: &[Stmt]) -> Option<u32> {
+    let [Stmt::Expr(Expr::LocalSet(value, read)), Stmt::Expr(Expr::LocalSet(state, n)), Stmt::Let {
+        init: Some(Expr::LocalGet(bound)),
+        ..
+    }, ..] = ss
+    else {
+        return None;
+    };
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args,
+        ..
+    } = read.as_ref()
+    else {
+        return None;
+    };
+    let ok = module == "__perry_runtime"
+        && method == "arrayRecordForValue"
+        && matches!(args.get(1), Some(Expr::LocalGet(v)) if v == value)
+        && matches!(n.as_ref(), Expr::Number(_))
+        && state != value
+        && bound == value;
+    ok.then_some(*value)
 }

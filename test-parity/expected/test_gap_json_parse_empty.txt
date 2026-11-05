@@ -1,0 +1,10 @@
+fresh true true
+grammar 216 11
+mutations {"4":true,"dynamic":"東京🙂","extra":{"answer":42},"a":7,"getter":"seen"} {}
+keys 4,dynamic,extra,a,getter
+prototype 12 {}
+DEC 250: Cannot add member Object.prototype.emptyParseSetter: built-in objects are read-only in a compiled program
+setter {"emptyParseSetter":41}
+reviver {"revised":true} 1
+retained 50000 0 742752340
+late {"4":true,"dynamic":"東京🙂","extra":{"answer":42},"a":7,"getter":"seen"} {} {"emptyParseSetter":41} {"revised":true}

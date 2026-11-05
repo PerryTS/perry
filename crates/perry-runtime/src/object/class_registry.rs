@@ -233,6 +233,7 @@ pub(crate) use parent_static::{
     class_object_owns_key_bytes, class_object_pinned_parent, class_own_static_method_code,
     class_own_static_method_code_bytes, class_own_static_method_entry,
     class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
+    class_table_symbol_member_keys,
     class_private_instance_getter_value, class_private_instance_setter_apply,
     class_static_accessor_getter_value, class_static_accessor_getter_value_bytes,
     class_static_accessor_setter_apply, class_static_accessor_setter_apply_bytes,

@@ -73,7 +73,9 @@ pub(crate) fn object_prototype_has_index_flag() -> bool {
 /// the array element-write paths; cheap (two relaxed atomic loads + compare).
 #[inline]
 pub(crate) fn note_array_index_write(arr: usize) {
-    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) && arr != 0 && arr == array_prototype_addr() {
+    if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        // DEC 250 (i): the program never adds an index to %Array.prototype%.
+        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
@@ -1530,6 +1532,17 @@ pub extern "C" fn js_array_set_f64_extend(
     crate::string::js_string_addref_if_heap_string(value);
     let cleaned = clean_arr_ptr_mut(arr);
     if cleaned.is_null() {
+        // An integer-indexed receiver (a typed array or a Uint8Array buffer)
+        // behind a `T[]` site: its numeric [[Set]]. The clean rejects every
+        // non-`GC_TYPE_ARRAY` header (`typed_array_receiver`), so this is
+        // where the receiver's header is asked.
+        if crate::typedarray_props::typed_array_set_number_key(
+            super::header::array_receiver_addr(arr),
+            index as f64,
+            value,
+        ) {
+            return arr;
+        }
         // #7574: `a[i] = v` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Pre-fix this stored the value into
         // `ObjectHeader.keys_array` / `.meta`. Run the object `[[Set]]` plus
@@ -1545,30 +1558,8 @@ pub extern "C" fn js_array_set_f64_extend(
         return js_array_alloc(0);
     }
     let arr = cleaned;
-    // #10694: skip both registry probes for a `GC_TYPE_ARRAY` header, which
-    // can never be a registered buffer or typed array.
-    if super::header::receiver_may_be_registered_exotic(arr) {
-        // Check if this is actually a buffer (Uint8Array) — write individual bytes
-        if crate::buffer::is_registered_buffer(arr as usize) {
-            crate::buffer::js_buffer_set(
-                arr as *mut crate::buffer::BufferHeader,
-                index as i32,
-                value as i32,
-            );
-            return arr;
-        }
-        // Check if this is a typed array — route through per-kind store (no extension).
-        if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
-            crate::typedarray_hook_slots::js_typed_array_set(
-                arr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
-                index as i32,
-                value,
-            );
-            return arr;
-        }
-    }
     // SAFETY: the clean above resolved this live plain-array head, and the
-    // compatible Buffer/TypedArray receivers have exited.
+    // integer-indexed receivers have exited before it.
     let flags = unsafe { array_object_flags_resolved(arr) };
     unsafe { js_array_set_f64_extend_resolved(arr, index, value, flags) }
 }

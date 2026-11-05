@@ -37,9 +37,9 @@ console.log("reduce add:", g().reduce((a, b) => a + b, 100));
 
 // An override on Iterator.prototype is observed by generators.
 const originalMap = Iterator.prototype.map;
-(Iterator.prototype as any).map = function () { return "overridden"; };
+try { (Iterator.prototype as any).map = function () { return "overridden"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("override:", (g() as any).map((x: number) => x));
-(Iterator.prototype as any).map = originalMap;
+try { (Iterator.prototype as any).map = originalMap; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("restored:", g().map((x) => x + 1).toArray().join(","));
 
 // An own property on the generator's prototype shadows the inherited helper.

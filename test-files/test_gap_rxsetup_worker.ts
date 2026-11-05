@@ -12,7 +12,7 @@ function run(role: string): Promise<void> {
     const w = new Worker(url, { workerData: role });
     const events: string[] = [];
     w.on("message", (m: string) => events.push(m));
-    w.on("error", (e: Error) => events.push("error " + e.message));
+    w.on("error", (e: Error) => events.push("error " + (/read-only/.test(e.message) ? "DEC 250: " : "") + e.message));
     w.on("exit", (code: number) => {
       console.log(role + ": " + events.join(" | ") + "; exit " + code);
       resolve();

@@ -112,6 +112,9 @@ show("idx-elem", arrK.length);
 const m = new Map<any, any>([[args, "mapped"]]);
 show("map-key", m.get("~t/Type/args"));
 
-// 4. A modified Array.prototype is honoured afterwards.
-(Array.prototype as any).includes = function () { return "patched"; };
-show("patched-includes", viaAny([1]).includes(1));
+// 4. A modified array prototype is honoured afterwards. DEC 250 locks
+// Array.prototype: the patch lands on a user array prototype UAP (below
+// Array.prototype) that the receiver adopts.
+const UAP: any = Object.create(Array.prototype);
+UAP.includes = function () { return "patched"; };
+show("patched-includes", viaAny(Object.setPrototypeOf([1], UAP)).includes(1));

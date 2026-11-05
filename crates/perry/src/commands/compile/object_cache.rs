@@ -971,39 +971,6 @@ fn compute_object_cache_key_with_env(
         h.field("imported_classes", &buf);
     }
 
-    // #8772: these producer capabilities are harvested from OTHER modules and
-    // can change the guarded direct-call arms without changing this module's
-    // own HIR. Keep ordering independent of HashMap/rayon traversal order.
-    {
-        let mut candidates: Vec<&perry_codegen::ShortSpreadMethodCandidate> = opts
-            .short_spread_method_candidates
-            .values()
-            .flatten()
-            .collect();
-        candidates.sort_by(|a, b| {
-            a.method_name
-                .cmp(&b.method_name)
-                .then(a.class_id.cmp(&b.class_id))
-                .then(a.target.cmp(&b.target))
-        });
-        let value = candidates
-            .into_iter()
-            .map(|candidate| {
-                format!(
-                    "{}:{}@{}:{}:{}:{}",
-                    candidate.method_name,
-                    candidate.class_id,
-                    candidate.source_prefix,
-                    candidate.target,
-                    candidate.shape_id_global,
-                    candidate.declared_count,
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("|");
-        h.field("short_spread_method_candidates", &value);
-    }
-
     // #8775 reverse-flow object candidates likewise affect modules that do
     // not import the producer and therefore are not covered by the imported
     // class/object fingerprint above.

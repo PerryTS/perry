@@ -382,24 +382,7 @@ fn throw_structured_clone_type_error(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn throw_data_clone_error(message: &str) -> ! {
-    // The runtime throw uses longjmp, so no Rust guard can release roots from
-    // the abandoned traversal. They are no longer needed once cloning fails.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let message = scope.root_nanbox_f64(crate::value::js_nanbox_string(js_string_from_bytes(
-        message.as_ptr(),
-        message.len() as u32,
-    ) as i64));
-    let name = scope.root_nanbox_f64(crate::value::js_nanbox_string(js_string_from_bytes(
-        b"DataCloneError".as_ptr(),
-        14,
-    ) as i64));
-    let err = crate::event_target_hook_slots::js_dom_exception_new(
-        message.get_nanbox_f64(),
-        name.get_nanbox_f64(),
-    );
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
+use crate::messaging::port_transfer::throw_data_clone_error;
 
 fn pointer_addr(value: f64) -> Option<usize> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
@@ -442,10 +425,10 @@ fn get_object_property(value: f64, name: &[u8]) -> f64 {
     f64::from_bits(val.bits())
 }
 
-fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
+fn collect_transfer_list(options: f64) -> f64 {
     let options_value = crate::value::JSValue::from_bits(options.to_bits());
     if options_value.is_undefined() || options_value.is_null() {
-        return std::collections::HashSet::new();
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if !options_value.is_pointer() {
         throw_structured_clone_type_error(
@@ -455,7 +438,7 @@ fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
 
     let transfer = get_object_property(options, b"transfer");
     if crate::value::JSValue::from_bits(transfer.to_bits()).is_undefined() {
-        return std::collections::HashSet::new();
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if !is_array_value(transfer) {
         throw_structured_clone_type_error(
@@ -463,28 +446,7 @@ fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
         );
     }
 
-    let transfer_addr = pointer_addr(transfer).unwrap_or(0);
-    let transfer_arr = transfer_addr as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(transfer_arr);
-    let mut out = std::collections::HashSet::new();
-    for i in 0..len {
-        let item = crate::array::js_array_get_f64(transfer_arr, i);
-        let Some(item_addr) = pointer_addr(item) else {
-            throw_data_clone_error("Found invalid value in transferList");
-        };
-        if !crate::buffer::is_array_buffer(item_addr)
-            || crate::buffer::is_shared_array_buffer(item_addr)
-        {
-            throw_data_clone_error("Found invalid value in transferList");
-        }
-        if crate::buffer::is_detached_buffer(item_addr) {
-            throw_data_clone_error("ArrayBuffer is already detached");
-        }
-        if !out.insert(item_addr) {
-            throw_data_clone_error("Transfer list contains duplicate ArrayBuffer");
-        }
-    }
-    out
+    transfer
 }
 
 /// structuredClone and worker messages use one Node-compatible codec.
@@ -497,16 +459,26 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
 pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
-    let transfer = collect_transfer_list(options)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let options = scope.root_nanbox_f64(options);
     let outcome = crate::exception::catch_js_throw(|| {
-        crate::thread_hook_slots::clone_with_transfers(value.get_nanbox_f64(), &transfer)
+        let list = collect_transfer_list(options.get_nanbox_f64());
+        crate::messaging::port_transfer::serialize(value.get_nanbox_f64(), list, None, |list| list)
+            .map(|message| {
+                f64::from_bits(unsafe {
+                    crate::thread::deserialize_nanbox_on_current_thread(&message)
+                })
+            })
     });
-    drop(transfer);
     drop(scope);
     match outcome {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => throw_data_clone_error(match error.as_str() {
+            "Found invalid value in transferList." => "Found invalid value in transferList",
+            "An ArrayBuffer is detached and could not be cloned." => {
+                "ArrayBuffer is already detached"
+            }
+            _ => &error,
+        }),
         Err(error) => crate::exception::js_throw(error),
     }
 }

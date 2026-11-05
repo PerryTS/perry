@@ -357,14 +357,19 @@ pub(super) unsafe fn family_overwrite(obj: *mut ObjectHeader, bytes: &[u8], valu
 /// `None` when it is not an add this module makes (a present key, a key the
 /// overflow holds, a constructor key).
 #[derive(Clone, Copy)]
-pub(super) enum FamilyAdd {
+pub(crate) enum FamilyAdd {
     /// A late key at list position `pos`, its slot `slot` holding the hole.
-    Late { pos: u32, slot: u32 },
+    /// `attrs`: the key's layout byte (`LAYOUT_KEY_LATE` alone for a plain
+    /// key). A key a constructor defines with attributes is filled only by
+    /// that definition (`define_field::family_define_own`); an add by
+    /// `[[Set]]` or CreateDataProperty goes through the overflow with default
+    /// attributes, the hole its tombstone.
+    Late { pos: u32, slot: u32, attrs: u8 },
     /// A key the layout does not name.
     Other,
 }
 
-pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Option<FamilyAdd> {
+pub(crate) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Option<FamilyAdd> {
     // A family layout without an overflow: the descriptor's index answers.
     if !super::super::overflow::has_overflow(obj) {
         if let Some(d) = family_desc_of(obj) {
@@ -374,7 +379,11 @@ pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
                         let k = &*d.keys.add(pos as usize);
                         (k.attrs & LAYOUT_KEY_LATE != 0
                             && family_slot_word(obj, k.slot) == crate::value::TAG_HOLE)
-                            .then_some(FamilyAdd::Late { pos, slot: k.slot })
+                            .then_some(FamilyAdd::Late {
+                                pos,
+                                slot: k.slot,
+                                attrs: k.attrs,
+                            })
                     }
                     None => Some(FamilyAdd::Other),
                 };
@@ -396,21 +405,59 @@ pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
     };
     match position {
         Some(pos) => {
-            if super::super::key_attrs::keys_entry(keys, pos)
-                & super::super::key_attrs::ENTRY_OPTIONAL
-                == 0
-            {
+            let entry = super::super::key_attrs::keys_entry(keys, pos);
+            if entry & super::super::key_attrs::ENTRY_OPTIONAL == 0 {
                 return None;
             }
             let slot = super::super::key_attrs::key_storage_slot(keys, pos);
             if family_slot_word(obj, slot) != crate::value::TAG_HOLE || held_by_overflow() {
                 return None;
             }
-            Some(FamilyAdd::Late { pos, slot })
+            Some(FamilyAdd::Late {
+                pos,
+                slot,
+                attrs: entry,
+            })
         }
         None if held_by_overflow() => None,
         None => Some(FamilyAdd::Other),
     }
+}
+
+/// The in-place add of late key `pos` (slot `slot`, holding the hole) of
+/// object `obj`, an add the caller has `admitted`. The overflow installed, a
+/// later key of the list present (`Err(true)`: the add is out of order) or
+/// an object something inherits from (it takes the overflow, whose install
+/// sets the shadow bit every inherited-read site tests, step 3) keeps the
+/// slot a hole. In order, the key's position is its enumeration order:
+/// `value` fills the slot. One rule for [`family_add`] and a definition's
+/// fill (`define_field::fill_defined`). `Err` changed nothing.
+pub(super) unsafe fn fill_in_order(
+    obj: *mut ObjectHeader,
+    pos: u32,
+    slot: u32,
+    admitted: bool,
+    value: u64,
+) -> Result<(), bool> {
+    if super::super::overflow::has_overflow(obj) {
+        return Err(false);
+    }
+    let record = super::super::shapes::object_shape_record(obj).unwrap();
+    let keys = record.keys() as usize as *const crate::array::ArrayHeader;
+    let out_of_order = later_late_key_present(obj, keys, record.logical_key_count(), pos);
+    if out_of_order && family_diag_pairs_on() {
+        note_out_of_order_pair(obj, pos);
+    }
+    if out_of_order
+        || !admitted
+        || slot >= super::super::object_inline_capacity(obj)
+        || (super::super::proto_validity::any_prototype_marked()
+            && super::super::proto_validity::object_is_marked_prototype(obj as usize))
+    {
+        return Err(out_of_order);
+    }
+    super::super::store_object_field_slot(obj, slot as usize, value);
+    Ok(())
 }
 
 /// Add the key `key_bits` to family object `obj` with `value` (see the
@@ -422,27 +469,15 @@ pub(super) unsafe fn family_add(obj: *mut ObjectHeader, key_bits: u64, add: Fami
     use std::sync::atomic::Ordering::Relaxed;
     let shadowed = super::super::overflow::has_overflow(obj);
     let mut out_of_order = false;
-    if let FamilyAdd::Late { pos, slot } = add {
-        if !shadowed {
-            let record = super::super::shapes::object_shape_record(obj).unwrap();
-            let keys = record.keys() as usize as *const crate::array::ArrayHeader;
-            out_of_order = later_late_key_present(obj, keys, record.logical_key_count(), pos);
-            if out_of_order && family_diag_pairs_on() {
-                note_out_of_order_pair(obj, pos);
-            }
-            // In order: the key's position is its enumeration order. An
-            // object something inherits from takes the overflow, whose
-            // install sets the shadow bit every inherited-read site tests
-            // (step 3).
-            if !out_of_order
-                && slot < super::super::object_inline_capacity(obj)
-                && !(super::super::proto_validity::any_prototype_marked()
-                    && super::super::proto_validity::object_is_marked_prototype(obj as usize))
-            {
+    if let FamilyAdd::Late { pos, slot, attrs } = add {
+        // `[[Set]]` and CreateDataProperty add a plain data property: only
+        // a plain key's slot takes it in place.
+        match fill_in_order(obj, pos, slot, attrs == LAYOUT_KEY_LATE, value) {
+            Ok(()) => {
                 FAMILY_DIAG.fills.fetch_add(1, Relaxed);
-                super::super::store_object_field_slot(obj, slot as usize, value);
                 return;
             }
+            Err(later) => out_of_order = later,
         }
     }
     if family_diag_on() {

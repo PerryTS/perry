@@ -82,21 +82,25 @@ plain.b = 2
 plain.a = 3
 console.log("plain:", plain.a, plain.b, Object.keys(plain).join(","))
 
-// 2. Inherited SETTER on Object.prototype must still intercept.
-Object.defineProperty(Object.prototype, "viaProto", {
+// 2. Inherited SETTER on Object.prototype must still intercept. DEC 250 (Q2):
+// the program adds no key there; `constructor` is the one image member it may
+// redefine, so the setter and the non-writable data (3.) are `constructor`.
+const objectCtor = Object.prototype.constructor
+Object.defineProperty(Object.prototype, "constructor", {
   set(v: any) { (this as any)._proto_set = v },
   get() { return (this as any)._proto_set },
   configurable: true,
 })
 const p2: any = {}
-p2.viaProto = 42
-console.log("protoSetter:", p2._proto_set, Object.prototype.hasOwnProperty.call(p2, "viaProto"))
+p2.constructor = 42
+console.log("protoSetter:", p2._proto_set, Object.prototype.hasOwnProperty.call(p2, "constructor"))
 
 // 3. Inherited NON-WRITABLE data on Object.prototype must still block.
-Object.defineProperty(Object.prototype, "roProto", { value: 7, writable: false, configurable: true })
+Object.defineProperty(Object.prototype, "constructor", { value: 7, writable: false, configurable: true })
 const p3: any = {}
-p3.roProto = 99
-console.log("protoRO:", p3.roProto, Object.prototype.hasOwnProperty.call(p3, "roProto"))
+p3.constructor = 99
+console.log("protoRO:", p3.constructor, Object.prototype.hasOwnProperty.call(p3, "constructor"))
+Object.defineProperty(Object.prototype, "constructor", { value: objectCtor, writable: true, configurable: true })
 
 // 4. OWN accessor on the receiver must still intercept.
 const p4: any = {}

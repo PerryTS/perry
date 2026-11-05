@@ -62,13 +62,13 @@ fn web_streams_remain_bundled_when_well_known_wrappers_are_enabled() {
 }
 
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
-/// The codegen prefix net routes `js_undici_*` to these
+/// The codegen prefix net routes `js_parcel_watcher_*` to these
 /// binding keys; each must exist in the shipped `well_known_bindings.toml`
 /// and map to its `perry-ext-*` crate, or the driver's routing loop would
 /// silently drop the flip.
 #[test]
 fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
-    for (key, krate) in [("undici", "perry-ext-undici")] {
+    for (key, krate) in [("@parcel/watcher", "perry-ext-parcel-watcher")] {
         let binding = super::super::well_known::lookup_well_known(key)
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
         assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
@@ -78,7 +78,7 @@ fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
 #[test]
 fn external_net_transport_keeps_tls_provider_without_bundled_net() {
     let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
-    super::driver::finalize_tls_transport_features(&mut features, true, true);
+    super::driver::finalize_tls_transport_features(&mut features, true, true, true);
     assert_eq!(
         features,
         std::collections::BTreeSet::from(["external-net-tls"]),
@@ -87,10 +87,36 @@ fn external_net_transport_keeps_tls_provider_without_bundled_net() {
 }
 
 #[test]
+fn external_net_transport_without_tls_links_no_tls_provider() {
+    let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
+    super::driver::finalize_tls_transport_features(&mut features, false, true, false);
+    assert!(
+        features.is_empty(),
+        "a net or child_process program must not install the TLS adapters: {features:?}"
+    );
+}
+
+#[test]
 fn direct_tls_without_external_transport_keeps_legacy_umbrella() {
     let mut features = std::collections::BTreeSet::new();
-    super::driver::finalize_tls_transport_features(&mut features, true, false);
+    super::driver::finalize_tls_transport_features(&mut features, true, false, true);
     assert_eq!(features, std::collections::BTreeSet::from(["tls"]));
+}
+
+#[test]
+fn child_process_links_net_without_calling_its_install_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    assert!(!well_known_iteration_set(&ctx).contains("net"));
+    ctx.uses_child_process = true;
+    assert!(
+        well_known_iteration_set(&ctx).contains("net"),
+        "a child's stdio pipes are net sockets, so net is linked"
+    );
+    assert!(
+        !program_module_set(&ctx).contains("net"),
+        "the entry does not install net: the runtime does at the first pipe socket"
+    );
 }
 
 #[test]
@@ -116,17 +142,6 @@ fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
     let modules = well_known_iteration_set(&ctx);
 
     assert!(modules.contains("node-fetch"));
-}
-
-#[test]
-fn explicit_undici_import_routes_to_well_known_undici() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    ctx.native_module_imports.insert("undici".to_string());
-
-    let modules = well_known_iteration_set(&ctx);
-
-    assert!(modules.contains("undici"));
 }
 
 #[test]
@@ -216,7 +231,7 @@ fn forced_well_known_env_extends_iteration_set() {
 
     set_env_var(
         "PERRY_FORCE_WELL_KNOWN",
-        Some("http, node:net ws definitely-not-real"),
+        Some("http, node:net perry/websocket definitely-not-real"),
     );
     let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
     let modules = well_known_iteration_set(&ctx);
@@ -225,7 +240,7 @@ fn forced_well_known_env_extends_iteration_set() {
 
     assert!(modules.contains("http"));
     assert!(modules.contains("net"));
-    assert!(modules.contains("ws"));
+    assert!(modules.contains("perry/websocket"));
     assert!(!modules.contains("node:net"));
     assert!(!modules.contains("definitely-not-real"));
 }
@@ -239,7 +254,8 @@ fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let net = super::super::well_known::lookup_well_known("net").expect("net well-known binding");
-    let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
+    let ws = super::super::well_known::lookup_well_known("perry/websocket")
+        .expect("perry/websocket well-known binding");
     let net_lib = dir
         .path()
         .join(super::super::well_known::ext_staticlib_filename(
@@ -264,7 +280,8 @@ fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
     ctx.native_module_imports.insert("net".to_string());
-    ctx.native_module_imports.insert("ws".to_string());
+    ctx.native_module_imports
+        .insert("perry/websocket".to_string());
     let libs = resolve_prebuilt_ext_libs(&routed_modules(&ctx), None, OutputFormat::Json);
 
     set_env_var("PERRY_LIB_DIR", old_lib_dir.as_deref());
@@ -315,7 +332,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut archives = Vec::new();
-    for module in ["net", "ws"] {
+    for module in ["net", "perry/websocket"] {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
         let lib = dir
             .path()
@@ -331,7 +348,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     set_env_var("PERRY_DISABLE_WELL_KNOWN", Some("1"));
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    for module in ["net", "ws", "events"] {
+    for module in ["net", "perry/websocket", "events"] {
         ctx.native_module_imports.insert(module.to_string());
     }
     let routed = super::routed_modules(&ctx);
@@ -345,7 +362,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     assert!(libs.contains(&archives[1]), "ws: {libs:?}");
     assert_eq!(
         routed,
-        std::collections::BTreeSet::from(["net".to_string(), "ws".to_string()])
+        std::collections::BTreeSet::from(["net".to_string(), "perry/websocket".to_string()])
     );
     assert!(super::wrapper_is_sole_provider("node:net"));
     assert!(!super::wrapper_is_sole_provider("tls"));
@@ -597,7 +614,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
     .map(|k| (*k, std::env::var(k).ok()))
     .collect();
 
-    let modules = ["http", "node:https", "net", "zlib", "ws"];
+    let modules = ["http", "node:https", "net", "zlib", "perry/websocket"];
     let dir = tempfile::tempdir().expect("tempdir");
     for module in modules {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
@@ -712,7 +729,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
         for flip in [true, false] {
             assert!(expect(no_auto, flip, "zlib").ends_with("Some(\"js_ext_zlib_nm_install\")"));
             assert!(expect(no_auto, flip, "net").ends_with("Some(\"js_ext_net_nm_install\")"));
-            assert!(expect(no_auto, flip, "ws").ends_with("None"));
+            assert!(expect(no_auto, flip, "perry/websocket").ends_with("None"));
         }
     }
 }
@@ -965,5 +982,24 @@ fn gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics() {
     }
     for (knob, value) in saved {
         set_env_var(knob, value.as_deref());
+    }
+}
+
+/// A `net` or `child_process` program links no TLS; a TLS import, the http
+/// family, and perry's `upgradeToTLS` on a plain `net` socket each reach it.
+#[test]
+fn reaches_tls_is_the_tls_family_or_upgrade_to_tls() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = |modules: &[&str], upgrade: bool| {
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports = modules.iter().map(|m| m.to_string()).collect();
+        ctx.uses_upgrade_to_tls = upgrade;
+        super::reaches_tls(&ctx)
+    };
+    assert!(!program(&["net"], false));
+    assert!(!program(&["child_process", "events"], false));
+    assert!(program(&["net"], true));
+    for module in ["tls", "node:https", "http2", "http"] {
+        assert!(program(&[module], false), "{module} reaches TLS");
     }
 }

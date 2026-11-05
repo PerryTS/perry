@@ -265,6 +265,58 @@ fn adopt_fd_option(owner: f64, options: f64) {
     }
 }
 
+/// A child process's stdio pipe: the parent end of the socketpair the
+/// runtime created for a pipe slot becomes a socket that owns it, as Node's
+/// `createSocket(handle, readable)` wraps the pipe handle. `options` carries
+/// `readable` (false for stdin). The descriptor is consumed on every outcome:
+/// it is the runtime's own, never a program fd number, so the `fd` option's
+/// fs-registry lookup does not apply.
+pub(crate) fn adopt_pipe(options: f64, descriptor: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(initialize_socket(
+        super::payload_io::ROUTE,
+        options,
+        u64::MAX,
+        None,
+    ));
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the runtime transfers an open descriptor it owns.
+        let pipe = unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor as i32) };
+        let socket = link(owner.get());
+        // SAFETY: The retained link belongs to this agent; projection checks family/open
+        // lifecycle, and core access ends before allocation or JS.
+        let result = unsafe {
+            match p::socket_core(socket) {
+                Ok(core) => Some(tl::link_adopt_stream(&mut *core, socket, pipe)),
+                Err(_) => None,
+            }
+        };
+        match result {
+            Some(Ok(())) => {
+                super::native_transport::adopted(owner.get());
+                flow(owner.get());
+            }
+            Some(Err(failure)) => {
+                let failure = error(&failure.code, &failure.message());
+                destroy(owner.get(), failure);
+            }
+            None => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = descriptor;
+        let failure = error(
+            "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM",
+            "child process stdio sockets are not available on this platform",
+        );
+        destroy(owner.get(), failure);
+    }
+    owner.get()
+}
+
 fn prepare_tcp(owner: f64, trigger: u64) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
@@ -1672,7 +1724,9 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
                     "connecting" => bool_value(fields.connecting),
                     "pending" => bool_value(!fields.opened),
                     "writable" => bool_value(!fields.write_ended),
-                    "readable" => bool_value(!fields.read_ended),
+                    // Readable.readable: true until `end` is emitted, so an EOF still
+                    // behind buffered bytes leaves the socket readable.
+                    "readable" => bool_value(!fields.read_end_emitted),
                     "writableEnded" => bool_value(fields.write_ended),
                     "readableEnded" => bool_value(fields.read_end_emitted),
                     "writableFinished" => bool_value(fields.shutdown_done),

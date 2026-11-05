@@ -27,12 +27,13 @@ Object.setPrototypeOf(p, {set 0(v) { calls++; }});
 numbers(p); objects(p, 2);
 console.log("custom", calls, p.length, Object.hasOwn(p, "0"));
 let seen = 0;
-Object.defineProperty(Array.prototype, "0", {set(v) { seen = v; }, configurable: true});
+try { Object.defineProperty(Array.prototype, "0", {set(v) { seen = v; }, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const clean: any = []; numbers(clean);
 const output = [seen, clean.length, Object.hasOwn(clean, "0")];
 delete (Array.prototype as any)[0];
 console.log("inherited", output[0], output[1], output[2]);
-const proto: any = Array.prototype; numbers(proto);
+const proto: any = Array.prototype;
+try { numbers(proto); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const inherited: any = [];
 console.log("prototype receiver", inherited[0], 0 in inherited);
 delete proto[0]; proto.length = 0;

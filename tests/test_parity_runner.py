@@ -8,6 +8,7 @@ produced by the real compile/run/compare path, not by a mocked judge.
 
 import json
 import re
+import shlex
 import os
 import shutil
 import subprocess
@@ -77,10 +78,10 @@ class Repo(unittest.TestCase):
 
 
 class Discovery(unittest.TestCase):
-    """Case ids must stay the ids run_parity_tests.sh reports."""
+    """Case ids are snapshot keys: they stay the ids the replaced shell runner reported."""
 
     def legacy_ids(self, suite):
-        # The discovery and id derivation of run_parity_tests.sh, verbatim.
+        # The replaced runner's discovery and id derivation, verbatim.
         script = r'''
         cd "$1"
         if [ "$2" = all ]; then
@@ -139,9 +140,72 @@ class Discovery(unittest.TestCase):
         self.assertEqual(shards[1], full[1::3])
         self.assertEqual(sorted(sum(shards, [])), sorted(full))
 
+    def test_subject_roots_are_discovered_like_node_suite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp))
+            write(root / "test-parity/language/string/a.ts")
+            write(root / "test-parity/language/string/fixtures/dep.ts")
+            write(root / "test-parity/typescript/enum/x/b.ts")
+            write(root / "test-parity/perry/thread/c.ts")
+            write(root / "test-parity/npm/zod/d.ts")
+            write(root / "test-parity/expected/language/string/a.txt")
+
+            def ids(*selectors, **kw):
+                return [i for i, _ in parity.select(root, list(selectors), **kw)]
+
+            self.assertEqual(ids("language/string"), ["language/string/a"])
+            self.assertEqual(ids("typescript"), ["typescript/enum/x/b"])
+            self.assertEqual(ids(str(root / "test-parity/perry/thread/c.ts")), ["perry/thread/c"])
+            self.assertEqual(ids(suite="all"), ["language/string/a", "npm/zod/d",
+                                                "perry/thread/c", "typescript/enum/x/b"])
+            self.assertEqual(parity.subject_of("typescript/enum/x/b"), "typescript/enum")
+
     def test_subject_of(self):
         self.assertEqual(parity.subject_of("test_gap_x"), "test-files")
         self.assertEqual(parity.subject_of("node-suite/fs/promises/a"), "node-suite/fs")
+
+
+class GapLane(Repo):
+    def workflow_args(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        match = re.search(r"args=\((run --suite [^\n]+)\)", workflow)
+        self.assertIsNotNone(match)
+        return [arg.replace("$GAP_SHARD/$GAP_TOTAL", "1/1")
+                for arg in shlex.split(match.group(1))[1:]]
+
+    def test_moving_cases_to_subjects_preserves_gap_lane_verdicts(self):
+        retained = ["test_gap_cts.cts", "test_gap_mts.mts", "test_gap_cjs.cjs"]
+        for name in retained:
+            write(self.root / "test-files" / name)
+        write(self.root / "test-files/test_parity_excluded.ts")
+        mapping = {}
+        for subject_root in parity.SUBJECT_ROOTS:
+            old_id = f"test_gap_{subject_root}"
+            mapping[old_id] = f"{subject_root}/subject/{old_id}"
+            write(self.root / "test-files" / f"{old_id}.ts")
+
+        before_code, before = self.run_cli(*self.workflow_args())
+        self.assertEqual(before_code, 0)
+        self.assertEqual(len(before["results"]), len(retained) + len(mapping))
+        for old_id, new_id in mapping.items():
+            old_path = self.root / "test-files" / f"{old_id}.ts"
+            new_path = self.root / "test-parity" / f"{new_id}.ts"
+            new_path.parent.mkdir(parents=True)
+            old_path.rename(new_path)
+            write(new_path.parent / "fixtures/test_gap_helper.ts")
+            write(new_path.parent / "test_parity_excluded.ts")
+
+        after_code, after = self.run_cli(*self.workflow_args())
+        self.assertEqual(after_code, before_code)
+        self.assertEqual(self.statuses(after), {
+            mapping.get(cid, cid): status for cid, status in self.statuses(before).items()
+        })
+
+    def test_gap_snapshot_artifact_includes_subject_snapshots(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        upload = workflow.split("- name: Upload re-baselined gap snapshot", 1)[1]
+        upload = upload.split("- name:", 1)[0]
+        self.assertRegex(upload, r"path: test-parity/snapshots/linux-fast/\*\*/\*\.json")
 
 
 class Headers(unittest.TestCase):
@@ -353,6 +417,45 @@ class Lanes(unittest.TestCase):
         self.assertTrue(parity.runs_serially("test_gap_x", zlib, "fast"))
         self.assertFalse(parity.runs_serially("test_gap_x", zlib, "auto"))
         self.assertFalse(parity.runs_serially("node-suite/zlib/a", zlib, "fast"))
+
+
+class Companions(unittest.TestCase):
+    """A case that names a companion server's port gets that server, once per run."""
+
+    def started(self, sources: dict) -> list:
+        with tempfile.TemporaryDirectory() as tmp:
+            files = Path(tmp) / "test-files"
+            files.mkdir()
+            cases = []
+            for name, text in sources.items():
+                (files / f"{name}.ts").write_text(text)
+                cases.append((name, files / f"{name}.ts"))
+            with mock.patch.object(parity.subprocess, "Popen") as popen, \
+                    mock.patch.object(parity.socket, "create_connection"):
+                parity.start_companions(Path(tmp), cases)
+            return [Path(call.args[0][1]).name for call in popen.call_args_list]
+
+    def test_a_case_naming_the_echo_port_gets_the_echo_server(self):
+        echo = "createConnection(17891 as never, '127.0.0.1' as never);"
+        self.assertEqual(self.started({"test_issue_1_a": echo, "test_issue_2_b": echo}),
+                         ["test_net_echo_server.py"])
+
+    def test_a_case_naming_no_port_starts_nothing(self):
+        self.assertEqual(self.started({"test_gap_x": "console.log(1);"}), [])
+
+
+class CompileBudget(unittest.TestCase):
+    """An auto-optimize compile may rebuild the runtime, so it gets the toolchain budget."""
+
+    def test_budget_per_compile_kind(self):
+        plain, toolchain, ordinary = "console.log(1);", parity.TOOLCHAIN_TIMEOUT, parity.COMPILE_TIMEOUT
+        forced = sorted(parity.FORCE_NO_AUTO)[0]
+        self.assertEqual(parity.compile_budget("test_gap_x", plain, auto=True, ext_routed=False), toolchain)
+        self.assertEqual(parity.compile_budget("test_gap_x", plain, auto=False, ext_routed=False), ordinary)
+        self.assertEqual(parity.compile_budget("test_gap_x", "new WebAssembly.Module(b);",
+                                               auto=False, ext_routed=False), toolchain)
+        self.assertEqual(parity.compile_budget(forced, plain, auto=False, ext_routed=True), toolchain)
+        self.assertEqual(parity.compile_budget(forced, plain, auto=False, ext_routed=False), ordinary)
 
 
 @unittest.skipIf(os.name == "nt" or not Path("/bin/dash").exists(), "needs a POSIX host with dash")

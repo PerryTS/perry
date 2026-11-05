@@ -23,10 +23,10 @@ function show(label: string, o: any, key: string) {
 const before = new Node() as any;
 show("callable", before, "kind");
 show("callable", before, "count");
-(Object.prototype as any).get = function () {
+try { (Object.prototype as any).get = function () {
   return "polluted";
-};
-(Object.prototype as any).set = function () {};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { (Object.prototype as any).set = function () {}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 try {
   const n = new Node() as any;
   show("callable+pollution", n, "kind");

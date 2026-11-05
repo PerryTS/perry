@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // RegExp flag reads. The runtime serves `.flags` and the flag-driven String
 // methods (replace, replaceAll, match, matchAll, split, search) from the
 // regex's own flag bits while the nine flag accessors on RegExp.prototype are
@@ -63,18 +64,18 @@ delete RegExp.prototype.exec2;
 
 // A flag getter redefined on RegExp.prototype is called by the String methods
 // and by .flags, with the receiver, and its answer decides the behavior.
-const restore = (name, desc) => Object.defineProperty(RegExp.prototype, name, desc);
+const restore = (name, desc) => locked(() => { Object.defineProperty(RegExp.prototype, name, desc); });
 const globalDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'global');
 const flagsDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags');
 {
   const calls = [];
-  Object.defineProperty(RegExp.prototype, 'global', {
+  locked(() => { Object.defineProperty(RegExp.prototype, 'global', {
     configurable: true,
     get() {
       calls.push('global');
       return false;
     },
-  });
+  }); });
   const re = /x/g;
   check('global getter redefined: flags', re.flags + ' ' + calls.join() + ' ' + flagsRow(re));
   calls.length = 0;
@@ -87,13 +88,13 @@ const flagsDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags');
 {
   const calls = [];
   let answer = null;
-  Object.defineProperty(RegExp.prototype, 'flags', {
+  locked(() => { Object.defineProperty(RegExp.prototype, 'flags', {
     configurable: true,
     get() {
       calls.push(this.source);
       return answer === null ? flagsDesc.get.call(this) : answer;
     },
-  });
+  }); });
   const re = /x/g;
   check('flags getter redefined: delegating read', re.flags + ' ' + calls.join());
   calls.length = 0;
@@ -107,7 +108,7 @@ const flagsDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags');
 }
 {
   const desc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'sticky');
-  Object.defineProperty(RegExp.prototype, 'sticky', { configurable: true, get: () => true });
+  locked(() => { Object.defineProperty(RegExp.prototype, 'sticky', { configurable: true, get: () => true }); });
   check('sticky getter redefined', flagsRow(/x/) + ' ' + ops(/x/g));
   restore('sticky', desc);
   check('sticky getter restored', flagsRow(/x/y) + ' ' + ops(/x/g));
@@ -165,6 +166,6 @@ check('flags getter receivers', [undefined, null, 1, 'x', {}, [], RegExp.prototy
 check('construction flags', [new RegExp('x', 'dgimsuy'), new RegExp(/x/g, 'i'), new RegExp(/x/gi), RegExp('x', 'v')].map(flagsRow).join(' | '));
 
 // A deleted flag getter (last: later reads would otherwise run on a prototype that lost it).
-delete RegExp.prototype.sticky;
+locked(() => { delete RegExp.prototype.sticky; });
 check('sticky getter deleted', flagsRow(/x/gy) + ' ' + ops(/x/g) + ' ' + flagsRow(/x/y) + ' ' + ops(/x/y));
 console.log(out.join('\n'));

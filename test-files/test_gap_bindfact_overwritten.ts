@@ -10,8 +10,8 @@ function f() { return 1; }
 const out: string[] = [];
 out.push(["before", typeof f.bind(null), typeof new C().m].join(" "));
 const original = Function.prototype.bind;
-(Function.prototype as any).bind = function (this: any, ...a: any[]) { return "patched:" + a.length; };
+try { (Function.prototype as any).bind = function (this: any, ...a: any[]) { return "patched:" + a.length; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 out.push(["after", f.bind(null), (f as any).bind(null, 1, 2), new C().m].join(" "));
-Function.prototype.bind = original;
+try { Function.prototype.bind = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 out.push(["restored", typeof f.bind(null), typeof new C().m].join(" "));
 for (const l of out) console.log(l);

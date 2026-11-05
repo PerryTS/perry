@@ -262,6 +262,10 @@ pub(super) fn apply_pkg_and_toml_config(
                 // Dependencies cannot grant it to themselves and wildcard
                 // spellings are rejected instead of being interpreted as a
                 // broader trust policy.
+                // An entry is the package name, or `{"name": <pkg>, "wasm":
+                // {<entry .node path in the package>: [<wasm32 archive>, ...]}}`
+                // for a package whose addon a WASI program links statically
+                // (archive paths are relative to this package.json).
                 if let Some(native_addons) = pkg.get("perry").and_then(|p| p.get("nativeAddons")) {
                     let entries = native_addons.as_array().ok_or_else(|| {
                         anyhow::anyhow!(
@@ -269,11 +273,14 @@ pub(super) fn apply_pkg_and_toml_config(
                         )
                     })?;
                     for (index, entry) in entries.iter().enumerate() {
-                        let name = entry.as_str().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "`perry.nativeAddons[{index}]` must be a package name string"
-                            )
-                        })?;
+                        let name = entry
+                            .as_str()
+                            .or_else(|| entry.get("name").and_then(|name| name.as_str()))
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "`perry.nativeAddons[{index}]` must be a package name string or {{\"name\": <package>, \"wasm\": {{<entry>: [<archive>, ...]}}}}"
+                                )
+                            })?;
                         let name = name.trim();
                         if !is_exact_npm_package_name(name) {
                             anyhow::bail!(
@@ -281,6 +288,49 @@ pub(super) fn apply_pkg_and_toml_config(
                             );
                         }
                         ctx.native_addon_packages.insert(name.to_string());
+                        if let Some(wasm) = entry.get("wasm") {
+                            let config_root = pkg_json_path
+                                .parent()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("project package.json has no parent directory")
+                                })?
+                                .to_path_buf();
+                            let addons = wasm.as_object().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "`perry.nativeAddons[{index}].wasm` must map each addon entry (`build/Release/<name>.node`) to its wasm32 archives"
+                                )
+                            })?;
+                            for (addon_entry, archives) in addons {
+                                let archives = archives
+                                    .as_array()
+                                    .filter(|archives| !archives.is_empty())
+                                    .and_then(|archives| {
+                                        archives
+                                            .iter()
+                                            .map(|archive| archive.as_str().map(|a| config_root.join(a)))
+                                            .collect::<Option<Vec<_>>>()
+                                    })
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "`perry.nativeAddons[{index}].wasm[\"{addon_entry}\"]` must be a non-empty array of archive paths"
+                                        )
+                                    })?;
+                                for archive in &archives {
+                                    anyhow::ensure!(
+                                        archive.is_file(),
+                                        "wasm archive {} of Node-API addon `{name}/{addon_entry}` does not exist",
+                                        archive.display()
+                                    );
+                                }
+                                ctx.native_addon_wasm
+                                    .entry(name.to_string())
+                                    .or_default()
+                                    .insert(
+                                        addon_entry.trim_start_matches("./").to_string(),
+                                        archives,
+                                    );
+                            }
+                        }
                     }
                 }
                 // #9606: extracted Bun standalones can carry project-owned

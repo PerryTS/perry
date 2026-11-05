@@ -52,7 +52,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -257,28 +256,20 @@ fn compile_ir(module: &Module) -> String {
 }
 
 /// A class-field store is the static-key store site (#12483): one
-/// `perry_probe_set` over the receiver's layout (the runtime owns the
-/// pointer-bearing bookkeeping: write barrier and string addref), and only a
-/// declined probe reaches the full `[[Set]]` (`js_put_value_set`) on the
-/// `put.pic.set` block. The site holds no inline bookkeeping region and no
-/// slot store of its own.
+/// `perry_store_or_put` over the receiver's layout (the runtime owns the
+/// pointer-bearing bookkeeping: write barrier and string addref; a declined
+/// probe takes the full `[[Set]]` there, with the assignment's own Throw
+/// flag). The site holds no inline bookkeeping region and no slot store of
+/// its own.
 fn assert_store_site(ir: &str, strict: &str) {
     assert!(
-        ir.contains("call i32 @perry_probe_set("),
-        "the field store is a probe call:\n{ir}"
+        ir.lines().any(|l| l.contains("call double @perry_store_or_put(")
+            && l.contains(&format!(", i32 {strict})"))),
+        "the field store is one store-site call (Throw = {strict}):\n{ir}"
     );
-    let misses: Vec<&str> = ir
-        .split("\nput.pic.set.")
-        .skip(1)
-        .map(|b| &b[..b.find("\n\n").unwrap_or(b.len())])
-        .collect();
     assert!(
-        misses
-            .iter()
-            .any(|miss| miss.contains("call double @js_put_value_set(")
-                && miss.contains(&format!(", i32 {strict})"))),
-        "a declined probe must reach the receiver-aware [[Set]] (Throw = {strict}) \
-         on a `put.pic.set` block:\n{ir}"
+        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("call double @js_put_value_set("),
+        "the probe and [[Set]] are the store-site call's, not the site's:\n{ir}"
     );
     assert!(
         !ir.contains("put.pic.gc_bookkeeping"),
@@ -517,7 +508,7 @@ fn raw_f64_field_store_is_the_store_site_and_never_canonicalizes() {
             assert!(
                 blocks
                     .iter()
-                    .any(|(label, _)| label.starts_with("put.pic.")),
+                    .any(|(_, body)| body.contains("call double @perry_store_or_put(")),
                 "strict={strict}: the store must be the static-key store site:\n{ir}"
             );
             for (label, body) in &blocks {

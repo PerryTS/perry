@@ -39,13 +39,9 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         return true;
     }
-    // INT32-tagged class references (top 16 bits = 0x7FFE) are callable
-    // constructors emitted by codegen. `is_pointer()` only checks 0x7FFD,
-    // so they would fall through to `return false` without this guard.
-    // `class_ref_id` also requires `is_class_id_registered`, so a
-    // user-crafted NaN payload sharing this tag band (e.g. via
-    // `DataView.setFloat64` — a real JS number, not a class ref) is not
-    // misclassified as callable.
+    // Constructor function objects carry a callable header. Non-pointer
+    // class-reference dispatch admits only flagged prototype references;
+    // an INT32 numeric word is never a constructor.
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return class_ref_id(value).is_some();

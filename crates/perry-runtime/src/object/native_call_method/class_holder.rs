@@ -296,9 +296,7 @@ unsafe fn chain_method_admitting(
                     return ChainMethod::Get { holder };
                 }
             } else {
-                let body = if pos < crate::object::field_rep::REP_SLOTS
-                    && record.special_constfn_mask() & (1 << pos) != 0
-                {
+                let body = if record.lane_is_constfn(pos) {
                     record.constfn_info(pos).and_then(|info| {
                         (info as usize as *const crate::closure::JsFunctionInfo).as_ref()
                     })

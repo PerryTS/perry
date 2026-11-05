@@ -292,8 +292,30 @@ cause_test!(
     "intrinsic-prototype-top-store",
     "property",
     "q",
-    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = [1].map; console.log(m.q);"#
+    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = ([1] as any).zz; console.log(m.q);"#
 );
+/// A read on a ⊤ receiver names the receiver's own root, even when a key
+/// written onto a builtin prototype through ⊤ is also a member the primitive
+/// chain would answer: the token loop (⊤ first) runs before the primitive load.
+#[test]
+fn top_receiver_read_keeps_the_receivers_root() {
+    // r is top (an unknown call) or a string; r.q is read after a key was
+    // written onto String.prototype through top, and its result is the
+    // receiver of .z.
+    let pf = whole(
+        r#"const g: any = (globalThis as any).hostFn; (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
+    );
+    let got = causes(&pf, "property", "z");
+    assert!(
+        got.iter().any(|c| c == "external-input"),
+        "external-input not in {got:?}"
+    );
+    assert!(
+        !got.iter().any(|c| c == "intrinsic-prototype-top-store"),
+        "receiver root booked to the prototype store: {got:?}"
+    );
+}
+
 cause_test!(
     opaque_builtin,
     "opaque-builtin",
@@ -318,9 +340,9 @@ cause_test!(
 cause_test!(
     external_input,
     "external-input",
-    "value-call",
-    "write",
-    r#"process.stdout.write("x");"#
+    "property",
+    "x",
+    r#"new FinalizationRegistry(function (h: any) { return h.x; });"#
 );
 cause_test!(
     unmodeled_construct,
@@ -395,12 +417,14 @@ verdict_test!(
 );
 
 // Interpreted code: `Function.call` runs the Function constructor (E14).
+// A spread may be the runtime's depd shape, which makes a function also
+// without an interpreter (`builtins::function_ctor_runs_code`).
 cause_test!(
     dynamic_code,
     "dynamic-code",
     "property",
     "x",
-    r#"const r: any = (Function as any).call(null, "return 1"); console.log(r.x);"#
+    r#"const p = ["return 1"]; const r: any = (Function as any).call(null, ...p); console.log(r.x);"#
 );
 
 /// B-codes mark a typed array hard, and a typed array is no fact unit, so

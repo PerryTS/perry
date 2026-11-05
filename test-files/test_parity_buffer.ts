@@ -2,7 +2,7 @@
 // Module: node:buffer
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `./run_parity_tests.sh --filter test_parity_buffer` to verify.
+// `python3 scripts/parity.py run test-files/test_parity_buffer.ts` to verify.
 
 import { Buffer } from "node:buffer";
 import * as buffer from "node:buffer";

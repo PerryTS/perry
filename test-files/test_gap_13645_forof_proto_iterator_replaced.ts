@@ -1,4 +1,11 @@
-// #13645 negative: Array.prototype[Symbol.iterator] replaced.
+// #13645 negative: [Symbol.iterator] replaced on the arrays' prototype chain.
+// DEC 250 locks Array.prototype, so the replace lands on a user array
+// prototype UAP that the arrays adopt.
+const UAP = Object.create(Array.prototype);
+function arr(...v: number[]): number[] {
+  Object.setPrototypeOf(v, UAP);
+  return v;
+}
 
 function probe(label: string, xs: number[]): void {
   const out: number[] = [];
@@ -14,10 +21,10 @@ function probeReturn(xs: number[]): number {
 }
 
 const original = Array.prototype[Symbol.iterator];
-(Array.prototype as any)[Symbol.iterator] = function* (this: number[]) {
+UAP[Symbol.iterator] = function* (this: number[]) {
   for (let i = this.length - 1; i >= 0; i--) yield this[i] * 100;
 };
-probe("reversed", [1, 2, 3]);
-console.log("ret", probeReturn([1, 2, 3]));
-(Array.prototype as any)[Symbol.iterator] = original;
-probe("restored", [1, 2, 3]);
+probe("reversed", arr(1, 2, 3));
+console.log("ret", probeReturn(arr(1, 2, 3)));
+UAP[Symbol.iterator] = original;
+probe("restored", arr(1, 2, 3));

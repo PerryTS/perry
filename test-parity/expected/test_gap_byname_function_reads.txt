@@ -1,0 +1,18 @@
+fn.start undefined|undefined|function|0|true 1
+DEC 250: Cannot add member Function.prototype.custom: built-in objects are read-only in a compiled program
+fn.fproto undefined|undefined|function|0|true 1
+fn.fproto.gone undefined|undefined|function|0|true 1
+DEC 250: Cannot add member Object.prototype.isBuffer: built-in objects are read-only in a compiled program
+fn.oproto undefined|undefined|function|0|true 1
+fn.oproto.gone undefined|undefined|function|0|true 1
+fn.own own|undefined|function|0|true 27
+fn.setproto setproto|undefined 1
+DEC 250: Cannot add member Function.prototype.custom: built-in objects are read-only in a compiled program
+fn.accessor undefined 1
+fn.kinds undefined|function 1
+fn.class static|undefined|Derived 40
+fn.bound undefined|bound plainFn 1
+isBuffer false 13
+isBuffer.each undefined 27
+isBuffer.patched true 1
+isBuffer.restored false 1

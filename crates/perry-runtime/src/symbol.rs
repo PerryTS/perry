@@ -40,6 +40,7 @@ pub use constructors::{
     js_symbol_description, js_symbol_equals, js_symbol_for, js_symbol_key_for, js_symbol_new,
     js_symbol_new_empty, js_symbol_to_string, js_symbol_typeof,
 };
+pub(crate) use constructors::symbol_for_text;
 
 // Symbol-keyed own property operations.
 pub(crate) use properties::{

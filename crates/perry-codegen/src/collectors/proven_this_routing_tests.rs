@@ -69,7 +69,6 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -1187,7 +1186,7 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             && probe.contains("getelementptr i8, ptr")
             && probe.contains("i64 -8")
             && probe.contains("and i32")
-            && probe.contains(", 134250751")
+            && probe.contains(", 33023")
             && probe.contains("icmp eq i32")
             && probe.contains(", 2")
             && probe.contains("load i64, ptr")
@@ -1833,7 +1832,9 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
         .into_iter()
         .filter(|(label, _)| label.starts_with("method_direct.layout."))
         .collect();
-    assert_eq!(tests.len(), 3);
+    // The two declared bodies have layout clones; the inherited arm's case
+    // enters its call directly (both layout edges would call one body).
+    assert_eq!(tests.len(), 2);
     for (_, body) in tests {
         assert!(body.iter().any(|l| l.contains("icmp eq i64")));
         assert!(!body.iter().any(|l| l.contains("icmp eq i32")));

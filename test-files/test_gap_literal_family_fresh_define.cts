@@ -30,7 +30,7 @@ const shut: any = fresh(4);
 Object.preventExtensions(shut);
 console.log("closed", Reflect.defineProperty(shut, "reserved", { value: 1 }), "reserved" in shut);
 let intercepted = 0;
-Object.defineProperty(Object.prototype, "reserved", { set(v) { intercepted += v; }, configurable: true });
+try { Object.defineProperty(Object.prototype, "reserved", { set(v) { intercepted += v; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const inherited: any = fresh(5);
 Object.defineProperty(inherited, "reserved", { value: 29 });
 console.log("inherited", intercepted, inherited.reserved, Object.hasOwn(inherited, "reserved"));

@@ -344,12 +344,31 @@ fn generate<'a>(
     t0: std::time::Instant,
 ) -> (gen::Gen<'a>, f64, std::time::Instant) {
     let loud = act.as_ref().is_none_or(|a| a.fixed);
-    let mut g = gen::Gen::new(sorted.to_vec(), cfg.relations && loud, cfg.explain && loud);
+    // Node IDs name the final observed model. Never apply its diagnostic
+    // suppression selector to intermediate liveness models with other IDs.
+    let birth_census =
+        cfg.diagnostics && loud && std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some();
+    let mut g = gen::Gen::new_observed(
+        sorted.to_vec(),
+        cfg.relations && loud,
+        cfg.explain && loud,
+        birth_census,
+    );
     // DECISIONS 225: a body is walked once its function can run.
     g.m.act = act;
     if cfg.diagnostics && loud {
         g.diagnostic = Some(Default::default());
-        g.m.diagnostic = Some(Default::default());
+        g.m.diagnostic.get_or_insert_with(Default::default);
+        if std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some()
+            && g.m.diagnostic.as_ref().unwrap().census.is_none()
+        {
+            g.m.diagnostic.as_mut().unwrap().census = Some(crate::diagnostics::BirthCensus {
+                suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
+                    .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())
+                    .flatten(),
+                ..Default::default()
+            });
+        }
     }
     g.export_sources = cfg.export_sources.clone();
     g.roots = cfg.roots.clone();
@@ -487,8 +506,11 @@ impl Activation {
     /// them, so no active key names them).
     fn over(self, sorted: &[(&str, &Module)]) -> Option<model::Act> {
         let mut act = self.act?;
-        let index: std::collections::HashMap<&str, u32> =
-            sorted.iter().enumerate().map(|(i, (p, _))| (*p, i as u32)).collect();
+        let index: std::collections::HashMap<&str, u32> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, (p, _))| (*p, i as u32))
+            .collect();
         let modules = &self.modules;
         let to = |s: crate::pts::FxHashSet<(u32, u32, String)>| {
             s.into_iter()
@@ -570,7 +592,9 @@ fn activation_pass<'a>(
     if g.m.aborted {
         return None;
     }
-    let seen = (0..g.m.funcs.len() as u32).map(|f| g.m.act_key(f)).collect();
+    let seen = (0..g.m.funcs.len() as u32)
+        .map(|f| g.m.act_key(f))
+        .collect();
     let mut a = g.m.act.take()?;
     a.fixed = true;
     a.queue.clear();

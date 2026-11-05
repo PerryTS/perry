@@ -509,6 +509,7 @@ impl<'a> Gen<'a> {
                 TmplKind::Arr {
                     module: mi,
                     site: u32::MAX,
+                    hole_free: false,
                 }
             },
             display: display.to_string(),
@@ -525,8 +526,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
             declared: vec![],
             reserved: Vec::new(),
         });
@@ -952,8 +955,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());
@@ -1352,6 +1357,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,

@@ -19,8 +19,8 @@ def runtime_features() -> list[str]:
     runtime = next(p for p in metadata["packages"] if p["name"] == "perry-runtime")
     defaults = runtime["features"]["default"]
     # Same documented exclusion as wasi_check.sh: the 64-bit-only allocator.
-    # All other defaults, including new ones, build. (turnloop UDP, `node:dgram`,
-    # is not compiled for wasm32 at all; its install is a no-op there.)
+    # All other defaults, including new ones, build. (`node:dgram` rides the
+    # polled WASI reactor there, wasi_net/dgram.rs, instead of turnloop.)
     excluded = {"alloc-mimalloc"}
     if excluded - set(defaults):
         sys.exit("Stale WASI feature exclusions; update wasi_check.sh and this script")
@@ -40,13 +40,15 @@ def main() -> int:
     if not os.environ.get(f"CC_{target.replace('-', '_')}"):
         sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
     features = ",".join(f"perry-runtime/{f}" for f in runtime_features())
+    # Both WASI archives also carry perry-stdlib and the Node module crates;
+    # the perry-stdlib feature list lives in perry-runtime-static's
+    # Cargo.toml. The linker keeps only what the program reaches.
+    features += ",perry-runtime-static/wasi-node-modules"
     if target == "wasm32-wasip1":
-        # The one wasip1 archive also carries perry-stdlib and the Node module
-        # crates; the perry-stdlib feature list lives in perry-runtime-static's
-        # Cargo.toml. `wasm-discard` adds the allocator that hands freed pages
-        # to a host's `perry_host.discard_pages`; a program imports it only
-        # when compiled with PERRY_WASM_DISCARD=1.
-        features += ",perry-runtime-static/wasi-node-modules,perry-runtime/wasm-discard"
+        # `wasm-discard` adds the allocator that hands freed pages to a host's
+        # `perry_host.discard_pages`; a program imports it only when compiled
+        # with PERRY_WASM_DISCARD=1.
+        features += ",perry-runtime/wasm-discard"
     if args.gc_instruments:
         features += ",perry-runtime/gc-instruments"
     if args.image_selftest:

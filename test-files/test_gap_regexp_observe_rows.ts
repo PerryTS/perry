@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // RegExp spec-observability rows (REGEXP_ONE_SHAPE_DESIGN S0). Every row here
 // must match Node through the one-shape slices (S1-S6). S3 also covers
 // the formerly wrong flags getter observation.
@@ -29,7 +30,7 @@ t("cold_intrinsic_after_global_reassignment", () => {
 });
 t("cold_lastIndex_define", () => {
   let calls = 0;
-  Object.defineProperty(Object.prototype, "lastIndex", { set() { calls++; }, configurable: true });
+  locked(() => { Object.defineProperty(Object.prototype, "lastIndex", { set() { calls++; }, configurable: true }); });
   try { const r: any = /a/; return [calls, r.lastIndex, Object.getOwnPropertyNames(r)]; }
   finally { delete Object.prototype.lastIndex; }
 });

@@ -10,9 +10,9 @@ const original = Function.prototype.bind;
 const src = "Function.prototype.bind = function () { return 'from eval'; }";
 const out: string[] = [];
 for (let i = 0; i < 4; i++) {
-  if (i === 2) (0, eval)(src);
+  if (i === 2) try { (0, eval)(src); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const b = f.bind(null), m = new C().m;
   out.push([i, typeof b === "function" ? "builtin" : b, typeof m === "function" ? "builtin" : m].join(" "));
 }
-Function.prototype.bind = original;
+try { Function.prototype.bind = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const l of out) console.log(l);

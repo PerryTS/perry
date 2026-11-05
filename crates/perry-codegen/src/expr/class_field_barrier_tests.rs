@@ -93,7 +93,6 @@ pub(super) fn ir_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -336,7 +335,7 @@ pub(super) fn wide_prologue_ir() -> String {
 fn class_field_store_is_the_store_site_and_refuses_by_shape() {
     let ir = ir();
     assert!(
-        ir.contains(&format!("{}.", super::put_value_store_ic::STORE_IC_STEM)),
+        ir.contains("call double @perry_store_or_put("),
         "the constructor's class-field store must be the static-key store site:\n{ir}"
     );
     assert!(
@@ -352,14 +351,15 @@ fn class_field_store_is_the_store_site_and_refuses_by_shape() {
 
 /// A pointer-valued class-field store keeps its write barrier on the store
 /// probe path: the site emits no inline slot store at all (the deleted store
-/// IC's `put.pic.hit.store` block), only `perry_probe_set` (whose own-slot
-/// store is the runtime's barriered funnel) and, when it declines, the
-/// complete `[[Set]]`, so no pointer reaches a slot without the barrier.
+/// IC's `put.pic.hit.store` block), only `perry_store_or_put` (the store
+/// probe, whose own-slot store is the runtime's barriered funnel, and when it
+/// declines the complete `[[Set]]`), so no pointer reaches a slot without the
+/// barrier.
 #[test]
 fn a_pointer_class_field_store_is_the_barriered_store_probe() {
     let ir = ir();
     assert!(
-        ir.contains("call i32 @perry_probe_set(") && ir.contains("call double @js_put_value_set("),
+        ir.contains("call double @perry_store_or_put("),
         "the class-field store must be the store probe, then [[Set]]:\n{ir}"
     );
     assert!(

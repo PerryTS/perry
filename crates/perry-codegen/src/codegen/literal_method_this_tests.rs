@@ -435,11 +435,13 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
     declared.fields.clear();
     declared.constructor = None;
     let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
         &[(literal.id, &literal), (declared.id, &declared)],
         &crate::strings::StringPool::new(),
         "empty_roles",
         &mut |_| panic!("a memberless class must not request a function body"),
         &crate::layout_families::ProgramLayouts::default(),
+        &Default::default(),
     );
     assert_eq!(
         records.len(),
@@ -474,11 +476,13 @@ fn member_names_carry_the_compilers_utf8_fact() {
     };
     class.getters = vec![getter(200, "plain"), getter(201, &lone_key)];
     let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
         &[(class.id, &class)],
         &pool,
         "utf8_names",
         &mut |_| panic!("getters request no function body"),
         &crate::layout_families::ProgramLayouts::default(),
+        &Default::default(),
     );
     let members = &records[0].globals[0];
     let plain = members.find("i32 200, i32 0, i8 1, i8 4, i16 -1");
@@ -517,11 +521,13 @@ fn equal_member_names_of_a_declaration_share_one_emitted_global() {
             pool.intern(n);
         }
         let records = super::class_declarations::class_declaration_globals(
+            &perry_hir::Module::new("class_declarations.ts"),
             &[(class.id, &class)],
             &pool,
             prefix,
             &mut |s| format!("@{s}"),
             &crate::layout_families::ProgramLayouts::default(),
+            &Default::default(),
         );
         // `{ ptr members, i32 count, i32 birth_shape, i32 flags, ...`
         let flags: u32 = records[0].globals[1]

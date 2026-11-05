@@ -1,8 +1,20 @@
 # node:path parity suite
 
-Granular Node compatibility cases for `node:path`, curated from the current broad
-`test-files/test_parity_path.ts` smoke test and intended to be expanded case by
-case from Node/Deno behavior references.
+Granular Node compatibility cases and retained regression programs for `node:path`.
+The broad `test_parity_path.ts` smoke case lives alongside the focused cases.
 
-Each test is intentionally small and deterministic so failures point to one API
-shape instead of the whole module.
+Run the subject from the repository root:
+
+```bash
+python3 scripts/parity.py run node-suite/path --mode auto
+```
+
+To regenerate the broad smoke case without recreating its legacy location:
+
+```bash
+python3 scripts/gen_parity_tests.py --module path --output-dir test-parity/node-suite/path
+```
+
+Keep migrated `test_gap_` basenames: the universal fast PR lane selects them
+across all subject roots. `test_path.ts` retains its basename-based runner skip;
+its snapshot entry moves with it rather than turning a skipped case into a pass.

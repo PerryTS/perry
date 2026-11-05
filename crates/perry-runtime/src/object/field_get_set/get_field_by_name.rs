@@ -1732,7 +1732,7 @@ fn get_field_by_name_past_data_probe(
     {
         let bits = obj as u64;
         if let (Some(class_id), false) = (
-            crate::object::class_value::legacy_class_ptr_word(bits),
+            crate::object::class_value::class_ref_ptr_word(bits),
             key.is_null(),
         ) {
             return class_value_get_field(obj, key, bits, class_id);

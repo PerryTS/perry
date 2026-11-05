@@ -174,10 +174,8 @@ One complete alternate-runtime pass produced:
 ## Commands
 
 ```sh
-cargo build --release --bin perry
-NODE_BIN="$HOME/.nvm/versions/node/v26.5.0/bin/node" \
-  python3 scripts/node_suite_run.py target/release/perry "$PWD" dns
-python3 -m json.tool test-parity/node_suite_baseline.json >/dev/null
+cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+python3 scripts/parity.py run node-suite/dns --mode auto
 ```
 
 Local authoritative-server cases need permission to bind ephemeral loopback UDP

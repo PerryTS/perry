@@ -1,0 +1,9 @@
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+phase1=1202000
+phase1-undef=1002000
+phase1-arrow=374250
+phase2-patched=1202000 arrow=374250 calls=0
+phase3-restored=1804500 calls=0

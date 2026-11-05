@@ -161,12 +161,6 @@ fn with_class_store_operands<'f, R>(
     })
 }
 
-pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
-    ctx.classes
-        .get(class_name)
-        .is_some_and(|class| !class.computed_members.is_empty())
-}
-
 fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -309,6 +303,7 @@ fn lower_static_key_store(
                 value_is_scalar,
                 matches!(object, Expr::This),
                 run.as_ref(),
+                super::layout_read::run_receiver(ctx, object),
             );
             Ok(result)
         },
@@ -863,7 +858,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                 // raw `ObjectHeader*`, which is only meaningful for an
                 // INSTANCE. A static body's `this` is the class ref, so the
                 // store landed on the bare class id and was lost.
-                if class_has_computed_runtime_members(ctx, &class_name)
+                if super::property_get::class_has_evaluated_accessor(ctx, &class_name)
                     && !ctx.is_static_class_this(object)
                 {
                     return lower_runtime_property_set_by_name(

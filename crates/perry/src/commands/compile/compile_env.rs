@@ -54,12 +54,14 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_EVAL_CSP",
     "PERRY_EXPORT_DEMAND",
     "PERRY_EXTRA_LINK_ARGS",
+    "PERRY_FACTS_BIRTH_CENSUS",
     "PERRY_FACTS_BUDGET_SECS",
     "PERRY_FACTS_ELIDE",
     "PERRY_FACTS_ELIDE_TA",
     "PERRY_FACTS_MAX_PTS",
     "PERRY_FACTS_MAX_WORK",
     "PERRY_FACTS_SABOTAGE",
+    "PERRY_FACTS_SUPPRESS_BIRTH",
     "PERRY_FACTS_UNITS",
     "PERRY_FACTS_WIDEN",
     "PERRY_FAMILY_SLOT_SABOTAGE",
@@ -399,6 +401,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_EVAL_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FACTS_ACTIVATION_CHECK",
+        "Activation-invariant detector: facts run their own pass over the final HIR for comparison; emitted code does not depend on it.",
     ),
     (
         "PERRY_FACTS_CONSUMED",

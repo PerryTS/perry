@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::commands::target::ExtFetch;
+use crate::commands::target::PackageFetch;
 use crate::OutputFormat;
 
 use super::super::rust_target_triple;
@@ -52,11 +52,14 @@ pub(crate) fn resolve_prebuilt_ext_libs(
             // fetched the first time a compile needs one (never otherwise).
             let triple =
                 rust_target_triple(target).unwrap_or(super::super::target_packages::HOST_TRIPLE);
-            match crate::commands::target::ensure_ext_package(triple) {
-                Some(ExtFetch::Installed) => {
+            match crate::commands::target::ensure_package(
+                super::super::target_packages::PackageKind::Ext,
+                triple,
+            ) {
+                Some(PackageFetch::Installed) => {
                     found = super::super::library_search::find_library(&filename, target);
                 }
-                Some(ExtFetch::Refused(message)) => {
+                Some(PackageFetch::Refused(message)) => {
                     eprintln!("error: `{module}` links the prebuilt wrapper archive `{filename}`; {message}");
                     std::process::exit(1);
                 }

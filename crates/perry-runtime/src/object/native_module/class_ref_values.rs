@@ -1,9 +1,9 @@
 // Class constructor/prototype REF values and the prototype-method lookups
 // keyed off them.
 //
-// A "class ref" is an INT32-tagged NaN box carrying a class id (plus a flag bit
-// for the `C.prototype` half), which is how compiled code names a class without
-// materializing an object. Extracted from `native_module.rs` to keep that file
+// A class constructor value is its function object (`class_value`); the
+// `C.prototype` half is a `0x7FFE` word with `CLASS_PROTOTYPE_REF_FLAG` set,
+// which is never an int32 number. Extracted from `native_module.rs` to keep that file
 // under the repository's 2000-line cap. Textually `include!`d (like
 // `class_method_values.rs`), so every item keeps the module path and visibility
 // it had before -- hence line comments, not `//!` inner docs, which are illegal
@@ -41,16 +41,14 @@ pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
 }
 
 /// A class constructor OR its `C.prototype` reference -> the class id. The
-/// constructor half is [`super::class_value::class_value_id`] (both forms);
+/// constructor half is [`super::class_value::class_value_id`] (the function object);
 /// callers that mean only the constructor ask that directly.
 #[inline]
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     match bits >> 48 {
-        // The legacy immediates: constructor or `C.prototype` reference.
-        0x7FFE => {
-            super::class_value::class_value_id_bits(bits).or_else(|| class_prototype_ref_id(value))
-        }
+        // A `C.prototype` reference word; an INT32 number is never a class.
+        0x7FFE => class_prototype_ref_id(value),
         // A class function object (one pre-filter for any other pointer).
         0x7FFD => {
             super::class_value::class_closure_id((bits & crate::value::POINTER_MASK) as usize)
@@ -185,7 +183,7 @@ pub(crate) fn class_prototype_method_value_at(
             m.has_synthetic_arguments(),
             m.has_rest(),
             m.entry as usize,
-            m.name.is_null(),
+            m.name.is_null() || m.is_symbol_named(),
         )
     });
     let Some((body, params, synthetic, rest, entry, computed_name)) = declaration else {
@@ -382,7 +380,7 @@ pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, 
                     m.param_count,
                     m.has_synthetic_arguments(),
                     m.has_rest(),
-                    m.name.is_null(),
+                    m.name.is_null() || m.is_symbol_named(),
                 )
             });
     let Some((name, body, params, synthetic, rest, computed_name)) = declaration else {
