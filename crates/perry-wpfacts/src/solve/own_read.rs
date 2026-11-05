@@ -10,11 +10,12 @@
 //! properties the model holds (literals, instances, `Object.create`
 //! results); any other value, an object or ⊤ key (its ToPropertyKey runs
 //! code at the test and again at the read), and a test whose callee may be
-//! anything but the own-property builtin read as `IdxLoad` does.
+//! anything but the own-property builtin or a body-derived own-test
+//! helper read as `IdxLoad` does.
 
 use super::*;
 use crate::model::{
-    IDX_OWN_ANY, IDX_OWN_CALL, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
+    IDX_OWN_ANY, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
 };
 
 impl Model {
@@ -138,25 +139,12 @@ impl Model {
         }
     }
 
-    /// `Cons::OwnGate` on node `n` (`OwnGateAt`): a value the test may run
-    /// other than the own-property builtin makes the read `obj[idx]` into
-    /// `dst` ordinary, once. A builtin passes, gated on the field that would
-    /// replace it: `H.call(o, k)` runs `Function.prototype.call` (locked,
-    /// DEC 250) unless the program wrote `call` onto `H` itself;
-    /// `Object.hasOwn` is a static the program may replace.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn own_gate(
-        &mut self,
-        obj: NodeId,
-        idx: NodeId,
-        dst: NodeId,
-        shape: KeyShapeId,
-        at: OwnGateAt,
-        toks: Tokens<'_>,
-    ) {
-        let mut open = false;
-        let mut watch = Vec::new();
-        for &t in toks.into_iter() {
+    /// The one own-test predicate. Every nonmatching value invalidates
+    /// `dst`; passing builtins watch their replaceable fields, and passing
+    /// helpers share their body evidence. Later writes invalidate already
+    /// generated guards through the same monotone edges.
+    pub(super) fn own_test(&mut self, dst: NodeId, at: OwnGateAt, toks: Tokens<'_>) {
+        for &t in toks {
             let key = match (at, &self.toks[t as usize]) {
                 (
                     OwnGateAt::OwnFn,
@@ -165,28 +153,42 @@ impl Model {
                     )),
                 ) => "call",
                 (OwnGateAt::ObjectCtor, TokKind::Builtin(BuiltinNs::Object)) => "hasOwn",
+                (OwnGateAt::Helper, TokKind::Func(f, _)) => {
+                    match self.funcs[*f as usize].own_test {
+                        OwnTestBody::Pending(bad) | OwnTestBody::Checked(bad) => {
+                            self.edge(bad, dst)
+                        }
+                        OwnTestBody::Unknown => self.add_tok(dst, TOP),
+                    }
+                    continue;
+                }
                 _ => {
-                    open = true;
+                    self.add_tok(dst, TOP);
                     continue;
                 }
             };
-            watch.push((t, key));
-        }
-        for (t, key) in watch {
-            if self.idx_done.insert((obj, t, dst, IDX_OWN_CALL)) {
-                let a = self.atom(key);
-                let f = self.field(t, a);
-                let c = Cons::OwnGate {
-                    obj,
-                    idx,
+            let a = self.atom(key);
+            let f = self.field(t, a);
+            self.cons(
+                f,
+                Cons::OwnTest {
                     dst,
-                    shape,
                     at: OwnGateAt::Value,
-                };
-                self.cons(f, c);
-            }
+                },
+            );
         }
-        if open && self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
+    }
+
+    /// Invalidated own-test evidence restores the ordinary read, once.
+    pub(super) fn own_gate(
+        &mut self,
+        obj: NodeId,
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+        toks: Tokens<'_>,
+    ) {
+        if !toks.is_empty() && self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
             self.own_read_census[1] += 1;
             self.cons(obj, Cons::IdxLoad { idx, dst, shape });
         }

@@ -417,6 +417,18 @@ fn generate<'a>(
     g.register_all();
     g.link_exports();
     g.walk_all();
+    // An unwalked body is no evidence, even if its token reached a guard.
+    let pending: Vec<_> =
+        g.m.funcs
+            .iter()
+            .filter_map(|f| match f.own_test {
+                model::OwnTestBody::Pending(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+    for n in pending {
+        g.m.add_tok(n, model::TOP);
+    }
     g.feed_parent_values();
     if cfg.unit {
         // The closed contracts first (decision 19): publishing a closed

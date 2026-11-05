@@ -181,6 +181,7 @@ impl Model {
             ret,
             args_all,
             has_arguments: true,
+            own_test: crate::model::OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,

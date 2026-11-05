@@ -47,8 +47,6 @@ pub const IDX_OWN_STR: u8 = 43;
 pub const IDX_OWN_NUM: u8 = 44;
 pub const IDX_OWN_GATE: u8 = 45;
 pub const IDX_OWN_PRIM: u8 = 46;
-/// The field replacing an own-property test's builtin (`OwnGateAt`) watched.
-pub const IDX_OWN_CALL: u8 = 49;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -501,6 +499,16 @@ pub struct Template {
     pub static_methods: Vec<Atom>,
 }
 
+/// The function body's own-test evidence has an explicit walk lifecycle.
+/// Pending evidence is invalidated before summaries run, including bodies
+/// skipped by activation or abandoned by a generation bound.
+#[derive(Clone, Copy, Debug)]
+pub enum OwnTestBody {
+    Unknown,
+    Pending(NodeId),
+    Checked(NodeId),
+}
+
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
     pub module: u32,
@@ -516,6 +524,10 @@ pub struct FuncInfo {
     /// The body has an `arguments` object, the only reader of `args_all`:
     /// calls feed `args_all` only then (nobody else reads it).
     pub has_arguments: bool,
+    /// Body-derived own-test predicate: a token invalidates it. Synthetic
+    /// functions have no body evidence. Shared across closure contexts, so
+    /// an invalidating context conservatively invalidates every use.
+    pub own_test: OwnTestBody,
     pub token: Tok,
     /// This function is the constructor of that class template.
     pub ctor_of: Option<TmplId>,
@@ -788,9 +800,7 @@ impl Protocol {
             Protocol::IterNext => MARK_TOUCH_ITER_NEXT,
             Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
-            Protocol::Json | Protocol::Inspect | Protocol::OwnKeys | Protocol::Any => {
-                MARK_TOUCH
-            }
+            Protocol::Json | Protocol::Inspect | Protocol::OwnKeys | Protocol::Any => MARK_TOUCH,
         }
     }
 

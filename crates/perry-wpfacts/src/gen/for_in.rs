@@ -247,6 +247,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: false,
+            own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: true,

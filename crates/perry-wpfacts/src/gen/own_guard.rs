@@ -6,7 +6,8 @@
 //! and H's own `call` field to nothing written),
 //! `o.hasOwnProperty(k)` (the member gated the same way) or
 //! `Object.hasOwn(o, k)` (the `Object` constructor's `hasOwn` field gated
-//! to nothing written); `o` and `k` are bindings (a local, a parameter,
+//! to nothing written), or `f(o,k)` (the callee value gated to program
+//! functions with an exact own-test return). `o` and `k` are bindings (a local, a parameter,
 //! `this`). The read is `o[k]` with the same bindings, and it is the first
 //! thing the guarded region evaluates that can run code: the consequent of
 //! `test ? … : …`, the right operand of `test && …`, the then-branch of
@@ -26,6 +27,8 @@ pub(crate) enum OwnTest {
     Method,
     /// `Object.hasOwn(o, k)` (HIR `ObjectHasOwn`: the runtime's own).
     HasOwn,
+    /// `f(o, k)`, gated on the callee value's body-derived predicate.
+    Helper,
 }
 
 /// What the test guards: an expression or the statements of a branch.
@@ -78,19 +81,21 @@ fn pure(e: &Expr) -> bool {
 fn own_test(cond: &Expr) -> Option<(OwnTest, &Expr, &Expr)> {
     let t = match cond {
         Expr::ObjectHasOwn(o, k) => (OwnTest::HasOwn, o.as_ref(), k.as_ref()),
-        Expr::Call { callee, args, .. } => {
-            let Expr::PropertyGet {
-                object, property, ..
-            } = callee.as_ref()
-            else {
-                return None;
-            };
-            match (property.as_str(), args.as_slice()) {
-                ("call", [o, k]) => (OwnTest::Call, o, k),
-                ("hasOwnProperty", [k]) => (OwnTest::Method, object.as_ref(), k),
-                _ => return None,
+        Expr::Call { callee, args, .. } => match (callee.as_ref(), args.as_slice()) {
+            (Expr::PropertyGet { property, .. }, [o, k]) if property == "call" => {
+                (OwnTest::Call, o, k)
             }
-        }
+            (
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+                [k],
+            ) if property == "hasOwnProperty" => (OwnTest::Method, object.as_ref(), k),
+            (Expr::LocalGet(_) | Expr::FuncRef(_) | Expr::ExternFuncRef { .. }, [o, k]) => {
+                (OwnTest::Helper, o, k)
+            }
+            _ => return None,
+        },
         _ => return None,
     };
     (binding(t.1) && binding(t.2)).then_some(t)
@@ -203,15 +208,90 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// After the test is lowered (its value `t`): the read's gates, the
-    /// test's callee and result (`Cons::OwnGate`). Returns the read to
+    /// After the test is lowered (its value `t`): derive the shared
+    /// own-test predicate from its callee and result. Returns the read to
     /// forget once the region is lowered (`own_guard_done`).
     pub(crate) fn own_guard_arm(&mut self, plan: Option<OwnPlan>, t: NodeId) -> Option<usize> {
         let recv = self.own_test_recv.take();
         let plan = plan?;
-        let gates = match (plan.form, recv) {
-            // `Object.hasOwn` is a static of the `Object` constructor, which
-            // the program may replace: its field gates the read.
+        let gates = self.own_test_gates(plan.form, recv, t)?;
+        let bad = self.tmp("own-test-guard");
+        for (n, at) in gates {
+            self.m.cons(n, Cons::OwnTest { dst: bad, at });
+        }
+        self.own_reads.insert(plan.read, bad);
+        Some(plan.read)
+    }
+
+    /// The direct predicate is also the helper body's evidence. Only an
+    /// exact return is accepted: no statement can rebind the operands,
+    /// replace the test or run after it before the caller's read.
+    pub(crate) fn own_helper_shape(
+        &self,
+        params: &[perry_hir::Param],
+        body: &[Stmt],
+        suspended: bool,
+    ) -> Option<OwnTest> {
+        if suspended
+            || params.len() < 2
+            || params
+                .iter()
+                .any(|p| p.default.is_some() || p.is_rest || p.arguments_object.is_some())
+        {
+            return None;
+        }
+        let [Stmt::Return(Some(e))] = body else {
+            return None;
+        };
+        let (form, o, k) = own_test(e)?;
+        if !matches!(o, Expr::LocalGet(id) if *id == params[0].id)
+            || !matches!(k, Expr::LocalGet(id) if *id == params[1].id)
+        {
+            return None;
+        }
+        match form {
+            OwnTest::HasOwn => Some(form),
+            OwnTest::Call => {
+                let Expr::Call { callee, .. } = e else {
+                    return None;
+                };
+                let Expr::PropertyGet { object, .. } = callee.as_ref() else {
+                    return None;
+                };
+                // Evaluating H must not run a closure that rebinds p0/p1.
+                matches!(
+                    object.as_ref(),
+                    Expr::LocalGet(_) | Expr::ExternFuncRef { .. }
+                )
+                .then_some(form)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn own_helper_finish(&mut self, f: FnIdx, form: Option<OwnTest>) {
+        let OwnTestBody::Pending(dst) = self.m.funcs[f as usize].own_test else {
+            return;
+        };
+        self.m.funcs[f as usize].own_test = OwnTestBody::Checked(dst);
+        let ret = self.m.funcs[f as usize].ret;
+        let recv = self.own_test_recv.take();
+        if let Some(gates) = form.and_then(|form| self.own_test_gates(form, recv, ret)) {
+            for (n, at) in gates {
+                self.m.cons(n, Cons::OwnTest { dst, at });
+            }
+        } else {
+            self.m.add_tok(dst, TOP);
+        }
+    }
+
+    fn own_test_gates(
+        &mut self,
+        form: OwnTest,
+        recv: Option<NodeId>,
+        t: NodeId,
+    ) -> Option<Vec<(NodeId, OwnGateAt)>> {
+        Some(match (form, recv) {
             (OwnTest::HasOwn, _) => {
                 let obj = self.m.tok(TokKind::Builtin(BuiltinNs::Object));
                 vec![(self.tok_node(obj), OwnGateAt::ObjectCtor)]
@@ -222,10 +302,9 @@ impl<'a> Gen<'a> {
                 let h = self.load(o, Key::Named(a));
                 vec![(h, OwnGateAt::OwnFn), (t, OwnGateAt::Value)]
             }
+            (OwnTest::Helper, Some(f)) => vec![(f, OwnGateAt::Helper), (t, OwnGateAt::Value)],
             (_, None) => return None,
-        };
-        self.own_reads.insert(plan.read, gates);
-        Some(plan.read)
+        })
     }
 
     pub(crate) fn own_guard_done(&mut self, read: Option<usize>) {

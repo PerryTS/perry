@@ -500,6 +500,9 @@ impl Model {
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
+        if matches!(c, Cons::IdxOwnLoad { .. }) {
+            self.own_read_census[0] += 1;
+        }
         if self.diagnostic.is_some() {
             if let Cons::TopSink { reason } = c {
                 self.diagnostic_sink(n, reason);
@@ -1405,14 +1408,9 @@ impl Model {
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
             Cons::IdxOwnLoad { idx, dst, .. } => format!("idxownload {n} {idx} {dst}"),
             Cons::IdxOwnKey { obj, dst, .. } => format!("idxownkey {n} {obj} {dst}"),
-            Cons::OwnGate {
-                obj,
-                idx,
-                dst,
-                at,
-                ..
-            } => {
-                format!("owngate {n} {obj} {idx} {dst} {at:?}")
+            Cons::OwnTest { dst, at } => format!("owntest {n} {dst} {at:?}"),
+            Cons::OwnGate { obj, idx, dst, .. } => {
+                format!("owngate {n} {obj} {idx} {dst}")
             }
             Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
             Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
