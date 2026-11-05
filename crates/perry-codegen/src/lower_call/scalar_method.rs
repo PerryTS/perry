@@ -329,7 +329,9 @@ fn lower_scalar_method_inline_body(
         ctx.block().store(DOUBLE, value, &slot);
         ctx.locals.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
-        ctx.proven_local_types.insert(param.id, param.ty.clone());
+        if ctx.admits_contents_proof(param.id, &param.ty) {
+            ctx.proven_local_types.insert(param.id, param.ty.clone());
+        }
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -433,7 +435,9 @@ fn lower_scalar_method_int32_inline_body(
         ctx.block().store(I32, value, &slot);
         ctx.i32_counter_slots.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
-        ctx.proven_local_types.insert(param.id, param.ty.clone());
+        if ctx.admits_contents_proof(param.id, &param.ty) {
+            ctx.proven_local_types.insert(param.id, param.ty.clone());
+        }
     }
 
     ctx.scalar_ctor_target.push(receiver_id);

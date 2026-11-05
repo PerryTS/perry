@@ -339,7 +339,9 @@ pub(crate) fn lower_let(
         } else {
             proven
         };
-        ctx.proven_local_types.insert(id, proven);
+        if ctx.admits_contents_proof(id, &proven) {
+            ctx.proven_local_types.insert(id, proven);
+        }
     }
 
     // #7773/#7506: a numeric local inherits a DECLARED-ONLY proof from its

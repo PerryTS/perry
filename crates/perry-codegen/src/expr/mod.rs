@@ -826,6 +826,10 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::string_accumulator_locals`): selected for the in-place
     /// self-append and demoted on ordinary reads, like a declared `string`.
     pub string_accumulator_locals: &'a std::collections::HashSet<u32>,
+    /// Module-wide contents-stable bindings
+    /// (`collectors::contents_stable_bindings`): the only bindings that may
+    /// keep a proof about their object's contents (`admits_contents_proof`).
+    pub contents_stable_bindings: &'a std::collections::HashSet<u32>,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,
@@ -2895,6 +2899,42 @@ impl<'a> FnCtx<'a> {
     /// type after a non-dominating write is a wrong-code bug (#7846). Declared
     /// annotations are never inserted into this map, so a successful lookup is
     /// both provenance-checked and write-stable.
+    /// May binding `id` keep the runtime-derived `proof`?
+    ///
+    /// A proof about the CONTENTS of an object (its property types) is
+    /// established once, at the binding; a later `delete`, store or
+    /// `defineProperty` changes a property without touching the binding. Such
+    /// a proof is kept only for a binding whose object nothing writes for its
+    /// whole life (`collectors::contents_stable_bindings`). A class identity
+    /// claims no contents: its field reads are re-checked as declared-only.
+    pub(crate) fn admits_contents_proof(&self, id: u32, proof: &HirType) -> bool {
+        !self.proof_claims_contents(proof, 0) || self.contents_stable_bindings.contains(&id)
+    }
+
+    fn proof_claims_contents(&self, ty: &HirType, depth: usize) -> bool {
+        if depth > 16 {
+            return true;
+        }
+        match ty {
+            HirType::Object(_) => true,
+            HirType::Named(name) => {
+                if let Some(alias) = self.type_aliases.get(name) {
+                    self.proof_claims_contents(alias, depth + 1)
+                } else {
+                    self.interfaces.contains_key(name)
+                }
+            }
+            HirType::Union(variants) | HirType::Tuple(variants) => variants
+                .iter()
+                .any(|v| self.proof_claims_contents(v, depth + 1)),
+            HirType::Array(element) => self.proof_claims_contents(element, depth + 1),
+            HirType::Generic { base, type_args } if base == "Array" => type_args
+                .iter()
+                .any(|v| self.proof_claims_contents(v, depth + 1)),
+            _ => false,
+        }
+    }
+
     pub(crate) fn stable_local_type_proof(&self, id: &u32) -> Option<&HirType> {
         if self.reassigned_locals.contains(id) {
             self.typed_locals.get(id)

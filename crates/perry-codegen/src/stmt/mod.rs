@@ -28,6 +28,8 @@ mod class_field_loop_tests;
 mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
+#[cfg(test)]
+mod contents_stable_ir_tests;
 mod counter_range;
 pub(crate) mod eh_actions;
 mod element_shape_carried;
