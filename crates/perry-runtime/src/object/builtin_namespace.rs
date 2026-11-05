@@ -47,7 +47,10 @@ pub(crate) const COUNT: usize = crate::codegen_abi::BUILTIN_NAMESPACES.len();
 pub(crate) const GLOBAL_FAMILY: usize = FIRST + COUNT;
 /// `console`'s intrinsic family: the one sealed namespace holder the program
 /// may still patch (DEC 250: it leaves the lock set, keeps its shadow bit).
+/// Only the lock-set test names it: no production code needs the family.
+#[cfg(test)]
 pub(crate) const CONSOLE_FAMILY: usize = FIRST + console_index();
+#[cfg(test)]
 const fn console_index() -> usize {
     let mut i = 0;
     while i < COUNT {
