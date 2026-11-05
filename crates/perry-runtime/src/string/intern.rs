@@ -878,9 +878,37 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
             return atom;
         }
     }
-    let units = (*key).utf16_len;
-    let flags = (*key).flags;
-    let len = bytes.as_bytes().len();
+    mint_property_atom(bytes.as_bytes(), hash, (*key).utf16_len, (*key).flags)
+}
+
+/// The property atom spelled by `bytes` (UTF-8 text, as a Node-API name
+/// arrives): the existing atom when the text has one, otherwise one atom is
+/// minted straight from the bytes. No intermediate string is allocated, so a
+/// name that is already some shape's key costs one hash and one table probe.
+///
+/// # Safety
+/// The returned atom is an unrooted heap pointer: the caller hands it to a
+/// rooting consumer before anything else can allocate.
+pub(crate) unsafe fn property_atom_from_bytes(bytes: &[u8]) -> *const StringHeader {
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    if let Some(atom) = atom_lookup(bytes, hash) {
+        if (*atom).flags & PROPERTY_ATOM != 0 {
+            return atom;
+        }
+    }
+    let (units, flags) = super::raw_string_metadata(bytes.as_ptr(), bytes.len() as u32);
+    mint_property_atom(bytes, hash, units, flags)
+}
+
+/// Allocate the atom of `bytes` (no atom with this text exists) and publish it
+/// in the agent's atom table, replacing a plain string entry of the same text.
+unsafe fn mint_property_atom(
+    bytes: &[u8],
+    hash: u64,
+    units: u32,
+    flags: u32,
+) -> *const StringHeader {
+    let len = bytes.len();
     let atom = crate::arena::arena_alloc_gc(
         (std::mem::size_of::<StringHeader>() + len + 1 + 7) / 8 * 8 + 8,
         8,
@@ -894,7 +922,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
         refcount: 0,
         flags: flags | PROPERTY_ATOM,
     });
-    std::ptr::copy_nonoverlapping(bytes.as_bytes().as_ptr(), string_data(atom) as *mut u8, len);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), string_data(atom) as *mut u8, len);
     // GC_STORE_AUDIT(POINTER_FREE): Writes byte0 string terminator into property atom payload; not a managed slot.
     (string_data(atom) as *mut u8).add(len).write(0);
     // GC_STORE_AUDIT(POINTER_FREE): Writes u64 key hash into trailing payload metadata; scalar data never traced as JSValue.
@@ -904,7 +932,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
     );
     let _ = ATOMS.try_with(|t| {
         let table = &mut *t.get();
-        if let Some(existing) = table.lookup(bytes.as_bytes(), hash) {
+        if let Some(existing) = table.lookup(bytes, hash) {
             if let Some(entry) = table
                 .slots
                 .iter_mut()

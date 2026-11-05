@@ -345,6 +345,105 @@ fn objects_arrays_and_named_properties_interoperate() {
     assert_eq!(read_int32(env, read), 99);
 }
 
+/// A Node-API named store is a named key add (`o.port = v`), not a computed
+/// one: objects an addon builds with the same names in the same order follow
+/// the same shape transitions, so they share one ShapeId and none of them
+/// grows an overflow. Only the first object's adds mint shapes. A name that
+/// already has its atom is looked up, not materialized: reading it back
+/// allocates nothing.
+#[test]
+fn named_stores_of_addon_built_objects_share_one_shape() {
+    let env = test_env();
+    let names = [c"msg", c"length", c"offset", c"port", c"address"];
+    let mut first_mints = 0;
+    let mut per_add = Vec::new();
+    let mut shared = None;
+    for i in 0..100_000 {
+        let mut scope = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_open_handle_scope(env, &mut scope) },
+            NapiStatus::Ok
+        );
+        let mut object = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_create_object(env, &mut object) },
+            NapiStatus::Ok
+        );
+        if i == 0 {
+            first_mints = crate::object::shapes::test_shape_id_counter();
+        }
+        for (slot, name) in names.iter().enumerate() {
+            let value = int32(env, i + slot as i32);
+            assert_eq!(
+                unsafe { napi_set_named_property(env, object, name.as_ptr(), value) },
+                NapiStatus::Ok
+            );
+            if i == 0 {
+                per_add.push(crate::object::shapes::test_shape_id_counter() - first_mints);
+            }
+        }
+        let obj = (value_bits(env, object).expect("live object") & crate::value::POINTER_MASK)
+            as *const crate::object::ObjectHeader;
+        assert!(
+            !unsafe { crate::object::overflow::has_overflow(obj) },
+            "a named store must not append to the overflow (object {i})"
+        );
+        let stamp = unsafe { crate::object::shapes::object_shape_stamp(obj) };
+        match shared {
+            None => {
+                let minted = crate::object::shapes::test_shape_id_counter() - first_mints;
+                // The first object pays the layout's mints once (its empty
+                // birth layout and the add edges); the count is bounded by
+                // the names, never by the number of objects.
+                assert!(
+                    minted as usize <= 2 * names.len(),
+                    "the first object's five adds mint a bounded set of shapes, \
+                     minted {minted} (after each add: {per_add:?})"
+                );
+                shared = Some((stamp, crate::object::shapes::test_shape_id_counter()));
+            }
+            Some((shape, _)) => assert_eq!(
+                stamp, shape,
+                "object {i} must carry the first object's ShapeId"
+            ),
+        }
+        if i == 99_999 {
+            let mut read = std::ptr::null_mut();
+            let mut present = false;
+            let before = crate::arena::arena_in_use_bytes();
+            for _ in 0..1_000 {
+                assert_eq!(
+                    unsafe { napi_get_named_property(env, object, c"port".as_ptr(), &mut read) },
+                    NapiStatus::Ok
+                );
+                assert_eq!(
+                    unsafe {
+                        napi_has_named_property(env, object, c"offset".as_ptr(), &mut present)
+                    },
+                    NapiStatus::Ok
+                );
+            }
+            assert_eq!(
+                crate::arena::arena_in_use_bytes(),
+                before,
+                "a named read of an existing name allocates no key string"
+            );
+            assert_eq!(read_int32(env, read), i + 3);
+            assert!(present);
+        }
+        assert_eq!(
+            unsafe { napi_close_handle_scope(env, scope) },
+            NapiStatus::Ok
+        );
+    }
+    let (_, mints_after_first) = shared.expect("objects were built");
+    assert_eq!(
+        crate::object::shapes::test_shape_id_counter(),
+        mints_after_first,
+        "objects after the first follow the cached transitions and mint no ShapeId"
+    );
+}
+
 #[test]
 fn pending_exceptions_and_strong_references_are_roots() {
     let env = test_env();

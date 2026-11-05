@@ -37,6 +37,14 @@ const ADDON_SCOPE_RETURN_MAIN: &str =
 #[cfg(unix)]
 const ADDON_SCOPE_RETURN_EXPECTED: &str =
     include_str!("fixtures/node_api_host/addon_scope_return_expected.txt");
+#[cfg(unix)]
+const ADDON_NAMED_PROPS_C: &str = include_str!("fixtures/node_api_host/addon_named_props.c");
+#[cfg(unix)]
+const ADDON_NAMED_PROPS_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_named_props_main.js");
+#[cfg(unix)]
+const ADDON_NAMED_PROPS_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_named_props_expected.txt");
 #[cfg(target_os = "linux")]
 const ADDON_LAZY_SYMBOL_C: &str = include_str!("fixtures/node_api_host/addon_lazy_symbol.c");
 #[cfg(target_os = "linux")]
@@ -886,6 +894,97 @@ fn objects_built_in_a_closed_callback_scope_are_returned() {
         assert_eq!(
             String::from_utf8_lossy(&node.stdout),
             ADDON_SCOPE_RETURN_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// Node-API named property operations are V8's `Object::Set`, `Get` and `Has`
+/// on whatever object they are given: a setter on the prototype runs instead
+/// of an own property appearing, numeric-like names are index keys (in key
+/// order and on arrays), a refused write (a frozen object, a read-only
+/// inherited property) is no error, and objects the addon builds with named
+/// stores read back in JavaScript with their keys in store order.
+#[cfg(unix)]
+#[test]
+fn named_property_operations_match_node() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-named-props");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-named-props-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-named-props"],
+    "allow": { "compilePackages": ["fixture-named-props"] },
+    "nativeAddons": ["fixture-named-props"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-named-props","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_named_props.c");
+    std::fs::write(&source, ADDON_NAMED_PROPS_C).expect("write named props fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "named props fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_NAMED_PROPS_MAIN).expect("write named props entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "named props compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run named props executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_NAMED_PROPS_EXPECTED,
+        "Perry must answer the named property operations as Node does\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "named props Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_NAMED_PROPS_EXPECTED,
             "the checked-in transcript must still be Node's"
         );
     } else {
