@@ -208,21 +208,23 @@ fn wrapped_compound_access_keeps_both_source_operations() {
 
 #[test]
 fn builtin_alias_receivers_reuse_canonical_identity_and_shape() {
-    let src = r#"const recv: any = new Set().keys;
-        const alias: any = new Set().values;
+    let src = r#"const recv: any = parseInt;
+        const alias: any = Number.parseInt;
         const key: any = "name";
         console.log(recv[key], alias[key], recv.name);"#;
     let pf = facts(src);
     let indexed = at(&pf, src, "recv[key]", ElementOp::Read);
     let alias = at(&pf, src, "alias[key]", ElementOp::Read);
     assert!(!indexed.top, "{indexed:?}");
-    assert_eq!(indexed.prims, 0);
+    assert_eq!(indexed.prims, prim::UNDEF, "{indexed:?}");
     assert_eq!(indexed.receivers.len(), 1, "{indexed:?}");
     let value = &indexed.receivers[0];
     assert!(
         matches!(
             value.kind,
-            TokKind::BuiltinFn(crate::model::Native::Member { .. })
+            TokKind::BuiltinFn(crate::model::Native::Member {
+                identity: "parseInt"
+            })
         ),
         "{value:?}"
     );
