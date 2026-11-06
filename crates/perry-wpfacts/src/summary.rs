@@ -632,6 +632,17 @@ impl Model {
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
         };
+        // Widened (`past_work_bound`): no new calling context. The call
+        // runs the function's shared instance, which gets this receiver
+        // and these arguments by the same edges (below): a merge of
+        // callers. A birth's run (5) stays per object: its key is what
+        // it births.
+        let key = match key.0 {
+            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => {
+                (1, LAY_NONE, ft)
+            }
+            _ => key,
+        };
         let inst = self.instance(key);
         let it = self.sum.insts[inst as usize].this;
         if it != NO_NODE {
@@ -677,8 +688,7 @@ impl Model {
         while i < self.sum.pending.len() {
             // Instances queue more instances: the work bound holds here too,
             // not only between worklist pops.
-            if self.max_work != 0 && self.work.get() > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 self.sum.pending.clear();
                 return;
             }

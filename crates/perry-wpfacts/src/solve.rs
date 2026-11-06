@@ -44,6 +44,9 @@ fn index_has_numeric_key(prim: u16) -> bool {
     prim & (prim::NUM | prim::BIGINT) != 0
 }
 
+/// How many times the work bound a widened solve may use before it stops.
+const WIDENED_WORK: u64 = 1000;
+
 impl Model {
     // ---------------------------------------------------------------- nodes
 
@@ -51,6 +54,24 @@ impl Model {
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
+    /// The work bound (`FactsConfig::max_work`, 0 = none). Past it a
+    /// whole-program solve (`Model::widen`) is widened (`bind_layout`: no
+    /// new calling contexts) and goes on to its fixpoint; past `WIDENED_WORK` times it, or past it
+    /// at all per unit, the solve stops and claims nothing.
+    pub(crate) fn past_work_bound(&mut self) -> bool {
+        if self.max_work == 0 || self.work.get() <= self.max_work {
+            return false;
+        }
+        self.widened = self.widen;
+        if !self.widen {
+            self.aborted = true;
+        } else if self.work.get() > self.max_work.saturating_mul(WIDENED_WORK) {
+            self.aborted = true;
+            self.widened_stop = true;
+        }
+        self.aborted
+    }
+
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
         if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
             if !c.injecting
@@ -640,8 +661,7 @@ impl Model {
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
-            if self.max_work != 0 && self.work.get() > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 return;
             }
             let mut i = 0;
@@ -652,8 +672,7 @@ impl Model {
                     if let Some(p) = self.prof.as_mut() {
                         p.step[1] += 1 + delivery_overhead;
                     }
-                    if self.max_work != 0 && self.work.get() > self.max_work {
-                        self.aborted = true;
+                    if self.past_work_bound() {
                         return;
                     }
                     i += 1;
@@ -680,8 +699,7 @@ impl Model {
                         .or_default()
                         .0 += visits;
                 }
-                if self.max_work != 0 && self.work.get() > self.max_work {
-                    self.aborted = true;
+                if self.past_work_bound() {
                     return;
                 }
                 if covered {
@@ -692,8 +710,7 @@ impl Model {
                     if let Some(p) = self.prof.as_mut() {
                         p.step[3] += extra;
                     }
-                    if self.max_work != 0 && self.work.get() > self.max_work {
-                        self.aborted = true;
+                    if self.past_work_bound() {
                         return;
                     }
                 }
@@ -1040,8 +1057,7 @@ impl Model {
                 continue;
             }
             self.charge_work(1);
-            if self.max_work != 0 && self.work.get() > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 return;
             }
             match self.arg_members.get(&x).cloned() {

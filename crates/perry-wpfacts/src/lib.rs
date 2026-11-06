@@ -140,6 +140,12 @@ pub struct Stats {
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
     pub aborted: bool,
+    /// The solve passed its work bound and finished widened
+    /// (`Model::widened`): the facts no later arrival touched.
+    pub widened: bool,
+    /// The widened solve stopped at `WIDENED_WORK` times the bound
+    /// (`aborted` is set too: no facts).
+    pub widened_stop: bool,
     /// Contract checks run after the solve (§11.2): none past the bound.
     pub checks: u64,
     pub top_calls: u64,
@@ -420,6 +426,7 @@ fn generate<'a>(
     g.m.unit_mode = cfg.unit;
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
+    g.m.widen = !cfg.unit;
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.interp_free = cfg.dynamic_code.is_none()
         && !cfg.dynamic_code_reach.globals
@@ -849,6 +856,8 @@ fn compute_act<'a>(
         contexts: g.m.sum.ctx_nodes.len() as u64,
         work: g.m.work.get(),
         aborted: g.m.aborted,
+        widened: g.m.widened,
+        widened_stop: g.m.widened_stop,
         checks,
         pts_entries: g.m.pts_entries,
         big_nodes: big_nodes(&g.m),

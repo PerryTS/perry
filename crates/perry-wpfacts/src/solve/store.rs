@@ -135,8 +135,7 @@ impl Model {
                 continue;
             }
             self.charge_work(fresh.len() as u64);
-            if self.max_work != 0 && self.work.get() > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 return;
             }
             self.arg_readers
