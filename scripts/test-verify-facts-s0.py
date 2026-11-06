@@ -100,6 +100,14 @@ def main():
             assert value["predicate"] == "inactive body" and value["observed_receiver"] is None, value
         save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value.get("expectation", "<entry>"))
 
+    source = fixtures / "parallel-bodies.ts"
+    exe, e = compile_(source, "parallel-bodies")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    inventory = [json.loads(line) for line in Path(str(exe) + ".facts.jsonl").read_text().splitlines() if line]
+    assert any(row.get("check") and row.get("emitted_checks") for row in inventory), inventory
+    save("parallel-bodies", status=0)
+
     source = fixtures / "slot-key.ts"
     exe, e = compile_(source, "slot-key-false", PERRY_FACTS_SABOTAGE="fixed_layout:Box")
     value = report(observe(exe, e))
