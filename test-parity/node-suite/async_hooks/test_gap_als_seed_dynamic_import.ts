@@ -3,6 +3,6 @@
 // Next.js server modules alone; a module reached only through `import()` used
 // to put the program on that path, so this printed "function".
 
-const m = await import("../../../test-files/dynamic_import_als_seed_target.ts");
+const m = await import("./dynamic_import_als_seed_target.ts");
 console.log(typeof (globalThis as any).AsyncLocalStorage, m.x);
 console.log("AsyncLocalStorage" in globalThis);

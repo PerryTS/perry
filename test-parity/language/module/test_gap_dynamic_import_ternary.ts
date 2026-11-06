@@ -4,7 +4,7 @@
 
 async function load(flag: boolean) {
   return await import(
-    flag ? "../../../test-files/dynamic_import_helper_a.ts" : "../../../test-files/dynamic_import_helper_b.ts"
+    flag ? "./dynamic_import_helper_a.ts" : "./dynamic_import_helper_b.ts"
   );
 }
 

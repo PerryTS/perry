@@ -8,7 +8,7 @@
 // its own module. redis's `commander.js` `attachConfig` (`Class = class
 // extends BaseClass {}`) hits exactly this from `RedisClient.factory` and
 // `Client.prototype.Multi = MultiCommand.extend(config)`.
-import { withCommands, withCommandsB } from "../../../test-files/gap_10455_class_expr_factory_identity_helper.ts";
+import { withCommands, withCommandsB } from "./gap_10455_class_expr_factory_identity_helper.ts";
 
 class A {
   constructor() {

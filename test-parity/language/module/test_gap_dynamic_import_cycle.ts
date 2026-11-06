@@ -1,4 +1,4 @@
-import { loadA } from "../../../test-files/dynamic_import_cycle_b.ts";
+import { loadA } from "./dynamic_import_cycle_b.ts";
 
 async function main(): Promise<void> {
   const v = await loadA();

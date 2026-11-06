@@ -22,8 +22,8 @@
 // same-module inheritance. The absolute-path salt satisfied both and failed
 // reproducibility; the module name satisfies all three.
 
-import { makeA } from "../../../test-files/cap_salt_helper_a.ts";
-import { makeB } from "../../../test-files/cap_salt_helper_b.ts";
+import { makeA } from "./cap_salt_helper_a.ts";
+import { makeB } from "./cap_salt_helper_b.ts";
 
 // Same basename, different directories-worth of identity: distinct captures.
 console.log("a:", makeA(10));

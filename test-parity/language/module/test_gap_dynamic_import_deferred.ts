@@ -9,7 +9,7 @@
 console.log("before");
 const branch: number = Number(process.argv[2] ?? "0");
 if (branch === 1) {
-  const m = await import("../../../test-files/dynamic_import_deferred_marker.ts");
+  const m = await import("./dynamic_import_deferred_marker.ts");
   console.log("after:" + m.x);
 } else {
   console.log("skipped");

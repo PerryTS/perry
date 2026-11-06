@@ -1,4 +1,4 @@
-import { fixture, delay } from '../../../test-files/fetch_stream_fixture.ts';
+import { fixture, delay } from './fetch_stream_fixture.ts';
 async function main() {
   const server = await fixture();
   try {

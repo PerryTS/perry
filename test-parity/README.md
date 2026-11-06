@@ -18,6 +18,9 @@ Each subject tree is discovered recursively. Runnable formats are `.ts`,
 extension when moving a case so Node retains its module mode. Case ids omit
 TypeScript-family suffixes but retain `.cjs`. Helpers go in a `fixtures/`
 directory, which the runner skips in every format.
+Legacy helper entry cases keep their standalone subject paths until their
+coverage is explicitly replaced. Preserve their `.ts` compile-smoke enrollment
+in `compile-smoke.txt`; fixture exclusion must not silently remove a gate.
 
 When Perry intentionally differs from Node, commit the Perry output as
 `test-parity/expected/<test-name>.txt`; add an `expected-exit` file when the

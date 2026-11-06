@@ -1,6 +1,6 @@
 // parity-env: NODE_TLS_REJECT_UNAUTHORIZED=0 NODE_NO_WARNINGS=1
 // parity-node-argv: --no-warnings
-import { fixture, delay } from '../../../test-files/fetch_stream_fixture.ts';
+import { fixture, delay } from './fetch_stream_fixture.ts';
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 async function main() {
   const server = await fixture(true);

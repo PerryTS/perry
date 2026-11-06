@@ -3,7 +3,7 @@
 // ("unresolved scope name Color"), so the namespace's aggregate view held ⊤ and every computed
 // read of the namespace was unproven. Node and the compiled program must agree on the keys and
 // on the class read through a computed key.
-import * as E from "../../../test-files/test_gap_type_export_top_mod.ts";
+import * as E from "./test_gap_type_export_top_mod.ts";
 const name = process.argv[2] ?? "Chess";
 const C = (E as any)[name];
 const c = new C();

@@ -1,5 +1,5 @@
-import keysA from '../../../test-files/test_gap_fnb_keys_a.cjs';
-import keysB from '../../../test-files/test_gap_fnb_keys_b.cjs';
+import keysA from './test_gap_fnb_keys_a.cjs';
+import keysB from './test_gap_fnb_keys_b.cjs';
 const { unique, alias, registry } = keysA;
 const { same, distinct, registry: otherRegistry } = keysB;
 function First(this: any) { this.id = 1; this[unique] = 2; this[registry] = 3; }
