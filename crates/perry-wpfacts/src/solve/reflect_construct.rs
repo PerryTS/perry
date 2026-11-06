@@ -2,32 +2,6 @@
 use super::*;
 
 impl Model {
-    /// Revisit actual unknown-target relations when their retained target
-    /// arrives later. The model's constraints and escape state are the
-    /// relation; no separate target inventory supplies proof inputs.
-    pub(crate) fn reflect_escaped_target(&mut self, target: Tok) {
-        if !self.sum.ready {
-            return;
-        }
-        let mut pending = Vec::new();
-        for node in &self.nodes {
-            for cons in &node.cons {
-                if let Cons::ReflectNewTarget { call, target: TOP } = *cons {
-                    if self.sum.templates.contains(&call) {
-                        continue;
-                    }
-                    if node.prim & prim::UNDEF != 0 {
-                        pending.push((call, target));
-                    }
-                    pending.extend(node.pts.to_sorted().into_iter().map(|nt| (call, nt)));
-                }
-            }
-        }
-        for (call, nt) in pending {
-            self.reflect_construct(call, target, nt);
-        }
-    }
-
     pub(crate) fn reflect_construct(&mut self, call: CallId, target: Tok, new_target: Tok) {
         if !self.sum.ready {
             self.sum

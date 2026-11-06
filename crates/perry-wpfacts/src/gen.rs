@@ -468,6 +468,7 @@ impl<'a> Gen<'a> {
         m.add_top(thrown, |_| "thrown value (runtime errors)".into());
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
+        m.escaped_classes = m.node_l("ESCCLASSES");
         let cjs_registry = m.node_l("CJSREG");
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
         m.cjs_union = cjs_registry;

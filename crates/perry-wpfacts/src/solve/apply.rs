@@ -74,6 +74,12 @@ impl Model {
             Cons::ReflectNew { call, new_target } => {
                 for &target in toks {
                     self.cons(new_target, Cons::ReflectNewTarget { call, target });
+                    // An unknown target may be any escaped class: each one,
+                    // now or later, arrives here as an ordinary target.
+                    if target == TOP && !self.sum.templates.contains(&call) {
+                        let esc = self.escaped_classes;
+                        self.cons(esc, Cons::ReflectNew { call, new_target });
+                    }
                 }
             }
             Cons::ReflectNewTarget { call, target } => {

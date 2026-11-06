@@ -766,8 +766,10 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // its named keys: each `z{i} = [y]` no longer copies `y` (n + 5 tokens)
         // into its named-key node, n * (n + 5) entries fewer.
         // CHESS4-A: the runtime-made `process.argv` array is one more entry
-        // at every n (the growth stays n^2): (956, 2604, 8204) -> the pin.
-        (957, 2605, 8205),
+        // at every n (the growth stays n^2): (956, 2604, 8204) -> (957, 2605, 8205).
+        // The escaped class objects are one node (ESCCLASSES) that holds the
+        // escaped class token: one entry more at every n -> the pin.
+        (958, 2606, 8206),
         "entries {e8} {e16} {e32}"
     );
 }
