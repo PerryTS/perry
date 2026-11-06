@@ -332,6 +332,12 @@ impl Model {
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
         self.calls.push(cs);
+        if !self.sum.ready && self.diagnostic.is_some() {
+            // Dump only: a call made before the summaries counts as a
+            // program call (`origin_of` never reads it); the dump still
+            // names the source call it was made for.
+            self.sum.origin.insert(id, by);
+        }
         if self.sum.ready {
             if let Some(o) = self.origin_of(by) {
                 self.sum.origin.insert(id, o);

@@ -203,3 +203,61 @@ fn diagnostic_marker_routes_preserve_unit_fixed_point() {
         );
     }
 }
+
+/// A call the solver makes for a program call (here `replace`, reached
+/// through an extracted `String.prototype.replace` and `.call`, calling its
+/// callback) is reported at that program call, the one the source names
+/// (tsc utilities.ts `stringReplace.call(...)`). A program call reports itself.
+#[test]
+fn diagnostic_solver_call_reports_its_program_call() {
+    let pf = facts_with(
+        r#"
+        import "unseen-host";
+        declare const unknown: any;
+        const stringReplace = String.prototype.replace;
+        function fill(text: string) {
+            return stringReplace.call(text, /a/g, unknown.cb);
+        }
+        console.log(fill("abc"));
+        unknown.direct("x");
+    "#,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    let lines = &pf.diagnostics[0].1;
+    let num = |l: &str, k: &str| -> Option<u32> {
+        let v = l.split(&format!("\"{k}\":")).nth(1)?;
+        v.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+    };
+    let calls: Vec<(u32, Option<u32>)> = lines
+        .iter()
+        .filter(|l| l.contains("\"record\":\"unknown-call\""))
+        .map(|l| (num(l, "call").unwrap(), num(l, "source")))
+        .collect();
+    let site_call = |key: &str| -> u32 {
+        let l = lines
+            .iter()
+            .find(|l| {
+                l.contains("\"record\":\"site\"")
+                    && l.contains("\"kind\":\"value-call\"")
+                    && l.contains(&format!("\"key\":\"{key}\""))
+            })
+            .unwrap();
+        num(l, "call").unwrap()
+    };
+    let (direct, outer) = (site_call("direct"), site_call("call"));
+    // `unknown.direct` is a program call: it reports itself. Every other
+    // unknown call is one the solver made for the `.call` (the callback).
+    assert!(calls.contains(&(direct, Some(direct))), "{calls:?}");
+    let inner: Vec<_> = calls.iter().filter(|c| c.0 != direct).collect();
+    assert!(!inner.is_empty(), "{calls:?}\n{}", lines.join("\n"));
+    for c in inner {
+        assert_eq!(
+            c.1,
+            Some(outer),
+            "callback call reports the `.call` {outer}: {calls:?}"
+        );
+    }
+}
