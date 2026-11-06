@@ -482,8 +482,8 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             keys.contains(&name) && find(COLLECTION, name).is_some()
         }
         // An array iterator's whole chain is add-locked (`ARRAY_ITERATOR`).
-        // The Map/Set/String iterator prototypes and the iterator helpers'
-        // take adds: not final.
+        // The Map/Set iterator prototypes lock only their image members
+        // (`iterator_prototype`); the iterator helpers' take adds.
         Family::Iterator => what == Some(ARRAY_ITERATOR),
         Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
     }
@@ -509,6 +509,18 @@ pub(crate) const ANY_ITERATOR: &str = "Iterator";
 pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
 pub(crate) const MAP_ITERATOR: &str = "MapIterator";
 pub(crate) const SET_ITERATOR: &str = "SetIterator";
+
+/// The intrinsic prototype of iterator kind `what` whose image members the
+/// runtime locks while it takes adds (`builtin_proto.rs`
+/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`): a read of one of those
+/// members is final (`builtins::locked_chain_read`).
+pub(crate) fn iterator_prototype(what: &str) -> Option<&'static str> {
+    match what {
+        MAP_ITERATOR => Some("%MapIteratorPrototype%"),
+        SET_ITERATOR => Some("%SetIteratorPrototype%"),
+        _ => None,
+    }
+}
 
 /// The iterator kind a collection of kind `what` (`Map`/`Set`) gives.
 pub(super) fn collection_iterator(what: &str) -> &'static str {

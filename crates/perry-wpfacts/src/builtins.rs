@@ -607,7 +607,12 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     if let TokKind::Func(f, _) = m.toks[t as usize] {
         let fi = &m.funcs[f as usize];
         if fi.gen_step() {
-            return generator_image_member(m, fi.gen_async, &m.atoms[a as usize]);
+            let holder = if fi.gen_async {
+                "%AsyncGeneratorPrototype%"
+            } else {
+                "%GeneratorPrototype%"
+            };
+            return image_member(m, holder, &m.atoms[a as usize]);
         }
     }
     let what = match &m.toks[t as usize] {
@@ -626,21 +631,23 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         }
         _ => None,
     };
+    // A Map or Set iterator: past its own keys the chain reaches
+    // `%MapIteratorPrototype%` / `%SetIteratorPrototype%`, whose declared
+    // image members are locked (DEC 250); every other key may be added
+    // there: not final.
+    if let Some(holder) = what.and_then(members::iterator_prototype) {
+        return image_member(m, holder, &m.atoms[a as usize]);
+    }
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
 }
 
-/// Is `name` an image member of the declared generator prototype (the
-/// realm table's `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`, the
-/// same declaration the runtime seals)? `constructor` stays writable.
-fn generator_image_member(m: &Model, is_async: bool, name: &str) -> bool {
+/// Is `name` an image member of the declared intrinsic prototype `holder`
+/// (the realm table's `%GeneratorPrototype%`, `%MapIteratorPrototype%` …,
+/// the same declaration the runtime seals)? `constructor` stays writable.
+fn image_member(m: &Model, holder: &str, name: &str) -> bool {
     if name == "constructor" {
         return false;
     }
-    let holder = if is_async {
-        "%AsyncGeneratorPrototype%"
-    } else {
-        "%GeneratorPrototype%"
-    };
     m.declarations
         .named(holder, m)
         .is_some_and(|h| m.declarations.property(h, name, m).is_some())
