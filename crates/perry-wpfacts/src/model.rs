@@ -753,6 +753,10 @@ pub enum Protocol {
     /// or `toJSON` returns) is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
     Inspect,
+    /// StructuredSerialize (HTML 2.7.3), what `structuredClone` runs: a
+    /// [[Get]] of every own value (own getters run), each serialized in
+    /// turn; it calls nothing else (a function or a Proxy throws).
+    Clone,
     /// A runtime helper that reflects over the value or mixes protocols:
     /// any key, and a function may be called back with anything.
     Any,
@@ -774,7 +778,7 @@ impl Protocol {
                 "toString",
                 "toJSON",
             ],
-            Protocol::IterResult | Protocol::OwnKeys => &[],
+            Protocol::IterResult | Protocol::OwnKeys | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
     }
@@ -790,7 +794,7 @@ impl Protocol {
     /// Every value read off the object is touched again by the same
     /// protocol (JSON serializes it, the formatter shows it).
     pub fn reads_all(self) -> bool {
-        matches!(self, Protocol::Json | Protocol::Inspect)
+        matches!(self, Protocol::Json | Protocol::Inspect | Protocol::Clone)
     }
 
     /// The use bit of a touch by this protocol (`MARK_TOUCH*`).
@@ -801,7 +805,11 @@ impl Protocol {
             Protocol::IterNext => MARK_TOUCH_ITER_NEXT,
             Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
-            Protocol::Json | Protocol::Inspect | Protocol::OwnKeys | Protocol::Any => MARK_TOUCH,
+            Protocol::Json
+            | Protocol::Inspect
+            | Protocol::Clone
+            | Protocol::OwnKeys
+            | Protocol::Any => MARK_TOUCH,
         }
     }
 
@@ -830,7 +838,8 @@ impl Protocol {
             Protocol::ToPrimitive
             | Protocol::IterResult
             | Protocol::HasInstance
-            | Protocol::OwnKeys => None,
+            | Protocol::OwnKeys
+            | Protocol::Clone => None,
         }
     }
 
@@ -844,6 +853,7 @@ impl Protocol {
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
             Protocol::Inspect => "inspect",
+            Protocol::Clone => "clone",
             Protocol::Any => "any",
         }
     }
