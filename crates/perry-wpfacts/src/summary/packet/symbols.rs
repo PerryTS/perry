@@ -276,6 +276,16 @@ impl Model {
                 act
             ),
             Cons::IterNext { dst } => format!("IterNext dst={:?}", dst),
+            Cons::NativeParent {
+                tm,
+                expected,
+                reason,
+            } => format!(
+                "NativeParent template={:?} expected={:?} reason={:?}",
+                self.tmpls[tm as usize].display,
+                self.packet_token(expected, packet),
+                self.reasons.get(reason as usize)
+            ),
             Cons::NewTargetHard { reason } => format!(
                 "NewTargetHard reason={:?}",
                 self.reasons.get(reason as usize)
