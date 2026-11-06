@@ -497,42 +497,6 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                 reads.insert(init as *const Expr as usize);
             }
         }
-        // `x === C.prototype.m` — the dispatch check the `this.F` loop hoist
-        // versions on. The prototype value is consumed by one member READ
-        // whose result is only compared, so it neither escapes nor runs as a
-        // receiver (a call `C.prototype.m()` could write through `this` and
-        // keeps the kill, as does a store `C.prototype.m = f`), and a plain
-        // method-only prototype runs no accessor for the read.
-        for_each_expr_in_stmts(stmts, &mut |expr| {
-            let Expr::Compare { op, left, right } = expr else {
-                return;
-            };
-            if !matches!(op, perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne)
-                || matches!(
-                    std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
-                    Ok("0") | Ok("off") | Ok("false")
-                )
-            {
-                return;
-            }
-            for side in [left.as_ref(), right.as_ref()] {
-                let Expr::PropertyGet { object, .. } = side else {
-                    continue;
-                };
-                if let Expr::PropertyGet {
-                    object: class_ref,
-                    property: proto,
-                    ..
-                } = object.as_ref()
-                {
-                    if is_prototype_key(proto)
-                        && matches!(class_ref.as_ref(), Expr::ClassRef(c) if plain_prototype_classes.contains(c.as_str()))
-                    {
-                        reads.insert(object.as_ref() as *const Expr as usize);
-                    }
-                }
-            }
-        });
     };
 
     inspect_scope(&hir.init);

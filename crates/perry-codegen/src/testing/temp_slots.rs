@@ -233,10 +233,13 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
 /// `"gc-leaf-function"` or inline asm.
 fn line_may_collect(line: &str) -> bool {
     let t = line.trim();
-    (t.starts_with("call ") || t.contains(" = call ") || t.contains("invoke "))
-        && !t.contains("\"gc-leaf-function\"")
-        && !t.contains(" asm ")
-        && !t.contains("@llvm.")
+    // `call`, with or without a `tail`/`musttail`/`notail` marker, and
+    // `invoke`, at the start or after an assignment.
+    let is_call = t
+        .split_whitespace()
+        .take(4)
+        .any(|w| w == "call" || w == "invoke");
+    is_call && !t.contains("\"gc-leaf-function\"") && !t.contains(" asm ") && !t.contains("@llvm.")
 }
 
 /// Does every CFG path from line `from` to line `to` avoid both a collecting
@@ -286,7 +289,21 @@ fn no_dirty_path(fn_ir: &str, slot: &str, from: usize, to: usize) -> bool {
                 break;
             }
             dirty |= dirty_line(l);
-            let mut rest = l;
+            // A `switch` lists its cases on the following lines up to `]`:
+            // every one of them is a successor.
+            let mut edge_text = l.to_string();
+            if l.trim_start().starts_with("switch ") && l.trim_end().ends_with('[') {
+                let mut j = i + 1;
+                while j < lines.len() {
+                    edge_text.push(' ');
+                    edge_text.push_str(lines[j]);
+                    if lines[j].trim() == "]" {
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+            let mut rest = edge_text.as_str();
             let mut any_edge = false;
             while let Some(at) = rest.find("label %") {
                 let tail = &rest[at + "label %".len()..];
@@ -718,6 +735,39 @@ pub fn assert_temp_rooting_count(fn_ir: &str, expected: usize, what: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::{slot_traffic, SlotEvent};
+
+    fn alias_is_load(fn_ir: &str) -> bool {
+        slot_traffic(fn_ir).get("%r1").is_some_and(|events| {
+            events
+                .iter()
+                .any(|e| matches!(e, SlotEvent::Load { into, .. } if into == "%v2"))
+        })
+    }
+
+    const RELOAD: &str = "  %v1.rs4p = load ptr addrspace(1), ptr %r1\n  %v1.rs4o = call i64 asm \"\", \"=r,0\"(ptr addrspace(1) %v1.rs4p) \"gc-leaf-function\"\n";
+    const ALIAS: &str = "  %v2.rs4o = add i64 %v1.rs4o, 0\n";
+
+    #[test]
+    fn a_reuse_alias_is_a_reread_only_without_a_collection_between() {
+        let clean = format!("define void @f() {{\nentry:\n{RELOAD}{ALIAS}  ret void\n}}\n");
+        assert!(alias_is_load(&clean));
+        // Tail markers still make it a call.
+        let notail = format!(
+            "define void @f() {{\nentry:\n{RELOAD}  notail call void @js_gc_loop_safepoint()\n{ALIAS}  ret void\n}}\n"
+        );
+        assert!(!alias_is_load(&notail), "{notail}");
+        let tail = notail.replace("notail call", "%t = tail call i64 @collect() ;");
+        assert!(!alias_is_load(&tail), "{tail}");
+    }
+
+    #[test]
+    fn every_switch_case_is_a_successor_of_the_reuse_scan() {
+        let ir = format!(
+            "define void @f(i32 %k) {{\nentry:\n{RELOAD}  switch i32 %k, label %join [\n    i32 1, label %slow\n  ]\nslow:\n  call void @js_gc_loop_safepoint()\n  br label %join\njoin:\n{ALIAS}  ret void\n}}\n"
+        );
+        assert!(!alias_is_load(&ir), "{ir}");
+    }
     use super::*;
 
     /// The pooled shape, shadow spelling — `console.log("label", {})`.

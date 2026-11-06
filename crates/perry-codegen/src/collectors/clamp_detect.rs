@@ -206,6 +206,10 @@ pub fn returns_int_stmts(ss: &[Stmt]) -> bool {
             Stmt::Return(Some(e)) if !returns_int_expr(e) => {
                 return false;
             }
+            // `return;` yields `undefined`, never an integer.
+            Stmt::Return(None) => {
+                return false;
+            }
             Stmt::If {
                 then_branch,
                 else_branch,

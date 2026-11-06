@@ -447,6 +447,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
         Expr::PrivateLexicalBrand(a0) => Expr::PrivateLexicalBrand(Shallow::shallow(a0, n)),
         Expr::PrivateLexicalBrandPush(a0) => Expr::PrivateLexicalBrandPush(Shallow::shallow(a0, n)),
         Expr::PrivateLexicalBrandPop => Expr::PrivateLexicalBrandPop,
+        Expr::ThisProvenClass(class) => Expr::ThisProvenClass(class.clone()),
         Expr::PrivateBrandCheck {
             class_name,
             class_id,
