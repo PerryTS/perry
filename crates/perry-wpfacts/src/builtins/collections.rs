@@ -127,7 +127,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // Generator protocol (a generator object is its step closure): the
         // step closure only; any other function value has no such methods
         // (a computed key on one is a runtime property: unknown).
-        Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step) => {
+        Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step()) => {
             if name.is_none() || !matches!(m.toks[t as usize], TokKind::Func(..)) {
                 unknown_method(m, call, "computed method of a function value");
             }

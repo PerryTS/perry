@@ -443,11 +443,33 @@ impl<'a> Gen<'a> {
                         }
                     }
                 }
-                // The generator object is its step closure.
+                // The generator object is its step closure. Its [[Prototype]]
+                // is the running generator function's `prototype` object
+                // (OrdinaryCreateFromConstructor at the generator's start):
+                // an ordinary object the program may write (`g.prototype.next
+                // = ...`), whose members a lookup on the generator object
+                // finds before the generator protocol. It is the token a read
+                // of `g.prototype` gives (`tok_load`), so what is stored there
+                // and what escapes with either is the same value. A generator
+                // function is never constructed (`new g()` throws), so the
+                // instance template's birth keys are never read. Every token
+                // of the step function (one per closure context) has it.
+                let g = fx.f;
+                let tm = self.m.fn_inst_template(g);
+                let p = self.m.tok(TokKind::Proto(tm));
+                let gt = self.m.funcs[g as usize].token;
+                let pa = self.m.atom("prototype");
+                let gp = self.m.field(gt, pa);
+                self.m.add_tok(gp, p);
                 for t in self.m.nodes[o as usize].pts.to_sorted() {
                     if let TokKind::Func(f, _) = self.m.toks[t as usize] {
-                        self.m.funcs[f as usize].gen_step = true;
+                        self.m.funcs[f as usize].gen_proto = Some(p);
                         self.m.funcs[f as usize].gen_async = *is_async;
+                        // A chain made before this link (`proto_node` seeds
+                        // later ones from `gen_proto`).
+                        if let Some(&pn) = self.m.proto_node.get(&t) {
+                            self.m.add_tok(pn, p);
+                        }
                     }
                 }
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
