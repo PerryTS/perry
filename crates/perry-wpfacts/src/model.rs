@@ -551,9 +551,9 @@ pub struct FuncInfo {
     /// (DECISIONS 49). Its body is not walked: `run_ctor_chain` runs the
     /// parent with the `new` call itself.
     pub forwards_super: bool,
-    /// A class constructor's hidden trailing parameters, one per value the
-    /// class captures (`__perry_cap_*`, perry-hir `synthesize_class_captures`):
-    /// the class environment slot each one is filled from. A construction
+    /// An environment-publishing constructor's hidden trailing parameters:
+    /// the class environment slot each one is filled from. Instance-capture
+    /// constructors keep their forwarded arguments instead. A construction
     /// from another module passes the class's own snapshot there, whatever
     /// arguments it was given (`construct_registered_class_resolved` fills
     /// only the user slots from them), so another unit never chooses these
