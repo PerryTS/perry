@@ -381,6 +381,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         lexical_this: true,
         no_summary: false,
         gen_proto: None,
+        gen_fn_protos: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -429,6 +430,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         lexical_this: false,
         no_summary: true,
         gen_proto: None,
+        gen_fn_protos: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -593,6 +595,17 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
             members::NsProto::Function | members::NsProto::Object
         ) && members::locked_read(Family::Object, None, &m.atoms[a as usize]);
     }
+    // A generator object (its step closure): past its own keys and its
+    // function's `prototype` (program objects, read through their fields)
+    // the chain reaches `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`,
+    // whose declared image members are locked (DEC 250; `constructor`
+    // exempt). Every other key may be added there: not final.
+    if let TokKind::Func(f, _) = m.toks[t as usize] {
+        let fi = &m.funcs[f as usize];
+        if fi.gen_step() {
+            return generator_image_member(m, fi.gen_async, &m.atoms[a as usize]);
+        }
+    }
     let what = match &m.toks[t as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what, .. } => Some(*what),
@@ -610,6 +623,23 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         _ => None,
     };
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
+}
+
+/// Is `name` an image member of the declared generator prototype (the
+/// realm table's `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`, the
+/// same declaration the runtime seals)? `constructor` stays writable.
+fn generator_image_member(m: &Model, is_async: bool, name: &str) -> bool {
+    if name == "constructor" {
+        return false;
+    }
+    let holder = if is_async {
+        "%AsyncGeneratorPrototype%"
+    } else {
+        "%GeneratorPrototype%"
+    };
+    m.declarations
+        .named(holder, m)
+        .is_some_and(|h| m.declarations.property(h, name, m).is_some())
 }
 
 /// The family whose intrinsic chain the lock sees on `t`: `seed_family`'s,

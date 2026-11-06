@@ -775,12 +775,13 @@ impl Model {
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
-            // A generator object (its step closure) inherits from its
-            // generator function's `prototype` (`FuncInfo::gen_proto`), whose
-            // chain the runtime's generator prototypes continue.
+            // A generator object (its step closure) inherits from what its
+            // generator function's `prototype` holds (`FuncInfo::gen_proto`:
+            // the original object or a replacement), whose chain the
+            // runtime's generator prototypes continue.
             TokKind::Func(f, _) if self.funcs[f as usize].gen_step() => {
                 if let Some(p) = self.funcs[f as usize].gen_proto {
-                    self.add_tok(n, p);
+                    self.edge(p, n);
                 }
                 self.add_tok(n, objproto);
             }

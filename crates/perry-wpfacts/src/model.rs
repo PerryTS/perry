@@ -532,10 +532,16 @@ pub struct FuncInfo {
     pub no_summary: bool,
     /// The step closure of a transformed generator is the generator object
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
-    /// iteration protocol on it run the closure. Its [[Prototype]] is this
-    /// token: the generator function's `prototype` object (`proto_node`),
-    /// where the program's members sit before the protocol.
-    pub gen_proto: Option<Tok>,
+    /// iteration protocol on it run the closure. Its [[Prototype]] is what
+    /// this node holds: the generator function's `prototype` field (its
+    /// original object, what the program stored there instead, ⊤ once the
+    /// function escaped), read by `proto_node`; the program's members sit
+    /// there before the protocol.
+    pub gen_proto: Option<NodeId>,
+    /// A generator function: the node of every `prototype` value of its
+    /// tokens (each closure context's own field, `Model::closure_tok`),
+    /// which its generator objects inherit from (`gen_proto`).
+    pub gen_fn_protos: Option<NodeId>,
     /// An async generator's step closure (its `next` settles a Promise).
     pub gen_async: bool,
     /// A sync step closure with a `yield*`: a step may hand back its

@@ -1356,6 +1356,7 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: true,
             gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
             proto: None,

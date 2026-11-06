@@ -189,6 +189,10 @@ fn the_lock_set_is_the_builtin_prototype_families() {
     assert!(!locked_family(RUNTIME_FAMILY));
     assert!(locked_family(ITERATOR_FAMILY));
     assert!(locked_family(ARRAY_ITERATOR_FAMILY));
+    assert!(locked_family(GENERATOR_FAMILY));
+    assert!(locked_family(ASYNC_GENERATOR_FAMILY));
+    assert!(!add_locked(GENERATOR_FAMILY));
+    assert!(!add_locked(ASYNC_GENERATOR_FAMILY));
     for (family, _) in BuiltinProto::ALL {
         assert!(locked_family(family as usize), "{family:?}");
     }
@@ -753,5 +757,59 @@ fn an_exempt_constructor_is_never_refused_as_an_add() {
             Some(Violation::Add(".other".into())),
             "any other add stays refused"
         );
+    }
+}
+
+/// DEC 250 as narrowed 2026-11-03: `%GeneratorPrototype%` and
+/// `%AsyncGeneratorPrototype%` are sealed when their tower is built; their
+/// image members are refused, `constructor` and adds are not.
+#[test]
+fn the_generator_prototypes_lock_their_image_and_take_adds() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::ensure_generator_intrinsics();
+    for (slot, family, name) in [
+        (
+            &crate::object::GENERATOR_PROTOTYPE_PTR,
+            GENERATOR_FAMILY,
+            "%GeneratorPrototype%",
+        ),
+        (
+            &crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR,
+            ASYNC_GENERATOR_FAMILY,
+            "%AsyncGeneratorPrototype%",
+        ),
+    ] {
+        let proto = slot.load(std::sync::atomic::Ordering::Acquire) as *mut ObjectHeader;
+        assert!(!proto.is_null(), "{name}");
+        unsafe {
+            let meta = meta_of(proto);
+            assert_ne!(
+                (*meta).flags & super::super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC,
+                0,
+                "{name}"
+            );
+            assert_eq!(sealed_family((*meta).flags), family, "{name}");
+            for key in [&b"next"[..], b"return", b"throw"] {
+                assert!(
+                    matches!(
+                        locked_violation(proto, meta, Mutation::Delete(Key::Bytes(key))),
+                        Some(Violation::Delete(_))
+                    ),
+                    "{name}: an image member is refused"
+                );
+            }
+            assert_eq!(
+                locked_violation(proto, meta, Mutation::Delete(Key::Bytes(b"constructor"))),
+                None,
+                "{name}: constructor is exempt"
+            );
+            assert_eq!(
+                locked_violation(proto, meta, Mutation::Add(Key::Bytes(b"helper"))),
+                None,
+                "{name}: an add is allowed"
+            );
+        }
+        assert_eq!(locked_object_name(family), name);
     }
 }
