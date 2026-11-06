@@ -667,6 +667,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ObjectProto => {
             m.add_prim(dst, prim::UNDEF);
             let Key::Named(a) = key else { unreachable!() };
+            object_proto_method_value(m, a, dst);
             if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
             }
@@ -699,6 +700,25 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
         TokKind::Top => {}
     }
+}
+
+/// A method `Object.prototype` holds under `a` (the three no builtin
+/// prototype overrides are `ObjectProtoOwn`, `chain_load`), read as a value
+/// through a chain: that method's native. A call of the value runs the
+/// method on the call's receiver (`native_call`), as a named call does:
+/// `box.m = plain.__defineGetter__; box.m(k, f)` installs on `box`.
+fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
+    let name = m.atoms[a as usize].clone();
+    if ProtoOwn::of_name(&name).is_some()
+        || !matches!(members::member(Family::Object, &name), Some(Mem::Fn))
+    {
+        return;
+    }
+    let f = match member_native(m, Family::Object, None, &name) {
+        Some(n) => m.tok(TokKind::BuiltinFn(n)),
+        None => builtin_fn(m, "described member"),
+    };
+    m.add_tok(dst, f);
 }
 
 /// `tok_load` of prototype `q` on the chain of `of` (`Cons::ChainUnion`).
@@ -740,6 +760,7 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
             && locked_chain_read(m, of, a)
         {
             m.add_prim(dst, prim::UNDEF);
+            object_proto_method_value(m, a, dst);
             return;
         }
     }
