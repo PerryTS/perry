@@ -652,6 +652,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             m.add_prim(dst, prim::UNDEF);
             if name.is_none() {
+                // A computed key reads each of `Object.prototype`'s methods
+                // its shape can spell (`t["__define" + s]`), as `family_any`
+                // reads them under a key that may name any member.
+                if members::object_proto_methods().any(|n| m.key_may_name_str(key, n)) {
+                    let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+                    m.add_tok(dst, f);
+                }
                 any_written(m, dst);
             }
         }
