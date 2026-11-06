@@ -4,6 +4,73 @@
 use super::effects;
 use super::*;
 
+/// BoundFunctionCreate(target `t`, `arg(0)`, `rest(1)`) for `call`, into
+/// its result (the declared `bound` operand of `Function.prototype.bind`).
+pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    // One bound value per (birth site, target): a bound value is a
+    // birth, so every instance's copy of the bind call makes the
+    // same one. Every bound target of a site shares one (`f =
+    // f.bind(x)` in a loop rebinds its own result: per target that
+    // would mint a new value each round). Its parts (target, bound
+    // `this`, bound arguments) are its own nodes, and every bind
+    // call that makes it copies its operands into them: the first
+    // maker may be a summarized body's shared observation node,
+    // which feeds no effect, while each instance's call carries
+    // its caller's values.
+    let key = (
+        m.birth_ctx(call),
+        if matches!(m.toks[t as usize], TokKind::Bound(_)) {
+            u32::MAX
+        } else {
+            t
+        },
+    );
+    let b = match m.bound_index.get(&key) {
+        Some(&b) => b,
+        None => {
+            let target = m.node_l("bind-target");
+            let bthis = m.node_l("bind-this");
+            let bargs: Vec<NodeId> = (1..c.args.len().max(1))
+                .map(|_| m.node_l("bind-arg"))
+                .collect();
+            let b = m.bound.len() as u32;
+            m.bound.push((target, bthis, bargs));
+            if let Some(source) = m.diagnostic_source_call(call) {
+                m.diagnostic
+                    .as_mut()
+                    .unwrap()
+                    .bound_origins
+                    .insert(b, source);
+            }
+            m.bound_index.insert(key, b);
+            b
+        }
+    };
+    let (target, bthis, bargs) = m.bound[b as usize].clone();
+    m.add_tok(target, t);
+    match c.args.first() {
+        Some(&n) => m.edge(n, bthis),
+        None => m.add_prim(bthis, prim::UNDEF),
+    }
+    let mut extra = Vec::new();
+    for (i, &a) in c.args.iter().skip(1).enumerate() {
+        match bargs.get(i) {
+            Some(&p) => m.edge(a, p),
+            None => extra.push(a),
+        }
+    }
+    let bt = m.tok(TokKind::Bound(b));
+    m.add_tok(c.ret, bt);
+    // bind(...spread), or more bound args than the bound value's
+    // first maker had (a call the solver made for the site): the
+    // extra bound args land anywhere.
+    for s in c.spread.iter().copied().chain(extra) {
+        let r = m.reason("bind with spread arguments");
+        m.sink_node(s, r);
+    }
+}
+
 // ------------------------------------------------- function protocol
 
 pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
@@ -61,68 +128,11 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             );
             m.call_tok(call2, t, None);
         }
-        Some("bind") => {
-            // One bound value per (birth site, target): a bound value is a
-            // birth, so every instance's copy of the bind call makes the
-            // same one. Every bound target of a site shares one (`f =
-            // f.bind(x)` in a loop rebinds its own result: per target that
-            // would mint a new value each round). Its parts (target, bound
-            // `this`, bound arguments) are its own nodes, and every bind
-            // call that makes it copies its operands into them: the first
-            // maker may be a summarized body's shared observation node,
-            // which feeds no effect, while each instance's call carries
-            // its caller's values.
-            let key = (
-                m.birth_ctx(call),
-                if matches!(m.toks[t as usize], TokKind::Bound(_)) {
-                    u32::MAX
-                } else {
-                    t
-                },
-            );
-            let b = match m.bound_index.get(&key) {
-                Some(&b) => b,
-                None => {
-                    let target = m.node_l("bind-target");
-                    let bthis = m.node_l("bind-this");
-                    let bargs: Vec<NodeId> = (1..c.args.len().max(1))
-                        .map(|_| m.node_l("bind-arg"))
-                        .collect();
-                    let b = m.bound.len() as u32;
-                    m.bound.push((target, bthis, bargs));
-                    if let Some(source) = m.diagnostic_source_call(call) {
-                        m.diagnostic
-                            .as_mut()
-                            .unwrap()
-                            .bound_origins
-                            .insert(b, source);
-                    }
-                    m.bound_index.insert(key, b);
-                    b
-                }
-            };
-            let (target, bthis, bargs) = m.bound[b as usize].clone();
-            m.add_tok(target, t);
-            match c.args.first() {
-                Some(&n) => m.edge(n, bthis),
-                None => m.add_prim(bthis, prim::UNDEF),
-            }
-            let mut extra = Vec::new();
-            for (i, &a) in c.args.iter().skip(1).enumerate() {
-                match bargs.get(i) {
-                    Some(&p) => m.edge(a, p),
-                    None => extra.push(a),
-                }
-            }
-            let bt = m.tok(TokKind::Bound(b));
-            m.add_tok(c.ret, bt);
-            // bind(...spread), or more bound args than the bound value's
-            // first maker had (a call the solver made for the site): the
-            // extra bound args land anywhere.
-            for s in c.spread.iter().copied().chain(extra) {
-                let r = m.reason("bind with spread arguments");
-                m.sink_node(s, r);
-            }
+        // A `Function.prototype` method the runtime declares (`bind`): its
+        // declaration runs.
+        Some(n) if effects::declared_at("Function.prototype", n).is_some() => {
+            let e = effects::declared_at("Function.prototype", n).expect("declared");
+            effects::run_native(m, e, t, call);
         }
         // Generator protocol (a generator object is its step closure): the
         // step closure only; any other function value has no such methods

@@ -145,6 +145,11 @@ impl Model {
         }
         let fa_s = self.field_any(s);
         self.edge(fa_s, fa_d);
+        // A key of the source the model does not name (computed, symbol) is
+        // a [[Set]] of some key on the target, as a named one is
+        // (`store_into`): the setters on the target's chain run with the
+        // target as `this` (ECMA-262 20.1.2.1 step 4.b.iii.2).
+        self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s));
         // Numeric-only source properties keep their range through a copy.
         let numeric_s = self.numeric_field(s);
         let numeric_d = self.numeric_field(d);
