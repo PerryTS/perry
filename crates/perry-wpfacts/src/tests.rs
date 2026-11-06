@@ -32,6 +32,7 @@ mod callable_contract;
 mod callback_origin;
 mod captured;
 mod cjs_require;
+mod class_capture_forwarding;
 mod class_statics;
 mod closed_marker_load;
 mod closed_world;

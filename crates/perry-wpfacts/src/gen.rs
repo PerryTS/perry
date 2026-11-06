@@ -1310,16 +1310,25 @@ impl<'a> Gen<'a> {
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
-            // Its hidden capture parameters (DECISIONS 117): slot `i` of the
-            // class environment, in the order the HIR appends them.
+            // Only an environment-publishing constructor takes its hidden
+            // arguments from that environment. Instance captures forward the
+            // actual argument, which their ClassCaptureValue rebind prefers
+            // over the declaration snapshot (including an unseeded snapshot).
+            let publishes_environment = ctor.body.iter().any(|s| {
+                matches!(s, perry_hir::Stmt::Expr(perry_hir::Expr::ClassEnvSet {
+                    class_name, publish: true, ..
+                }) if class_name == &c.name)
+            });
             let caps = ctor
                 .params
                 .iter()
                 .rev()
                 .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
-            self.m.funcs[f as usize].captures =
-                (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            if publishes_environment {
+                self.m.funcs[f as usize].captures =
+                    (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            }
         }
         let proto = self.m.tok(TokKind::Proto(tm));
         let cobj = self.m.tok(TokKind::ClassObj(tm));
