@@ -359,7 +359,15 @@ impl<'a> Gen<'a> {
                         let el = self.load(a, ek);
                         self.new_iter_from(fx.module, crate::builtins::ARRAY_ITERATOR_KIND, &[el])
                     } else {
-                        a
+                        // The record's iterator is what GetIterator's
+                        // `v[Symbol.iterator]()` returned; the payload holds
+                        // `v` in its place (`Cons::IterNext` steps it), so a
+                        // returned iterator distinct from `v` is closed too.
+                        let returned = self.iterator_of(a);
+                        let it = self.tmp("close-iterator");
+                        self.m.edge(a, it);
+                        self.m.edge(returned, it);
+                        it
                     };
                     // The runtime's IteratorClose: a protocol call.
                     let ra = self.m.atom("return");

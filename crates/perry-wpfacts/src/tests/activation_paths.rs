@@ -10,6 +10,11 @@
 //! A private method called from the constructor of a class a mixin extends
 //! is the first kind: its call selects the declaring member (CXCHK0 found
 //!  excluded while Node ran it, before private calls were followed).
+//! An iterator's `return` runs through the consumer's IteratorClose, a
+//! protocol call on the value GetIterator produced: what
+//! `v[Symbol.iterator]()` returned, not only `v` (CXCHK0 gap witnesses
+//! test_gap_10524_untyped_array_destructuring and the iterator-close
+//! family).
 //! `instance`, `composed` and `for-in` fire only inside a transfer that
 //! `call`, `accessor`, `this` or `for-in`'s caller already activates (an
 //! instance is made by a call binding; a composed callee's calls are
@@ -80,6 +85,28 @@ console.log(new Client({}).opts.ok);
 "#,
         "call+this",
         &["call", "this", "escape", "accessor"],
+    ),
+    (
+        "iterator-close-of-a-returned-iterator-destructuring",
+        r#"
+function hit() { return 1; }
+const src: any = { [Symbol.iterator]() { return { next() { return { done: false, value: 1 }; }, return() { hit(); return { done: true }; } }; } };
+const [a] = src;
+console.log(a);
+"#,
+        "call+this",
+        &["escape", "accessor", "computed"],
+    ),
+    (
+        "iterator-close-of-a-returned-iterator-for-of-break",
+        r#"
+function hit() { return 1; }
+function mk(): any { return { next() { return { done: false, value: 1 }; }, return() { hit(); return { done: true }; } }; }
+const src: any = { [Symbol.iterator]() { return mk(); } };
+for (const v of src) { console.log(v); break; }
+"#,
+        "call+this",
+        &["escape", "accessor", "computed"],
     ),
 ];
 
