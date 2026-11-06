@@ -1,0 +1,41 @@
+iterator true
+next {"value":1,"done":false}
+throw {"value":"caught","done":false}
+done {"value":3,"done":true}
+return {"value":9,"done":true}
+before return {"value":1,"done":false}
+early return {"value":8,"done":true}
+next next 1 true false true
+return return 1 true false true
+throw throw 1 true false true
+warm {"value":1,"done":false}
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+intrinsic replacement {"value":2,"done":false}
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+function replacement {"value":"function prototype","done":false}
+restored {"value":3,"done":true}
+DEC 250: Cannot delete built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+deleted function
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+restored again {"done":true}
+before setPrototypeOf {"value":1,"done":false}
+after setPrototypeOf {"value":"new prototype","done":true}
+new iterator true
+async iterator true
+async next {"value":4,"done":false}
+async throw {"value":"async caught","done":false}
+async done {"value":6,"done":true}
+async return {"value":9,"done":true}
+async warm {"value":4,"done":false}
+DEC 250: Cannot replace built-in member %AsyncGeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+async replacement {"value":5,"done":false}
+DEC 250: Cannot redefine built-in member %AsyncGeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+async function replacement {"value":"async function prototype","done":false}
+async restored {"value":6,"done":true}
+DEC 250: Cannot delete built-in member %AsyncGeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+async deleted function
+DEC 250: Cannot redefine built-in member %AsyncGeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+async restored again {"done":true}
+async before setPrototypeOf {"value":4,"done":false}
+async after setPrototypeOf {"value":"async new prototype","done":true}
+async new iterator true
