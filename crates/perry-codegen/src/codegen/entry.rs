@@ -921,6 +921,8 @@ pub(super) fn compile_module_entry(
             scope_map: &cross_module.scope_map,
             string_accumulator_locals: &cross_module.string_accumulator_locals,
             contents_stable_bindings: &cross_module.contents_stable_bindings,
+            loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+            pushed_array_birth: false,
             string_length_read_of: None,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),

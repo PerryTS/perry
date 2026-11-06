@@ -349,6 +349,7 @@ pub(crate) use temp_root::{expr_is_inert_primitive, TempRootPool};
 mod scoped_binding;
 pub(crate) use scoped_binding::{
     lower_scoped_binding, lower_scoped_body, read_scoped_binding, with_scoped_arguments,
+    with_scoped_values,
 };
 
 use anyhow::Result;

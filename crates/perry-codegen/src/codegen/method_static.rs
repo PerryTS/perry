@@ -352,6 +352,8 @@ pub(in crate::codegen) fn compile_static_method(
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: false,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -570,7 +572,7 @@ pub(in crate::codegen) fn compile_static_method(
     );
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
             format!("lowering async body of static '{}::{}'", class.name, f.name)
@@ -592,6 +594,7 @@ pub(in crate::codegen) fn compile_static_method(
             ctx.block().ret(DOUBLE, &undef);
         }
     }
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let artifacts = take_lowered_fn_artifacts(&mut ctx);
     drop(ctx);
     publish_lowered_fn_artifacts(llmod, artifacts);

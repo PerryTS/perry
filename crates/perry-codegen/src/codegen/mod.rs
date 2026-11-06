@@ -3183,6 +3183,7 @@ fn lower_module(
         scope_map: Default::default(),
         string_accumulator_locals: Default::default(),
         contents_stable_bindings: Default::default(),
+        loop_pushed_arrays: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
@@ -3407,6 +3408,7 @@ fn lower_module(
         crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
     cross_module.string_accumulator_locals = crate::collectors::string_accumulator_locals(hir);
     cross_module.contents_stable_bindings = crate::collectors::contents_stable_bindings(hir);
+    cross_module.loop_pushed_arrays = crate::collectors::loop_pushed_arrays(hir);
     cross_module.capture_type_proofs =
         crate::collectors::typed_locals::capture_proofs(hir, &module_boxed_vars, &module_globals);
     cross_module.definite_init = crate::collectors::definite_init::collect(hir);
