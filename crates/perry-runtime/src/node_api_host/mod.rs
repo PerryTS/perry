@@ -580,7 +580,6 @@ pub(crate) fn catch_value_call(env: NapiEnv, f: impl FnOnce() -> f64) -> Result<
 pub(crate) const ROOT_SCANNER_NAME: &str = "crate::node_api_host::scan_node_api_roots_mut";
 
 pub(crate) fn install() {
-    symbols::retain();
     hooks::install();
 }
 

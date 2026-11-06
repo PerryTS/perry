@@ -281,6 +281,15 @@ fn module_uses_process_object(module: &perry_hir::Module) -> bool {
 
     fn uses(expr: &Expr) -> bool {
         match expr {
+            // `process.dlopen` loads an authenticated addon; the call itself
+            // touches no process state. What the addon reaches is its own
+            // fact: an open one installs every subsystem (`addon_world`).
+            Expr::NativeMethodCall {
+                module,
+                method,
+                object: None,
+                ..
+            } if module == "process" && method == "dlopen" => {}
             Expr::NativeModuleRef(module) | Expr::NativeMethodCall { module, .. }
                 if matches!(
                     module.as_str(),
@@ -1515,6 +1524,7 @@ mod tests {
             r#"const e = { on() {}, emit() {} }; e.on(); e.emit();"#,
             r#"console.log("stdin", "on", "emit", "kill");"#,
             r#"console.log(process.argv[2], process.env.HOME, process.pid);"#,
+            r#"const m = { exports: {} }; process.dlopen(m, "addon.node");"#,
         ] {
             assert!(!detect_for_source(source).uses_os, "{source}");
         }
@@ -1534,6 +1544,7 @@ mod tests {
             r#"const callback = () => { const p = process; p.on("beforeExit", () => {}); }; callback();"#,
             r#"class C { subscribe(p: any = process) { p.on("beforeExit", () => {}); } } new C().subscribe();"#,
             r#"console.log(process.stdin, process.stdout, process.stderr);"#,
+            r#"const m = { exports: {} }; process.dlopen(m, String(process.stdin));"#,
         ] {
             assert!(detect_for_source(source).uses_os, "{source}");
         }

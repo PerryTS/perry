@@ -93,8 +93,9 @@ use app_metadata::rust_target_triple;
 // compile.rs anymore now that the iOS bundle code moved out).
 pub(crate) use audit_manifest::allowlist_matches;
 use bootstrap::{
-    apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug, maybe_init_type_checker,
-    rerun_collect_with_class_field_types, run_native_instance_fixups, run_post_collect_preflight,
+    admit_open_native_addons, apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug,
+    maybe_init_type_checker, rerun_collect_with_class_field_types, run_native_instance_fixups,
+    run_post_collect_preflight,
 };
 // HarmonyOS ArkTS harvest only exists when the arkts backend is compiled in.
 #[cfg(feature = "backend-arkts")]
