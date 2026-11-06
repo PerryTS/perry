@@ -131,7 +131,7 @@ def main():
   for line in result.stdout.splitlines():
    fields=line.split()
    if len(fields)==3:
-    if fields[2].startswith(("js_crypto_","js_webcrypto_")):
+    if fields[2].startswith(("js_crypto_","js_webcrypto_","js_vm_")) or fields[2] in ("js_eval_in_scope","js_function_constructor","js_function_new"):
      audit.setdefault(int(fields[0],16),[]).append(fields[2])
     if fields[2] in ("js_snap_entry_body","js_run_module_init_guarded"):
      symbols[fields[2]]=int(fields[0],16)
@@ -231,6 +231,14 @@ def main():
     sequence+=1
     entry={"kind":"syscall","seq":sequence,"tid":tid,"ir_enter":pos,"ip":ip,"nr":nr,"name":NAMES.get(nr,"UNKNOWN"),"args":args,"policy":"representation" if nr in REP else "STOP"}
     a=args
+    # Optional raw stack evidence for source audit. These words are not a
+    # backtrace and never establish an input's eligibility or pointer shape.
+    if nr not in REP and not(nr in (0,1) and a[0] in state["diagnostic_fds"]):
+     regs=(C.c_ulonglong*27)()
+     ptrace(12,tid,0,C.addressof(regs))
+     sp=int(regs[19]);entry["rsp"]=sp
+     window=memory(tid,sp,min(2048,4096-(sp&4095)))
+     entry["stack_window"]=window.hex() if window is not None else None
     if nr in (2,4,6,21,80,82,83,84,85,87,89,137):entry["path"]=string(tid,a[0])
     elif nr in (257,262,267,439):entry["path"]=string(tid,a[1])
     if nr==59:
@@ -242,6 +250,14 @@ def main():
       if not ptr:break
       argv.append(string(tid,ptr));index+=1
      entry["argv"]=argv
+     envp=[];index=0
+     while True:
+      item=memory(tid,a[2]+8*index,8)
+      if item is None:break
+      pointer=struct.unpack("Q",item)[0]
+      if not pointer:break
+      envp.append(string(tid,pointer));index+=1
+     entry["environment"]=envp
     if nr==157 and a[0]==0x53564d41:entry["vma_name"]=string(tid,a[4])
     if nr==157 and a[0]==15:entry["input_name"]=string(tid,a[1])
     if nr in (1,18,44):entry["input_bytes"]=blob(tid,a[1],a[2])
@@ -269,21 +285,40 @@ def main():
      elif nr==262:e["struct"]=blob(tid,a[2],144)
      elif nr==332:e["struct"]=blob(tid,a[4],256)
      elif nr in (228,229):e["struct"]=blob(tid,a[1],16)
-     elif nr==96:e["struct"]=blob(tid,a[0],16)
+     elif nr==96:
+      e["struct"]=blob(tid,a[0],16) if a[0] else None
+      e["timezone"]=blob(tid,a[1],8) if a[1] else None
      elif nr==63:e["struct"]=blob(tid,a[0],390)
      elif nr==99:e["struct"]=blob(tid,a[0],112)
      elif nr in (97,302):e["struct"]=blob(tid,a[1] if nr==97 else a[3],16) if (nr==97 or a[3]) else None
      elif nr==98:e["struct"]=blob(tid,a[1],144)
      elif nr==204:e["struct"]=blob(tid,a[2],ret)
      elif nr==115:e["struct"]=blob(tid,a[1],ret*4) if a[1] else None
+     elif nr in (13,14):
+      e["old_signal_state"]=blob(tid,a[2],32 if nr==13 else a[3]) if a[2] else None
+     elif nr==131:e["old_signal_stack"]=blob(tid,a[1],24) if a[1] else None
+     elif nr in (137,138):e["struct"]=blob(tid,a[1],120)
+     elif nr==158:
+      if a[0] in (0x1003,0x1004):e["tls_pointer"]=blob(tid,a[1],8)
+     elif nr in (23,270):
+      length=((a[0]+63)//64)*8
+      e["fdsets"]=[blob(tid,address,length) if address else None for address in a[1:4]]
+      e["timeout"]=blob(tid,a[4],16) if a[4] else None
+     elif nr==61:
+      e["wait_status"]=blob(tid,a[1],4) if a[1] else None
+      e["usage"]=blob(tid,a[3],144) if a[3] else None
      elif nr==157:
       if a[0]==16:e["thread_name"]=blob(tid,a[1],16)
       elif a[0]==40:e["struct"]=blob(tid,a[1],8)
-      elif a[0] in (2,37):e["struct"]=blob(tid,a[1],4)
+      elif a[0] in (2,5,9,11,19,25,37):e["struct"]=blob(tid,a[1],4)
+      elif a[0] not in (1,3,4,6,7,8,10,12,13,14,15,17,18,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,38,39,41,42,43,44,45,46,47,50,51,52,53,54,55,56,57,58,59,63,64,65,66,67,68,0x53564d41,0x59616d61):
+       e["unsupported_payload"]=True
      elif nr==16:
       if a[1] in (0x5413,0x5401,0x541b):e["struct"]=blob(tid,a[2],{0x5413:8,0x5401:36,0x541b:4}[a[1]])
       else:e["unsupported_payload"]=True
-     elif nr in (7,271):e["struct"]=blob(tid,a[0],a[1]*8)
+     elif nr in (7,271):
+      e["struct"]=blob(tid,a[0],a[1]*8)
+      if nr==271 and a[2]:e["timeout"]=blob(tid,a[2],16)
      elif nr in (232,281,441):e["struct"]=blob(tid,a[1],ret*12)
      elif nr in (43,51,52,288) and a[1] and a[2]:
       size=memory(tid,a[2],4)
@@ -302,13 +337,19 @@ def main():
        if length is None:messages.append({"unreadable_mmsghdr":item});continue
        messages.append(message(tid,item,struct.unpack("I",length)[0]))
       e["messages"]=messages
+    if ret==-errno.EINTR and nr in (35,230):
+     address=a[1] if nr==35 else a[3]
+     e["remaining_time"]=blob(tid,address,16) if address else None
     if e["name"]=="UNKNOWN" or e.get("unsupported_payload"):e["complete"]=False
     else:e["complete"]=True
     out.write(json.dumps(e,separators=(",",":"))+"\n")
   elif event == 0 and sig==signal.SIGTRAP and handle_probe(tid):
    pass
   elif event == 0 and sig != signal.SIGSTOP:
-   out.write(json.dumps({"kind":"signal","tid":tid,"signal":sig,"ir":ir(active[tid]["perf"])})+"\n")
+   information=C.create_string_buffer(128)
+   ptrace(0x4202,tid,0,C.addressof(information))
+   out.write(json.dumps({"kind":"signal","tid":tid,"signal":sig,"ir":ir(active[tid]["perf"]),
+     "siginfo_hex":information.raw.hex()})+"\n")
    ptrace(SYSCALL,tid,0,sig);continue
   ptrace(SYSCALL,tid)
  out.write(json.dumps({"kind":"summary","main_rc":main_rc,"memory_failures":failures})+"\n")
