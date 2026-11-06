@@ -12,7 +12,8 @@ fn mark_runs(src: &str) -> bool {
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     let list = [("t.ts".to_string(), &hir)];
     let pf = crate::compute(&list, &FactsConfig::default());
-    let on = pf.active_bodies.as_ref().expect("activated");
+    assert!(pf.body_reach.complete, "activated");
+    let on = &pf.body_reach.bodies;
     let id = hir
         .functions
         .iter()
