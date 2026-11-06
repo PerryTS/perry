@@ -152,6 +152,7 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF | prim::BOOL)
             }
             Expr::PrivateLexicalBrandPop => self.prim_node(prim::UNDEF),
+            Expr::ThisProvenClass(_) => self.prim_node(prim::BOOL),
             Expr::PrivateBrandCheck { object, .. } => {
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)

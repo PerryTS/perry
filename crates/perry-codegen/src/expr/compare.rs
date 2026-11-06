@@ -1535,23 +1535,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     return Ok(blk.bitcast_i64_to_double(&tagged));
                 }
-                // The `this.F` hoist's dispatch check: a runtime identity test
-                // only while the module proves the class's prototype stable
-                // (`hoist_dispatch`), else a constant mismatch.
-                if matches!(op, CompareOp::Eq | CompareOp::Ne) {
-                    if let Some((class, _)) =
-                        crate::expr::hoist_dispatch::dispatch_check(left.as_ref(), right.as_ref())
-                    {
-                        if !crate::expr::hoist_dispatch::prototype_is_stable(&ctx.module_slug, class) {
-                            let bits = if matches!(op, CompareOp::Eq) {
-                                crate::nanbox::TAG_FALSE_I64
-                            } else {
-                                crate::nanbox::TAG_TRUE_I64
-                            };
-                            return Ok(ctx.block().bitcast_i64_to_double(bits));
-                        }
-                    }
-                }
                 // Strict equality against a string LITERAL. Decidable inline for
                 // every runtime shape (see `lower_string_literal_strict_eq`), so it
                 // pre-empts all the arms below — including the `js_eq` tail that an

@@ -224,6 +224,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PrivateLexicalBrand(_)
         | Expr::PrivateLexicalBrandPush(_)
         | Expr::PrivateLexicalBrandPop
+        | Expr::ThisProvenClass(_)
         | Expr::Logical { .. }
         | Expr::ArrayFilter { .. }
         | Expr::FetchWithOptions { .. }

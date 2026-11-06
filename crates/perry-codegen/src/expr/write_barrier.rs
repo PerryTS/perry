@@ -827,6 +827,38 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     write_barrier_needed: bool,
     stem: &str,
 ) -> Option<String> {
+    emit_jsvalue_slot_store_pointer_tested_known(
+        ctx,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        string_addref_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        stem,
+        false,
+    )
+}
+
+/// [`emit_jsvalue_slot_store_pointer_tested`] for a caller that knows whether
+/// the stored value is a heap pointer: with `value_is_heap_pointer` (a pool
+/// atom literal, always a `STRING_TAG` heap string) the live "may carry a
+/// heap pointer" test is omitted, since it would always pass. The parent's
+/// remembering check and the barrier itself are unchanged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_jsvalue_slot_store_pointer_tested_known(
+    ctx: &mut FnCtx<'_>,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    string_addref_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+    stem: &str,
+    value_is_heap_pointer: bool,
+) -> Option<String> {
     {
         let blk = ctx.block();
         // GC_STORE_AUDIT(BARRIERED): the slot write itself is unconditional;
@@ -851,8 +883,12 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     let done_label = ctx.block_label(done_idx);
     {
         let blk = ctx.block();
-        let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
-        blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+        if value_is_heap_pointer {
+            blk.br(&bookkeeping_label);
+        } else {
+            let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
+            blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+        }
     }
     ctx.current_block = bookkeeping_idx;
     {

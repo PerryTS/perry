@@ -51,7 +51,7 @@ pub(crate) fn hoist_loop_invariant_property_array(
         return None;
     }
     let recv = Recv::Local(recv_id);
-    if !loop_is_hoist_safe(condition, update, body, recv, &[]) {
+    if !loop_is_hoist_safe(condition, update, body, recv, &[], None) {
         return None;
     }
     // Reads of `RECV.PROP` must actually occur in the body, or the rewrite
@@ -177,8 +177,13 @@ fn loop_is_hoist_safe(
     body: &[Stmt],
     recv: Recv,
     writable: &[String],
+    strict: Option<Strict<'_>>,
 ) -> bool {
-    let scan = Scan { recv, writable };
+    let scan = Scan {
+        recv,
+        writable,
+        strict,
+    };
     expr_is_hoist_safe(condition, &scan)
         && update.is_none_or(|expr| expr_is_hoist_safe(expr, &scan))
         && body.iter().all(|stmt| stmt_is_hoist_safe(stmt, &scan))
@@ -190,6 +195,46 @@ fn loop_is_hoist_safe(
 struct Scan<'a> {
     recv: Recv,
     writable: &'a [String],
+    /// `this`-receiver mode only: the reads the loop may make. Any other
+    /// property or element read could run a getter (or a Proxy trap) that
+    /// replaces the hoisted field.
+    strict: Option<Strict<'a>>,
+}
+
+/// The reads a `this.F` hoist admits: `this.P` for a declared data field,
+/// `h.length` and `h[i]` for a hoisted array local `h`, and `this.F[i]` for an
+/// array field `F`.
+struct Strict<'a> {
+    readable: &'a [String],
+    arrays: &'a [(String, Type)],
+    hoisted: &'a [u32],
+}
+
+impl Strict<'_> {
+    fn read_ok(&self, object: &Expr, property: &str) -> bool {
+        match object {
+            Expr::This => self.readable.iter().any(|f| f == property),
+            Expr::LocalGet(id) => self.hoisted.contains(id) && property == "length",
+            Expr::PropertyGet {
+                object, property: f, ..
+            } => {
+                property == "length"
+                    && matches!(object.as_ref(), Expr::This)
+                    && self.arrays.iter().any(|(a, _)| a == f)
+            }
+            _ => false,
+        }
+    }
+
+    fn element_ok(&self, object: &Expr) -> bool {
+        match object {
+            Expr::PropertyGet {
+                object, property, ..
+            } => matches!(object.as_ref(), Expr::This) && self.arrays.iter().any(|(f, _)| f == property),
+            Expr::LocalGet(id) => self.hoisted.contains(id),
+            _ => false,
+        }
+    }
 }
 
 fn stmt_is_hoist_safe(stmt: &Stmt, scan: &Scan<'_>) -> bool {
@@ -278,9 +323,16 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Undefined => true,
-        Expr::PropertyGet { object, .. } => expr_is_hoist_safe(object, scan),
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            scan.strict.as_ref().is_none_or(|st| st.read_ok(object, property))
+                && expr_is_hoist_safe(object, scan)
+        }
         Expr::IndexGet { object, index, .. } => {
-            expr_is_hoist_safe(object, scan) && expr_is_hoist_safe(index, scan)
+            scan.strict.as_ref().is_none_or(|st| st.element_ok(object))
+                && expr_is_hoist_safe(object, scan)
+                && expr_is_hoist_safe(index, scan)
         }
         Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } => {
             expr_is_hoist_safe(left, scan) && expr_is_hoist_safe(right, scan)
@@ -656,6 +708,11 @@ pub(crate) fn hoist_this_array_fields(
     let pure_scan = Scan {
         recv: Recv::This,
         writable: &no_writes,
+        strict: Some(Strict {
+            readable: &data,
+            arrays: &arrays,
+            hoisted: &[],
+        }),
     };
     let accessor_or_field = |n: &str| accessor(n) || fields.iter().any(|f| f.name == n);
     let inlinable: std::collections::HashMap<String, Inlinable> = methods
@@ -776,6 +833,7 @@ fn hoist_this_for(
     inlined.sort();
     inlined.dedup();
     let mut hoists: Vec<Stmt> = Vec::new();
+    let mut hoisted_ids: Vec<u32> = Vec::new();
     for (field, ty) in class.arrays {
         let reads = expr_reads_property(&cond, Recv::This, field)
             || update
@@ -788,14 +846,29 @@ fn hoist_this_for(
             continue;
         }
         let writable: Vec<String> = class.data.iter().filter(|f| *f != field).cloned().collect();
+        let strict = || Strict {
+            readable: class.data,
+            arrays: class.arrays,
+            hoisted: &hoisted_ids,
+        };
         let scan = Scan {
             recv: Recv::This,
             writable: &writable,
+            strict: Some(strict()),
         };
         let init_safe = init
             .as_deref()
             .is_none_or(|s| stmt_is_hoist_safe(s, &scan));
-        if !init_safe || !loop_is_hoist_safe(&cond, update.as_ref(), &body, Recv::This, &writable) {
+        if !init_safe
+            || !loop_is_hoist_safe(
+                &cond,
+                update.as_ref(),
+                &body,
+                Recv::This,
+                &writable,
+                Some(strict()),
+            )
+        {
             continue;
         }
         let name = format!("__perry_hoist_this_{field}");
@@ -803,6 +876,7 @@ fn hoist_this_for(
         // the binding is only ever named by the rewritten loop.
         let hoist_id = ctx.fresh_local();
         ctx.immutable_locals.insert(hoist_id);
+        hoisted_ids.push(hoist_id);
         hoists.push(Stmt::Let {
             id: hoist_id,
             name,
@@ -828,36 +902,17 @@ fn hoist_this_for(
         update,
         body,
     });
-    let mut guard = Expr::InstanceOf {
-        expr: Box::new(Expr::This),
-        ty: class.name.to_string(),
-        ty_expr: None,
-    };
-    for m in &inlined {
-        let method_of = |object: Expr| Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(object),
-            property: m.clone(),
-            byte_offset: 0,
-        };
-        let proto = Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::ClassRef(class.name.to_string())),
-            property: "prototype".to_string(),
-            byte_offset: 0,
-        };
-        guard = Expr::Logical {
-            op: crate::ir::LogicalOp::And,
-            left: Box::new(guard),
-            right: Box::new(Expr::Compare {
-                op: crate::ir::CompareOp::Eq,
-                left: Box::new(method_of(Expr::This)),
-                right: Box::new(method_of(proto)),
-            }),
-        };
-    }
+    // Versioned on what codegen proves, not on a runtime test user code can
+    // observe: `ThisProvenClass` is true exactly in a `$pshape` body, whose
+    // receiver is an instance of exactly this class with its declared
+    // layout, under the module's dispatch-stability and shape-barrier facts
+    // (`collectors::method_proven_this`). That covers an overridden or
+    // replaced method (the inlined copies), an accessor redefined on the
+    // instance, and a foreign receiver, without `instanceof` (which can run a
+    // `Symbol.hasInstance` hook). Every other body runs the original loop.
+    let _ = &inlined;
     vec![Stmt::If {
-        condition: guard,
+        condition: Expr::ThisProvenClass(class.name.to_string()),
         then_branch: hoists,
         else_branch: Some(vec![original]),
     }]
@@ -868,10 +923,11 @@ fn expr_has_set(e: &Expr) -> bool {
     s.contains("PropertySet") || s.contains("LocalSet") || s.contains("Update")
 }
 
-/// An argument that may be dropped or duplicated by inlining: evaluating it
-/// cannot throw and has no effect.
+/// An argument that may be dropped or duplicated by inlining: a literal. A
+/// local is not one: dropping its read skips a TDZ `ReferenceError`, and
+/// reading it twice can observe a write a `valueOf` made in between.
 fn arg_is_trivial(e: &Expr) -> bool {
-    matches!(e, Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_))
+    matches!(e, Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_))
 }
 
 fn count_local(e: &Expr, id: u32) -> usize {

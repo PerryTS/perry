@@ -1967,6 +1967,12 @@ fn match_packed_f64_range_loop(
         }
         true
     };
+    // The walkers admit `this.P` reads structurally. Only a proven raw-f64
+    // lane is a plain load; anything else could run a getter, which in the
+    // classic tier would re-run when a hole side-exits to the slow copy.
+    if !body_this_reads_are_raw_f64(ctx, fast_body.as_deref().unwrap_or(body)) {
+        return range_loop_reject("this_read_not_raw_f64");
+    }
     if accesses.is_empty() {
         // No tracked array access — nothing for the versioned loop to win.
         return range_loop_reject("no_tracked_array_access");
@@ -3019,6 +3025,23 @@ struct MaskedWindowExpressionProof {
 /// finite double is a plain store (`property_set`'s raw-f64 route), so both
 /// are inert, call-free and numeric. `PERRY_UNBOXED_CLASS_FIELDS=0` keeps
 /// `this.P` out of the packed tiers.
+/// Every `this.P` read in `stmts` is a proven raw-f64 lane
+/// ([`this_raw_f64_field`]).
+fn body_this_reads_are_raw_f64(ctx: &FnCtx<'_>, stmts: &[Stmt]) -> bool {
+    let mut ok = true;
+    crate::collectors::for_each_expr_in_stmts(stmts, &mut |e| {
+        if let perry_hir::Expr::PropertyGet {
+            object, property, ..
+        } = e
+        {
+            if ok && matches!(object.as_ref(), perry_hir::Expr::This) && !this_raw_f64_field(ctx, property) {
+                ok = false;
+            }
+        }
+    });
+    ok
+}
+
 /// `PERRY_UNBOXED_CLASS_FIELDS=0`.
 pub(crate) fn this_field_fast_off() -> bool {
     matches!(

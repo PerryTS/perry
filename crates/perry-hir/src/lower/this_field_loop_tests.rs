@@ -61,12 +61,10 @@ fn a_computed_key_on_this_keeps_its_temps() {
 fn version_check(stmts: &[Stmt]) -> Option<(&[Stmt], &[Stmt])> {
     stmts.iter().find_map(|s| match s {
         Stmt::If {
-            condition: Expr::InstanceOf { expr, ty, .. },
+            condition: Expr::ThisProvenClass(class),
             then_branch,
             else_branch: Some(else_branch),
-        } if matches!(expr.as_ref(), Expr::This) && ty == "B" => {
-            Some((then_branch.as_slice(), else_branch.as_slice()))
-        }
+        } if class == "B" => Some((then_branch.as_slice(), else_branch.as_slice())),
         _ => None,
     })
 }
@@ -119,4 +117,41 @@ fn an_accessor_or_undeclared_field_is_not_hoisted() {
         let m = lower(class);
         assert!(version_check(method(&m, "B", "sum")).is_none(), "{class}");
     }
+}
+
+#[test]
+fn reads_that_could_run_user_code_block_the_hoist() {
+    for body in [
+        // A getter on another receiver could replace the field.
+        "for (let i = 0; i < n; i++) { s += this.board[i] as number; s += st.next; }",
+        // An element of something other than the hoisted field.
+        "for (let i = 0; i < n; i++) { s += (this.board[i] as number) + (other as any)[i]; }",
+    ] {
+        let src = format!(
+            "class B {{ board: number[] = []; sum(n: number, st: any, other: any) {{ let s = 0; {body} return s; }} }}\n"
+        );
+        let m = lower(&src);
+        assert!(version_check(method(&m, "B", "sum")).is_none(), "{body}");
+    }
+}
+
+#[test]
+fn inlining_keeps_every_argument_read_that_could_throw_or_change() {
+    for (method_src, call) in [
+        // An unused parameter: the argument's TDZ read must not be dropped.
+        ("at(sq: number) { return this.board[0] ?? 0; }", "this.at(k)"),
+        // A parameter read twice: one read of the argument per call.
+        ("at(sq: number) { return (this.board[sq] ?? 0) + sq; }", "this.at(k)"),
+    ] {
+        let src = format!(
+            "class B {{ board: number[] = []; {method_src}\n sum(n: number, k: number) {{ let s = 0; for (let i = 0; i < n; i++) s += {call}; return s; }} }}\n"
+        );
+        let m = lower(&src);
+        assert!(version_check(method(&m, "B", "sum")).is_none(), "{method_src}");
+    }
+    // A literal argument may be dropped or duplicated.
+    let m = lower(
+        "class B { board: number[] = []; at(sq: number) { return (this.board[sq] ?? 0) + sq; }\n sum(n: number) { let s = 0; for (let i = 0; i < n; i++) s += this.at(3); return s; } }\n",
+    );
+    assert!(version_check(method(&m, "B", "sum")).is_some());
 }

@@ -574,6 +574,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_private_lexical_brand_pop", &[]))
         }
+        // The `this.F` hoist's version test: a compile-time answer. True only
+        // in a body lowered with a proven `this` of exactly this class.
+        Expr::ThisProvenClass(class) => {
+            let proven = !crate::stmt::this_field_fast_off()
+                && ctx
+                    .ptr_shape_region_class(&Expr::This)
+                    .is_some_and(|c| c == *class);
+            let bits = if proven {
+                crate::nanbox::TAG_TRUE_I64
+            } else {
+                crate::nanbox::TAG_FALSE_I64
+            };
+            Ok(ctx.block().bitcast_i64_to_double(bits))
+        }
         Expr::Logical { op, left, right } => lower_logical(ctx, *op, left, right),
 
         // -------- arr.filter(callback) --------
