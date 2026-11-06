@@ -460,20 +460,22 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
     use perry_abi::lock::{final_on, LockHolder, LockKey};
     use perry_abi::BuiltinProto as P;
-    // The family's own prototype (if the lock holds it) and whether `name`
-    // is one of its image members; `Object.prototype` follows on every chain.
-    let own_proto = match fam {
-        Family::Object => None,
+    // The locked prototypes the lookup passes before `Object.prototype`
+    // (which follows on every chain), each with whether `name` is one of its
+    // image members.
+    let own_member = || own(fam, name).is_some();
+    let chain: &[(LockHolder, bool)] = match fam {
+        Family::Object => &[],
         Family::Function if what == Some(FN_PROTO_ONLY) => {
-            Some((P::Function, own(fam, name).is_some()))
+            &[(LockHolder::Proto(P::Function), own_member())]
         }
-        Family::Array => Some((P::Array, own(fam, name).is_some())),
-        Family::Str => Some((P::String, own(fam, name).is_some())),
-        Family::Num => Some((P::Number, own(fam, name).is_some())),
-        Family::Bool => Some((P::Boolean, own(fam, name).is_some())),
-        Family::Sym => Some((P::Symbol, own(fam, name).is_some())),
-        Family::BigInt => Some((P::BigInt, own(fam, name).is_some())),
-        Family::Promise => Some((P::Promise, own(fam, name).is_some())),
+        Family::Array => &[(LockHolder::Proto(P::Array), own_member())],
+        Family::Str => &[(LockHolder::Proto(P::String), own_member())],
+        Family::Num => &[(LockHolder::Proto(P::Number), own_member())],
+        Family::Bool => &[(LockHolder::Proto(P::Boolean), own_member())],
+        Family::Sym => &[(LockHolder::Proto(P::Symbol), own_member())],
+        Family::BigInt => &[(LockHolder::Proto(P::BigInt), own_member())],
+        Family::Promise => &[(LockHolder::Proto(P::Promise), own_member())],
         Family::Collection => {
             let (proto, keys) = match what {
                 Some("Map") => (P::Map, MAP_KEYS),
@@ -482,11 +484,20 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
                 Some("WeakSet") => (P::WeakSet, WEAKSET_KEYS),
                 _ => return false,
             };
-            Some((
-                proto,
-                keys.contains(&name) && find(COLLECTION, name).is_some(),
-            ))
+            let image = keys.contains(&name) && find(COLLECTION, name).is_some();
+            &[(LockHolder::Proto(proto), image)]
         }
+        // An array iterator's chain: `%ArrayIteratorPrototype%`, then
+        // `%IteratorPrototype%`. The iterator family's member list is the
+        // union of every iterator kind, so it names neither holder's image;
+        // both holders are add-locked, where an image member and an absent
+        // key are final alike, so the answer does not depend on it. The
+        // Map/Set/String iterator prototypes and the iterator helpers' take
+        // adds: no other iterator kind is final.
+        Family::Iterator if what == Some(ARRAY_ITERATOR) => &[
+            (LockHolder::ArrayIterator, false),
+            (LockHolder::Iterator, false),
+        ],
         Family::Function
         | Family::Iterator
         | Family::Error
@@ -508,9 +519,9 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
     // The lock's one decision (`perry_abi::lock`, the runtime's too) on each
     // prototype the lookup passes: an image member ends it, an absent key
     // goes on to the next prototype.
-    if let Some((proto, image)) = own_proto {
+    for &(holder, image) in chain {
         let key = class(image);
-        if !final_on(LockHolder::Proto(proto), key) {
+        if !final_on(holder, key) {
             return false;
         }
         if key == LockKey::Image {
@@ -532,11 +543,32 @@ pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     }
 }
 
+/// Builtin iterator template kinds (`TmplKind::BObj::what`, family
+/// `Iterator`): the iterator's intrinsic prototype, when the model knows it.
+pub(crate) const ANY_ITERATOR: &str = "Iterator";
+/// `%ArrayIteratorPrototype%` (`extends %IteratorPrototype%`): the runtime
+/// seals and add-locks both (`builtin_proto.rs` `add_locked`:
+/// `ITERATOR_FAMILY`, `ARRAY_ITERATOR_FAMILY`), so past them the chain is
+/// `Object.prototype`, add-locked too: every read but `constructor` is
+/// final (`locked_read`).
+pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
+pub(crate) const MAP_ITERATOR: &str = "MapIterator";
+pub(crate) const SET_ITERATOR: &str = "SetIterator";
+
+/// The iterator kind a collection of kind `what` (`Map`/`Set`) gives.
+pub(super) fn collection_iterator(what: &str) -> &'static str {
+    match what {
+        "Map" => MAP_ITERATOR,
+        "Set" => SET_ITERATOR,
+        _ => ANY_ITERATOR,
+    }
+}
+
 /// The family of a builtin object template kind (`TmplKind::BObj::what`).
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        "Iterator" => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {

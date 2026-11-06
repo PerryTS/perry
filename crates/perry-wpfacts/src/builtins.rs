@@ -31,6 +31,10 @@ pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
+/// The template kind of an iterator whose prototype the model does not know.
+pub(crate) const ITERATOR_KIND: &str = members::ANY_ITERATOR;
+/// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
+pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
@@ -700,6 +704,10 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
     let holder = match what {
         Some("TypedArray") => m.declarations.named("%TypedArray%.prototype", m),
+        // Every iterator kind resolves its members as `Iterator.prototype`'s.
+        Some(w) if members::bobj_family(w) == Family::Iterator => {
+            m.declarations.named("Iterator.prototype", m)
+        }
         Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
         None => m.declarations.family(fam, m),
     }?;
