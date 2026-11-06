@@ -908,6 +908,105 @@ fn ran_in_isolated_child(name: &str) -> bool {
     true
 }
 
+/// A program with one native addon of the given reach and Node-API imports.
+fn addon_context(
+    dir: &std::path::Path,
+    reach: &[perry_runtime_manifest::NodeApiReach],
+    imports: &[&str],
+) -> CompilationContext {
+    let mut ctx = CompilationContext::new(dir.to_path_buf());
+    ctx.native_addons.insert(
+        "fixture/addon.node".to_string(),
+        crate::commands::compile::NativeAddonModule {
+            logical_id: "fixture/addon.node".to_string(),
+            package: "fixture".to_string(),
+            version: "1.0.0".to_string(),
+            source_path: dir.join("addon.node"),
+            package_dir: dir.to_path_buf(),
+            entry_relative: "addon.node".into(),
+            ship_package_payload: true,
+            reach: reach.iter().copied().collect(),
+            node_api_imports: imports.iter().map(|name| name.to_string()).collect(),
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
+        },
+    );
+    ctx
+}
+
+/// The host links and exports the Node-API symbols its addons import, and
+/// its whole inventory for an open addon (which can look any export up).
+#[test]
+fn node_api_host_exports_what_its_addons_import() {
+    use perry_runtime_manifest::{node_api_host_symbols, NodeApiReach};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(CompilationContext::new(dir.path().to_path_buf())
+        .node_api_host_exports()
+        .is_empty());
+    let closed = addon_context(
+        dir.path(),
+        &[],
+        &["napi_create_int32", "napi_set_named_property"],
+    );
+    assert_eq!(
+        closed.node_api_host_exports(),
+        ["napi_create_int32", "napi_set_named_property"]
+    );
+    let open = addon_context(dir.path(), &[NodeApiReach::World], &["napi_get_global"]);
+    assert_eq!(
+        open.node_api_host_exports(),
+        node_api_host_symbols().collect::<Vec<_>>()
+    );
+}
+
+/// A native addon reaches what its Node-API imports reach. A closed addon
+/// links the Node-API host and the subsystems of the values it creates, not
+/// every global subsystem; an open one links them all.
+#[test]
+fn native_addons_install_what_their_imports_reach() {
+    if ran_in_isolated_child("native_addons_install_what_their_imports_reach") {
+        return;
+    }
+    use perry_runtime_manifest::NodeApiReach;
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
+    let dir = tempfile::tempdir().unwrap();
+    let features = BTreeSet::new();
+    let with_addon = |reach: &[NodeApiReach]| {
+        auto_optimized_cross_features(&addon_context(dir.path(), reach, &[]), &features, &[])
+    };
+    let has = |cross: &[String], feature: &str| cross.iter().any(|f| f == feature);
+    let world = [
+        "perry-runtime/temporal",
+        "perry-runtime/url-engine",
+        "perry-runtime/perf-hooks",
+        "perry-runtime/os",
+        "perry-runtime/messaging",
+        "perry-runtime/event-target",
+        "perry-runtime/thread",
+        "perry-runtime/async-hooks",
+        "perry-runtime/proxy",
+        "perry-runtime/proc-ipc",
+        "perry-runtime/diagnostics",
+    ];
+    let values = [
+        "perry-runtime/bigint",
+        "perry-runtime/date",
+        "perry-runtime/typedarray",
+    ];
+    let closed = with_addon(&[]);
+    assert!(has(&closed, "perry-runtime/node-api-host"), "{closed:?}");
+    for feature in world.iter().chain(&values) {
+        assert!(!has(&closed, feature), "closed addon selected {feature}");
+    }
+    let dated = with_addon(&[NodeApiReach::Date]);
+    assert!(has(&dated, "perry-runtime/date"), "{dated:?}");
+    assert!(!has(&dated, "perry-runtime/bigint"), "{dated:?}");
+    let open = with_addon(&[NodeApiReach::World]);
+    for feature in world.iter().chain(&values) {
+        assert!(has(&open, feature), "open addon lacks {feature}: {open:?}");
+    }
+}
+
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
     if ran_in_isolated_child("deserializers_install_regex_without_a_regex_literal") {

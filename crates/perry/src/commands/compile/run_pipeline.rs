@@ -992,6 +992,12 @@ pub fn run_with_parse_cache(
     collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+    // The lowering and the closed-world bit above saw every open addon; one
+    // first admitted here would be linked against a census that missed it.
+    anyhow::ensure!(
+        !admit_open_native_addons(&mut ctx),
+        "an open Node-API addon was admitted after the program's dynamic-code census"
+    );
 
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
     // bundled PARTIAL well-known binding over a `node_modules/<pkg>` copy the
