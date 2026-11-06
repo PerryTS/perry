@@ -19,6 +19,8 @@ use std::rc::Rc;
 
 pub(crate) mod body;
 mod build;
+#[cfg(test)]
+pub(crate) mod packet;
 use build::build_summaries;
 
 /// A summary term: a slot index with this bit, else an absolute node.
@@ -644,9 +646,7 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => {
-                (1, LAY_NONE, ft)
-            }
+            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => (1, LAY_NONE, ft),
             _ => key,
         };
         let inst = self.instance(key);

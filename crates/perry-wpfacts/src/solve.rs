@@ -52,6 +52,14 @@ impl Model {
 
     /// Add tokens/prims to a node; schedules it when anything is new.
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Seed(
+            n,
+            toks.to_vec(),
+            prim,
+        )) {
+            return;
+        }
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
     /// The work bound (`FactsConfig::max_work`, 0 = none). Past it a
@@ -496,6 +504,10 @@ impl Model {
             return n;
         }
         let n = self.node_l("TOPVAL");
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].intrinsic_top = Some(why.to_owned());
+        }
         self.add_top(n, |_| why.to_string());
         self.add_prim(n, prim::ALL);
         self.top_vals.insert(why.to_string(), n);
@@ -522,6 +534,10 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
+            return;
+        }
         self.stats_cons += 1;
         if matches!(c, Cons::IdxOwnLoad { .. }) {
             self.own_read_census[0] += 1;
@@ -735,10 +751,21 @@ impl Model {
 
     /// The node holding the prototype objects of `t`.
     pub fn proto_node(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.proto_node(t));
+        }
         if let Some(&n) = self.proto_node.get(&t) {
             return n;
         }
         let n = self.node_named("protos", || format!("protos({t})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::Prototype,
+            });
+        }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
         self.rel(|| format!("protonode {n} {t}"));

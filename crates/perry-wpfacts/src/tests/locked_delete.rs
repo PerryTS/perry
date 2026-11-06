@@ -18,12 +18,19 @@ fn one(src: &str) -> ProgramFacts {
 fn tmpl<'a>(pf: &'a ProgramFacts, first_key: &str) -> &'a crate::TemplateFacts {
     pf.templates
         .iter()
-        .find(|t| t.birth_keys.first().is_some_and(|k| k == first_key) || t.display.ends_with(&format!(":{first_key}")))
+        .find(|t| {
+            t.birth_keys.first().is_some_and(|k| k == first_key)
+                || t.display.ends_with(&format!(":{first_key}"))
+        })
         .unwrap_or_else(|| panic!("no template {first_key}\n{}", pf.dump_text()))
 }
 
 fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<Verdict> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     s.iter().map(|s| s.verdict.clone()).collect()
 }
@@ -63,7 +70,11 @@ const BODY: &str = "const r: any = { zoneIndex: 1, fourOctet: 2 }; \
 fn a_delete_on_object_prototype_keeps_a_literal_layout() {
     let control = one(&program(NONE, BODY));
     let c = tmpl(&control, "zoneIndex");
-    assert!(c.fixed_layout && c.prefix_stable, "control: {}", control.dump_text());
+    assert!(
+        c.fixed_layout && c.prefix_stable,
+        "control: {}",
+        control.dump_text()
+    );
     for del in DELETES {
         let pf = one(&program(del, BODY));
         let t = tmpl(&pf, "zoneIndex");
@@ -73,7 +84,11 @@ fn a_delete_on_object_prototype_keeps_a_literal_layout() {
             t.chain,
             pf.dump_text()
         );
-        assert_eq!(verdicts(&pf, "zoneIndex"), verdicts(&control, "zoneIndex"), "{del}");
+        assert_eq!(
+            verdicts(&pf, "zoneIndex"),
+            verdicts(&control, "zoneIndex"),
+            "{del}"
+        );
     }
 }
 

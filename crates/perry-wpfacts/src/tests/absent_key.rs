@@ -17,7 +17,9 @@ fn reads(pf: &ProgramFacts, key: &str) -> Vec<Verdict> {
 
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let v = reads(pf, key);
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 fn open(pf: &ProgramFacts, key: &str) -> bool {
@@ -34,8 +36,15 @@ const SEARCH: &str = r#"
 
 #[test]
 fn a_key_no_literal_layout_holds_reads_undefined() {
-    let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }}), search());"));
-    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }}), search());"
+    ));
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
     // `{ level }` holds it, `{}` does not: two outcomes.
     assert_eq!(
         reads(&pf, "level"),
@@ -47,9 +56,21 @@ fn a_key_no_literal_layout_holds_reads_undefined() {
 
 #[test]
 fn an_absent_key_on_one_layout_is_proven() {
-    let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }}), search({{ level: 4 }}));"));
-    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
-    assert!(proven(&pf, "level"), "{:?}\n{}", reads(&pf, "level"), pf.dump_text());
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }}), search({{ level: 4 }}));"
+    ));
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
+    assert!(
+        proven(&pf, "level"),
+        "{:?}\n{}",
+        reads(&pf, "level"),
+        pf.dump_text()
+    );
 }
 
 /// Soundness: each of these may give `maxDepth` a value on the receiver or
@@ -78,8 +99,18 @@ fn an_object_prototype_member_is_not_absent() {
         console.log(typeof f, (o as any).constructor === Object);
         "#,
     );
-    assert!(open(&pf, "hasOwnProperty"), "{:?}\n{}", reads(&pf, "hasOwnProperty"), pf.dump_text());
-    assert!(open(&pf, "constructor"), "{:?}\n{}", reads(&pf, "constructor"), pf.dump_text());
+    assert!(
+        open(&pf, "hasOwnProperty"),
+        "{:?}\n{}",
+        reads(&pf, "hasOwnProperty"),
+        pf.dump_text()
+    );
+    assert!(
+        open(&pf, "constructor"),
+        "{:?}\n{}",
+        reads(&pf, "constructor"),
+        pf.dump_text()
+    );
 }
 
 /// A literal with its own prototype is not a plain chain.
@@ -92,5 +123,10 @@ fn a_literal_with_a_prototype_is_not_absent() {
         console.log(o.maxDepth);
         "#,
     );
-    assert!(open(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
+    assert!(
+        open(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
 }

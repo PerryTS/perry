@@ -315,6 +315,10 @@ impl Model {
             self.aborted = true;
         }
         self.nodes.push(Node::default());
+        #[cfg(test)]
+        if let Some(b) = &self.packet_scope {
+            self.nodes[id as usize].packet_owner = Some(b.packet.header.identity.clone());
+        }
         self.node_fn.push(NO_FN);
         self.labels.push(label);
         if self.relations.is_some() {
@@ -632,6 +636,12 @@ impl Model {
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
     /// it, or it escaped.
     pub fn activate(&mut self, f: FnIdx, path: &str) {
+        #[cfg(test)]
+        if self.packet_scope.is_some()
+            && self.packet_emit(crate::summary::packet::Emission::Activate(f, path.into()))
+        {
+            return;
+        }
         if self.act.as_ref().is_none_or(|a| {
             a.fixed
                 || a.sabotage

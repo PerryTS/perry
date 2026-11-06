@@ -370,6 +370,8 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
     let p = m.node_l("resolver-param");
     m.edge(p, dst);
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         name: "<resolver>".into(),
@@ -419,6 +421,8 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
     m.add_top(ret, |_| "result of another unit's accessor".into());
     m.add_prim(ret, prim::ALL);
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         name: "<another unit's accessor>".into(),

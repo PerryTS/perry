@@ -305,9 +305,7 @@ impl SetTable {
             return old;
         }
         let len = old.len() + new.len();
-        let hash = new
-            .iter()
-            .fold(0u64, |h, &t| h.wrapping_add(mix(t)));
+        let hash = new.iter().fold(0u64, |h, &t| h.wrapping_add(mix(t)));
         match old {
             Pts::Small(v) => {
                 if len == 1 {
