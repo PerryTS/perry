@@ -459,9 +459,9 @@ extern "C" fn deliver_one_message(
     let (data, ports) = unsafe { crate::thread::deserialize_message(&message, true) };
     let data_h = scope.root_nanbox_u64(data);
     let ports = scope.root_nanbox_u64(ports);
-    let event = crate::event_target_hook_slots::message_event_with_ports(
+    let event = crate::event_target_hook_slots::node_message_event(
         data_h.get_nanbox_f64(),
-        ports.get_nanbox_f64(),
+        Some(ports.get_nanbox_f64()),
     );
     let event_h = scope.root_nanbox_f64(event);
 

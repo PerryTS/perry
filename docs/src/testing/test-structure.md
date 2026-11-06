@@ -1,12 +1,9 @@
 # Test Structure
 
-> **Status:** steps 1–3 of the [transition](#transition) are in place: one
-> runner, subject selection on pull requests, and no new `test_gap_*` files.
-> Steps 4 and 5, moving existing cases into their subjects, follow one subject
-> at a time.
->
-> **A test's subject decides where it lives; one runner judges whether it
-> passes; a pull request runs the subjects it touches.**
+> External suites are organized by purpose under `tests/`; Rust implementation
+> tests and native Cargo integration tests remain with their owning crates.
+> **A test's assertion decides its layer. Each suite keeps its oracle and
+> execution interface; a pull request runs the gates it owns.**
 
 ## Where a test goes
 
@@ -14,9 +11,9 @@ Ask what the assertion needs to see.
 
 | The assertion is… | It is… | It lives in |
 |---|---|---|
-| what a program prints or exits with, and Node can produce it | a program diffed against Node | `test-parity/<subject>/` |
-| the same, but only meaningful under a GC mode | a `.ts` program run by the GC matrix | `test-parity/<subject>/`, modes declared in its header |
-| what Perry prints for a Perry-only API | a `.ts` program with committed expected output | `test-parity/perry/<api>/` |
+| what a program prints or exits with, and Node can produce it | a program diffed against Node | `tests/parity/<subject>/` |
+| the same, but only meaningful under a GC mode | a `.ts` program run by the GC matrix | `tests/parity/<subject>/`, modes declared in its header |
+| what Perry prints for a Perry-only API | a `.ts` program with committed expected output | `tests/parity/perry/<api>/` |
 | an internal invariant: rooting, layout, ordering, allocation, private state | a Rust unit test | beside the code |
 | the shape of emitted IR or lowered HIR | a Rust test | beside the lowering code where it can be; `crates/<crate>/tests/` when it needs the crate's public API |
 | a diagnostic, stderr, a compile failure, CLI output, determinism | a Rust test that runs the `perry` binary | `crates/perry/tests/` |
@@ -26,12 +23,27 @@ A Rust test whose only assertion is stdout that Node prints identically is a
 parity case in the wrong language. A parity case built to observe something the
 runtime keeps internal is a unit test in the wrong suite. `crates/*/tests/`
 suites run on a pull request only when the diff selects them, so coverage that
-must gate every change belongs beside the code or in `test-parity/`.
+must gate every change belongs beside the code or in `tests/parity/`.
+
+## External suite organization
+
+The [testing index](../../../tests/README.md) is the shared entry point for
+`tests/{parity,compat,features,integration,tooling,coverage,fixtures}`. These
+families centralize external suites without merging their oracles or replacing
+Cargo and specialized runners. Rust unit tests remain beside implementation;
+native Cargo integration suites remain in their owning crate's `tests/`.
+
+The physical layout and logical identities are separate. Parity subject IDs,
+feature identities and upstream compatibility pins stay stable across moves.
+The logical `test-files` suite reads retained top-level program fixtures from
+`tests/fixtures/programs/` and keeps bare IDs and its snapshot subject name.
+This compatibility interface preserves existing witnesses while native-only
+oracles and fixture semantics are handled explicitly, not rebaselined by a move.
 
 ## Layout
 
 ```text
-test-parity/
+tests/parity/
   node-suite/<module>/   one Node core module, named as Node names it
   language/<area>/        JavaScript semantics: object, string, json, regex,
                           promise, class, iterator, bigint, intl, …
@@ -48,12 +60,24 @@ its directory.
 
 Legacy and subject roots accept `.ts`, `.cts`, `.mts` and `test_*.cjs`. Keep
 source extensions during migration: Node uses them to select the module mode.
-Case ids omit TypeScript-family suffixes and retain `.cjs`. Helpers remain in
-`fixtures/`, excluded regardless of their extension.
+Case ids omit TypeScript-family suffixes and retain `.cjs`. New helpers belong
+in `fixtures/`, excluded regardless of their extension. Legacy helper entry
+cases retain plain subject paths until their standalone coverage has an
+explicit replacement; moving an existing entry into `fixtures/` removes it
+from discovery, including the universal gap lane when its name starts with
+`test_gap_`.
+
+`tests/parity/compile-smoke.txt` retains standalone TypeScript compilation for
+relocated legacy entries. The existing smoke selector combines its checked
+paths with top-level `tests/fixtures/programs/*.ts`, sorting by basename to preserve shard
+assignment. Missing, duplicate or escaping manifest paths fail selection. Basenames must
+also be unique because CI names its output and result markers by basename.
+Add a relocated `.ts` entry there when it already participates in compile
+smoke; a parity skip does not imply a compile-smoke skip.
 
 The GC representation-selection corpus keeps its stable bare-basename IDs in
-`test-parity/gc_repsel_corpus.txt`. The matrix resolves each ID to exactly one
-runnable `.ts` case, whether it is still top-level in `test-files/` or has moved
+`tests/parity/gc_repsel_corpus.txt`. The matrix resolves each ID to exactly one
+runnable `.ts` case, whether it is still top-level in `tests/fixtures/programs/` or has moved
 under a subject root. Fixtures are not cases; unknown or duplicate source IDs
 fail before the oracle or compiler runs. This keeps GC report names and flat
 artifacts stable while the case itself moves with its subject.
@@ -63,10 +87,19 @@ resolver's basename-pattern lookup across all roots. Pattern order and repeated
 matches remain intact; fixtures never become corpus inputs. Strict corpus
 patterns fail when empty, while optional registration categories may be empty.
 
+The WASI acceptance runner's `gap` suite and `scripts/wasi_ir_check.sh` resolve
+their fixed sample basenames through the same resolver. Moving a sample does
+not change its order, report name or output directory. Repeated acceptance
+filters select a union before lookup; missing unselected samples do not block
+that selection. An existing legacy source takes precedence; canonical-only
+duplicates fail closed. A missing selected source keeps its legacy locator:
+acceptance lets the oracle report its failure, while the IR gate reports its
+missing-sample diagnostic before compiling.
+
 `expected/` mirrors the test's path. A lookup by basename lets two subjects
 with the same case name overwrite each other.
 
-## One runner
+## One program-parity runner
 
 One runner, `scripts/parity.py`, judges every program case. It
 takes subjects or paths, runs cases in parallel, and judges each one the same
@@ -108,7 +141,7 @@ or names a subject that does not exist. A path no row owns is cross-cutting.
 | no source and no test | none |
 
 Every core pull request also runs the gap lane, every `test_gap_*` in
-`test-files/` and the subject trees in fast mode, so selection only adds cases
+`tests/fixtures/programs/` and the subject trees in fast mode, so selection only adds cases
 and never runs less than the gap lane did. Migrated cases retain their
 `test_gap_` basename to stay in this universal lane.
 A path no row of `scripts/test_owners.py` owns is cross-cutting. Rust suites keep their
@@ -117,20 +150,28 @@ nightly run executes every subject.
 
 ## Transition
 
-`test-files/test_gap_*` keeps running on every pull request until it is empty.
+`tests/fixtures/programs/test_gap_*` keeps running on every pull request until it is empty.
 Nothing leaves it before its subject directory gates pull requests.
+
+Legacy leftovers need classification, not a blanket move: a helper can still
+be enrolled in the gap lane, and a skipped interactive case can still belong
+to compile smoke. Preserve those independent gates before changing discovery.
+Perry-only cases need committed expected output or an explicit Node oracle
+loader; a missing oracle is not a reason to invent a passing baseline.
 
 1. **One runner** lands beside the old one and takes over each gate in turn,
    without moving a file.
 2. **Ownership and selection** land: subject directories gate pull requests.
 3. **New `test_gap_*` files are refused** by `lint`; the message names the
    subject directory to use.
-4. **Migration**, one subject per pull request: move the files —
-   `test_gap_*`, `test_parity_*` and `test-parity/node-suite/<module>/` into
-   `test-parity/<subject>/` — move their snapshot entries, update the
+4. **Migration**, grouped by subject in coherent batches: move the files —
+   `test_gap_*`, `test_parity_*` and `tests/parity/node-suite/<module>/` into
+   `tests/parity/<subject>/` — move their snapshot entries, update the
    registries that name them, and delete exact duplicates of an existing
    subject case.
 5. **Rust parity duplicates** in `crates/perry/tests` become `.ts` cases;
    the suites that stay share one compile-and-run helper.
 
-Steps 1–3 are in place. Steps 4 and 5 follow, one subject at a time.
+Steps 1–3 are in place. Subject migration and Rust parity-duplicate cleanup
+retain their separate acceptance criteria; centralizing physical roots does
+not claim either semantic cleanup is complete.

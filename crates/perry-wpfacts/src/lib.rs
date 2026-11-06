@@ -42,7 +42,10 @@ mod tests;
 mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
-pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
+pub use derive::{
+    ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
+    TemplateFacts, Verdict,
+};
 use perry_hir::Module;
 
 /// Reserved atom for computed-key accessors ("any key").
@@ -170,6 +173,9 @@ pub struct ProgramFacts {
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
+    /// Computed member sites in a whole-program solve. Per-unit facts do
+    /// not publish values whose token/template ids belong to separate solves.
+    pub elements: Vec<ElementFacts>,
     pub stats: Stats,
     /// Interpreted code can run (decision 150), and why. It is no kill: its
     /// data flow is the ⊤ summary node (everything it can receive already
@@ -735,6 +741,8 @@ fn compute_act<'a>(
         }
     }
     g.m.dump_meta();
+    #[cfg(test)]
+    tests::delivery_boundaries::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
@@ -776,11 +784,17 @@ fn compute_act<'a>(
     } else {
         derive::derive(&mut g)
     };
+    let mut elements = if g.m.aborted {
+        Vec::new()
+    } else {
+        derive::element_facts(&g)
+    };
     let mut bindings = bindings::collect(&g);
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.
         templates.clear();
         sites.clear();
+        elements.clear();
         bindings.clear();
     }
     if let Some(spec) = &cfg.sabotage {
@@ -815,7 +829,7 @@ fn compute_act<'a>(
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
         contexts: g.m.sum.ctx_nodes.len() as u64,
-        work: g.m.work,
+        work: g.m.work.get(),
         aborted: g.m.aborted,
         checks,
         pts_entries: g.m.pts_entries,
@@ -1948,6 +1962,7 @@ fn compute_act<'a>(
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
         sites,
+        elements,
         stats,
         interp_guard,
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),

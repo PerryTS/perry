@@ -415,8 +415,7 @@ extern "C" fn payload_ctor_thunk(
 ) -> f64 {
     let message = b"Illegal constructor";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// The cell's type tag: the family id plus the payload's layout. One family
@@ -713,12 +712,12 @@ fn alloc_with_cell(
 
 #[path = "native_payload_attach.rs"]
 mod attach;
-use attach::{link_cell, new_cell, store_payload_word};
 pub(crate) use attach::{any_object, attach_external_rooted, set_own};
 pub use attach::{
     attach_stream_to_object, attach_to_object, define_own_accessor, iter_result_done_value,
     iterator_prototype, prototype, state_get, state_set,
 };
+use attach::{link_cell, new_cell, store_payload_word};
 
 /// A fresh instance of `class_id` linked to its family prototype `proto`,
 /// with `slots` live inline slots.

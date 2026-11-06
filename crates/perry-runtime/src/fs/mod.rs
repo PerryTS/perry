@@ -92,7 +92,11 @@ fn inherited_unix_fds() -> Vec<i32> {
         None => {
             // No descriptor directory: probe up to the descriptor limit.
             let limit = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
-            let limit = if limit <= 0 { 1024 } else { limit.min(65536) as i32 };
+            let limit = if limit <= 0 {
+                1024
+            } else {
+                limit.min(65536) as i32
+            };
             (3..limit).filter(|&fd| is_inherited(fd)).collect()
         }
     };
@@ -540,7 +544,7 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
                 // a Node-shaped fs error instead. This is a real, catchable JS
                 // throw (caught by JS try/catch) — NOT the null-pointer segfault
                 // the previous empty-string workaround was guarding against.
-                crate::exception::js_throw(failure.error_value())
+                crate::exception::throw_core(failure.core_error())
             }
         }
     }
@@ -554,7 +558,9 @@ pub extern "C-unwind" fn js_fs_read_file_dispatch(path_value: f64, options_value
     validate::validate_string_or_object_options("options", options_value);
     if let Some(encoding) = encoding {
         let str_ptr = read_file_string_with_options(path_value, options_value, &encoding)
-            .unwrap_or_else(|failure| unsafe { crate::exception::js_throw(failure.error_value()) });
+            .unwrap_or_else(|failure| unsafe {
+                crate::exception::throw_core(failure.core_error())
+            });
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
     } else {
         // Throws on failure (#10452) — never null, so never `undefined`.
@@ -570,16 +576,16 @@ pub(crate) unsafe fn read_file_value_result(
     path_value: f64,
     options_value: f64,
     encoding: Option<&str>,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::error::CoreError> {
     validate::validate_path_or_fd("path", path_value, "read");
     validate::validate_string_or_object_options("options", options_value);
     Ok(if let Some(encoding) = encoding {
         let str_ptr = read_file_string_with_options(path_value, options_value, encoding)
-            .map_err(|failure| failure.async_error_value())?;
+            .map_err(|failure| failure.async_core_error())?;
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
     } else {
         let bytes = read_file_bytes_with_options(path_value, options_value)
-            .map_err(|failure| failure.async_error_value())?;
+            .map_err(|failure| failure.async_core_error())?;
         let buf = buffer_from_file_bytes(&bytes);
         f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
     })
@@ -697,7 +703,8 @@ pub extern "C" fn js_fs_write_file_sync_options(
     unsafe {
         match write_file_path_or_fd_result(path_value, content_value, options_value) {
             Ok(()) => 1,
-            Err(err) => crate::exception::js_throw(err),
+            // Native fs failures, program Promise/iterator values and hook-built abort errors mix here.
+            Err(err) => crate::exception::throw_open(err),
         }
     }
 }
@@ -736,7 +743,7 @@ pub(crate) unsafe fn js_fs_append_file_result(
     path_value: f64,
     content_value: f64,
     options_value: f64,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path_or_fd("path", path_value, "write");
     validate::validate_string_or_object_options("options", options_value);
 
@@ -745,13 +752,13 @@ pub(crate) unsafe fn js_fs_append_file_result(
         return FD_REGISTRY.with(|r| {
             let mut reg = r.borrow_mut();
             let Some(file) = reg.get_mut(&fd) else {
-                return Err(validate::build_ebadf_error_value("write"));
+                return Err(validate::ebadf_error("write"));
             };
             if let Err(err) = file.seek(SeekFrom::End(0)) {
-                return Err(build_fs_error_value_no_path(&err, "write"));
+                return Err(fs_error_no_path(&err, "write"));
             }
             file.write_all(&content_bytes)
-                .map_err(|err| build_fs_error_value_no_path(&err, "write"))
+                .map_err(|err| fs_error_no_path(&err, "write"))
         });
     }
 
@@ -766,10 +773,10 @@ pub(crate) unsafe fn js_fs_append_file_result(
     let mode = write_mode_from_options(options_value);
     let mut file = match open_file_for_write_flag(&path_str, &flag, mode) {
         Ok(file) => file,
-        Err(err) => return Err(build_fs_error_value(&err, "open", &path_str)),
+        Err(err) => return Err(fs_error(&err, "open", &path_str)),
     };
     file.write_all(&content_bytes)
-        .map_err(|err| build_fs_error_value(&err, "write", &path_str))
+        .map_err(|err| fs_error(&err, "write", &path_str))
 }
 
 /// Append content to a file synchronously.
@@ -783,7 +790,7 @@ pub extern "C" fn js_fs_append_file_sync_options(
     unsafe {
         match js_fs_append_file_result(path_value, content_value, options_value) {
             Ok(()) => 1,
-            Err(err) => crate::exception::js_throw(err),
+            Err(err) => crate::exception::throw_core(err),
         }
     }
 }
@@ -899,7 +906,10 @@ pub extern "C" fn js_fs_mkdir_sync(path_value: f64) -> i32 {
     js_fs_mkdir_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
-pub(crate) unsafe fn js_fs_mkdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_mkdir_result(
+    path_value: f64,
+    options_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("path", path_value);
     validate::validate_mkdir_options(options_value);
     let path_str = match decode_path_value(path_value) {
@@ -918,7 +928,7 @@ pub(crate) unsafe fn js_fs_mkdir_result(path_value: f64, options_value: f64) -> 
             apply_dir_mode(&path_str, mode);
             Ok(())
         }
-        Err(err) => Err(build_fs_error_value(&err, "mkdir", &path_str)),
+        Err(err) => Err(fs_error(&err, "mkdir", &path_str)),
     }
 }
 
@@ -927,7 +937,7 @@ pub extern "C" fn js_fs_mkdir_sync_options(path_value: f64, options_value: f64) 
     unsafe {
         match js_fs_mkdir_result(path_value, options_value) {
             Ok(()) => 1,
-            Err(err) => crate::exception::js_throw(err),
+            Err(err) => crate::exception::throw_core(err),
         }
     }
 }
@@ -951,7 +961,7 @@ pub extern "C" fn js_fs_is_directory(path_value: f64) -> i32 {
     }
 }
 
-pub(crate) unsafe fn js_fs_unlink_result(path_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_unlink_result(path_value: f64) -> Result<(), crate::error::CoreError> {
     validate::validate_path("path", path_value);
     let path_str = match decode_path_value(path_value) {
         Some(s) => s,
@@ -960,7 +970,7 @@ pub(crate) unsafe fn js_fs_unlink_result(path_value: f64) -> Result<(), f64> {
 
     match fs::remove_file(&path_str) {
         Ok(_) => Ok(()),
-        Err(err) => Err(build_fs_error_value(&err, "unlink", &path_str)),
+        Err(err) => Err(fs_error(&err, "unlink", &path_str)),
     }
 }
 
@@ -973,7 +983,7 @@ pub extern "C" fn js_fs_unlink_sync(path_value: f64) -> i32 {
         match js_fs_unlink_result(path_value) {
             Ok(()) => 1,
             Err(err_val) => {
-                crate::exception::js_throw(err_val);
+                crate::exception::throw_core(err_val);
             }
         }
     }
@@ -982,7 +992,10 @@ pub extern "C" fn js_fs_unlink_sync(path_value: f64) -> i32 {
 /// Shared `chmod` op. On failure builds a Node-shaped fs error
 /// (`code`/`syscall: "chmod"`/`path`) so the sync FFI can throw and the
 /// callback/promise wrappers can surface the same error (#2746).
-pub(crate) unsafe fn js_fs_chmod_result(path_value: f64, mode: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_chmod_result(
+    path_value: f64,
+    mode: f64,
+) -> Result<(), crate::error::CoreError> {
     // #2013: path-only validation. Mode coercion goes through Node's
     // `parseFileMode` which throws ERR_INVALID_ARG_VALUE (not the
     // ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE shape `validate_int32`
@@ -999,7 +1012,7 @@ pub(crate) unsafe fn js_fs_chmod_result(path_value: f64, mode: f64) -> Result<()
         let perms = fs::Permissions::from_mode(mode as u32);
         match fs::set_permissions(&path_str, perms) {
             Ok(_) => Ok(()),
-            Err(err) => Err(build_fs_error_value(&err, "chmod", &path_str)),
+            Err(err) => Err(fs_error(&err, "chmod", &path_str)),
         }
     }
     #[cfg(not(unix))]
@@ -1016,7 +1029,7 @@ pub extern "C" fn js_fs_chmod_sync(path_value: f64, mode: f64) -> i32 {
     unsafe {
         match js_fs_chmod_result(path_value, mode) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1042,7 +1055,7 @@ pub extern "C-unwind" fn js_fs_read_file_binary_options(
     unsafe {
         match read_file_bytes_with_options(path_value, options_value) {
             Ok(bytes) => buffer_from_file_bytes(&bytes),
-            Err(failure) => crate::exception::js_throw(failure.error_value()),
+            Err(failure) => crate::exception::throw_core(failure.core_error()),
         }
     }
 }
@@ -1069,7 +1082,10 @@ pub extern "C" fn js_fs_rm_recursive(path_value: f64) -> i32 {
 /// a non-recursive directory → `ERR_FS_EISDIR`/`syscall: "rm"`, and underlying
 /// `remove_*` errors with their errno. Preserves `{ force: true }` missing-path
 /// success.
-pub(crate) unsafe fn js_fs_rm_result(path_value: f64, options_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_rm_result(
+    path_value: f64,
+    options_value: f64,
+) -> Result<(), crate::error::CoreError> {
     use std::path::Path;
 
     validate::validate_path("path", path_value);
@@ -1087,7 +1103,7 @@ pub(crate) unsafe fn js_fs_rm_result(path_value: f64, options_value: f64) -> Res
             return if force {
                 Ok(())
             } else {
-                Err(build_fs_error_value(&err, "lstat", &path_str))
+                Err(fs_error(&err, "lstat", &path_str))
             };
         }
     };
@@ -1097,7 +1113,7 @@ pub(crate) unsafe fn js_fs_rm_result(path_value: f64, options_value: f64) -> Res
         if recursive {
             match fs::remove_dir_all(&path_str) {
                 Ok(_) => Ok(()),
-                Err(err) => Err(build_fs_error_value(&err, "rm", &path_str)),
+                Err(err) => Err(fs_error(&err, "rm", &path_str)),
             }
         } else {
             // Node refuses to remove a directory without `recursive: true`,
@@ -1107,7 +1123,7 @@ pub(crate) unsafe fn js_fs_rm_result(path_value: f64, options_value: f64) -> Res
     } else {
         match fs::remove_file(&path_str) {
             Ok(_) => Ok(()),
-            Err(err) => Err(build_fs_error_value(&err, "unlink", &path_str)),
+            Err(err) => Err(fs_error(&err, "unlink", &path_str)),
         }
     }
 }
@@ -1117,7 +1133,7 @@ pub extern "C" fn js_fs_rm_recursive_options(path_value: f64, options_value: f64
     unsafe {
         match js_fs_rm_result(path_value, options_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1125,14 +1141,13 @@ pub extern "C" fn js_fs_rm_recursive_options(path_value: f64, options_value: f64
 /// Build Node's `ERR_FS_EISDIR` error for `fs.rm` on a directory without
 /// `recursive: true`. Node sets `code: "ERR_FS_EISDIR"`, `syscall: "rm"`, and
 /// `path`.
-unsafe fn build_eisdir_rm_error(path: &str) -> f64 {
+unsafe fn build_eisdir_rm_error(path: &str) -> crate::error::CoreError {
     let msg = format!("Path is a directory: rm returned EISDIR (is a directory) {path}");
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_FS_EISDIR");
     crate::node_submodules::register_error_syscall(msg_ptr, "rm");
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::value::js_nanbox_pointer(err_ptr as i64)
+    crate::error::CoreError::error(msg_ptr)
 }
 
 /// `fs.chownSync(path, uid, gid)`.
@@ -1144,7 +1159,7 @@ pub extern "C" fn js_fs_chown_sync(path_value: f64, uid_value: f64, gid_value: f
     unsafe {
         match js_fs_chown_result(path_value, uid_value, gid_value, true) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1158,7 +1173,7 @@ pub extern "C" fn js_fs_lchown_sync(path_value: f64, uid_value: f64, gid_value: 
     unsafe {
         match js_fs_chown_result(path_value, uid_value, gid_value, false) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1183,14 +1198,16 @@ pub(crate) fn lchmod_is_callable_on_this_platform() -> bool {
 
 fn throw_plain_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Shared `lchmod` op (macOS/BSD only). On failure builds a Node-shaped fs
 /// error carrying the real errno and `syscall: "open"` (#2746). Callers must
 /// have already verified `lchmod_is_callable_on_this_platform()`.
-pub(crate) unsafe fn js_fs_lchmod_result(path_value: f64, mode: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_lchmod_result(
+    path_value: f64,
+    mode: f64,
+) -> Result<(), crate::error::CoreError> {
     #[cfg(all(
         unix,
         any(
@@ -1219,7 +1236,7 @@ pub(crate) unsafe fn js_fs_lchmod_result(path_value: f64, mode: f64) -> Result<(
         if rc == 0 {
             Ok(())
         } else {
-            Err(build_fs_error_value(
+            Err(fs_error(
                 &std::io::Error::last_os_error(),
                 "open",
                 &path_str,
@@ -1263,7 +1280,7 @@ pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
     unsafe {
         match js_fs_lchmod_result(path_value, mode) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1275,7 +1292,7 @@ pub(crate) unsafe fn js_fs_chown_result(
     uid_value: f64,
     gid_value: f64,
     follow: bool,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     crate::fs::validate::validate_path("path", path_value);
     crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
     crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
@@ -1298,7 +1315,7 @@ pub(crate) unsafe fn js_fs_chown_result(
             Ok(())
         } else {
             let syscall = if follow { "chown" } else { "lchown" };
-            Err(build_fs_error_value(
+            Err(fs_error(
                 &std::io::Error::last_os_error(),
                 syscall,
                 &path_str,
@@ -1464,7 +1481,10 @@ fn open_file_for_write_flag(
 /// fs error (with `code`/`syscall`/`path`/`dest`) on failure. Shared by the
 /// sync FFI (which throws), the callback wrapper, and the promise thunk so
 /// destination-side failures (#2735) are no longer silently dropped.
-pub(crate) unsafe fn js_fs_rename_result(from_value: f64, to_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_rename_result(
+    from_value: f64,
+    to_value: f64,
+) -> Result<(), crate::error::CoreError> {
     crate::fs::validate::validate_path("oldPath", from_value);
     crate::fs::validate::validate_path("newPath", to_value);
     let from = match decode_path_value(from_value) {
@@ -1477,7 +1497,7 @@ pub(crate) unsafe fn js_fs_rename_result(from_value: f64, to_value: f64) -> Resu
     };
     match fs::rename(&from, &to) {
         Ok(_) => Ok(()),
-        Err(err) => Err(build_fs_error_value_with_dest(&err, "rename", &from, &to)),
+        Err(err) => Err(fs_error_with_dest(&err, "rename", &from, &to)),
     }
 }
 
@@ -1487,7 +1507,7 @@ pub extern "C" fn js_fs_rename_sync(from_value: f64, to_value: f64) -> i32 {
     unsafe {
         match js_fs_rename_result(from_value, to_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1511,7 +1531,7 @@ pub(crate) unsafe fn js_fs_copy_file_result(
     from_value: f64,
     to_value: f64,
     flags_value: f64,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     crate::fs::validate::validate_path("src", from_value);
     crate::fs::validate::validate_path("dest", to_value);
     let flags_jv = crate::value::JSValue::from_bits(flags_value.to_bits());
@@ -1533,11 +1553,11 @@ pub(crate) unsafe fn js_fs_copy_file_result(
             std::io::ErrorKind::AlreadyExists,
             "destination already exists",
         );
-        return Err(build_fs_error_value_with_dest(&err, "copyfile", &from, &to));
+        return Err(fs_error_with_dest(&err, "copyfile", &from, &to));
     }
     match fs::copy(&from, &to) {
         Ok(_) => Ok(()),
-        Err(err) => Err(build_fs_error_value_with_dest(&err, "copyfile", &from, &to)),
+        Err(err) => Err(fs_error_with_dest(&err, "copyfile", &from, &to)),
     }
 }
 
@@ -1550,7 +1570,7 @@ pub extern "C" fn js_fs_copy_file_sync_flags(
     unsafe {
         match js_fs_copy_file_result(from_value, to_value, flags_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1558,7 +1578,10 @@ pub extern "C" fn js_fs_copy_file_sync_flags(
 /// Shared `fs.access` op. On a failed existence or mode check builds a
 /// Node-shaped fs error carrying the real errno and `syscall: "access"`
 /// (#2748). Returns `Ok(())` when the access check passes.
-pub(crate) unsafe fn js_fs_access_result(path_value: f64, mode_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_access_result(
+    path_value: f64,
+    mode_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("path", path_value);
     validate::validate_fs_mode(mode_value);
     let path_str = match decode_path_value(path_value) {
@@ -1578,7 +1601,7 @@ pub(crate) unsafe fn js_fs_access_result(path_value: f64, mode_value: f64) -> Re
         if libc::access(c_path.as_ptr(), mode) == 0 {
             Ok(())
         } else {
-            Err(build_fs_error_value(
+            Err(fs_error(
                 &std::io::Error::last_os_error(),
                 "access",
                 &path_str,
@@ -1591,7 +1614,7 @@ pub(crate) unsafe fn js_fs_access_result(path_value: f64, mode_value: f64) -> Re
         if Path::new(&path_str).exists() {
             Ok(())
         } else {
-            Err(build_fs_error_value(
+            Err(fs_error(
                 &std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
                 "access",
                 &path_str,
@@ -1633,7 +1656,10 @@ fn encoded_string_ptr(bytes: &[u8], encoding: &str) -> *mut StringHeader {
     }
 }
 
-fn realpath_bytes_result(path_value: f64, syscall: &'static str) -> Result<Vec<u8>, f64> {
+fn realpath_bytes_result(
+    path_value: f64,
+    syscall: &'static str,
+) -> Result<Vec<u8>, crate::error::CoreError> {
     unsafe {
         let path_str = match decode_path_value_named(path_value, "path") {
             Some(s) => s,
@@ -1650,7 +1676,7 @@ fn realpath_bytes_result(path_value: f64, syscall: &'static str) -> Result<Vec<u
                 };
                 Ok(path.as_bytes().to_vec())
             }
-            Err(err) => Err(build_fs_error_value(&err, syscall, &path_str)),
+            Err(err) => Err(fs_error(&err, syscall, &path_str)),
         }
     }
 }
@@ -1659,7 +1685,7 @@ fn realpath_value_result(
     path_value: f64,
     options_value: f64,
     syscall: &'static str,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::error::CoreError> {
     let bytes = realpath_bytes_result(path_value, syscall)?;
     if fs_encoding_option(options_value).as_deref() == Some("buffer") {
         return Ok(buffer_value_from_bytes(&bytes));
@@ -1681,7 +1707,7 @@ pub extern "C" fn js_fs_realpath_sync_options(path_value: f64, options_value: f6
     validate::validate_string_or_object_options("options", options_value);
     let bytes = match realpath_bytes_result(path_value, "lstat") {
         Ok(bytes) => bytes,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     };
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
     encoded_string_ptr(&bytes, &enc) as i64
@@ -1693,7 +1719,7 @@ pub extern "C" fn js_fs_realpath_dispatch(path_value: f64, options_value: f64) -
     validate::validate_string_or_object_options("options", options_value);
     match realpath_value_result(path_value, options_value, "lstat") {
         Ok(value) => value,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -1703,7 +1729,7 @@ pub extern "C" fn js_fs_realpath_promises_dispatch(path_value: f64, options_valu
     validate::validate_string_or_object_options("options", options_value);
     match realpath_value_result(path_value, options_value, "realpath") {
         Ok(value) => value,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -1711,7 +1737,7 @@ pub(crate) fn js_fs_realpath_value_result(
     path_value: f64,
     options_value: f64,
     syscall: &'static str,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::error::CoreError> {
     validate::validate_path("path", path_value);
     validate::validate_string_or_object_options("options", options_value);
     realpath_value_result(path_value, options_value, syscall)
@@ -1725,7 +1751,7 @@ pub extern "C" fn js_fs_mkdtemp_sync(prefix_value: f64) -> i64 {
     js_fs_mkdtemp_sync_options(prefix_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
-pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
+pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, crate::error::CoreError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1752,12 +1778,12 @@ pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
                     last_collision_path = Some(candidate);
                     continue;
                 }
-                Err(err) => return Err(build_fs_error_value(&err, "mkdtemp", &candidate)),
+                Err(err) => return Err(fs_error(&err, "mkdtemp", &candidate)),
             }
         }
         let candidate = last_collision_path.unwrap_or_else(|| format!("{}XXXXXX", prefix_str));
         let err = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "file already exists");
-        Err(build_fs_error_value(&err, "mkdtemp", &candidate))
+        Err(fs_error(&err, "mkdtemp", &candidate))
     }
 }
 
@@ -1775,7 +1801,7 @@ pub extern "C" fn js_fs_mkdtemp_sync_options(prefix_value: f64, options_value: f
     validate::validate_string_or_object_options("options", options_value);
     let bytes = match mkdtemp_bytes_result(prefix_value) {
         Ok(bytes) => bytes,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     };
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
     encoded_string_ptr(&bytes, &enc) as i64
@@ -1787,7 +1813,7 @@ pub extern "C" fn js_fs_mkdtemp_dispatch(prefix_value: f64, options_value: f64) 
     validate::validate_string_or_object_options("options", options_value);
     let bytes = match mkdtemp_bytes_result(prefix_value) {
         Ok(bytes) => bytes,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     };
     if fs_encoding_option(options_value).as_deref() == Some("buffer") {
         return buffer_value_from_bytes(&bytes);
@@ -1800,7 +1826,7 @@ pub extern "C" fn js_fs_mkdtemp_dispatch(prefix_value: f64, options_value: f64) 
 /// Read a symlink target. On `read_link` failure builds a Node-shaped fs
 /// error (`EINVAL` for a regular file, `ENOENT` for a missing path) with
 /// `syscall: "readlink"` and `path` (#2733) instead of returning empty bytes.
-fn readlink_result(path_value: f64) -> Result<Vec<u8>, f64> {
+fn readlink_result(path_value: f64) -> Result<Vec<u8>, crate::error::CoreError> {
     unsafe {
         let path_str = match decode_path_value(path_value) {
             Some(s) => s,
@@ -1808,12 +1834,15 @@ fn readlink_result(path_value: f64) -> Result<Vec<u8>, f64> {
         };
         match fs::read_link(&path_str) {
             Ok(p) => Ok(p.to_string_lossy().as_bytes().to_vec()),
-            Err(err) => Err(build_fs_error_value(&err, "readlink", &path_str)),
+            Err(err) => Err(fs_error(&err, "readlink", &path_str)),
         }
     }
 }
 
-fn readlink_value_result(path_value: f64, options_value: f64) -> Result<f64, f64> {
+fn readlink_value_result(
+    path_value: f64,
+    options_value: f64,
+) -> Result<f64, crate::error::CoreError> {
     let bytes = readlink_result(path_value)?;
     if fs_encoding_option(options_value).as_deref() == Some("buffer") {
         return Ok(buffer_value_from_bytes(&bytes));
@@ -1834,7 +1863,10 @@ pub extern "C" fn js_fs_rmdir_sync(path_value: f64) -> i32 {
 /// Shared `fs.rmdir` op. Reports removal failures (#2747) with the real errno
 /// and `syscall: "rmdir"` — `ENOENT` (missing), `ENOTDIR` (not a directory),
 /// `ENOTEMPTY` (non-empty, non-recursive).
-pub(crate) unsafe fn js_fs_rmdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_rmdir_result(
+    path_value: f64,
+    options_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("path", path_value);
     validate_rmdir_options(options_value)?;
     let path_str = match decode_path_value(path_value) {
@@ -1843,11 +1875,13 @@ pub(crate) unsafe fn js_fs_rmdir_result(path_value: f64, options_value: f64) -> 
     };
     match fs::remove_dir(&path_str) {
         Ok(_) => Ok(()),
-        Err(err) => Err(build_fs_error_value(&err, "rmdir", &path_str)),
+        Err(err) => Err(fs_error(&err, "rmdir", &path_str)),
     }
 }
 
-pub(crate) unsafe fn validate_rmdir_options(options_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn validate_rmdir_options(
+    options_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_object_options("options", options_value);
     let Some(recursive) = options_field_value(options_value, b"recursive") else {
         return Ok(());
@@ -1863,7 +1897,7 @@ pub(crate) unsafe fn validate_rmdir_options(options_value: f64) -> Result<(), f6
     } else {
         received
     };
-    Err(validate::build_type_error_with_code_value(
+    Err(validate::type_error_with_registered_code(
         &format!("The property 'options.recursive' is no longer supported. Received {received}"),
         "ERR_INVALID_ARG_VALUE",
     ))
@@ -1874,7 +1908,7 @@ pub extern "C" fn js_fs_rmdir_sync_options(path_value: f64, options_value: f64) 
     unsafe {
         match js_fs_rmdir_result(path_value, options_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1886,7 +1920,10 @@ pub(crate) use utimes::*;
 /// with `code`/`syscall: "link"`/`path`/`dest`. Surfaces missing-source
 /// (ENOENT), missing-destination-parent (ENOENT), and existing-destination
 /// (EEXIST) failures that previously collapsed to a silent no-op (#2738).
-pub(crate) unsafe fn js_fs_link_result(from_value: f64, to_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_link_result(
+    from_value: f64,
+    to_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("existingPath", from_value);
     validate::validate_path("newPath", to_value);
     let from = match decode_path_value(from_value) {
@@ -1899,7 +1936,7 @@ pub(crate) unsafe fn js_fs_link_result(from_value: f64, to_value: f64) -> Result
     };
     match fs::hard_link(&from, &to) {
         Ok(()) => Ok(()),
-        Err(err) => Err(build_fs_error_value_with_dest(&err, "link", &from, &to)),
+        Err(err) => Err(fs_error_with_dest(&err, "link", &from, &to)),
     }
 }
 
@@ -1911,7 +1948,7 @@ pub extern "C" fn js_fs_link_sync(from_value: f64, to_value: f64) -> i32 {
     unsafe {
         match js_fs_link_result(from_value, to_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1922,7 +1959,10 @@ pub extern "C" fn js_fs_link_sync(from_value: f64, to_value: f64) -> i32 {
 /// destination parent (ENOENT) or existing destination (EEXIST) now surface
 /// instead of collapsing to a silent no-op (#2740). Node sets `path` to the
 /// target and `dest` to the link path.
-pub(crate) unsafe fn js_fs_symlink_result(target_value: f64, path_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_symlink_result(
+    target_value: f64,
+    path_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("target", target_value);
     validate::validate_path("path", path_value);
     let target = match decode_path_value(target_value) {
@@ -1941,9 +1981,7 @@ pub(crate) unsafe fn js_fs_symlink_result(target_value: f64, path_value: f64) ->
     let res = std::os::wasi::fs::symlink_path(&target, &path);
     match res {
         Ok(()) => Ok(()),
-        Err(err) => Err(build_fs_error_value_with_dest(
-            &err, "symlink", &target, &path,
-        )),
+        Err(err) => Err(fs_error_with_dest(&err, "symlink", &target, &path)),
     }
 }
 
@@ -1955,7 +1993,7 @@ pub extern "C" fn js_fs_symlink_sync(target_value: f64, path_value: f64) -> i32 
     unsafe {
         match js_fs_symlink_result(target_value, path_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -1974,7 +2012,7 @@ pub extern "C" fn js_fs_readlink_sync_options(path_value: f64, options_value: f6
             let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
             encoded_string_ptr(&bytes, &enc) as i64
         }
-        Err(err_val) => crate::exception::js_throw(err_val),
+        Err(err_val) => crate::exception::throw_core(err_val),
     }
 }
 
@@ -1983,13 +2021,16 @@ pub extern "C" fn js_fs_readlink_dispatch(path_value: f64, options_value: f64) -
     validate::validate_path("path", path_value);
     match readlink_value_result(path_value, options_value) {
         Ok(v) => v,
-        Err(err_val) => crate::exception::js_throw(err_val),
+        Err(err_val) => crate::exception::throw_core(err_val),
     }
 }
 
 /// `Result`-returning readlink for callback/promise wrappers that need the
 /// error value rather than a throw (#2733).
-pub(crate) fn js_fs_readlink_value_result(path_value: f64, options_value: f64) -> Result<f64, f64> {
+pub(crate) fn js_fs_readlink_value_result(
+    path_value: f64,
+    options_value: f64,
+) -> Result<f64, crate::error::CoreError> {
     crate::fs::validate::validate_path("path", path_value);
     crate::fs::validate::validate_string_or_object_options("options", options_value);
     readlink_value_result(path_value, options_value)
@@ -2055,7 +2096,7 @@ pub extern "C" fn js_fs_access_sync_throw_mode(path_value: f64, mode_value: f64)
             Ok(()) => f64::from_bits(TAG_UNDEFINED),
             // js_throw is `-> !` (diverges via setjmp/longjmp into the nearest
             // try/catch). No code path reaches here. #853.
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }

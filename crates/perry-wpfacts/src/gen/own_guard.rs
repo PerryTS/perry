@@ -243,7 +243,28 @@ impl<'a> Gen<'a> {
         let [Stmt::Return(Some(e))] = body else {
             return None;
         };
+        // Lowering lifts a binding's TDZ check over its member/call. It
+        // either throws before the helper returns or leaves that same
+        // binding's value in use. No other prefix may run here.
+        let (e, checked) = match e {
+            Expr::Sequence(parts) => {
+                let [check, access] = parts.as_slice() else {
+                    return None;
+                };
+                if !perry_hir::tdz_check::is_read_check(check)
+                    || !matches!(check, Expr::Call { args, .. }
+                        if matches!(args.as_slice(), [Expr::LocalGet(_), Expr::String(_)]))
+                {
+                    return None;
+                }
+                (access, Some(perry_hir::tdz_check::checked_binding(check)?))
+            }
+            _ => (e, None),
+        };
         let (form, o, k) = own_test(e)?;
+        if checked.is_some() && !matches!(form, OwnTest::Call) {
+            return None;
+        }
         if !matches!(o, Expr::LocalGet(id) if *id == params[0].id)
             || !matches!(k, Expr::LocalGet(id) if *id == params[1].id)
         {
@@ -259,10 +280,13 @@ impl<'a> Gen<'a> {
                     return None;
                 };
                 // Evaluating H must not run a closure that rebinds p0/p1.
-                matches!(
+                (matches!(
                     object.as_ref(),
                     Expr::LocalGet(_) | Expr::ExternFuncRef { .. }
-                )
+                ) && checked.map_or(
+                    true,
+                    |id| matches!(object.as_ref(), Expr::LocalGet(h) if *h == id),
+                ))
                 .then_some(form)
             }
             _ => None,

@@ -147,9 +147,7 @@ pub(crate) unsafe fn call_generator_symbol_method(
     });
     let recv = if let Some(cid) = crate::object::class_prototype_ref_id(object.get_nanbox_f64()) {
         crate::object::class_registry::class_decl_prototype_value(cid)
-    } else if let Some(cid) =
-        crate::object::class_value::class_ref_word(object.get_nanbox_u64())
-    {
+    } else if let Some(cid) = crate::object::class_value::class_ref_word(object.get_nanbox_u64()) {
         crate::value::js_nanbox_pointer(crate::object::class_value::class_value_ptr(cid) as i64)
     } else {
         object.get_nanbox_f64()
@@ -619,6 +617,7 @@ pub(super) unsafe fn resume_fixed_state(
     resume_fixed_step(state, op, arg).into_result()
 }
 
+crate::fn_info!(#[realm(throws = passes(2))] declare
 /// The generator birth owns an inaccessible, two-parameter compiled resume
 /// body (one argument for bodies with no abrupt routes). Once the receiver's brand proves that edge, no general callable,
 /// rest-argument or arity dispatch remains to resolve. The body returns the
@@ -645,8 +644,7 @@ pub(crate) unsafe fn resume_fixed_step(
     if get(3) == crate::value::TAG_TRUE {
         let msg = b"Generator is already executing";
         let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
     let next_only =
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| (*(*p).info).params == 1);
@@ -654,7 +652,7 @@ pub(crate) unsafe fn resume_fixed_step(
     {
         set(1, crate::value::TAG_TRUE);
         if op == 2.0 {
-            crate::exception::js_throw(arg);
+            crate::exception::throw_program_value(arg);
         }
         set(STEP_SLOT, (STEP_DONE as f64).to_bits());
         let value = if op == 1.0 {
@@ -703,10 +701,11 @@ pub(crate) unsafe fn resume_fixed_step(
         }
         Err(value) => {
             set(1, crate::value::TAG_TRUE);
-            crate::exception::js_throw(value)
+            crate::exception::rethrow_caught(value)
         }
     }
 }
+);
 
 /// A previously marked prototype already owns its stable serial. Read those
 /// existing metadata facts before asking the general allocating mark path.

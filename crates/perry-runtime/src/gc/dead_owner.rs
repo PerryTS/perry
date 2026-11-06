@@ -412,6 +412,16 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         full_only: false,
         young_prune: Some(crate::object::prune_dead_transition_cache_entries_young),
     },
+    // A Node-API reference at count 0 holds its object weakly in its own
+    // record; a dead target is cleared to undefined (napi_get_reference_value
+    // then answers NULL, as in node).
+    DeadKeyPrune {
+        table: "NODE_API_WEAK_REFERENCES",
+        owner: DeadKeyOwner::Any,
+        prune: crate::feature_hooks::prune_dead_node_api_weak_references,
+        full_only: false,
+        young_prune: None,
+    },
 ];
 
 fn fan_out(is_dead_owner: &dyn Fn(usize) -> bool, young_only: bool, mut diag: Option<&mut String>) {

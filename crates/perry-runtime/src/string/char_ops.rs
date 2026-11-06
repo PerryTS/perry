@@ -672,9 +672,7 @@ pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeade
 fn throw_invalid_code_point(code: f64) -> ! {
     let msg = format!("Invalid code point {}", code);
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_rangeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg_str))
 }
 
 /// Create a string from a Unicode code point (String.fromCodePoint).

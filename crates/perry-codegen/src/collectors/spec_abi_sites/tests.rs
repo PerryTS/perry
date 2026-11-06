@@ -427,7 +427,10 @@ fn sites_inside_closures_are_judged_as_their_own_body() {
     };
     let m = module_with_init(vec![let_stmt(4, false, closure)]);
     let facts = collect_spec_abi_facts(&m);
-    assert_eq!(facts.call_sites.get(&7), Some(&vec![vec![SpecParamRep::I32]]));
+    assert_eq!(
+        facts.call_sites.get(&7),
+        Some(&vec![vec![SpecParamRep::I32]])
+    );
 }
 
 #[test]
@@ -469,6 +472,7 @@ fn put_value_set_receiver_demotes_source_const_len() {
             value: Box::new(Expr::Integer(3)),
             receiver: Box::new(source),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -547,6 +551,7 @@ fn local_is_reassigned_sees_closure_writes() {
 #[test]
 fn guarded_number_array_rejects_stale_or_aliasable_reads() {
     let read = || Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
@@ -557,6 +562,7 @@ fn guarded_number_array_rejects_stale_or_aliasable_reads() {
             object: Box::new(Expr::LocalGet(5)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::Integer(1)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -739,6 +745,7 @@ fn store_key_const_len(pre: Vec<Stmt>, key: Expr) -> Option<Option<i64>> {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(key),
         value: Box::new(Expr::Integer(0)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }));

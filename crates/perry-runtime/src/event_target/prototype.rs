@@ -6,8 +6,8 @@ use crate::native_class_ids as ids;
 pub(super) fn throw_receiver(name: &str) -> ! {
     let message = format!("Value of \"this\" must be of type {name}");
     let text = key(message.as_bytes());
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(boxed_ptr(error))
+    let error = crate::error::CoreError::type_error(text);
+    crate::exception::throw_core(error)
 }
 
 fn receiver(this: crate::closure::JsThis, class: u32, name: &str) -> *mut ObjectHeader {

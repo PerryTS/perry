@@ -24,8 +24,7 @@ unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
 fn throw_invalid_string_length() -> ! {
     let message = b"Invalid string length";
     let string = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_rangeerror_new(string);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(string))
 }
 
 /// Read one exotic element while keeping the receiver current across a getter

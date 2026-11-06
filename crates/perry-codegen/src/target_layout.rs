@@ -87,6 +87,49 @@ pub fn wasm32_lowering(target_triple: &str) -> bool {
         && target_triple.contains("wasi")
 }
 
+/// Emitted Eden births (`expr::inline_birth`, the class and array bumps) run
+/// on the LP64 triples and on the wasm32 WASI lowering: they read the arena
+/// cell and write the header words at [`inline_arena_layout`] and the
+/// target's header offsets. Other ILP32 targets keep the runtime allocators
+/// with the rest of their codegen.
+pub fn inline_births_admitted(target_triple: &str) -> bool {
+    !target_is_ilp32(target_triple) || wasm32_lowering(target_triple)
+}
+
+/// `perry_runtime::arena::InlineArenaState` for the target: `repr(C)`
+/// `{data: ptr, offset: usize, size: usize, birth_flags: ptr, birth_seeds:
+/// ptr}`, so its words are pointer-sized. The runtime const-asserts both
+/// widths' offsets next to the struct (`INLINE_*_LP64` / `INLINE_*_ILP32`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InlineArenaLayout {
+    /// The LLVM type of the `offset` and `size` words.
+    pub word: &'static str,
+    pub offset: u64,
+    pub limit: u64,
+    pub flags: u64,
+    pub seeds: u64,
+}
+
+pub fn inline_arena_layout(target_triple: &str) -> InlineArenaLayout {
+    if target_is_ilp32(target_triple) {
+        InlineArenaLayout {
+            word: crate::types::I32,
+            offset: 4,
+            limit: 8,
+            flags: 12,
+            seeds: 16,
+        }
+    } else {
+        InlineArenaLayout {
+            word: crate::types::I64,
+            offset: 8,
+            limit: 16,
+            flags: 24,
+            seeds: 32,
+        }
+    }
+}
+
 /// Exclusive upper bound accepted by the runtime's `is_valid_obj_ptr` for a
 /// candidate GC address. Linux-family AArch64 can use the full low 48-bit VA
 /// range; every other target keeps the canonical low-half 47-bit ceiling.
@@ -277,6 +320,16 @@ pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
 /// ShapeId precede it).
 pub fn closure_info_offset_bytes(_target_triple: &str) -> u64 {
     crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
+}
+
+/// Byte offset of `ClosureHeader::props`, the pointer after `info`: 16 on
+/// LP64, 12 on ILP32.
+pub fn closure_props_offset_bytes(target_triple: &str) -> u64 {
+    if target_is_ilp32(target_triple) {
+        12
+    } else {
+        crate::runtime_abi::CLOSURE_PROPS_OFFSET as u64
+    }
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY

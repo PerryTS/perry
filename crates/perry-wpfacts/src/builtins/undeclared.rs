@@ -7,21 +7,6 @@
 
 use super::*;
 
-/// Where a store under a key built-in object `t` does not declare goes
-/// (`Model::builtin_field`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Undeclared {
-    /// A described namespace or constructor (`Object`, `Math`, ...): its own
-    /// field under the key.
-    Namespace,
-    /// A native function value whose keys are `Function.prototype`'s: the
-    /// one field every native function value shares under the key. Natives
-    /// alias (`Set.prototype.keys === Set.prototype.values`, an
-    /// `Object.prototype` method token is also a `Native::Member`), and the
-    /// anonymous native stands for any of them.
-    NativeFn,
-}
-
 /// The keys no built-in object takes as a program field: a symbol key (the
 /// runtime reads well-known symbols on any object), `prototype` (read on
 /// any callable by `instanceof` and `new`), `__proto__`, a number, and the
@@ -38,55 +23,62 @@ fn field_key(m: &Model, a: Atom) -> bool {
         || crate::solve::numeric_key(name))
 }
 
-/// A native function value or `Object.prototype` method token: its keys
-/// are `Function.prototype`'s (and `Object.prototype`'s).
-fn native_fn(m: &Model, t: Tok) -> bool {
-    matches!(
-        m.toks[t as usize],
-        TokKind::BuiltinFn(_)
-            | TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
-    )
+/// Native function-value tokens, including the Object.prototype method
+/// identities represented as namespaces.
+pub fn builtin_function(m: &Model, t: Tok) -> bool {
+    match m.toks[t as usize] {
+        TokKind::BuiltinFn(_) => true,
+        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod) => true,
+        TokKind::Builtin(ns) => !m.unit_mode && members::ns_chain(ns) == Family::Function,
+        _ => false,
+    }
 }
 
-/// Rule R1: `Some` when a store under named key `a` into built-in object
-/// `t` is a field store, because the description does not declare `a` for
-/// `t` (own or on its chain). `None`: a declared or undescribed key, or a
-/// holder the rule does not cover; they keep the opaque path. Only whole
-/// program mode. `Native::Any` is no store holder: it may be a native the
-/// description does not cover (an undescribed family's constructor, an
-/// undescribed namespace's static), whose declared keys are unknown. A
-/// `Native::Member` is a described family's (`loads::family_load` mints
-/// none for `Family::Opaque`, whose every key reads the anonymous native).
-pub fn undeclared(m: &Model, t: Tok, a: Atom) -> Option<Undeclared> {
+/// A described built-in object and its chain declare no such program key.
+pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
     if t == TOP || !field_key(m, a) {
-        return None;
+        return false;
     }
-    let name = m.atoms[a as usize].as_str();
-    match &m.toks[t as usize] {
-        TokKind::BuiltinFn(Native::Any) => None,
-        _ if native_fn(m, t) => members::member(Family::Function, name)
-            .is_none()
-            .then_some(Undeclared::NativeFn),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => None,
-        TokKind::Builtin(ns) => {
-            (members::ns_member(*ns, name) == Some(None)).then_some(Undeclared::Namespace)
+    match m.toks[t as usize] {
+        TokKind::BuiltinFn(Native::Member { .. }) => {
+            !m.native_property(t, &m.atoms[a as usize])
+                .is_some_and(|p| p.own_namespace)
+                && members::member(Family::Function, &m.atoms[a as usize]).is_none()
         }
-        _ => None,
+        TokKind::Builtin(BuiltinNs::GlobalThis) => false,
+        TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),
+        _ => false,
     }
 }
 
-/// Does a read of named key `a` through native function value `t` (any
-/// native, `Native::Any` included, or an `Object.prototype` method token)
-/// find the field R1 stores make under `a` (`Undeclared::NativeFn`)?
-pub fn native_fn_field(m: &Model, t: Tok, a: Atom) -> bool {
-    t != TOP
-        && native_fn(m, t)
-        && field_key(m, a)
-        && members::member(Family::Function, &m.atoms[a as usize]).is_none()
-}
-
-/// Is `t` a native function value whose computed-key reads see every R1
-/// field of native function values.
-pub fn native_fn_holder(m: &Model, t: Tok) -> bool {
-    t != TOP && !m.unit_mode && native_fn(m, t)
+/// Denotation, not equivalence: Any may be X or Y without identifying X
+/// with Y. All value observations use this predicate, including chain and
+/// accessor reads and the reach exposed to unknown code.
+pub fn native_may_be(m: &Model, a: Tok, b: Tok) -> bool {
+    if !builtin_function(m, a) || !builtin_function(m, b) {
+        return false;
+    }
+    a == b
+        || matches!(m.toks[a as usize], TokKind::BuiltinFn(Native::Any))
+        || matches!(m.toks[b as usize], TokKind::BuiltinFn(Native::Any))
+        || match (&m.toks[a as usize], &m.toks[b as usize]) {
+            // A computed Object.prototype read has a narrower call model.
+            (
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+                TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_)),
+            )
+            | (
+                TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_)),
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+            ) => true,
+            (
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+                TokKind::BuiltinFn(Native::Member { identity }),
+            )
+            | (
+                TokKind::BuiltinFn(Native::Member { identity }),
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+            ) => identity.starts_with("Object.prototype."),
+            _ => false,
+        }
 }

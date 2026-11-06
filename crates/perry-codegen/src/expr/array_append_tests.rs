@@ -27,6 +27,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
                     byte_offset: 0,
                 }),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),

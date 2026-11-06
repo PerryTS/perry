@@ -1030,6 +1030,7 @@ mod tests {
             .wrapping_add(17)
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn pcs_round_trip_through_the_ascii_blob() {
         let pcs = [0x1_0000_1234usize, 0x7fff_ffff_0000, 1, 0];
@@ -1117,6 +1118,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn new_image_replacement_is_visible_without_a_name_snapshot() {
         const START: usize = 0x0000_7d10_0010_0000;
@@ -1167,6 +1169,7 @@ mod tests {
     /// stack index must use only codegen's image registry, or the lower-bound
     /// lookup gives every nearby runtime function the thunk's JS name.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn describe_ip_does_not_name_runtime_code_after_a_builtin_thunk() {
         const THUNK_START: usize = 0x0000_7e00_0000_0000;
         const THUNK_NAME: &[u8] = b"get years";

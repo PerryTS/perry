@@ -57,7 +57,7 @@ pub(crate) use stack_roots::with_stack_roots;
 pub(crate) use scan_mode::ConservativeScanEffectiveTestGuard;
 #[allow(unused_imports)]
 pub(crate) use scan_mode::{
-    conservative_scan_is_effective, conservative_stack_scan_decision,
+    collection_point_is_precise, conservative_scan_is_effective, conservative_stack_scan_decision,
     conservative_stack_scan_decision_for, conservative_stack_scan_mode,
     conservative_stack_scan_mode_from_value, resolve_conservative_stack_scan_mode,
     set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,

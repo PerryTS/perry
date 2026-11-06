@@ -70,6 +70,7 @@ fn a_real_forwarding_pointer_is_still_followed() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// SABOTAGE: the forwarding word is a NaN-boxed value, not an address.
 ///
 /// Before #8174 the walk returned it and the caller masked it to 48 bits. Now

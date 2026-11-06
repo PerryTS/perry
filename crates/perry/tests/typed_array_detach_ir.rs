@@ -21,7 +21,7 @@
 //! - A literal-length module array whose `.buffer` is observed takes no
 //!   `$spec_ta*` clone; its sealed twin does.
 //!
-//! The behavioural half is `test-files/test_gap_typed_array_detach_*.ts`,
+//! The behavioural half is `tests/fixtures/programs/test_gap_typed_array_detach_*.ts`,
 //! compared against node.
 
 use std::path::PathBuf;

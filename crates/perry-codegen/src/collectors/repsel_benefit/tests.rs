@@ -55,6 +55,7 @@ fn cmp(l: Expr, r: Expr) -> Expr {
 
 fn index(object: Expr, idx: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(object),
@@ -206,6 +207,7 @@ fn index_used_counter_survives() {
                 object: Box::new(get(1)),
                 index: Box::new(get(2)),
                 value: Box::new(Expr::Bool(false)),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })],

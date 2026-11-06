@@ -225,12 +225,12 @@ unsafe fn close_this_quietly(this: f64) {
 unsafe fn to_limit(this: f64, limit: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
-    let n = match crate::exception::catch_js_throw(|| crate::builtins::js_number_coerce(limit)) {
+    let n = match crate::exception::catch_thrown(|| crate::builtins::js_number_coerce(limit)) {
         Ok(n) => n,
         Err(error) => {
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             close_this_quietly(this.get_nanbox_f64());
-            crate::exception::js_throw(error.get_nanbox_f64());
+            crate::exception::rethrow_caught(error.caught());
         }
     };
     let n = n.trunc() + 0.0;
@@ -253,7 +253,7 @@ unsafe fn terminal(
     let callback = scope.root_nanbox_f64(callback);
     let it = || iterated.get_nanbox_f64();
     let close = Cell::new(false);
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let mut counter = 0.0;
         let acc = scope.root_nanbox_f64(undefined());
         if m == Method::Reduce {
@@ -308,11 +308,11 @@ unsafe fn terminal(
     match result {
         Ok(value) => value,
         Err(error) => {
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             if close.get() {
                 close_quietly(it());
             }
-            crate::exception::js_throw(error.get_nanbox_f64())
+            crate::exception::rethrow_caught(error.caught())
         }
     }
 }

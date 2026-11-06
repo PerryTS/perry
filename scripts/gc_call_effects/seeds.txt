@@ -92,7 +92,8 @@ barrier regex (replay_array_growth_write_barriers|rebuild_closure_layout_and_bar
 # The throw funnel. ThrowOnly cuts it: a call that reaches JS only by throwing
 # leaves no suspended frame to resume without unwinding (RFC section 4.6). The
 # fatal path runs exit listeners on an intact stack that never resumes.
-throw exact js_throw -- the single throw funnel every js_throw_* helper ends in
+throw exact js_throw -- the entry of compiled code (a program `throw` statement); it calls raise_thrown
+throw regex ^perry_runtime::exception::raise_thrown$ -- the single raise behind js_throw and the four typed leaves (throw_core, rethrow_caught, throw_program_value, throw_open)
 throw contains perry_runtime::exception::print_uncaught -- fatal uncaught-exception report: runs exit listeners, then the process exits
 
 # ------------------------------------------------------------------- panic
@@ -727,3 +728,6 @@ indirect exact perry_runtime::dyn_eval_hook_roots::register_installed_roots => e
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_active_functions_storage => exact perry_runtime::dyn_eval::function_owner::active_functions_storage::resolve -- evaluator installer fills existing function pin TLS resolver
 
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_pin_top_storage => exact perry_runtime::dyn_eval::function_owner::pin_top_storage::resolve -- evaluator installer fills existing function pin TLS resolver
+
+# interpreted program throw: counted with dynamic code
+program exact perry_runtime::dyn_eval::interp::exec_stmt -- the statement evaluator executes interpreted program text (interp_entry is inlined); exclude its program throws from the native throw class

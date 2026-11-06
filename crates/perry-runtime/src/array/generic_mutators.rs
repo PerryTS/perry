@@ -98,8 +98,7 @@ fn pushlike_primitive_result(recv: f64, count: usize) -> f64 {
 pub(super) fn throw_reduce_empty() -> ! {
     let msg = b"Reduce of empty array with no initial value";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// #5989: `Set`/`Map` fallback for the generic array-like `forEach` engine.

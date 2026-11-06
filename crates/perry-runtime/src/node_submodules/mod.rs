@@ -82,9 +82,7 @@ macro_rules! thunk {
             let msg: &'static str = $msg;
             let bytes = msg.as_bytes();
             let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            let err = crate::error::js_error_new_with_message(header);
-            let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-            crate::exception::js_throw(f64::from_bits(bits))
+            crate::exception::throw_core(crate::error::CoreError::error(header))
         }
     };
 }
@@ -1046,7 +1044,7 @@ pub fn scan_node_submodule_singleton_roots(mark: &mut dyn FnMut(f64)) {
 pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     DIAG_PENDING_UNCAUGHT.with(|pending| {
         for (err, _) in pending.borrow_mut().iter_mut() {
-            visitor.visit_nanbox_f64_slot(err);
+            err.scan_roots(visitor);
         }
     });
     // Symbol keys duplicate the structurally rooted DIAG_CHANNELS names.
@@ -1131,7 +1129,9 @@ pub(crate) fn test_seed_node_submodule_roots(
         let mut pending = pending.borrow_mut();
         pending.clear();
         pending.push((
-            f64::from_bits(JSValue::pointer(namespace as *const u8).bits()),
+            UncaughtError::Caught(crate::exception::test_caught(f64::from_bits(
+                JSValue::pointer(namespace as *const u8).bits(),
+            ))),
             None,
         ));
     });
@@ -1148,7 +1148,7 @@ pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize, u64) {
         pending
             .borrow_mut()
             .pop()
-            .map(|(value, _)| value.to_bits())
+            .map(|(value, _)| value.value().to_bits())
             .unwrap_or(0)
     });
     (closure, namespace, diag, pending)

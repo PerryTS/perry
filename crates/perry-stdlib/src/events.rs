@@ -140,15 +140,15 @@ fn result_array(value: f64) -> *mut ArrayHeader {
     }
 }
 
-fn invalid_arg_type_error(message: &str) -> f64 {
+fn invalid_arg_type_error(message: &str) -> perry_runtime::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::value::js_nanbox_pointer(err as i64)
+    let err = perry_runtime::error::CoreError::type_error(msg);
+    err
 }
 
 fn throw_invalid_arg_type(message: &str) -> ! {
-    perry_runtime::exception::js_throw(invalid_arg_type_error(message))
+    perry_runtime::exception::throw_core(invalid_arg_type_error(message))
 }
 
 fn received(value: f64) -> String {
@@ -323,7 +323,9 @@ fn validate_listener_arg(value: f64, name: &str) -> i64 {
     })
 }
 
-unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
+unsafe fn options_signal_result(
+    options: f64,
+) -> Result<Option<f64>, perry_runtime::error::CoreError> {
     let jsval = JSValue::from_bits(options.to_bits());
     if jsval.is_undefined() {
         return Ok(None);
@@ -350,7 +352,7 @@ unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
 unsafe fn options_signal_or_throw(options: f64) -> Option<f64> {
     match options_signal_result(options) {
         Ok(signal) => signal,
-        Err(error) => perry_runtime::exception::js_throw(error),
+        Err(error) => perry_runtime::exception::throw_core(error),
     }
 }
 

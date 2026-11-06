@@ -99,7 +99,7 @@ fn message_event_delivery_cleanup_preserves_exception_identity() {
                         0,
                     );
                 }
-                crate::exception::js_throw(boxed_ptr(sentinel.get_raw_mut_ptr::<ObjectHeader>()));
+                crate::exception::test_throw(boxed_ptr(sentinel.get_raw_mut_ptr::<ObjectHeader>()));
             },
         );
     });
@@ -121,4 +121,56 @@ fn message_event_delivery_cleanup_preserves_exception_identity() {
         boxed_ptr(target.get_raw_mut_ptr::<ObjectHeader>()),
         || panic!("stopped delivery must not invoke another callback"),
     );
+}
+
+#[test]
+fn node_delivery_defaults_data_without_changing_lossless_factories() {
+    crate::event_target_hook_slots::install();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_nanbox_f64(boxed_ptr(js_object_alloc(0, 0)));
+    let ports = scope.root_nanbox_f64(boxed_ptr(js_array_alloc(0)));
+    let values: Vec<_> = [
+        (undefined_value(), null_value()),
+        (null_value(), null_value()),
+        (7.0, 7.0),
+        (bool_value(false), bool_value(false)),
+        (0.0, 0.0),
+        (object.get_nanbox_f64(), object.get_nanbox_f64()),
+    ]
+    .into_iter()
+    .map(|(data, expected)| (scope.root_nanbox_f64(data), scope.root_nanbox_f64(expected)))
+    .collect();
+    for (data, expected) in values {
+        for supplied_ports in [false, true] {
+            let node = scope.root_nanbox_f64(crate::event_target_hook_slots::node_message_event(
+                data.get_nanbox_f64(),
+                supplied_ports.then(|| ports.get_nanbox_f64()),
+            ));
+            assert_eq!(
+                get(node.get_nanbox_f64(), b"data").to_bits(),
+                expected.get_nanbox_f64().to_bits()
+            );
+            let actual_ports = scope.root_nanbox_f64(get(node.get_nanbox_f64(), b"ports"));
+            assert!(value_as_ptr::<ArrayHeader>(actual_ports.get_nanbox_f64()).is_some());
+            assert_eq!(
+                crate::object::js_object_is_frozen(actual_ports.get_nanbox_f64()).to_bits(),
+                JSValue::bool(true).bits()
+            );
+            if supplied_ports {
+                assert_eq!(actual_ports.get_nanbox_u64(), ports.get_nanbox_u64());
+            }
+            let raw = scope.root_nanbox_f64(if supplied_ports {
+                crate::event_target_hook_slots::message_event_with_ports(
+                    data.get_nanbox_f64(),
+                    ports.get_nanbox_f64(),
+                )
+            } else {
+                crate::event_target_hook_slots::message_event(data.get_nanbox_f64())
+            });
+            assert_eq!(
+                get(raw.get_nanbox_f64(), b"data").to_bits(),
+                data.get_nanbox_f64().to_bits()
+            );
+        }
+    }
 }

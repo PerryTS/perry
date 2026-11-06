@@ -5,7 +5,7 @@
 `normalize_parity_failure`. `unified` is the `parity` rules plus the masks for
 the `node:test` reporter's own artefacts (`test at <location>`, suite
 durations, clock-format timers).
-`tests/test_parity_normalize.py` pins the `parity` rules against fixtures
+`tests/tooling/parity/test_parity_normalize.py` pins the `parity` rules against fixtures
 captured from the shell chain they replaced.
 """
 

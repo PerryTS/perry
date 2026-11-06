@@ -18,12 +18,12 @@ pub(super) enum PathModuleStatus {
     Initialized,
     /// Initializers are not retried. Every later caller receives the exact
     /// same thrown JS value until process teardown.
-    Failed(u64),
+    Failed(crate::exception::Caught),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PathModuleRequireError {
-    Initializer(u64),
+    Initializer(crate::exception::Caught),
     /// Defensive fail-closed result for a state that would otherwise make the
     /// logical loader owner wait on a foreign initializer.
     OwnershipConflict,
@@ -329,7 +329,11 @@ impl PathModuleRegistry {
     /// completes with those partial exports. An exceptional return caches the
     /// original throw. Lazy claims are deliberately absent from this stack and
     /// are completed by `require_with` instead.
-    pub(super) fn finish_module_boundary(&self, boundary: u64, error: Option<u64>) -> usize {
+    pub(super) fn finish_module_boundary(
+        &self,
+        boundary: u64,
+        error: Option<crate::exception::Caught>,
+    ) -> usize {
         let current = std::thread::current().id();
         let completed = {
             let mut state = self.lock();
@@ -378,7 +382,7 @@ impl PathModuleRegistry {
         };
         if completed > 0 {
             if let Some(error) = error {
-                crate::gc::runtime_write_barrier_root_nanbox(error);
+                crate::gc::runtime_write_barrier_root_nanbox(error.value().to_bits());
             }
             self.ready.notify_all();
         }
@@ -393,7 +397,7 @@ impl PathModuleRegistry {
     pub(super) fn require_with(
         &self,
         key: &str,
-        initialize: &dyn Fn(usize) -> Result<(), u64>,
+        initialize: &dyn Fn(usize) -> Result<(), crate::exception::Caught>,
     ) -> Result<Option<u64>, PathModuleRequireError> {
         let current = std::thread::current().id();
         let init_addr = loop {
@@ -503,7 +507,7 @@ impl PathModuleRegistry {
         // Failed values are persistent roots too. Keep waiters asleep until
         // the cached exception has been shaded.
         if let Some(error) = failed_error {
-            crate::gc::runtime_write_barrier_root_nanbox(error);
+            crate::gc::runtime_write_barrier_root_nanbox(error.value().to_bits());
         }
         self.ready.notify_all();
         result
@@ -549,7 +553,7 @@ impl PathModuleRegistry {
                 visitor.visit_nanbox_u64_slot(factory);
             }
             if let PathModuleStatus::Failed(error) = &mut entry.status {
-                visitor.visit_nanbox_u64_slot(error);
+                error.scan_roots(visitor);
             }
         }
     }
@@ -703,6 +707,13 @@ crate::perry_thread_local! {
 
 #[cfg(test)]
 mod path_module_registry_tests {
+    fn caught(bits: u64) -> crate::exception::Caught {
+        crate::exception::catch_thrown(|| {
+            crate::exception::throw_program_value(f64::from_bits(bits))
+        })
+        .unwrap_err()
+    }
+
     use super::super::canonicalize_module_path;
     use super::*;
     use crate::value::TAG_UNDEFINED;
@@ -738,7 +749,7 @@ mod path_module_registry_tests {
         calls: &[AtomicUsize; 2],
         partial_observations: &AtomicUsize,
         addr: usize,
-    ) -> Result<(), u64> {
+    ) -> Result<(), crate::exception::Caught> {
         gate.enter_and_wait(addr);
         let (key, other_key, partial, other_partial, final_value, call_index) = match addr {
             31 => ("a.js", "b.js", 0xA1, 0xB1, 0xA2, 0),
@@ -975,19 +986,22 @@ mod path_module_registry_tests {
             "the foreign waiter returned partial exports instead of waiting"
         );
 
-        assert_eq!(registry.finish_module_boundary(boundary, Some(0xBAD)), 1);
+        assert_eq!(
+            registry.finish_module_boundary(boundary, Some(caught(0xBAD))),
+            1
+        );
         assert_eq!(
             result_rx
                 .recv_timeout(std::time::Duration::from_secs(2))
                 .expect("eager failure did not wake the waiting require"),
-            Err(PathModuleRequireError::Initializer(0xBAD))
+            Err(PathModuleRequireError::Initializer(caught(0xBAD)))
         );
         waiter.join().unwrap();
         assert_eq!(
             registry.require_with("eager-throws.js", &|_| {
                 panic!("failed eager module must not retry")
             }),
-            Err(PathModuleRequireError::Initializer(0xBAD))
+            Err(PathModuleRequireError::Initializer(caught(0xBAD)))
         );
         let state = registry.lock();
         assert_eq!(state.initializing_count, 0);
@@ -1005,14 +1019,14 @@ mod path_module_registry_tests {
         assert!(registry.register_partial("inner.js".into(), 0xB1, None));
 
         assert_eq!(
-            registry.finish_module_boundary(inner_boundary, Some(0xBAD)),
+            registry.finish_module_boundary(inner_boundary, Some(caught(0xBAD))),
             1
         );
         assert!(registry.register_final_exports("outer.js".into(), 0xA2));
         assert_eq!(registry.finish_module_boundary(outer_boundary, None), 0);
         assert_eq!(
             registry.require_with("inner.js", &|_| panic!("inner failure must be cached")),
-            Err(PathModuleRequireError::Initializer(0xBAD))
+            Err(PathModuleRequireError::Initializer(caught(0xBAD)))
         );
         assert_eq!(
             registry.require_with("outer.js", &|_| panic!("outer module completed eagerly")),
@@ -1035,7 +1049,7 @@ mod path_module_registry_tests {
         // complete independently.
         let inner_boundary = registry.begin_module_boundary();
         assert_eq!(
-            registry.finish_module_boundary(inner_boundary, Some(0xBAD)),
+            registry.finish_module_boundary(inner_boundary, Some(caught(0xBAD))),
             0
         );
         assert!(registry.register_final_exports("outer.js".into(), 0xA2));
@@ -1177,8 +1191,8 @@ mod path_module_registry_tests {
         assert!(registry.contains_registered(key));
         assert_eq!(registry.published_exports(key), None);
         assert_eq!(
-            registry.require_with(key, &|_| Err(TAG_UNDEFINED)),
-            Err(PathModuleRequireError::Initializer(TAG_UNDEFINED))
+            registry.require_with(key, &|_| Err(caught(TAG_UNDEFINED))),
+            Err(PathModuleRequireError::Initializer(caught(TAG_UNDEFINED)))
         );
         assert!(registry.contains_registered(key));
         registry.remove_for_test(key);
@@ -1219,7 +1233,7 @@ mod path_module_registry_tests {
         let init_entered = Arc::new(Barrier::new(2));
         let release_init = Arc::new(Barrier::new(2));
         let calls = Arc::new(AtomicUsize::new(0));
-        let error = 0x7FFD_0000_0000_0042;
+        let error = caught(0x7FFD_0000_0000_0042);
 
         let mut workers = Vec::new();
         for _ in 0..THREADS {

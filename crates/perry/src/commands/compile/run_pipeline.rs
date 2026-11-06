@@ -960,6 +960,10 @@ pub fn run_with_parse_cache(
             Vec::new()
         };
 
+    // Declared addons can be reached by computed loaders, with no literal
+    // graph edge. Admit them before settling the lowering census as well.
+    collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+
     rerun_collect_with_class_field_types(
         &args,
         &mut ctx,
@@ -988,6 +992,12 @@ pub fn run_with_parse_cache(
     collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+    // The lowering and the closed-world bit above saw every open addon; one
+    // first admitted here would be linked against a census that missed it.
+    anyhow::ensure!(
+        !admit_open_native_addons(&mut ctx),
+        "an open Node-API addon was admitted after the program's dynamic-code census"
+    );
 
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
     // bundled PARTIAL well-known binding over a `node_modules/<pkg>` copy the
@@ -1266,10 +1276,9 @@ pub fn run_with_parse_cache(
         Vec::new()
     };
     // Object model step 3: prototype slots written once are constants.
-    if std::env::var_os("PERRY_PROTO_CENSUS_REPORT").is_some() {
-        eprintln!("{}", ctx.proto_census.summary());
-    }
-    perry_codegen::set_program_proto_census(Some(ctx.proto_census.clone()));
+    let proto_census = super::foreign_native_census::census(&ctx).into_owned();
+    super::foreign_native_census::report(&proto_census);
+    perry_codegen::set_program_proto_census(Some(proto_census));
     // Object model §3.6: the program's export facts (constant keys, literal
     // keys) that prototype images in importing modules read.
     {

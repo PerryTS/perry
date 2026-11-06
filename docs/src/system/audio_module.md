@@ -15,7 +15,7 @@ mixer**. Three concepts:
 Use `perry/audio` for SFX, music loops, voice prompts, and any UI
 feedback where you want overlap or sub-20ms latency. For long-form
 streaming with a seek bar, lock-screen controls, and Now Playing
-metadata, use [`perry/media`](./media.md) instead.
+metadata, use [`perry/media`](media.md) instead.
 
 ## Quick start
 

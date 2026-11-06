@@ -58,8 +58,7 @@ fn is_callable_value(value: f64) -> bool {
 /// Throw a `TypeError` with the given message. Never returns.
 fn throw_type_error(msg: &str) -> ! {
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// GetDisposeMethod(V, hint) — read the disposer method off a resource value.
@@ -197,8 +196,7 @@ fn throw_disposed() -> ! {
         b"Cannot add values to a disposed stack".as_ptr(),
         "Cannot add values to a disposed stack".len() as u32,
     );
-    let err = crate::error::js_referenceerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg))
 }
 
 /// Invoke a single disposer value (a closure) with no arguments. Non-callable

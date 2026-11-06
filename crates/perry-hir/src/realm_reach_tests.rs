@@ -241,6 +241,7 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         (crate::Expr::GlobalThisExpr, true),
         (
             crate::Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(crate::Expr::GlobalThisExpr),
@@ -250,6 +251,7 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         ),
         (
             crate::Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(crate::Expr::GlobalThisExpr),
@@ -418,8 +420,13 @@ fn get_builtin_module_is_require_for_reach() {
 fn assert_loads_fs(form: &str, literal: &str) {
     let partial = reach(literal);
     assert!(!partial.is_full(), "{form}: {literal}: {partial:?}");
-    assert!(partial.names.contains("node:fs"), "{form}: {literal}: {partial:?}");
-    let dynamic_source = literal.replace("\"node:fs\"", "name").replace("\"fs\"", "name");
+    assert!(
+        partial.names.contains("node:fs"),
+        "{form}: {literal}: {partial:?}"
+    );
+    let dynamic_source = literal
+        .replace("\"node:fs\"", "name")
+        .replace("\"fs\"", "name");
     assert_ne!(dynamic_source, literal, "{form}: fixture has no literal");
     let dynamic = reach(&dynamic_source);
     assert!(
@@ -430,12 +437,18 @@ fn assert_loads_fs(form: &str, literal: &str) {
 
 fn assert_escapes(form: &str, source: &str) {
     let r = reach(source);
-    assert!(r.top.contains(&RealmTop::DynamicModule), "{form}: {source}: {r:?}");
+    assert!(
+        r.top.contains(&RealmTop::DynamicModule),
+        "{form}: {source}: {r:?}"
+    );
 }
 
 #[test]
 fn optional_chain_get_builtin_module_loads_the_module() {
-    assert_loads_fs("optional call", "const fs = process.getBuiltinModule?.(\"node:fs\");");
+    assert_loads_fs(
+        "optional call",
+        "const fs = process.getBuiltinModule?.(\"node:fs\");",
+    );
     assert_loads_fs(
         "optional member",
         "const fs = globalThis.process?.getBuiltinModule(\"node:fs\");",
@@ -512,7 +525,10 @@ fn imported_get_builtin_module_loads_the_module() {
 
 #[test]
 fn computed_get_builtin_module_loads_the_module() {
-    assert_loads_fs("computed key", "process[\"getBuiltinModule\"](\"node:fs\");");
+    assert_loads_fs(
+        "computed key",
+        "process[\"getBuiltinModule\"](\"node:fs\");",
+    );
     assert_loads_fs(
         "constant computed key",
         "const k = \"getBuiltinModule\"; process[k](\"node:fs\");",
@@ -521,7 +537,8 @@ fn computed_get_builtin_module_loads_the_module() {
 
 #[test]
 fn create_require_result_used_as_a_value_is_top() {
-    let head = "import { createRequire } from \"node:module\"; const req = createRequire(__filename);";
+    let head =
+        "import { createRequire } from \"node:module\"; const req = createRequire(__filename);";
     assert_escapes("map argument", &format!("{head} [\"fs\"].map(req);"));
     assert_escapes("helper argument", &format!("{head} helper(req);"));
     assert_escapes("stored", &format!("{head} const o = {{ load: req }};"));
@@ -529,16 +546,25 @@ fn create_require_result_used_as_a_value_is_top() {
     assert_escapes("call", &format!("{head} req.call(null, \"fs\");"));
     assert_escapes("exported", "import { createRequire } from \"node:module\"; export const req = createRequire(__filename);");
     assert_escapes("export list", &format!("{head} export {{ req }};"));
-    assert_escapes("maker as a value", "import { createRequire } from \"node:module\"; helper(createRequire);");
+    assert_escapes(
+        "maker as a value",
+        "import { createRequire } from \"node:module\"; helper(createRequire);",
+    );
 }
 
 #[test]
 fn require_used_as_a_value_is_top() {
-    assert_escapes("alias map argument", "const req = require; [\"fs\"].map(req);");
+    assert_escapes(
+        "alias map argument",
+        "const req = require; [\"fs\"].map(req);",
+    );
     assert_escapes("alias helper argument", "const req = require; helper(req);");
     assert_escapes("free require argument", "helper(require);");
     assert_escapes("let alias", "let req = require; req(\"fs\");");
-    assert_escapes("getBuiltinModule value", "[\"fs\"].map(process.getBuiltinModule);");
+    assert_escapes(
+        "getBuiltinModule value",
+        "[\"fs\"].map(process.getBuiltinModule);",
+    );
     // Uses that do not let the loader escape stay partial.
     for source in [
         "const p = require.resolve(\"node:fs\"); require(\"node:fs\");",

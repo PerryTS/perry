@@ -1,17 +1,19 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod absent_key;
 mod accessor_keys;
+mod accessor_reach;
 mod accessor_receiver;
+mod activation_paths;
+mod annexb_accessors;
+mod args_beside_rest;
 mod arguments_object;
 mod array_ctor;
 mod array_elements;
-mod array_index_store;
-mod array_iteration;
-mod absent_key;
-mod host_objects;
 mod array_helper_nodes;
 mod array_holes;
-mod for_of_yield;
+mod array_index_store;
+mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
@@ -23,6 +25,7 @@ mod birth_site;
 mod body_activation;
 mod body_identity;
 mod bound_in_summary;
+mod builtin_fn_identity;
 mod builtin_fn_keys;
 mod builtin_members;
 mod builtin_program_fields;
@@ -32,6 +35,7 @@ mod callable_contract;
 mod callback_origin;
 mod captured;
 mod cjs_require;
+mod class_capture_forwarding;
 mod class_statics;
 mod closed_marker_load;
 mod closed_world;
@@ -42,39 +46,45 @@ mod ctor_return;
 mod dead_dynamic_import;
 mod declared_effects;
 mod default_params;
+pub(crate) mod delivery_boundaries;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
+mod element_sites;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
 mod field_array_push;
-mod rest_elements;
 mod for_in_keys;
+mod for_of_yield;
 mod function_ctor_without_interp;
 mod function_values;
 mod getter_contract;
 mod global_gc;
 mod global_namespace_store;
+mod host_objects;
 mod hub_tokens;
+mod indexed_callees;
 mod indexed_owner;
 mod inherited_layout;
 mod interp_from_facts;
 mod layout_key;
 mod ledger;
 mod lit_accessor;
+mod locked_builtins;
+mod locked_delete;
+mod locked_store;
+mod logical_and;
+mod map_identity_ops;
 mod memo_context;
 mod named_accessors;
 mod native_fs;
 mod native_given_proto;
 mod native_member;
-mod locked_builtins;
-mod locked_delete;
-mod locked_store;
-mod logical_and;
 mod native_proto;
 mod num_key;
+mod objproto_protocol;
 mod own_guarded_read;
 mod own_helper_guard;
 mod own_key_shadow;
@@ -83,6 +93,7 @@ mod parent_value;
 mod plus_string;
 mod prim_result;
 mod private_field;
+mod private_method_flow;
 mod process_argv;
 mod proof_receivers;
 mod proto_lock_keys;
@@ -92,9 +103,11 @@ mod protocol_keys;
 mod reach_accessor;
 mod receiver_slots;
 mod receiver_this;
+mod reflect_construct;
 mod regexp_exec;
 mod relinked_parent;
 mod rest_element;
+mod rest_elements;
 mod run_once_closed;
 mod runtime_helpers;
 mod spread_elements;
@@ -682,7 +695,7 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
         assert!(
             !m.aborted,
             "{count}-value copies aborted at {} work",
-            m.work
+            m.work.get()
         );
         for n in reads {
             for &v in &values {
@@ -733,7 +746,7 @@ fn copying_a_base_into_a_superset_keeps_extra_values_and_primitives() {
     m.add_prim(src, prim::NUM);
     m.max_work = 100;
     m.solve();
-    assert!(!m.aborted, "base copy used {} work", m.work);
+    assert!(!m.aborted, "base copy used {} work", m.work.get());
     for t in values {
         assert!(m.nodes[dst as usize].pts.contains_tok(t));
     }
@@ -817,13 +830,13 @@ fn observed_bases_avoid_recopying_pending_prefixes_and_keep_independent_members(
         let later = m.tok(TokKind::ModNs(40));
         m.add(src, &[later], prim::STR);
         // The bound measures the solve's deliveries, not setup.
-        m.work = 0;
+        m.work.set(0);
         m.max_work = 6000;
         m.solve();
         assert!(
             !m.aborted,
             "observed-base copies used {} work (own={own_members})",
-            m.work
+            m.work.get()
         );
         for (i, &dst) in destinations.iter().enumerate() {
             let n = &m.nodes[dst as usize];
@@ -858,10 +871,10 @@ fn observed_relay_bases_share_new_batches_without_enumerating_each_transfer() {
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 5000;
     m.solve();
-    assert!(!m.aborted, "batch sharing used {} work", m.work);
+    assert!(!m.aborted, "batch sharing used {} work", m.work.get());
     for dst in destinations {
         for &t in first.iter().chain(&next) {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -917,10 +930,10 @@ fn small_observed_sets_preserve_superset_members_without_recopying_values() {
         extras.push(extra);
     }
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 1500;
     m.solve();
-    assert!(!m.aborted, "small supersets used {} work", m.work);
+    assert!(!m.aborted, "small supersets used {} work", m.work.get());
     for (i, dst) in destinations.into_iter().enumerate() {
         for t in [a, b, extras[i]] {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -957,10 +970,10 @@ fn equal_snapshot_groups_keep_old_owners_covered_after_coalescing() {
     let added = m.tok(TokKind::ModNs(40));
     m.add_tok(src, added);
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 5000;
     m.solve();
-    assert!(!m.aborted, "coalesced snapshots used {} work", m.work);
+    assert!(!m.aborted, "coalesced snapshots used {} work", m.work.get());
     for dst in first {
         assert!(m.nodes[dst as usize].pts.contains_tok(added));
     }
@@ -998,10 +1011,10 @@ fn delivered_cardinality_proves_batch_adoption_with_independent_storage() {
     m.add_tok(destinations[999], own);
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 2000;
     m.solve();
-    assert!(!m.aborted, "cardinality batches used {} work", m.work);
+    assert!(!m.aborted, "cardinality batches used {} work", m.work.get());
     for (i, dst) in destinations.into_iter().enumerate() {
         let n = &m.nodes[dst as usize];
         for &t in first.iter().chain(&next) {
@@ -1031,10 +1044,10 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
             }
         }
         // The bound measures the solve's deliveries, not setup.
-        m.work = 0;
+        m.work.set(0);
         m.max_work = group as u64 * 9;
         m.solve();
-        assert!(!m.aborted, "late subscribers used {} work", m.work);
+        assert!(!m.aborted, "late subscribers used {} work", m.work.get());
         for &dst in &destinations {
             for t in [a, b, c] {
                 assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -1042,7 +1055,7 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
         }
         let d = m.tok(TokKind::ModNs(4));
         m.add_tok(src, d);
-        m.work = 0;
+        m.work.set(0);
         m.max_work = group as u64 * 4;
         m.solve();
         assert!(!m.aborted);
@@ -1401,7 +1414,8 @@ fn a_parameter_node_holds_its_argument_marker() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
+        gen_fn_protos: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1469,7 +1483,8 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
+        gen_fn_protos: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1526,7 +1541,8 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
+        gen_fn_protos: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1577,7 +1593,8 @@ fn marker_model() -> crate::model::Model {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
+        gen_fn_protos: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1609,19 +1626,19 @@ fn a_use_through_an_argument_marker_is_solve_work() {
     }
     let a = m.atom("k");
     let k = m.keyed_reach_of(r, a);
-    let w = m.work;
+    let w = m.work.get();
     m.mark_use(k, MARK_ESCAPE);
     assert!(
-        m.work - w >= n,
+        m.work.get() - w >= n,
         "a keyed use walked {n} members for {} work",
-        m.work - w
+        m.work.get() - w
     );
-    let w = m.work;
+    let w = m.work.get();
     m.mark_use(r, MARK_ESCAPE);
     assert!(
-        m.work - w >= n,
+        m.work.get() - w >= n,
         "a use walked {n} members for {} work",
-        m.work - w
+        m.work.get() - w
     );
 }
 
@@ -1708,14 +1725,14 @@ fn a_repeated_keyed_use_costs_one_step() {
     let k = m.keyed_reach_of(r, a);
     m.mark_use(k, MARK_READ);
     let reps = 100;
-    let w = m.work;
+    let w = m.work.get();
     for _ in 0..reps {
         m.mark_use(k, MARK_READ);
     }
     assert!(
-        m.work - w <= reps,
+        m.work.get() - w <= reps,
         "{reps} repeated uses cost {} work",
-        m.work - w
+        m.work.get() - w
     );
 }
 
@@ -1742,13 +1759,13 @@ fn a_keyed_use_in_a_recursion_walks_each_member_once_per_bit() {
         m.link_marker(mks[i], rs[i]);
         m.link_marker(rs[(i + 1) % n as usize], rs[i]);
     }
-    let w = m.work;
+    let w = m.work.get();
     let atoms: Vec<_> = (0..keys).map(|i| m.atom(&format!("k{i}"))).collect();
     for &a in &atoms {
         let k = m.keyed_reach_of(rs[0], a);
         m.mark_use(k, MARK_ESCAPE);
     }
-    let spent = m.work - w;
+    let spent = m.work.get() - w;
     assert!(
         spent <= 3 * keys + 2 * n as u64 + 4,
         "{keys} keys on a ring of {n} cost {spent} work"
@@ -1790,22 +1807,27 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod collection_entries;
+mod concat_elements;
+mod console_protocol;
 mod constructor_values;
 mod date_methods;
 mod delegate_step;
+mod gen_proto_lock;
+mod array_iter_lock;
+mod gen_proto_members;
 mod generator_results;
-mod console_protocol;
+mod generator_resume_arguments;
 mod helper_protocols;
 mod host_helpers;
+mod key_shape;
 mod method_this_escape;
+mod native_proto_member;
 mod native_push;
 mod native_value_call;
-mod native_proto_member;
 mod proto_own_call;
 mod receiver_param_call;
 mod regexp_results;
 mod string_methods;
-mod key_shape;
 mod string_results;
 mod typed_array_methods;
 mod web_timer_methods;
@@ -1850,5 +1872,13 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
         .is_none());
 }
 
+mod builtin_fn_storage;
 mod numeric_property_store;
 mod shared_sets;
+
+mod builtin_missing_member;
+
+mod annexb_alias;
+mod uri_coercion;
+
+mod accessor_lookup_values;

@@ -108,6 +108,7 @@ fn an_order_free_computed_key_call_probes_the_key_before_the_dispatcher() {
     let ir = function_ir(Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),

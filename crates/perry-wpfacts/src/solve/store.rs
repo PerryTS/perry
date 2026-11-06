@@ -114,141 +114,6 @@ impl Model {
         own
     }
 
-    /// Rule R2 (STR1): a store into a builtin function value may have named
-    /// `key` (a named key, the element key, a computed key with its shape):
-    /// every property read of such a value under a key `key` may name is ⊤
-    /// from now on (`bf_key_written`), the reads made before included. A
-    /// read under another key keeps the member the realm describes.
-    pub(super) fn write_builtin_fns(&mut self, key: Key, r: u32) {
-        if self.bf_written.contains_key(&key) {
-            return;
-        }
-        self.bf_written.insert(key, r);
-        let k = match key {
-            Key::Named(a) => Some(self.atoms[a as usize].clone()),
-            Key::Any(_) => None,
-        };
-        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, k));
-        let met: Vec<Key> = (self.bf_reads.keys().copied())
-            .filter(|&rk| self.bf_keys_meet(rk, key))
-            .collect();
-        for rk in met {
-            for dst in self.bf_reads.remove(&rk).unwrap_or_default() {
-                self.add_top(dst, |_| {
-                    "property of a written builtin function value".into()
-                });
-            }
-        }
-    }
-
-    /// A store of `src` into a builtin function value under `wkey` (an
-    /// element store: its element key). Such a value is opaque: it has no
-    /// field storage here. The value is gone to the runtime, and a property
-    /// read of such a value under a key `wkey` may name is ⊤ from now on
-    /// (rule R2, `load_from`). Beside ⊤ the value is that ⊤
-    /// (`Model::top_beside`), but it may reach the node before ⊤ does: the
-    /// node decides once the worklist is empty. A store from no rule's node
-    /// decides now. Every write that puts a value under a key of such a
-    /// value comes here: a store, a spread (`spread_into`), an accessor
-    /// (`Cons::AccessorInstall`).
-    pub(super) fn store_builtin_fn(&mut self, wkey: Key, src: NodeId, site: SiteId) {
-        let r = self.reason("stored into a builtin function value");
-        self.sink_node(src, r);
-        if self.bf_written.contains_key(&wkey) {
-            return;
-        }
-        match self.store_at {
-            Some(n) => {
-                self.census_bf_site(n, site);
-                self.bf_stores.push((n, wkey, r))
-            }
-            None => {
-                self.census_bf_opened(None, Some(site), wkey);
-                self.write_builtin_fns(wkey, r)
-            }
-        }
-    }
-
-    /// Accessor `f` installed under `key` on `t`. On a builtin function
-    /// value it is a store under `key` (rule R2): `f` goes to the runtime,
-    /// which runs it on a read. On the source of an `Object.assign` into
-    /// one (`spread_to`), the getter's result is copied under `key`.
-    pub(super) fn accessor_on_builtin_fn(&mut self, t: Tok, key: Atom, f: Tok) {
-        let k = match self.atoms[key as usize] == crate::STAR_KEY {
-            true => Key::any(),
-            false => Key::Named(key),
-        };
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            let v = self.node_l("bf-accessor");
-            self.add_tok(v, f);
-            let site = self.anon_post_site("accessor on a builtin function value");
-            self.store_builtin_fn(k, v, site);
-        }
-        let targets = self.spread_to.get(&t).cloned().unwrap_or_default();
-        for (d, site) in targets {
-            if matches!(self.toks[d as usize], TokKind::BuiltinFn(_)) {
-                let v = self.node_l("bf-assign-getter");
-                self.store_builtin_fn(k, v, site);
-            }
-        }
-    }
-
-    /// Rule R2: the reason a property read of a builtin function value under
-    /// `key` is ⊤, if a store into one may have named that key.
-    pub(super) fn bf_key_written(&self, key: Key) -> Option<u32> {
-        if let Some(&r) = self.bf_written.get(&key) {
-            return Some(r);
-        }
-        (self.bf_written.iter())
-            .find(|&(&w, _)| self.bf_keys_meet(w, key))
-            .map(|(_, &r)| r)
-    }
-
-    /// May keys `a` and `b` name the same property of a builtin function
-    /// value? A computed key meets what its shape may name (`key_may_name`),
-    /// two computed keys always; the element key meets every numeric name.
-    fn bf_keys_meet(&self, a: Key, b: Key) -> bool {
-        match (a, b) {
-            (Key::Named(x), Key::Named(y)) => {
-                let (x, y) = (
-                    self.atoms[x as usize].as_str(),
-                    self.atoms[y as usize].as_str(),
-                );
-                x == y || x == NUM_KEY && numeric_key(y) || y == NUM_KEY && numeric_key(x)
-            }
-            (Key::Named(x), k @ Key::Any(_)) | (k @ Key::Any(_), Key::Named(x)) => {
-                self.key_may_name(k, x)
-            }
-            (Key::Any(_), Key::Any(_)) => true,
-        }
-    }
-
-    /// The stores into a builtin function value, once the worklist is
-    /// empty: one at a node without ⊤ wrote its key (true: solve on). A node
-    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good. So
-    /// does one holding a bare marker: another unit's argument whole, which
-    /// every rule reads as ⊤ (DECISIONS 119).
-    pub(super) fn settle_bf_written(&mut self) -> bool {
-        if self.bf_stores.is_empty() {
-            return false;
-        }
-        let stores = std::mem::take(&mut self.bf_stores);
-        let holds_top = |m: &Self, n: NodeId| {
-            let pts = &m.nodes[n as usize].pts;
-            pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
-        };
-        let mut wrote = false;
-        for (n, key, r) in stores {
-            if holds_top(self, n) || self.bf_written.contains_key(&key) {
-                continue;
-            }
-            self.census_bf_opened(Some(n), None, key);
-            self.write_builtin_fns(key, r);
-            wrote = true;
-        }
-        wrote
-    }
-
     /// DECISIONS 193: the readers argument marker `x` stands for gain
     /// `new` (a marker below it, or a keyed reach of one, `arg_readers`):
     /// the stores made on `x` and on its keyed reaches reach them, and so do
@@ -269,8 +134,8 @@ impl Model {
             if fresh.is_empty() {
                 continue;
             }
-            self.work += fresh.len() as u64;
-            if self.max_work != 0 && self.work > self.max_work {
+            self.charge_work(fresh.len() as u64);
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 return;
             }
@@ -354,7 +219,7 @@ impl Model {
             (Some(_), Some(_)) => return,
         };
         for &(key, src, site) in ss {
-            self.work += 1;
+            self.charge_work(1);
             self.store_into(y, key, src, site);
         }
     }
@@ -517,15 +382,9 @@ impl Model {
                 self.fn_touched.insert(t);
             }
         }
-        // A store into a builtin function value is decided once the
-        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes
-        // its key.
         // The boundary's store for other units' code is theirs to publish.
         let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
-        if let Some(s) = self
-            .shared_of(t)
-            .filter(|s| *s != Shared::BuiltinFn && !theirs)
-        {
+        if let Some(s) = self.shared_of(t).filter(|_| !theirs) {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
                 Key::Any(_) if elem => Some(NUM_KEY.to_string()),
@@ -545,12 +404,11 @@ impl Model {
                 return;
             }
         }
-        // Rule R1 (STR1): under a key the realm does not declare for a
-        // built-in namespace or native function object, the store is a
-        // field of that object (`builtin_field`): the runtime never reads
-        // it, so nothing is sunk, no key is written on the holder
-        // (`note_native_write`) and no builtin function value is written
-        // (`write_builtin_fns`). Setters on its chain still run.
+        // Native function values use ordinary fields below. Constructors
+        // and namespaces retain the realm-declared boundary: the runtime
+        // itself consumes some declared statics (Error.prepareStackTrace),
+        // even when the program never hands the constructor to an operand
+        // protocol. Only their undeclared keys are program-owned (R1).
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
@@ -594,7 +452,9 @@ impl Model {
         // bound publishes every key), and every unit replays it under its key.
         if !theirs {
             self.census_store_ctx(Some((site, self.store_at)));
-            builtins::note_native_write(self, t, Some(wkey), &what);
+            if !builtins::builtin_function(self, t) {
+                builtins::note_native_write(self, t, Some(wkey), &what);
+            }
             self.census_store_ctx(None);
         }
         // An element store's key is a number: it never names `__proto__`.
@@ -602,6 +462,9 @@ impl Model {
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
+            if !self.unit_mode && self.is_builtin_proto(t) {
+                self.given_prototype(t, src);
+            }
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
                 self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
@@ -618,10 +481,6 @@ impl Model {
             }
             let r = self.reason("stored into a value from unmodeled code");
             self.sink_node(src, r);
-            return;
-        }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            self.store_builtin_fn(wkey, src, site);
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
@@ -909,7 +768,9 @@ impl Model {
                 }
             }
         }
-        // Setters on the chain (and own accessors).
+        // Setters on the chain (and own accessors), including an accessor
+        // installed through another token that may denote this native.
+        self.builtin_field_use(t, key, ChainAct::Store(src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
@@ -917,6 +778,13 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        self.with_b(|m| builtins::tok_store(m, t, key, src));
+        // Callable namespaces still expose their declared static keys to
+        // the runtime. Their program-owned fields use the function graph.
+        let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
+            if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
+        let program_field = matches!(key, Key::Named(a) if builtins::undeclared(self, t, a));
+        if !builtins::builtin_function(self, t) || (namespace && !program_field) {
+            self.with_b(|m| builtins::tok_store(m, t, key, src));
+        }
     }
 }

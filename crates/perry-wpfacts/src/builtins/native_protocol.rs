@@ -382,6 +382,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     old
                 });
             match miss {
+                NativeMiss::Lookup(dst) => {
+                    m.add_top(dst, |_| {
+                        "accessor descriptor of a written intrinsic key".into()
+                    });
+                }
                 NativeMiss::Load(dst) => {
                     let bf = builtin_fn(m, "written key replay");
                     m.add_tok(dst, bf);

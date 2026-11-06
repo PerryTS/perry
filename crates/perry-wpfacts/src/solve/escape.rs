@@ -187,6 +187,14 @@ impl Model {
             TokKind::Builtin(BuiltinNs::GlobalThis)
         ) {
             crate::builtins::note_global_in_top(self);
+            if !self.unit_mode {
+                crate::builtins::note_native_write(
+                    self,
+                    t,
+                    None,
+                    "global object given to unknown code",
+                );
+            }
             self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
                 BuiltinNs::GlobalThis,
             )));
@@ -201,6 +209,9 @@ impl Model {
         // prototype, as whole-program facts hold of ⊤ from unknown code. The
         // global object takes no part: escaped, it already puts ⊤ in reach
         // of stores into ⊤ (`global_in_top`).
+        if self.chain_escape && builtins::builtin_function(self, t) {
+            return;
+        }
         if !self.chain_escape {
             if let Some(s) = self
                 .shared_of(t)
@@ -214,13 +225,12 @@ impl Model {
         // operations) or E14 (interpreted code), never a side effect of some
         // value reaching unknown code; its user-stored members escape where
         // they are stored (`builtins::tok_store`).
-        if matches!(
-            self.toks[t as usize],
-            TokKind::ObjectProto
-                | TokKind::BuiltinFn(_)
-                | TokKind::Builtin(_)
-                | TokKind::NativeProto(_)
-        ) {
+        if !builtins::builtin_function(self, t)
+            && matches!(
+                self.toks[t as usize],
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_)
+            )
+        {
             // Handed to unknown code (not reached along a chain): the
             // program fields rule R1 gave it may be read there.
             if !self.chain_escape {
@@ -667,7 +677,7 @@ impl Model {
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
         if published
             || fi.lexical_this
-            || fi.gen_step
+            || fi.gen_step()
             || fi.ctor_of.is_some()
             || fi.func_id == u32::MAX
             || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f))
@@ -902,6 +912,16 @@ impl Model {
         if matches!(self.toks[t as usize], TokKind::Func(..)) {
             self.fn_props_top.insert(t);
         }
+        // Overlapping abstract native tokens contribute read values, never
+        // writes into each other's storage: the overlap is not transitive.
+        if builtins::builtin_function(self, t) {
+            let read = self.node_l("escaped-native-fields");
+            self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            if !self.unit_mode {
+                self.proto_value(t, read);
+            }
+            self.sink_node(read, reason);
+        }
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
@@ -980,6 +1000,7 @@ impl Model {
                     site: 0,
                 });
                 self.construct(call, t);
+                self.reflect_escaped_target(t);
                 self.sink_node(ret, reason);
                 // DEC221: only what unknown construction returns escapes.
                 // NO_CTX is a template-wide mark, which would also expose

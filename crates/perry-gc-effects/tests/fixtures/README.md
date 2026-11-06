@@ -17,3 +17,8 @@ Targets: x86_64-unknown-linux-gnu (ELF),
 arm64-apple-macos11 (Mach-O), x86_64-pc-windows-msvc (COFF).
 
 COFF TimeDateStamp fields are normalized to zero by rebuild.py.
+
+Native throw-class fixtures are in `throw-fixture.c` and `libthrow_*`.
+`rebuild_throws.py` rebuilds the six ELF/Mach-O/COFF archives. They seed each
+class and plant a raw-entry call; their declarations come from a scratch
+`fn_info!` carrier, so deleting one exercises the actual build check.

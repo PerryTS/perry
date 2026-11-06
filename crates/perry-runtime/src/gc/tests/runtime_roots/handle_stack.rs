@@ -82,7 +82,7 @@ fn handle_stack_real_throw_restores_live_outer_scope_and_ffi_roots() {
             js_ffi_root_push_nanbox(42.0f64.to_bits());
         }
         assert!(RuntimeHandleScope::active_len_for_tests() > base);
-        crate::exception::js_throw(17.0);
+        crate::exception::test_throw(17.0);
     });
     assert_eq!(result, Err(17.0));
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), base);

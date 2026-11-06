@@ -68,8 +68,8 @@ PATH_ROOTS = (
     "scripts/",
     "benchmarks/",
     "docs/",
-    "test-parity/",
-    "test-files/",
+    "tests/parity/",
+    "tests/fixtures/programs/",
     ".github/",
 )
 

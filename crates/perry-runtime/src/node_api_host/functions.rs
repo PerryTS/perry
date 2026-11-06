@@ -122,7 +122,7 @@ extern "C" fn napi_callback_thunk(
 
     let exception = with_env_mut(env, |env| env.pending_exception_bits.take()).flatten();
     if let Some(exception) = exception {
-        crate::exception::js_throw(f64::from_bits(exception));
+        crate::exception::throw_open(f64::from_bits(exception));
     }
     let Some(returned_bits) = returned_bits else {
         crate::fs::validate::throw_error_with_code(

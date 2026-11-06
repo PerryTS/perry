@@ -302,9 +302,9 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
     let message = format!("Cannot find module '{specifier}'");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "MODULE_NOT_FOUND");
-    let error = crate::error::js_error_new_with_message(msg);
+    let error = crate::error::CoreError::error(msg);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let error_handle = scope.root_raw_mut_ptr(error);
+    let error_handle = error.root(&scope);
     let stack = crate::array::js_array_alloc_with_length(1);
     let stack_handle = scope.root_raw_mut_ptr(stack);
     let base_value = string_value(&base.to_string_lossy());
@@ -314,8 +314,10 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
     let stack_value = stack_handle.with_mut_ptr(|stack: *mut crate::array::ArrayHeader| {
         f64::from_bits(JSValue::array_ptr(stack).bits())
     });
-    let error_value = error_handle.with_mut_ptr(|error: *mut crate::object::ObjectHeader| {
-        let error_value = js_nanbox_pointer(error as i64);
+    {
+        let error_value = error_handle.value();
+        let error =
+            crate::value::js_nanbox_get_pointer(error_value) as *mut crate::object::ObjectHeader;
         unsafe {
             crate::object::exotic_expando::exotic_set_property(
                 error as usize,
@@ -325,9 +327,8 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
                 error_value,
             );
         }
-        error_value
-    });
-    crate::exception::js_throw(error_value)
+    }
+    crate::exception::throw_core(error_handle.error())
 }
 
 fn throw_package_path_not_exported(specifier: &str) -> ! {
@@ -1249,7 +1250,7 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
     }
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
     let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
-    let outcome = crate::exception::js_call_catching(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     });
@@ -1258,9 +1259,8 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
             MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, None));
         }
         Err(error) => {
-            MODULE_PATH_REGISTRY
-                .with(|r| r.finish_module_boundary(boundary, Some(error.to_bits())));
-            crate::exception::js_throw(error)
+            MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, Some(error)));
+            crate::exception::rethrow_caught(error)
         }
     }
 }
@@ -1291,7 +1291,7 @@ pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: 
             *(guard_addr as *mut u8) = 0;
             match error {
                 PathModuleRequireError::Initializer(error) => {
-                    crate::exception::js_throw(f64::from_bits(error));
+                    crate::exception::rethrow_caught(error);
                 }
                 PathModuleRequireError::OwnershipConflict => {
                     crate::fs::validate::throw_error_with_code(
@@ -1325,17 +1325,16 @@ fn directory_module_candidates(key: &str) -> Vec<String> {
     candidates
 }
 
-fn run_path_initializer(addr: usize) -> Result<(), u64> {
+fn run_path_initializer(addr: usize) -> Result<(), crate::exception::Caught> {
     // SAFETY: `addr` came from codegen's `ptrtoint` of an `extern "C" fn()`
     // module initializer and was accepted once for this canonical path.
     let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
     crate::snap_census::init_enter(addr);
-    let outcome = crate::exception::js_call_catching(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     })
-    .map(|_| ())
-    .map_err(f64::to_bits);
+    .map(|_| ());
     crate::snap_census::init_exit(outcome.is_err());
     outcome
 }
@@ -1355,9 +1354,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
     let key = module_lookup_key(&path);
     match require_path_key(&key) {
         Ok(Some(bits)) => return path_module_exports(bits),
-        Err(PathModuleRequireError::Initializer(error)) => {
-            crate::exception::js_throw(f64::from_bits(error))
-        }
+        Err(PathModuleRequireError::Initializer(error)) => crate::exception::rethrow_caught(error),
         Err(PathModuleRequireError::OwnershipConflict) => {
             crate::fs::validate::throw_error_with_code(
                 "Perry rejected a cross-owner path-module initialization cycle",
@@ -1371,7 +1368,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
         match require_path_key(&candidate) {
             Ok(Some(bits)) => return path_module_exports(bits),
             Err(PathModuleRequireError::Initializer(error)) => {
-                crate::exception::js_throw(f64::from_bits(error))
+                crate::exception::rethrow_caught(error)
             }
             Err(PathModuleRequireError::OwnershipConflict) => {
                 crate::fs::validate::throw_error_with_code(

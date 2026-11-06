@@ -122,7 +122,7 @@ pub unsafe fn serialize_message_with_ports(
         .iter()
         .map(|&addr| crate::buffer::view::backing_of(addr))
         .collect();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         write_value(
             CloneMode::Message,
             bits,
@@ -138,7 +138,7 @@ pub unsafe fn serialize_message_with_ports(
             drop(backings);
             drop(_roots);
             drop(scope);
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
     };
     if let Some(name) = super::first_unsupported_transfer_type(&value) {
@@ -256,11 +256,11 @@ unsafe fn write_value(
         match &writer.failure {
             Some(Failure::Unsupported(name)) => return SerializedValue::Unsupported(name),
             Some(Failure::Thrown(thrown)) => {
-                let bits = thrown.get_nanbox_u64();
+                let caught = thrown.caught();
                 drop(value);
                 drop(writer);
                 drop(scope);
-                crate::exception::js_throw(f64::from_bits(bits));
+                crate::exception::rethrow_caught(caught);
             }
             None => {}
         }
@@ -313,7 +313,7 @@ unsafe fn build_pending(pending: &[Pending]) {
 }
 
 enum Failure<'a> {
-    Thrown(RuntimeHandle<'a>),
+    Thrown(crate::exception::RootedCaught<'a>),
     Unsupported(&'static str),
 }
 
@@ -1063,14 +1063,14 @@ impl Writer<'_> {
         if get == 0 || get == TAG_UNDEFINED {
             return Some(TAG_UNDEFINED);
         }
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             crate::object::invoke_accessor_getter(get, f64::from_bits(receiver)).bits()
         });
         self.refresh_identities();
         match result {
             Ok(bits) => Some(bits),
             Err(error) => {
-                self.failure = Some(Failure::Thrown(self.scope.root_nanbox_f64(error)));
+                self.failure = Some(Failure::Thrown(error.root(self.scope)));
                 None
             }
         }

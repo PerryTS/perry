@@ -25,7 +25,7 @@ pub(in crate::component) fn profile(wasm: &[u8], contract: &[u8]) -> bool {
             String::from_utf8_lossy(&output).into_owned()
         };
         drop((output, parsed));
-        let outcome = crate::exception::catch_js_throw(|| fail(&message));
+        let outcome = crate::exception::catch_thrown(|| fail(&message));
         drop(message);
         finish(outcome);
         unreachable!();

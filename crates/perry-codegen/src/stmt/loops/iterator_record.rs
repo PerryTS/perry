@@ -113,6 +113,7 @@ pub(super) fn lower(
         }),
     };
     let element = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(array)),
@@ -573,6 +574,7 @@ mod tests {
                                 mode,
                                 Expr::LocalGet(3),
                                 Expr::IndexGet {
+                                    element_offset: 0,
                                     byte_offset: 0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(array_id)),
@@ -735,6 +737,7 @@ mod tests {
             right: Box::new(Expr::Bool(true)),
         };
         let element = Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(0)),

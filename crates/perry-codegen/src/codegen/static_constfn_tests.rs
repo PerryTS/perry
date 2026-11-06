@@ -935,6 +935,7 @@ fn final_literal_visitor_harvests_static_import_member_writes() {
         key: Box::new(Expr::String("loggingHost".into())),
         value: Box::new(Expr::Object(Vec::new())),
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }));
@@ -961,7 +962,7 @@ fn fused_private_method_probe_never_matches_a_zero_word() {
     c.methods.push(method);
     let mut module = Module::new("private_probe.ts");
     module.classes = vec![c];
-        module.init.push(Stmt::Let {
+    module.init.push(Stmt::Let {
         id: 1,
         name: "o".into(),
         ty: Type::Any,

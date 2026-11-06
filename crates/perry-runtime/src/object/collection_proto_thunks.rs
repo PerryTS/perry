@@ -503,10 +503,7 @@ pub(crate) fn throw_incompatible_receiver(proto: &str, method: &str, receiver_bi
         render_incompatible_receiver(receiver_bits)
     );
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[inline]

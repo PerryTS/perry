@@ -12,10 +12,10 @@
 //! declaring class exactly, so an ancestor's private member was rejected on
 //! every subclass instance. The same defect, without any CommonJS, is #11127
 //! (function-local classes) — covered by
-//! `test-parity/language/class/test_gap_11127_private_field_function_local_subclass.ts`.
+//! `tests/parity/language/class/test_gap_11127_private_field_function_local_subclass.ts`.
 //!
 //! This file pins the literal bare-`require` form, which the gap suite cannot
-//! run: Node executes `test-files/*.ts` as ESM (the repo's package.json has
+//! run: Node executes `tests/fixtures/programs/*.ts` as ESM (the repo's package.json has
 //! `"type": "module"`), where `require` is undefined.
 
 use std::path::PathBuf;

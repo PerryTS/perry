@@ -21,6 +21,21 @@ pub struct InlineArenaState {
     pub birth_seeds: *mut std::ffi::c_void, // offset 32 on LP64
 }
 
+/// The same cell on 32-bit pointers (wasm32): codegen's
+/// `target_layout::inline_arena_layout` reads these words as i32.
+pub const INLINE_OFFSET_OFFSET_ILP32: usize = 4;
+pub const INLINE_SIZE_OFFSET_ILP32: usize = 8;
+pub const INLINE_FLAGS_OFFSET_ILP32: usize = 12;
+pub const INLINE_SEEDS_OFFSET_ILP32: usize = 16;
+// Evaluated on every host, so the four constants are referenced at every
+// pointer width; the comparison binds only where pointers are 32 bits.
+const _: () = assert!(
+    cfg!(not(target_pointer_width = "32"))
+        || (std::mem::offset_of!(InlineArenaState, offset) == INLINE_OFFSET_OFFSET_ILP32
+            && std::mem::offset_of!(InlineArenaState, size) == INLINE_SIZE_OFFSET_ILP32
+            && std::mem::offset_of!(InlineArenaState, birth_flags) == INLINE_FLAGS_OFFSET_ILP32
+            && std::mem::offset_of!(InlineArenaState, birth_seeds) == INLINE_SEEDS_OFFSET_ILP32)
+);
 pub const INLINE_BIRTH_FLAGS_OFFSET_LP64: usize = 24;
 pub const INLINE_BIRTH_SEEDS_OFFSET_LP64: usize = 32;
 #[cfg(target_pointer_width = "64")]

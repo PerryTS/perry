@@ -10,13 +10,13 @@ Runnable formats are .ts, .cts, .mts and test_*.cjs in every root. Keep the
 extension to preserve Node's module mode; case ids omit TS-family suffixes
 but retain .cjs. Subject fixtures are excluded from discovery.
 
-A SELECTOR is a subject (`test-files`, or `<root>/<subject>` under test-parity/
+A SELECTOR is a subject (`test-files`, or `<root>/<subject>` under tests/parity/
 for a root in SUBJECT_ROOTS), a whole root, or a path to a case file or a
 directory of cases. Every case is compiled, run, and
 compared with Node on merged stdout+stderr and exit status after the `unified`
 profile of scripts/parity_normalize.py.
 
-A subject's snapshot, test-parity/snapshots/<platform>-<mode>/<subject>.json,
+A subject's snapshot, tests/parity/snapshots/<platform>-<mode>/<subject>.json,
 lists its cases that do not pass; an unlisted case must pass. The check runs
 both ways over the cases this run executed. A crash is never a snapshot entry.
 
@@ -124,17 +124,17 @@ class HarnessError(Exception):
 
 # --- selection ---------------------------------------------------------------
 
-# Directories under test-parity/ whose second path level is a subject.
+# Directories under tests/parity/ whose second path level is a subject.
 SUBJECT_ROOTS = ("node-suite", "language", "typescript", "perry", "npm")
 
 
 def suite_dirs(root: Path) -> tuple[Path, Path]:
-    return root / "test-files", root / "test-parity" / "node-suite"
+    return root / "tests/fixtures/programs", root / "tests/parity" / "node-suite"
 
 
 def subject_root(root: Path, path: Path) -> Path | None:
     return next((d for name in SUBJECT_ROOTS
-                 if (d := root / "test-parity" / name) == path or d in path.parents), None)
+                 if (d := root / "tests/parity" / name) == path or d in path.parents), None)
 
 
 def is_case(root: Path, path: Path) -> bool:
@@ -169,7 +169,7 @@ def resolve(root: Path, selector: str) -> Path:
     if selector == "test-files":
         return suite_dirs(root)[0]
     if selector.split("/")[0] in SUBJECT_ROOTS:
-        return root / "test-parity" / selector
+        return root / "tests/parity" / selector
     return Path(selector).resolve()
 
 
@@ -179,7 +179,7 @@ def select(root: Path, selectors=(), suite="all", filters=(), shard=None) -> lis
     if not selectors:
         selectors = [suite] if suite != "all" else [
             s for s in ("test-files", *SUBJECT_ROOTS)
-            if s == "test-files" or (root / "test-parity" / s).is_dir()]
+            if s == "test-files" or (root / "tests/parity" / s).is_dir()]
     paths: set[Path] = set()
     for selector in selectors:
         target = resolve(root, selector)
@@ -222,7 +222,7 @@ def expected_for(root: Path, cid: str) -> tuple[Path | None, int]:
     """Expected output and exit, looked up by case id, then by basename."""
     def lookup(kind):
         keys = dict.fromkeys((cid, cid.rsplit("/", 1)[-1]))
-        return next((p for k in keys if (p := root / "test-parity" / kind / f"{k}.txt").is_file()), None)
+        return next((p for k in keys if (p := root / "tests/parity" / kind / f"{k}.txt").is_file()), None)
 
     output, code = lookup("expected"), lookup("expected-exit")
     if output is None:
@@ -380,12 +380,12 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
 def case_exists(root: Path, cid: str) -> bool:
     files = suite_dirs(root)[0]
     if cid.split("/")[0] in SUBJECT_ROOTS:
-        return (root / "test-parity" / f"{cid}.ts").is_file()
+        return (root / "tests/parity" / f"{cid}.ts").is_file()
     return any((files / f"{cid}{ext}").is_file() for ext in ("", ".ts", ".cts", ".mts"))
 
 
 def snapshot_path(root: Path, plat: str, mode: str, subject: str) -> Path:
-    return root / "test-parity" / "snapshots" / f"{plat}-{mode}" / f"{subject}.json"
+    return root / "tests/parity" / "snapshots" / f"{plat}-{mode}" / f"{subject}.json"
 
 
 def load_snapshot(path: Path) -> dict:
@@ -519,7 +519,7 @@ def start_companions(root: Path, cases) -> list[subprocess.Popen]:
     for port, (script, args) in COMPANIONS.items():
         if not any(re.search(r"\b%d\b" % port, text) for text in texts):
             continue
-        procs.append(subprocess.Popen([sys.executable, str(root / "test-files" / script), *args],
+        procs.append(subprocess.Popen([sys.executable, str(root / "tests/fixtures/programs" / script), *args],
                                       cwd=root))
         for _ in range(50):
             try:
@@ -650,7 +650,7 @@ def main(argv=None, root: Path = ROOT) -> int:
     run_p.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     run_p.add_argument("--mode", choices=("fast", "auto"), default="fast")
     run_p.add_argument("--update", action="store_true")
-    run_p.add_argument("--report", default=str(root / "test-parity" / "reports" / "latest.json"))
+    run_p.add_argument("--report", default=str(root / "tests/parity" / "reports" / "latest.json"))
     run_p.add_argument("--unpinned-oracle", action="store_true")
     acc_p = sub.add_parser("accept")
     acc_p.add_argument("reports", nargs="+")

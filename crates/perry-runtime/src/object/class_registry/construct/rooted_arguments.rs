@@ -18,7 +18,7 @@ pub(crate) fn construct_rooted_arguments(function: f64, args: &[f64], new_target
             argument_scope.root_nanbox_cell(cell);
         }
     }
-    let result = crate::exception::catch_js_throw(|| unsafe {
+    let result = crate::exception::catch_thrown(|| unsafe {
         js_new_function_construct_with_new_target(
             function.get_nanbox_f64(),
             args.as_ptr().cast(),
@@ -32,7 +32,7 @@ pub(crate) fn construct_rooted_arguments(function: f64, args: &[f64], new_target
     drop(args);
     match result {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

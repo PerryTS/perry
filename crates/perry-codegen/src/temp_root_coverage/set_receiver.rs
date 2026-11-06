@@ -7,7 +7,7 @@
 //! / `MapDelete` were fixed for (`math_simple.rs`, `logical_collections.rs`),
 //! found live in these two twins by #9522's audit. An evacuating minor inside
 //! the value's lowering moves the Set; the handle keeps the pre-move address,
-//! and `js_set_has` reads a from-space header. `test-files/test_gap_9523_set_
+//! and `js_set_has` reads a from-space header. `tests/fixtures/programs/test_gap_9523_set_
 //! receiver_roots_across_value.ts` is the end-to-end half.
 //!
 //! # Non-vacuity

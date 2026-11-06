@@ -254,7 +254,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             } else {
                 elem
             };
-            let it = super::collections::iter_over(m, call, vals);
+            let it = super::collections::iter_over(m, call, members::ARRAY_ITERATOR, vals);
             ret_tok(m, call, it);
         }
         _ => return false,

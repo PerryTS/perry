@@ -102,6 +102,21 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
     });
     ctx.expr_lower_depth -= 1;
     let mut result = result;
+    // Reach facts need source identity in product mode too. Verdict offsets
+    // retain their diagnostic-mode contract and cannot read this field.
+    if let Ok(value) = &mut result {
+        match (expr, value) {
+            (ast::Expr::Member(_), Expr::IndexGet { element_offset, .. })
+            | (
+                ast::Expr::Assign(_),
+                Expr::IndexSet { element_offset, .. } | Expr::PutValueSet { element_offset, .. },
+            )
+            | (ast::Expr::Update(_), Expr::IndexUpdate { element_offset, .. }) => {
+                *element_offset = expr.span().lo.0;
+            }
+            _ => {}
+        }
+    }
     if std::env::var_os("PERRY_FACTS_DUMP").is_some() {
         if let Ok(value) = &mut result {
             let span = expr.span();

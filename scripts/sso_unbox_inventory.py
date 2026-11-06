@@ -569,7 +569,10 @@ def run_self_tests() -> int:
         regressions, stale = compare_counts(counts, lowered)
         expect(not regressions and bool(stale), "a removed offender did not require a repin")
 
-    from sso_unbox_reviews_tests import check_reviews
+    from runpy import run_path
+
+    tests = Path(__file__).resolve().parents[1] / "tests/tooling/infrastructure/sso"
+    check_reviews = run_path(str(tests / "sso_unbox_reviews_tests.py"))["check_reviews"]
     check_reviews(sys.modules[__name__], expect)
 
     if failures:

@@ -2132,9 +2132,9 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 #[path = "layout_probe/computed.rs"]
 mod computed;
 use computed::computed_key;
-#[cfg(test)]
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
+pub(crate) use computed::probe_set_keyed;
 
 #[path = "layout_probe/diagnostics.rs"]
 mod diagnostics;

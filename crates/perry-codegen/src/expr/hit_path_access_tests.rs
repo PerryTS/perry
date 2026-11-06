@@ -1,7 +1,7 @@
 //! Emission pins for the hit-path audit's array, typed-array and class-field
 //! access changes. Each test names the removed out-of-line work and the
 //! fallback that must remain; the behavioural half of each change is a
-//! `test-files/test_gap_*` fixture compared against node.
+//! `tests/fixtures/programs/test_gap_*` fixture compared against node.
 
 use super::class_field_barrier_tests::block_body;
 use crate::testing::root_slots::function_slice;
@@ -131,6 +131,7 @@ fn unproven_numeric_index_store_has_an_inline_element_tier() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
             value: Box::new(Expr::LocalGet(3)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -155,6 +156,7 @@ fn declared_typed_array_unproven_index_access_is_inline() {
         "ta_dynamic_get",
         vec![param(1, named("Float64Array")), param(2, Type::Number)],
         vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -183,6 +185,7 @@ fn declared_typed_array_unproven_index_access_is_inline() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
             value: Box::new(Expr::LocalGet(3)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -221,10 +224,12 @@ fn owner_element_store_join_has_no_bag_arm() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(2)),
                 value: Box::new(Expr::LocalGet(3)),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -292,6 +297,7 @@ fn inline_typed_array_store_rejects_boxed_values_and_wraps_exactly() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
             value: Box::new(Expr::LocalGet(3)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],

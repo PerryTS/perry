@@ -574,6 +574,7 @@ mod tests {
         body.insert(
             0,
             Stmt::Expr(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -621,6 +622,7 @@ mod tests {
                                     byte_offset: 0,
                                 }),
                                 Stmt::Expr(Expr::IndexGet {
+                                    element_offset: 0,
                                     byte_offset: 0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(if alias { 2 } else { 1 })),

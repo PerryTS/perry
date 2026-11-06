@@ -19,6 +19,13 @@ use std::process::{Command, Output};
 
 const ADDON_C: &str = include_str!("fixtures/node_api_host/addon.c");
 #[cfg(unix)]
+const ADDON_OPEN_WORLD_C: &str = include_str!("fixtures/node_api_host/addon_open_world.c");
+#[cfg(unix)]
+const ADDON_OPEN_WORLD_MAIN: &str = include_str!("fixtures/node_api_host/addon_open_world_main.js");
+#[cfg(unix)]
+const ADDON_OPEN_WORLD_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_open_world_expected.txt");
+#[cfg(unix)]
 const ADDON_V10_C: &str = include_str!("fixtures/node_api_host/addon_v10.c");
 #[cfg(unix)]
 const ADDON_V10_MAIN: &str = include_str!("fixtures/node_api_host/addon_v10_main.js");
@@ -37,6 +44,23 @@ const ADDON_SCOPE_RETURN_MAIN: &str =
 #[cfg(unix)]
 const ADDON_SCOPE_RETURN_EXPECTED: &str =
     include_str!("fixtures/node_api_host/addon_scope_return_expected.txt");
+#[cfg(unix)]
+const ADDON_NAMED_PROPS_C: &str = include_str!("fixtures/node_api_host/addon_named_props.c");
+#[cfg(unix)]
+const ADDON_NAMED_PROPS_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_named_props_main.js");
+#[cfg(unix)]
+const ADDON_NAMED_PROPS_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_named_props_expected.txt");
+#[cfg(unix)]
+const ADDON_TYPEDARRAY_INFO_C: &str =
+    include_str!("fixtures/node_api_host/addon_typedarray_info.c");
+#[cfg(unix)]
+const ADDON_TYPEDARRAY_INFO_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_typedarray_info_main.js");
+#[cfg(unix)]
+const ADDON_TYPEDARRAY_INFO_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_typedarray_info_expected.txt");
 #[cfg(target_os = "linux")]
 const ADDON_LAZY_SYMBOL_C: &str = include_str!("fixtures/node_api_host/addon_lazy_symbol.c");
 #[cfg(target_os = "linux")]
@@ -321,17 +345,9 @@ console.log("node-api-cache", direct.exports === addon)
     let inventory = HOST_SYMBOLS
         .lines()
         .map(str::trim)
-        .filter(|name| !name.is_empty() && !name.starts_with('#'))
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_whitespace().next())
         .collect::<BTreeSet<_>>();
-    let missing = inventory
-        .iter()
-        .filter(|name| !exported.contains(**name))
-        .copied()
-        .collect::<Vec<_>>();
-    assert!(
-        missing.is_empty(),
-        "host omitted Node-API exports required by its inventory: {missing:?}"
-    );
 
     // Match the host's CommonJS setup so the budget measures the Node-API
     // host, not the unrelated cost of introducing CommonJS into a plain script.
@@ -406,6 +422,11 @@ module.exports = addon
         "an unused perry.nativeAddons policy must have a zero-byte executable delta"
     );
     let host_delta = host_bytes.len().saturating_sub(control_bytes.len());
+    eprintln!(
+        "node-api-size host={} control={} delta={host_delta}",
+        host_bytes.len(),
+        control_bytes.len()
+    );
     assert!(
         host_delta <= 600 * 1024,
         "Node-API host executable delta is {host_delta} bytes; budget is 614400 bytes"
@@ -464,6 +485,31 @@ module.exports = addon
         );
         assert!(exported.contains(required), "host must export `{required}`");
     }
+    // A native addon reaches what its Node-API imports reach: the host
+    // exports exactly the inventory symbols this closed addon imports.
+    let host_node_api = inventory
+        .iter()
+        .filter(|name| exported.contains(**name))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let imported_node_api =
+        addon_imports::node_api_imports(&addon).expect("read staged addon Node-API imports");
+    assert_eq!(
+        host_node_api,
+        imported_node_api
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        "a closed addon's host exports the Node-API symbols it imports"
+    );
+    // An addon reaches what its Node-API imports reach: this one only makes
+    // and fills values, so it is closed and the host links like the control.
+    assert!(
+        addon_imports::addon_reach(&addon)
+            .expect("read staged addon reach")
+            .is_empty(),
+        "the fixture addon reads no global, property or prototype: closed"
+    );
     #[cfg(windows)]
     for import in addon.imports().expect("read PE import libraries") {
         if String::from_utf8_lossy(import.name()).starts_with("napi_") {
@@ -886,6 +932,317 @@ fn objects_built_in_a_closed_callback_scope_are_returned() {
         assert_eq!(
             String::from_utf8_lossy(&node.stdout),
             ADDON_SCOPE_RETURN_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// A native addon reaches what its Node-API imports reach. This one reads
+/// the global object and calls what it finds (`napi_get_global`,
+/// `napi_get_named_property`, `napi_call_function`): it is open, so the
+/// program is a dynamic-code site (`Function` from a runtime string) and
+/// reaches every builtin module as `process.getBuiltinModule` does.
+#[cfg(unix)]
+#[test]
+fn open_addon_reaches_function_and_builtin_modules() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-open-world");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-open-world-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-open-world"],
+    "allow": { "compilePackages": ["fixture-open-world"] },
+    "nativeAddons": ["fixture-open-world"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-open-world","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_open_world.c");
+    std::fs::write(&source, ADDON_OPEN_WORLD_C).expect("write open addon fixture");
+    let addon = package.join("addon.node");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(&addon).arg(&source);
+    run(clang, "open addon fixture build");
+    let addon_bytes = std::fs::read(&addon).expect("read open addon");
+    let addon_file = object::File::parse(&*addon_bytes).expect("parse open addon");
+    assert!(
+        addon_imports::addon_reach(&addon_file)
+            .expect("read open addon reach")
+            .contains(&perry_runtime_manifest::NodeApiReach::World),
+        "napi_get_global makes the addon open"
+    );
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_OPEN_WORLD_MAIN).expect("write open addon entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "open addon compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    eprintln!(
+        "node-api-size open={}",
+        std::fs::metadata(&executable)
+            .expect("stat open addon executable")
+            .len()
+    );
+    // An open addon can look any export up at run time: the host exports
+    // its whole inventory.
+    let host_bytes = std::fs::read(&executable).expect("read open addon host");
+    let host = object::File::parse(&*host_bytes).expect("parse open addon host");
+    let exported = host
+        .exports()
+        .expect("read open addon host exports")
+        .into_iter()
+        .map(|export| {
+            String::from_utf8_lossy(export.name())
+                .trim_start_matches('_')
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    let missing = HOST_SYMBOLS
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| !exported.contains(*name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "an open addon's host omitted Node-API exports: {missing:?}"
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run open addon executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_OPEN_WORLD_EXPECTED,
+        "an open addon must reach Function and every builtin module\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "open addon Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_OPEN_WORLD_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// Node-API named property operations are V8's `Object::Set`, `Get` and `Has`
+/// on whatever object they are given: a setter on the prototype runs instead
+/// of an own property appearing, numeric-like names are index keys (in key
+/// order and on arrays), a refused write (a frozen object, a read-only
+/// inherited property) is no error, and objects the addon builds with named
+/// stores read back in JavaScript with their keys in store order. An own
+/// addon store must shadow an inherited data value in compiled reads too.
+#[cfg(unix)]
+#[test]
+fn named_property_operations_match_node() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-named-props");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-named-props-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-named-props"],
+    "allow": { "compilePackages": ["fixture-named-props"] },
+    "nativeAddons": ["fixture-named-props"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-named-props","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_named_props.c");
+    std::fs::write(&source, ADDON_NAMED_PROPS_C).expect("write named props fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "named props fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_NAMED_PROPS_MAIN).expect("write named props entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "named props compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run named props executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_NAMED_PROPS_EXPECTED,
+        "Perry must answer the named property operations as Node does\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "named props Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_NAMED_PROPS_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// napi_get_typedarray_info and napi_create_typedarray answer as Node does:
+/// Node's `napi_typedarray_type` numbering, length, byte offset and data for
+/// plain, offset, Buffer, detached and out-of-bounds views, a NULL data
+/// pointer once detached, and the same ArrayBuffer as `view.buffer`.
+#[cfg(unix)]
+#[test]
+fn typedarray_info_matches_node() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-typedarray-info");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-typedarray-info-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-typedarray-info"],
+    "allow": { "compilePackages": ["fixture-typedarray-info"] },
+    "nativeAddons": ["fixture-typedarray-info"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-typedarray-info","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_typedarray_info.c");
+    std::fs::write(&source, ADDON_TYPEDARRAY_INFO_C).expect("write typedarray info fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "typedarray info fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_TYPEDARRAY_INFO_MAIN).expect("write typedarray info entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "typedarray info compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run typedarray info executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_TYPEDARRAY_INFO_EXPECTED,
+        "Perry must answer typed-array info as Node does\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "typedarray info Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_TYPEDARRAY_INFO_EXPECTED,
             "the checked-in transcript must still be Node's"
         );
     } else {

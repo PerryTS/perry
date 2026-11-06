@@ -62,6 +62,7 @@ fn module_ir() -> String {
     let body = vec![Stmt::Expr(Expr::LocalSet(
         S,
         Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(BS)),

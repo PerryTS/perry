@@ -923,12 +923,10 @@ mod symbol_keyed_element_reads {
                     name: "f".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::IndexGet {
-                        byte_offset: 0,
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::LocalGet(2)),
-                    }),
+                    init: Some(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::LocalGet(2)),
+                    )),
                 },
                 truthy_return(3),
             ],
@@ -983,12 +981,10 @@ mod symbol_keyed_element_reads {
                     name: "v".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::IndexGet {
-                        byte_offset: 0,
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::LocalGet(2)),
-                    }),
+                    init: Some(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::LocalGet(2)),
+                    )),
                 },
                 truthy_return(3),
             ],

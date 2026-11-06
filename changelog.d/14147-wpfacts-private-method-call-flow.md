@@ -1,0 +1,1 @@
+Fix whole-program facts for private method calls by resolving the declaring brand and member, preserving receiver, argument, return and write flow. A private method changing a numeric field to a string now preserves the string when subsequent arithmetic reads the field.

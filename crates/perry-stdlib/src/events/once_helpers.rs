@@ -189,7 +189,7 @@ pub unsafe extern "C" fn js_events_once(
                 "EventEmitter",
                 target_value.get_nanbox_f64(),
             ));
-            js_promise_reject(promise.get_raw_mut_ptr(), error);
+            js_promise_reject(promise.get_raw_mut_ptr(), error.value());
             return promise.get_raw_mut_ptr();
         }
     };
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn js_events_once(
     let signal = match options_signal_result(options.get_nanbox_f64()) {
         Ok(signal) => signal,
         Err(error) => {
-            js_promise_reject(promise.get_raw_mut_ptr(), error);
+            js_promise_reject(promise.get_raw_mut_ptr(), error.value());
             return promise.get_raw_mut_ptr();
         }
     };

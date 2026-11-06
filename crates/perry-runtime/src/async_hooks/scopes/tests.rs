@@ -114,11 +114,14 @@ fn check_context(with_metadata: bool) {
                 expected.get_nanbox_f64().to_bits()
             );
             if reject {
-                crate::exception::js_throw(777.0);
+                crate::exception::test_throw(777.0);
             }
             33.0
         });
-        assert_eq!(result, if reject { Err(777.0) } else { Ok(33.0) });
+        assert_eq!(
+            result.map_err(|error| error.value()),
+            if reject { Err(777.0) } else { Ok(33.0) }
+        );
         assert_eq!(async_context::get_store(token.token()), Some(17.0));
         assert_eq!(
             (

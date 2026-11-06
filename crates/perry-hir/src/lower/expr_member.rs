@@ -540,6 +540,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // (#1401); the shape-only read is what closes #1346.
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
@@ -681,6 +682,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "report" => return Ok(process_native_property("report")),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
@@ -957,6 +959,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     if matches!(value, crate::ir::EnumValue::Computed) {
                         if let Some(id) = ctx.lookup_local(&obj_name) {
                             return Ok(Expr::IndexGet {
+                                element_offset: 0,
                                 byte_offset: 0,
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(id)),
@@ -1017,6 +1020,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         crate::lower_decl::enum_runtime_object(&members)
                     };
                 return Ok(Expr::IndexGet {
+                    element_offset: member.span.lo.0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(object),

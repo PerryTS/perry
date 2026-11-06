@@ -228,6 +228,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         arguments_object: None,
     };
     let loaded = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(10)),
@@ -250,6 +251,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             Stmt::While {
                 condition: Expr::Bool(false),
                 body: vec![Stmt::Expr(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(11)),
@@ -280,6 +282,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(13)),
                         right: Box::new(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(11)),
@@ -292,6 +295,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 object: Box::new(Expr::LocalGet(10)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(Expr::LocalGet(12)),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -390,6 +394,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     11,
                     Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(10)),
@@ -497,6 +502,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                             op: BinaryOp::BitXor,
                             left: Box::new(Expr::LocalGet(12)),
                             right: Box::new(Expr::IndexGet {
+                                element_offset: 0,
                                 byte_offset: 0,
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(10)),
@@ -514,6 +520,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                             op: BinaryOp::BitXor,
                             left: Box::new(Expr::LocalGet(12)),
                             right: Box::new(Expr::IndexGet {
+                                element_offset: 0,
                                 byte_offset: 0,
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(10)),
@@ -1264,12 +1271,10 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
                     type_args: vec![],
                     byte_offset: 0,
                 }),
-                Stmt::Return(Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                })),
+                Stmt::Return(Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                ))),
             ],
             is_async: false,
             is_generator: false,

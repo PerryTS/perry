@@ -7,7 +7,7 @@
 //! `Stmt::Let` — cannot see them, and nothing bound them. A collection landing
 //! between the store and the read swept the value out from under the alloca.
 //!
-//! The end-to-end proof is `test-parity/language/object/test_gap_repsel_scalar_replaced_locals.ts`
+//! The end-to-end proof is `tests/parity/language/object/test_gap_repsel_scalar_replaced_locals.ts`
 //! on the `cons_scan_off` arm of `scripts/gc_repsel_matrix.sh` — the only
 //! configuration where the bug is observable, because every automatic
 //! collection otherwise forces a conservative native-stack scan that pins the
@@ -354,18 +354,8 @@ fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -389,12 +379,10 @@ fn numeric_only_scalar_replaced_array_emits_no_rooting() {
                 "a",
                 Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             ),
-            console_log(vec![Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Integer(0)),
-            }]),
+            console_log(vec![Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(0)),
+            )]),
         ],
     );
 
@@ -447,18 +435,8 @@ fn scalar_replaced_split_parts_are_bound() {
             source.clone(),
             let_stmt(2, "parts", split),
             console_log(vec![
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -723,18 +701,8 @@ fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );

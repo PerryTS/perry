@@ -26,7 +26,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
                 m.cur_this = prev;
             }
         }
-        ChainAct::Store(_) => {}
+        ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
     }
 }
 
@@ -64,7 +64,42 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            m.sink_node(src, r);
+            let retained = if !m.unit_mode
+                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
+            {
+                match _key {
+                    Key::Named(a) => m
+                        .native_property(t, &m.atoms[a as usize])
+                        .and_then(|p| p.native),
+                    _ => None,
+                }
+                .and_then(|identity| {
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    match m.toks[value as usize] {
+                        TokKind::Builtin(_)
+                            if !m
+                                .native_shape(value)
+                                .is_none_or(|s| s.global_identity.matches(identity)) =>
+                        {
+                            None
+                        }
+                        _ => Some(value),
+                    }
+                })
+            } else {
+                None
+            };
+            if let Some(retained) = retained {
+                m.cons(
+                    src,
+                    Cons::RuntimeStore {
+                        reason: r,
+                        retained,
+                    },
+                );
+            } else {
+                m.sink_node(src, r);
+            }
             // `process.argv = v`: later reads of the property see `v`.
             if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
                 && match _key {
@@ -133,7 +168,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         // program runs.
         Some(Mem::Fn) if name == "__defineGetter__" || name == "__defineSetter__" => {}
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
-            ret_prim(m, call, prim::UNDEF)
+            annexb_lookup(m, None, call, name == "__lookupSetter__");
         }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
@@ -239,6 +274,19 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         }
     }
     match m.toks[t as usize].clone() {
+        // Inherited Annex B methods run through the prototype-chain
+        // summary. An opaque own-method summary beside it would also
+        // hand the installed callback to unknown code.
+        TokKind::Builtin(ns)
+            if name.as_deref().is_some_and(|n| {
+                matches!(n, "__defineGetter__" | "__defineSetter__")
+                    && matches!(members::ns_member(ns, n), Some(Some(Mem::Fn)))
+            }) => {}
+        TokKind::BuiltinFn(_)
+            if matches!(
+                name.as_deref(),
+                Some("__defineGetter__" | "__defineSetter__")
+            ) => {}
         // `Function.prototype.call/apply/bind` of a described builtin
         // method: its call, the receiver given.
         TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_))
@@ -392,7 +440,23 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 ret_prim(m, call, prim::BOOL);
             }
-            "toString" | "toLocaleString" => {
+            // 20.1.3.6 step 15: `Get(O, @@toStringTag)` runs a getter there;
+            // what it returns is only shown.
+            "toString" => {
+                let key = Key::Named(m.atom(&format!("{WK_PREFIX}toStringTag")));
+                let recv = m.node_l("tostringtag-recv");
+                let dst = m.node_l("tostringtag-read");
+                m.nodes[dst as usize].sink = true;
+                m.cons(recv, Cons::Load { key, dst });
+                m.add_tok(recv, origin);
+                ret_prim(m, call, prim::STR);
+            }
+            // 20.1.3.5: `Invoke(O, "toString")`. ToPrimitive's calls include
+            // it (they also look up `valueOf` and `@@toPrimitive`: more can
+            // run, never less).
+            "toLocaleString" => {
+                let r = m.reason("ToPrimitive of a toLocaleString receiver");
+                m.implicit(origin, r, Protocol::ToPrimitive);
                 ret_prim(m, call, prim::STR);
             }
             "valueOf" => ret_tok(m, call, origin),
@@ -401,51 +465,106 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                 if m.calls[call as usize].args.len() < 2
                     && m.calls[call as usize].spread.is_empty() => {}
             "__defineGetter__" | "__defineSetter__" => {
-                let r = m.reason("E5 __defineGetter__/__defineSetter__");
-                m.mark_hard(origin, Hard::E5DefineProperty, r);
-                // An accessor under a key not known here.
-                let star = m.atom(crate::STAR_KEY);
-                let ks = m.accessor_keys.entry(origin).or_default();
-                if !ks.contains(&star) {
-                    ks.push(star);
-                }
-                m.escape(origin, r);
-                // ToPropertyKey of the key; the function becomes an accessor
-                // of the escaped receiver, which unknown code runs.
-                let c = m.calls[call as usize].clone();
-                if let Some(&k) = c.args.first() {
-                    let reason = m.reason("ToPropertyKey");
-                    m.cons(
-                        k,
-                        Cons::Implicit {
-                            reason,
-                            proto: Protocol::ToPrimitive,
-                        },
-                    );
-                }
-                let r = m.reason("E5 __defineGetter__ argument");
-                for &a in c.args.iter().skip(1).take(1).chain(&c.spread) {
-                    m.sink_node(a, r);
-                }
+                annexb_define(m, origin, call, name == "__defineSetter__");
                 ret_prim(m, call, prim::UNDEF);
             }
             "__lookupGetter__" | "__lookupSetter__" => {
-                implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
-                m.implicit(origin, 0, Protocol::Any);
-                if origin != TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
-                    // The unmodeled lookup creates a new unknown result;
-                    // it does not copy TOP from a mixed receiver node.
-                    let ret = m.calls[call as usize].ret;
-                    m.add_top(ret, |_| {
-                        "result of an unmodeled native accessor lookup".into()
-                    });
-                } else {
-                    ret_tok(m, call, TOP);
-                }
+                annexb_lookup(m, Some(origin), call, name == "__lookupSetter__");
             }
             _ => {}
         },
         TokKind::NativeProto(name_of) => native_method(m, p, &name_of, origin, &name, call),
         _ => {}
+    }
+}
+
+/// Annex B defines a descriptor; only an unmodeled receiver keeps the
+/// reflective escape fallback. Known holders use the descriptor accessor flow.
+pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bool) {
+    let c = m.calls[call as usize].clone();
+    if c.args.len() < 2 && c.spread.is_empty() {
+        return;
+    }
+    if let Some(&k) = c.args.first() {
+        let reason = m.reason("ToPropertyKey");
+        m.cons(
+            k,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    let key = c
+        .spread
+        .is_empty()
+        .then(|| m.call_lit.get(&call).copied())
+        .flatten()
+        .unwrap_or_else(|| m.atom(crate::STAR_KEY));
+    if accessor_receiver(m, origin, key) {
+        let holder = m.node_l("annexb-holder");
+        m.add_tok(holder, origin);
+        // Spread positions are not retained in CallSite: any direct or
+        // spread value may be argument 1, and its key is not known here.
+        let direct = if c.spread.is_empty() {
+            &c.args[1..2]
+        } else {
+            &c.args[..]
+        };
+        for &f in direct {
+            m.cons(
+                f,
+                Cons::Accessor {
+                    holder,
+                    key,
+                    setter,
+                },
+            );
+        }
+        for &spread in &c.spread {
+            let f = m.node_l("annexb-spread-function");
+            let key = m.atom(crate::STAR_KEY);
+            let elem = m.elem_key();
+            m.cons(spread, Cons::Load { key: elem, dst: f });
+            m.cons(
+                f,
+                Cons::Accessor {
+                    holder,
+                    key,
+                    setter,
+                },
+            );
+        }
+    } else {
+        let r = m.reason("E5 __defineGetter__/__defineSetter__");
+        m.mark_hard(origin, Hard::E5DefineProperty, r);
+        let star = m.atom(crate::STAR_KEY);
+        let ks = m.accessor_keys.entry(origin).or_default();
+        if !ks.contains(&star) {
+            ks.push(star);
+        }
+        m.escape(origin, r);
+        let r = m.reason("E5 __defineGetter__ argument");
+        for &f in c.args.iter().skip(1).take(1).chain(&c.spread) {
+            m.sink_node(f, r);
+        }
+    }
+}
+
+/// Receiver shapes for which descriptor accessors have modeled holder groups.
+pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
+    !m.is_marker(t)
+        && (matches!(
+            m.toks[t as usize],
+            TokKind::Obj(..) | TokKind::Func(..) | TokKind::Proto(_) | TokKind::ClassObj(_)
+        ) || super::undeclared(m, t, key))
+}
+
+/// Callable values whose bodies the accessor groups cannot bind precisely.
+pub(crate) fn unknown_accessor_callable(m: &Model, t: Tok) -> bool {
+    match m.toks[t as usize] {
+        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
+        TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,
+        _ => false,
     }
 }

@@ -12,6 +12,10 @@ pub(super) fn act_map(
     k: &mut impl FnMut(CallId) -> CallId,
 ) -> ChainAct {
     match a {
+        ChainAct::Lookup { dst, setter } => ChainAct::Lookup {
+            dst: n(dst),
+            setter,
+        },
         ChainAct::Load(x) => ChainAct::Load(n(x)),
         ChainAct::Store(x) => ChainAct::Store(n(x)),
         ChainAct::Call(c) => ChainAct::Call(k(c)),
@@ -42,6 +46,14 @@ pub fn map_cons(
             this,
         },
         New { call } => New { call: k(call) },
+        ReflectNew { call, new_target } => ReflectNew {
+            call: k(call),
+            new_target: n(new_target),
+        },
+        ReflectNewTarget { call, target } => ReflectNewTarget {
+            call: k(call),
+            target,
+        },
         NewNamed { name, call } => NewNamed {
             name,
             call: k(call),
@@ -53,6 +65,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
         CallerValue { dst, reason } => CallerValue {
@@ -196,6 +209,14 @@ pub fn map_cons(
             setter,
         },
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
+        AnnexBDefine { call, setter } => AnnexBDefine {
+            call: k(call),
+            setter,
+        },
+        AnnexBLookup { call, setter } => AnnexBLookup {
+            call: k(call),
+            setter,
+        },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
         ProtoOf { dst } => ProtoOf { dst: n(dst) },
         ProtoValues { dst } => ProtoValues { dst: n(dst) },
@@ -379,10 +400,12 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Store { .. }
             | Call { .. }
             | New { .. }
+            | ReflectNew { .. }
             | NewNamed { .. }
             | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
+            | RuntimeStore { .. }
             | HandOver { .. }
             | ContractThis { .. }
             | OverrideThis { .. }
@@ -421,6 +444,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | CreateProto { .. }
             | NewTargetHard { .. }
             | ShareBuffer { .. }
+            | AnnexBDefine { .. }
+            | AnnexBLookup { .. }
             | Accessor { .. }
             | ProtoFrom { .. }
     )

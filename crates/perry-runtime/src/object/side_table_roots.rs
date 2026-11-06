@@ -114,8 +114,11 @@ unsafe fn scan_transition_cache_slot(
     let mut invalidate = false;
     // Content-namespace ids (len marker != 0) are string BYTES,
     // not addresses — the visitor must not rewrite them.
-    if (entry.slot_idx >> 24) == 0 {
-        invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
+    if let Some(mut key) = entry.interned_key() {
+        if visitor.visit_metadata_usize_slot(&mut key) {
+            entry.key_id = interned_key_id(key);
+            invalidate = true;
+        }
     }
     // #6759 phase 3: `next_keys` is WEAK, not a strong root.
     //
@@ -139,7 +142,7 @@ unsafe fn scan_transition_cache_slot(
     visitor.visit_metadata_usize_slot(&mut entry.next_keys);
     if invalidate {
         *entry = TransitionEntry {
-            key_ptr: 0,
+            key_id: 0,
             next_keys: 0,
             prev_shape_id: LayoutWord(0),
             target_shape_id: LayoutWord(0),
@@ -165,7 +168,7 @@ pub(crate) fn prune_dead_transition_cache_entries_young(is_dead_owner: &dyn Fn(u
             }
             if transition_entry_is_dead(entry, is_dead_owner) {
                 *entry = TransitionEntry {
-                    key_ptr: 0,
+                    key_id: 0,
                     next_keys: 0,
                     prev_shape_id: LayoutWord(0),
                     target_shape_id: LayoutWord(0),
@@ -187,7 +190,7 @@ fn transition_entry_is_dead(
     entry: &TransitionEntry,
     is_dead_owner: &dyn Fn(usize) -> bool,
 ) -> bool {
-    ((entry.slot_idx >> 24) == 0 && entry.key_ptr != 0 && is_dead_owner(entry.key_ptr))
+    entry.interned_key().is_some_and(is_dead_owner)
         // #6759 phase 3: `next_keys` stopped being a strong root, so a
         // dead target is now possible and must be reaped here — this is
         // the half that makes weakening it safe.
@@ -226,7 +229,7 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
             }
             if transition_entry_is_dead(entry, is_dead_owner) {
                 *entry = TransitionEntry {
-                    key_ptr: 0,
+                    key_id: 0,
                     next_keys: 0,
                     prev_shape_id: LayoutWord(0),
                     target_shape_id: LayoutWord(0),
@@ -281,10 +284,10 @@ pub(crate) fn test_seed_transition_cache_entry(
     let slot = transition_cache_slot(prev_shape_id, 0, 0);
     // The seed writes `slot_idx: 0`, i.e. no length marker, so `key_ptr` is an
     // address here — which is the `len_marker == 0` arm of the shared predicate.
-    arm_transition_cache_young(slot, next_keys, key_ptr, 0);
+    arm_transition_cache_young(slot, next_keys, interned_key_id(key_ptr), 0);
     with_transition_cache(|table| unsafe {
         (*table)[slot] = TransitionEntry {
-            key_ptr,
+            key_id: interned_key_id(key_ptr),
             next_keys,
             prev_shape_id,
             target_shape_id: LayoutWord(0),

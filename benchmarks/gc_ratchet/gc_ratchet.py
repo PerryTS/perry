@@ -1650,7 +1650,7 @@ def inspect_artifact(artifact: Mapping[str, Any]) -> list[ArtifactDefect]:
             )
 
         # The bit-identity rule, enforced at PINNING time rather than only in
-        # the unit tests. It used to live only in tests/test_gc_ratchet.py, so
+        # the unit tests. It used to live only in tests/tooling/infrastructure/test_gc_ratchet.py, so
         # #7446 was able to write an artifact whose 12_large_live_set retention
         # spread was 6,768 bytes; the test then failed in the CI step that runs
         # *before* the measurement step, and the ratchet measured nothing at all

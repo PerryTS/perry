@@ -143,8 +143,7 @@ pub(crate) fn set_slot(owner: *mut ObjectHeader, index: u32, value: f64) {
                 let message = b"Cannot update event state on this receiver";
                 let message =
                     crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-                let error = crate::error::js_typeerror_new(message);
-                crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+                crate::exception::throw_core(crate::error::CoreError::type_error(message));
             }
             return;
         }

@@ -48,6 +48,23 @@ Three consequences worth noting:
 2. **The GC can identify pointer values from the tag alone.** When tracing a value, the collector masks the high bits, checks for `0x7FFA`/`0x7FFD`/`0x7FFF`, and either follows the low-48-bit pointer or skips. There is no per-value runtime type lookup.
 3. **Type checks are bitwise.** `typeof` and many fast paths in the runtime are register-level mask-and-compare operations.
 
+## Property atoms during realm bootstrap
+
+A program property key has one atom per text. Literal property probes compare
+these atoms by identity, so runtime bootstrap must not create a second program
+atom before the executable registers its literal images. Builtin global names
+have shared static image atoms; constructor statics use ordinary keys in the
+constructor's complete attributed property bag.
+
+A provider can initialize the realm before source literals register. For example,
+the streams provider installs `ReadableStream.from` during startup. Error's
+`isError`, `captureStackTrace`, `prepareStackTrace` and `stackTraceLimit` are
+installed together through `ConstructorStatics`, so that early bootstrap keeps
+the same statics and inherited identities as later bootstrap. Debug builds assert
+that registration cannot encounter another program atom for the same text.
+`scripts/check_error_statics.py` compares the Error-family statics with Node across
+stream and fetch global references.
+
 ## Heap layout: per-thread arena, nursery + old-gen
 
 Ordinary values cross agents through `SerializedValue`. SharedArrayBuffer backing is explicitly shared, and supported transfer operations move ownership. Each collector traces its own heap; shared backing and transfer coordination have separate lifetime rules.

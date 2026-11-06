@@ -3,8 +3,8 @@
 //! object, not on a missing export. These assert which lowering the call got:
 //! the unimplemented-API gate compiled it to a deferred throw.
 //! Byte-for-byte behaviour against node lives in
-//! `test-parity/node-suite/{buffer,util}/imports/default-object-prototype.ts`
-//! and `test-parity/node-suite/process/object-prototype-methods.ts`.
+//! `tests/parity/node-suite/{buffer,util}/imports/default-object-prototype.ts`
+//! and `tests/parity/node-suite/process/object-prototype-methods.ts`.
 
 #![cfg(test)]
 

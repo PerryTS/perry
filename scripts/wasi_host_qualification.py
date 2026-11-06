@@ -126,7 +126,7 @@ def main() -> int:
                PERRY_CODEGEN_CPU_SLOTS="4")
     for knob in MOVING_KNOBS:
         env.pop(knob, None)
-    fixture = ROOT / "test-parity/node-suite/wasi"
+    fixture = ROOT / "tests/parity/node-suite/wasi"
     cases = discover(fixture)
     names = {path.relative_to(fixture).as_posix() for path in cases}
     if len(cases) < 56 or not {EXIT_CASE, MOVING_CASE}.issubset(names):

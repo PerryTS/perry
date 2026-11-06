@@ -187,15 +187,15 @@ fn option_interval_ms(options_value: f64) -> f64 {
     }
 }
 
-fn signal_type_error(value: f64) -> f64 {
+fn signal_type_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The \"options.signal\" property must be an instance of AbortSignal. Received {}",
         validate::describe_received(value)
     );
-    validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE")
+    validate::type_error_with_registered_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn option_signal_value(options_value: f64) -> Result<Option<f64>, f64> {
+fn option_signal_value(options_value: f64) -> Result<Option<f64>, crate::error::CoreError> {
     let options_js = crate::value::JSValue::from_bits(options_value.to_bits());
     if options_js.is_undefined() || options_js.is_null() || options_js.is_any_string() {
         return Ok(None);
@@ -424,23 +424,23 @@ fn with_fs_watch_scope(
             ..ids
         };
         if let Err(error) = crate::async_hook_slots::try_enter_resource_scope(ids) {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
-        let outcome = crate::exception::js_call_catching(|| {
+        let outcome = crate::exception::catch_thrown(|| {
             completion();
             undefined_value()
         });
         let scope = crate::gc::RuntimeHandleScope::new();
         let error = match outcome {
-            Err(error) => Some(scope.root_nanbox_f64(error)),
+            Err(error) => Some(error.root(&scope)),
             Ok(_) => None,
         };
         let leave = crate::async_hook_slots::try_leave_resource_scope(current_id());
         if let Some(error) = error {
-            crate::exception::js_throw(error.get_nanbox_f64());
+            crate::exception::rethrow_caught(error.caught());
         }
         if let Err(error) = leave {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
     });
 }
@@ -1239,7 +1239,8 @@ extern "C" fn bun_glob_sync_iterator_next_impl(
     });
     match action {
         GlobNextAction::Done => iterator_result(undefined_value(), true),
-        GlobNextAction::Reject(reason) => crate::exception::js_throw(reason),
+        // Native validation/regex errors and caught glob callback failures share this channel.
+        GlobNextAction::Reject(reason) => crate::exception::throw_open(reason),
         GlobNextAction::Entry(entry, with_file_types) => {
             let scope = crate::gc::RuntimeHandleScope::new();
             let value = scope.root_nanbox_f64(glob_entry_value(&entry, with_file_types));
@@ -1644,7 +1645,8 @@ pub(crate) fn js_bun_glob_async_iterator(pattern_value: f64, options_value: f64)
 pub(crate) fn js_bun_glob_sync_iterator(pattern_value: f64, options_value: f64) -> f64 {
     let run = match run_bun_glob_result(pattern_value, options_value) {
         Ok(run) => run,
-        Err(err) => crate::exception::js_throw(err),
+        // Native validation/regex errors and caught glob callback failures share this channel.
+        Err(err) => crate::exception::throw_open(err),
     };
     let id = next_glob_iterator_id();
     GLOB_ITERATORS.with(|iterators| {
@@ -1687,13 +1689,13 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     let recursive = option_bool_default_local(options_value, b"recursive", false);
     let signal = match option_signal_value(options_value) {
         Ok(signal) => signal,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     };
     // Node throws ENOENT & co. at call time; one stat answers that without
     // the pre-#9591 full walk of the target.
     if let Err(err) = fs::symlink_metadata(&path) {
         unsafe {
-            crate::exception::js_throw(build_fs_error_value(&err, "watch", &path));
+            crate::exception::throw_core(crate::io_error::fs_error(&err, "watch", &path));
         }
     }
     let id = next_watch_id();
@@ -1845,7 +1847,7 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
     let recursive = option_bool_default_local(options_value.get_nanbox_f64(), b"recursive", false);
     let signal = match option_signal_value(options_value.get_nanbox_f64()) {
         Ok(signal) => signal,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     };
     let signal = signal.map(|signal| scope.root_nanbox_f64(signal));
     // Validate the path synchronously, matching Node's `watch()` which throws
@@ -1853,7 +1855,7 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
     // itself starts on the first `next()` (`start_promise_watcher`).
     if let Err(err) = fs::symlink_metadata(&path) {
         unsafe {
-            crate::exception::js_throw(build_fs_error_value(&err, "watch", &path));
+            crate::exception::throw_core(crate::io_error::fs_error(&err, "watch", &path));
         }
     }
     let id = next_watch_id();

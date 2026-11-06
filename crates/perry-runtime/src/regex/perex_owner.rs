@@ -323,7 +323,7 @@ pub(crate) enum BuildError {
     Compile(CompileError),
     SizeLimit,
     Allocation,
-    Abrupt(u64),
+    Abrupt(crate::exception::Caught),
 }
 
 /// An immutable program held by a real mutable collector root.
@@ -380,15 +380,14 @@ impl<'scope> GcProgram<'scope> {
             // Arena sizes include the GC header and round to eight bytes.
             .filter(|&n| n <= u32::MAX as usize - crate::gc::GC_HEADER_SIZE - 7)
             .ok_or(BuildError::SizeLimit)?;
-        let cell = crate::exception::catch_js_throw(|| {
+        let cell = crate::exception::catch_thrown(|| {
             crate::arena::arena_alloc_gc(
                 size,
                 std::mem::align_of::<ProgramCell>(),
                 crate::gc::GC_TYPE_REGEX_PROGRAM,
             )
         })
-        .map_err(|value| BuildError::Abrupt(value.to_bits()))?
-            as *mut ProgramCell;
+        .map_err(BuildError::Abrupt)? as *mut ProgramCell;
         if cell.is_null() {
             return Err(BuildError::Allocation);
         }

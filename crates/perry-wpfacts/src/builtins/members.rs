@@ -481,7 +481,11 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             };
             keys.contains(&name) && find(COLLECTION, name).is_some()
         }
-        Family::Iterator | Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
+        // An array iterator's whole chain is add-locked (`ARRAY_ITERATOR`).
+        // The Map/Set/String iterator prototypes and the iterator helpers'
+        // take adds: not final.
+        Family::Iterator => what == Some(ARRAY_ITERATOR),
+        Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
     }
 }
 
@@ -494,11 +498,32 @@ pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     }
 }
 
+/// Builtin iterator template kinds (`TmplKind::BObj::what`, family
+/// `Iterator`): the iterator's intrinsic prototype, when the model knows it.
+pub(crate) const ANY_ITERATOR: &str = "Iterator";
+/// `%ArrayIteratorPrototype%` (`extends %IteratorPrototype%`): the runtime
+/// seals and add-locks both (`builtin_proto.rs` `add_locked`:
+/// `ITERATOR_FAMILY`, `ARRAY_ITERATOR_FAMILY`), so past them the chain is
+/// `Object.prototype`, add-locked too: every read but `constructor` is
+/// final (`locked_read`).
+pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
+pub(crate) const MAP_ITERATOR: &str = "MapIterator";
+pub(crate) const SET_ITERATOR: &str = "SetIterator";
+
+/// The iterator kind a collection of kind `what` (`Map`/`Set`) gives.
+pub(super) fn collection_iterator(what: &str) -> &'static str {
+    match what {
+        "Map" => MAP_ITERATOR,
+        "Set" => SET_ITERATOR,
+        _ => ANY_ITERATOR,
+    }
+}
+
 /// The family of a builtin object template kind (`TmplKind::BObj::what`).
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        "Iterator" => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
@@ -545,6 +570,7 @@ pub(super) struct NsStatics {
 // [[Prototype]] is exactly Function.prototype.
 const ERROR_NAMESPACE: NsStatics = NsStatics {
     members: Some(&[
+        ("prototype", Mem::Proto),
         ("captureStackTrace", FN),
         ("isError", FN),
         ("prepareStackTrace", FN),
@@ -567,6 +593,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Object => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("assign", FN),
                 ("create", FN),
                 ("defineProperties", FN),
@@ -614,6 +641,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Array => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("from", FN),
                 ("fromAsync", FN),
                 ("isArray", FN),
@@ -685,6 +713,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Promise => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("all", FN),
                 ("allSettled", FN),
                 ("any", FN),
@@ -703,6 +732,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Error | BuiltinNs::AggregateError => (
             NsProto::Constructor(&ERROR_NAMESPACE),
             Some(&[
+                ("prototype", Mem::Proto),
                 ("captureStackTrace", FN),
                 ("isError", FN),
                 ("stackTraceLimit", N),
@@ -716,6 +746,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Symbol => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("asyncDispose", SY),
                 ("asyncIterator", SY),
                 ("dispose", SY),
@@ -739,6 +770,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Number => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("EPSILON", N),
                 ("MAX_SAFE_INTEGER", N),
                 ("MAX_VALUE", N),
@@ -759,22 +791,38 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         ),
         BuiltinNs::String => (
             NsProto::Function,
-            Some(&[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)]),
+            Some(&[
+                ("prototype", Mem::Proto),
+                ("fromCharCode", FN),
+                ("fromCodePoint", FN),
+                ("raw", FN),
+            ]),
         ),
-        BuiltinNs::Boolean
-        | BuiltinNs::Function
-        | BuiltinNs::ObjectProtoMethod
-        | BuiltinNs::ObjectProtoOwn(_) => (NsProto::Function, Some(&[])),
+        BuiltinNs::Boolean | BuiltinNs::Function => {
+            (NsProto::Function, Some(&[("prototype", Mem::Proto)]))
+        }
+        BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {
+            (NsProto::Function, Some(&[]))
+        }
         BuiltinNs::Map => (
             NsProto::Function,
-            Some(&[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)]),
+            Some(&[
+                ("prototype", Mem::Proto),
+                ("groupBy", FN),
+                ("@@__perry_wk_species", Mem::Ctor),
+            ]),
         ),
         BuiltinNs::Set => (
             NsProto::Function,
-            Some(&[("@@__perry_wk_species", Mem::Ctor)]),
+            Some(&[
+                ("prototype", Mem::Proto),
+                ("@@__perry_wk_species", Mem::Ctor),
+            ]),
         ),
         // No statics, no `@@species`.
-        BuiltinNs::WeakMap | BuiltinNs::WeakSet => (NsProto::Function, Some(&[])),
+        BuiltinNs::WeakMap | BuiltinNs::WeakSet => {
+            (NsProto::Function, Some(&[("prototype", Mem::Proto)]))
+        }
         BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
@@ -915,4 +963,45 @@ pub(super) fn any_member(fam: Family) -> (bool, u16) {
         _ => p,
     });
     (own.iter().any(|(_, m)| *m == Mem::Fn), prims)
+}
+
+/// Emit the description itself for the compiled-runtime behaviour check.
+/// The harness compares observed own keys against these same member tables.
+#[test]
+fn runtime_member_description() {
+    fn keys(d: NsStatics, out: &mut Vec<&'static str>) -> bool {
+        let Some(own) = d.members else { return false };
+        out.extend(own.iter().map(|(key, _)| *key));
+        match d.prototype {
+            NsProto::Function => {
+                out.extend(FUNCTION.iter().map(|(key, _)| *key));
+                out.extend(OBJECT.iter().map(|(key, _)| *key));
+            }
+            NsProto::Object => out.extend(OBJECT.iter().map(|(key, _)| *key)),
+            NsProto::Constructor(parent) => return keys(*parent, out),
+            NsProto::Unknown(_) => return false,
+        }
+        true
+    }
+    let mut rows = 0;
+    for e in crate::native_effects::realm() {
+        let Some(ns) = super::ns_by_name(e.name) else {
+            continue;
+        };
+        let mut names = Vec::new();
+        if !keys(ns_statics(ns), &mut names) {
+            continue;
+        }
+        names.sort_unstable();
+        names.dedup();
+        println!("DESCRIPTION\t{}\t{}", e.name, names.join("\t"));
+        rows += 1;
+    }
+    let mut names: Vec<_> = FUNCTION.iter().chain(OBJECT).map(|(key, _)| *key).collect();
+    names.sort_unstable();
+    names.dedup();
+    for expr in ["Array.prototype.map", "Object.prototype.hasOwnProperty"] {
+        println!("DESCRIPTION\t{expr}\t{}", names.join("\t"));
+    }
+    assert!(rows > 10);
 }

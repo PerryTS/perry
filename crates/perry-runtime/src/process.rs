@@ -734,15 +734,13 @@ pub(crate) fn module_get_named_field(obj: *const crate::object::ObjectHeader, na
 
 pub(crate) fn module_throw_plain_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 pub(crate) fn module_throw_syntax_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 pub(crate) fn module_validate_bool_property(value: f64, name: &str) -> Option<bool> {

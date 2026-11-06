@@ -284,9 +284,9 @@ fn tls_roundtrip_through_a_rooted_wrapper_and_its_native_parent() {
         let agent = perry_runtime::agent::enter_worker_agent();
         SEEN.with(|seen| seen.borrow_mut().clear());
         const CERT: &[u8] =
-            include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
+            include_bytes!("../../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem");
         const KEY: &[u8] =
-            include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-key.pem");
+            include_bytes!("../../../tests/parity/node-suite/tls/fixtures/localhost-key.pem");
         let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(CERT))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();

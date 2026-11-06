@@ -22,7 +22,7 @@ class SourceIssue:
 
     def diagnostic(self, root: Path) -> str:
         if self.kind == "unknown":
-            return f"manifest lists {self.case_id} but test-files/{self.case_id}.ts does not exist"
+            return f"manifest lists {self.case_id} but tests/fixtures/programs/{self.case_id}.ts does not exist"
         if self.kind == "unmatched_pattern":
             return (f"::error::pattern '{self.case_id}' matched nothing; it is stale. "
                     "Remove it or fix it.")
@@ -37,8 +37,8 @@ class SourceResolutionError(ValueError):
 
 
 def source_patterns() -> tuple[str, ...]:
-    return ("test-files/*.ts",) + tuple(
-        f"test-parity/{root}/**/*.ts" for root in parity.SUBJECT_ROOTS
+    return ("tests/fixtures/programs/*.ts",) + tuple(
+        f"tests/parity/{root}/**/*.ts" for root in parity.SUBJECT_ROOTS
     )
 
 

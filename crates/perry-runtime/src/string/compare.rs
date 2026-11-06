@@ -406,8 +406,7 @@ fn throw_regexp_search_type_error(method_id: i32) -> ! {
     let message =
         format!("First argument to String.prototype.{method} must not be a regular expression");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Check if a string starts with a prefix
@@ -664,8 +663,7 @@ pub extern "C" fn js_string_normalize(
 fn throw_invalid_normalize_form() -> ! {
     let message = "The normalization form should be one of NFC, NFD, NFKC, NFKD.";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// Apply the canonical-equivalence requirement shared by all locale-aware

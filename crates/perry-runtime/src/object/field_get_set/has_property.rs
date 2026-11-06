@@ -121,8 +121,7 @@ fn throw_in_operator_non_object(obj: f64, key: f64) -> ! {
     let (key_str, rhs_str) = unsafe { (describe_in_operand(key), describe_in_operand(obj)) };
     let msg = format!("Cannot use 'in' operator to search for '{key_str}' in {rhs_str}");
     let msg_val = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_val);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_val))
 }
 
 /// Does the right operand of `in` count as an Object (ECMA-262 13.10.1 step 5)?

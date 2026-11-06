@@ -258,6 +258,7 @@ pub(crate) use intern::existing_property_atom;
 pub(crate) use intern::existing_property_atom_of_value;
 pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
+pub(crate) use intern::property_atom_from_bytes;
 #[cfg(test)]
 pub(crate) use intern::test_evict_interned;
 pub(crate) use intern::IMAGE_ATOM_FLAGS;
@@ -836,8 +837,7 @@ pub(crate) const MAX_STRING_LENGTH: usize = 536_870_888;
 pub(crate) fn throw_invalid_string_length() -> ! {
     let message = "Invalid string length";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// [`string_storage_alloc`] with **no collection point**: `Some` means the

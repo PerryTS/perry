@@ -88,7 +88,9 @@ pub(super) struct Entry {
     /// JS handle id. Promise timers have no JS handle and use 0.
     pub(super) id: i64,
     pub(super) class: Class,
-    /// When the timers phase may run this entry. Meaningless for `Immediate`.
+    /// When the timers phase may run this entry. Meaningless for `Immediate`
+    /// and `Pending`: they run in queue order and carry the timer origin, so
+    /// scheduling one reads no clock.
     pub(super) deadline: Instant,
     /// Creation order, the tie-break for equal deadlines (Node fires
     /// same-deadline timers in creation order).

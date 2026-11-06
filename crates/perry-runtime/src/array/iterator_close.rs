@@ -126,8 +126,7 @@ fn iterator_delegate_throw(iter: f64, error: f64) -> f64 {
     );
     let msg = b"The iterator does not provide a 'throw' method";
     let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[cfg(panic = "abort")]

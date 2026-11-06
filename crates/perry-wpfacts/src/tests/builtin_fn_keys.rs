@@ -1,10 +1,6 @@
-//! Rule R2 (STR1 design §3): a property read of a builtin function value is
-//! ⊤ only under a key some store into a builtin function value may have
-//! named (`Model::bf_written`, `bf_key_written`), not under every key. The
-//! sites read a program object through a native function value's field
-//! (rule R1: `f.cache` under a key no native declares), so they are proven
-//! only while no store may have named `cache`. Twins: the store names
-//! `cache`, a computed key, or comes after the read.
+//! Native function properties retain ordinary fields. These key-isolation
+//! and mutation controls also exercise the named, numeric and computed
+//! write paths through defineProperty, Object.assign and Reflect.set.
 use super::*;
 
 /// The read sites under `key` on the line holding `marker`.
@@ -116,7 +112,7 @@ fn twin_a_computed_key_store_may_name_every_key() {
 
 /// Twin: the store naming `cache` comes after the read in program order,
 /// in a later iteration and from a later call: the read made before turns
-/// ⊤ once the key is written (`bf_reads` by key).
+/// its stored alternatives once the later write arrives.
 #[test]
 fn twin_a_later_store_reaches_an_earlier_read() {
     let src = format!(
@@ -178,7 +174,11 @@ const READ: &str = "console.log(f.cache.n);";
 
 #[test]
 fn twin_define_property_named_key() {
-    twin("G1", "Object.defineProperty(node, \"cache\", { value: [1] });\n", READ);
+    twin(
+        "G1",
+        "Object.defineProperty(node, \"cache\", { value: [1] });\n",
+        READ,
+    );
 }
 
 #[test]
@@ -335,7 +335,11 @@ fn a_function_prototype_store_reaches_builtin_function_values() {
     );
     let pf = facts(&src);
     for m in ["// SITE-G8", "// SITE-G8b"] {
-        assert!(!proven_wrong(&pf, &src, m, "n", "Array"), "{m}: {}", verdicts(&pf, &src, m, "n"));
+        assert!(
+            !proven_wrong(&pf, &src, m, "n", "Array"),
+            "{m}: {}",
+            verdicts(&pf, &src, m, "n")
+        );
     }
 }
 

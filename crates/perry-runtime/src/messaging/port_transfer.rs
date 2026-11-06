@@ -91,7 +91,7 @@ pub fn serialize(
     let value = scope.root_nanbox_f64(value);
     let transfer = scope.root_nanbox_f64(transfer);
     let mut prepared = Prepared::default();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let list = admit(transfer.get_nanbox_f64());
         prepared = prepare(list, source)?;
         unsafe {
@@ -108,7 +108,7 @@ pub fn serialize(
     drop(scope);
     match outcome {
         Ok(result) => result,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 
@@ -140,5 +140,5 @@ pub fn throw_data_clone_error(message: &str) -> ! {
         message.get_nanbox_f64(),
         name.get_nanbox_f64(),
     );
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_open(crate::value::js_nanbox_pointer(err as i64))
 }

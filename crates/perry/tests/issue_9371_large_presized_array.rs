@@ -41,7 +41,7 @@ fn large_presized_arrays_fill_densely_and_preserve_every_value() {
         &entry,
         concat!(
             include_str!(
-                "../../../test-parity/language/array/test_gap_9784_module_presized_array.ts"
+                "../../../tests/parity/language/array/test_gap_9784_module_presized_array.ts"
             ),
             r#"
 declare function gc(): void;

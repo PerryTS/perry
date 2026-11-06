@@ -164,6 +164,7 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
                     key: Box::new(Expr::LocalGet(2)),
                     value: Box::new(Expr::Number(42.0)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),

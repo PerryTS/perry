@@ -511,18 +511,15 @@ fn boxed_str(value: &str) -> f64 {
 
 fn throw_error(message: &str) -> f64 {
     let msg = string(message);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 fn throw_type_error(message: &str) -> f64 {
     let msg = string(message);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_quota_exceeded() -> f64 {
     let msg = string("The quota has been exceeded.");
-    let err = crate::error::js_error_new_with_name_message(b"QuotaExceededError", msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::named(b"QuotaExceededError", msg))
 }

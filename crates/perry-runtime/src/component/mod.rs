@@ -102,8 +102,8 @@ unsafe fn take(buffer: Buffer) -> Vec<u8> {
 
 // JS throws abandon Rust frames. Keep all owned native scratch outside the
 // catching closure and destroy it before propagating the original exception.
-fn finish(result: Result<f64, f64>) -> f64 {
-    result.unwrap_or_else(|error| crate::exception::js_throw(error))
+fn finish(result: Result<f64, crate::exception::Caught>) -> f64 {
+    result.unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
 #[no_mangle]
@@ -120,7 +120,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
     let mut options = Vec::new();
     let mut options_value = Value::Null;
     let mut error = None;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = host::ops();
         contract = string(contract_input.get_nanbox_f64());
         world =
@@ -215,8 +215,8 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
     });
     let result = match result {
         Err(error) if !JSValue::from_bits(owner.get_nanbox_f64().to_bits()).is_undefined() => {
-            let original = scope.root_nanbox_f64(error);
-            let _ = crate::exception::catch_js_throw(|| {
+            let original = error.root(&scope);
+            let _ = crate::exception::catch_thrown(|| {
                 if unsafe { (*context::get(owner.get_nanbox_f64())).host.is_null() } {
                     context::finish_disposal(
                         owner.get_nanbox_f64(),
@@ -226,7 +226,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
                     js_component_dispose(owner.get_nanbox_f64());
                 }
             });
-            Err(original.get_nanbox_f64())
+            Err(original.caught())
         }
         result => result,
     };
@@ -247,7 +247,7 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
     let mut args = Vec::new();
     let mut output = Vec::new();
     let mut parsed = Value::Null;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         interface = string(interface_input.get_nanbox_f64());
         function = string(function_input.get_nanbox_f64());
         let context = context::get(owner.get_nanbox_f64());
@@ -345,7 +345,7 @@ pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let frame = callback::Frame::new(&scope, owner);
     let mut error = Vec::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let context = context::get(frame.owner.get_nanbox_f64());
         let mut buffer = Buffer::default();
         let status = unsafe {
@@ -354,12 +354,12 @@ pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
         error = unsafe { take(buffer) };
         // A destructor may have thrown in a JS import. Its exception is
         // rooted by frame, so sever imports before rethrowing that value.
-        let cleanup = crate::exception::catch_js_throw(|| {
+        let cleanup = crate::exception::catch_thrown(|| {
             context::finish_disposal(frame.owner.get_nanbox_f64(), status)
         });
         frame.rethrow();
         if let Err(error) = cleanup {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
         if status != perry_abi::component_host::OK {
             fail(&String::from_utf8_lossy(&error));

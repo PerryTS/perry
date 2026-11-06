@@ -135,9 +135,9 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                     scope.root_nanbox_f64(event)
                 });
                 if !event_cbs.is_empty() || handler_cb.is_some() {
-                    let event = perry_runtime::event_target_hook_slots::message_event_with_ports(
+                    let event = perry_runtime::event_target_hook_slots::node_message_event(
                         value.get_nanbox_f64(),
-                        ports.get_nanbox_f64(),
+                        Some(ports.get_nanbox_f64()),
                     );
                     let event = scope.root_nanbox_f64(event);
                     for (callback, is_global) in event_cbs {
@@ -235,10 +235,9 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let value =
                     f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&dispatch.msg) });
                 let value = scope.root_nanbox_f64(value);
-                let event = event_object(
-                    "message",
-                    target.get_nanbox_f64().to_bits(),
-                    Some(value.get_nanbox_f64()),
+                let event = perry_runtime::event_target_hook_slots::node_message_event(
+                    value.get_nanbox_f64(),
+                    None,
                 );
                 let event = scope.root_nanbox_f64(event);
                 if let Some(callback) = handler_cb {

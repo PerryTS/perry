@@ -1020,6 +1020,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                     },

@@ -131,6 +131,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
         hir_inferred_static_type_from_locals(
             &local_types,
             &Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
