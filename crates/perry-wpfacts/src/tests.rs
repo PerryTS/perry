@@ -129,6 +129,7 @@ mod unit_shared;
 mod unit_this;
 mod unknown_accessor_key;
 mod unrun_param_call;
+mod work_bound_widen;
 
 use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
 
