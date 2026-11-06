@@ -5,6 +5,7 @@ use super::let_stmt_facts::{
     pod_view_count_source, record_array_length_snapshot, record_pod_rejection,
     record_scalar_aggregate_field,
 };
+use super::let_scalar_new::{scalar_rebind, scalar_slot};
 use super::unused_expr::lower_unused_expr;
 use super::*;
 use crate::expr::{
@@ -431,9 +432,19 @@ pub(crate) fn lower_let(
     // cell is the activation's). The declaration initializes that cell, the
     // same `LocalSet` store every write of the capture takes; a fresh slot
     // would shadow the cell the other states and closures read.
-    if ctx.locals.contains_key(&id)
+    //
+    // A scalar-replaced binding is the exception. Its `ctx.locals` entry is
+    // a dummy, and its fields live in `scalar_replaced` /
+    // `scalar_replaced_arrays`, which every read resolves through first. A
+    // second lowering of the same declaration, such as a loop region's G-body
+    // after its F-body, must store into those slots again. Routing it through
+    // `LocalSet` would heap-allocate into the dummy while the reads kept
+    // loading the field slots, which only the first copy wrote, so they read
+    // `undefined`. The scalar paths below reuse the existing slots.
+    if (ctx.locals.contains_key(&id)
         || ctx.local_slot_reps.contains_key(&id)
-        || ctx.closure_captures.contains_key(&id)
+        || ctx.closure_captures.contains_key(&id))
+        && !scalar_rebind(ctx, id, init)
     {
         // A birth table already bore this declaration's closure and stored it
         // in the binding's scope slot (`closure_births`). Record what the
@@ -663,11 +674,10 @@ pub(crate) fn lower_let(
                 .iter()
                 .max()
                 .map_or(0usize, |index| *index as usize + 1);
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let existing = ctx.scalar_replaced_arrays.get(&id).cloned();
             let mut slots = Vec::with_capacity(slot_count);
-            for _ in 0..slot_count {
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+            for i in 0..slot_count {
+                let slot = scalar_slot(ctx, existing.as_ref().and_then(|v| v.get(i)));
                 slots.push(slot);
             }
 
@@ -748,8 +758,10 @@ pub(crate) fn lower_let(
                     .insert(id, length_slots);
             }
             ctx.local_types.insert(id, refined_ty);
-            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.locals.insert(id, dummy_slot);
+            if !ctx.locals.contains_key(&id) {
+                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.locals.insert(id, dummy_slot);
+            }
             return Ok(());
         }
     }
@@ -771,10 +783,9 @@ pub(crate) fn lower_let(
             // entry onward — before the element store runs, and on paths where
             // it never runs at all. An uninitialized alloca would feed the
             // root-word decoder stack garbage.
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            for _ in 0..n {
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+            let existing = ctx.scalar_replaced_arrays.get(&id).cloned();
+            for i in 0..n {
+                let slot = scalar_slot(ctx, existing.as_ref().and_then(|v| v.get(i)));
                 slots.push(slot);
             }
             // Evaluate each element expression first; store the
@@ -840,8 +851,10 @@ pub(crate) fn lower_let(
             // still resolves; the actual scalar-replaced reads short-
             // circuit before hitting this slot.
             ctx.local_types.insert(id, refined_ty);
-            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.locals.insert(id, dummy_slot);
+            if !ctx.locals.contains_key(&id) {
+                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.locals.insert(id, dummy_slot);
+            }
             return Ok(());
         }
     }
@@ -853,12 +866,11 @@ pub(crate) fn lower_let(
     // See `collect_non_escaping_object_literals` in collectors.rs.
     if let Some(perry_hir::Expr::Object(props)) = init {
         if let Some(field_order) = ctx.non_escaping_object_literals.get(&id).cloned() {
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let existing = ctx.scalar_replaced.get(&id).cloned();
             let mut field_slots: std::collections::HashMap<String, String> =
                 std::collections::HashMap::with_capacity(field_order.len());
             for fname in &field_order {
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                let slot = scalar_slot(ctx, existing.as_ref().and_then(|m| m.get(fname)));
                 field_slots.insert(fname.clone(), slot);
             }
 
@@ -911,8 +923,10 @@ pub(crate) fn lower_let(
             // — the scalar-replaced PropertyGet/Set paths short-
             // circuit before loading this slot.
             ctx.local_types.insert(id, refined_ty);
-            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.locals.insert(id, dummy_slot);
+            if !ctx.locals.contains_key(&id) {
+                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.locals.insert(id, dummy_slot);
+            }
             return Ok(());
         }
     }

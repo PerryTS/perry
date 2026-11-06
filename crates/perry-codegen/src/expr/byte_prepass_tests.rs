@@ -293,11 +293,41 @@ fn assert_special_owner_misses(text: &str) {
             line.contains(" = and i1 ") && line.ends_with(&format!(", {}", result(regular)))
         })
         .expect("special owners must guard admission");
+    // The runtime arm can re-enter JS, so the body's stack check may sit in
+    // front of it (`stack_guard::move_check_to_call_sites`): follow the
+    // check's own blocks to the arm.
+    let reaches_slow = |label: &str| {
+        let mut work = vec![label.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(l) = work.pop() {
+            if l.starts_with("ta.read.slow") {
+                return true;
+            }
+            if !l.starts_with("stack_guard.") || !seen.insert(l.clone()) {
+                continue;
+            }
+            let start = format!("{l}:");
+            let body = lines
+                .iter()
+                .skip_while(|line| **line != start)
+                .skip(1)
+                .take_while(|line| !line.ends_with(':'));
+            for line in body {
+                for part in line.split("label %").skip(1) {
+                    work.push(part.split([',', ' ']).next().unwrap().to_string());
+                }
+            }
+        }
+        false
+    };
     assert!(
-        lines.iter().any(
-            |line| line.starts_with(&format!("br i1 {},", result(admitted)))
-                && line.contains("label %ta.read.slow")
-        ),
+        lines.iter().any(|line| {
+            line.starts_with(&format!("br i1 {},", result(admitted)))
+                && line
+                    .split("label %")
+                    .skip(1)
+                    .any(|part| reaches_slow(part.split([',', ' ']).next().unwrap()))
+        }),
         "special owner must reach runtime arm: {text}"
     );
     assert!(text.contains("call double @js_dyn_index_get"));

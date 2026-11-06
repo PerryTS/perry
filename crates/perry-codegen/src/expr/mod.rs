@@ -252,9 +252,13 @@ mod bounded_array_hole_tests;
 #[cfg(test)]
 mod class_evaluation_owner_tests;
 #[cfg(test)]
-mod class_field_barrier_tests;
+pub(crate) mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
+#[cfg(test)]
+mod member_update_class_field_tests;
+#[cfg(test)]
+mod stack_guard_leaf_tests;
 mod dispatch;
 #[cfg(test)]
 mod ek_prefix_tests;
@@ -833,6 +837,12 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::contents_stable_bindings`): the only bindings that may
     /// keep a proof about their object's contents (`admits_contents_proof`).
     pub contents_stable_bindings: &'a std::collections::HashSet<u32>,
+    /// Empty-literal bindings a later loop pushes into
+    /// (`collectors::loop_pushed_arrays`): their `[]` is born with the larger
+    /// append reserve.
+    pub loop_pushed_arrays: &'a std::collections::HashSet<u32>,
+    /// Set by `lower_let` while it lowers such a binding's `[]` initializer.
+    pub pushed_array_birth: bool,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,

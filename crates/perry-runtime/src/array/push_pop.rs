@@ -89,7 +89,15 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // capacity word (which shares the shape-id band) representable.
         // Clamp doubling before validating min_capacity so only a request
         // beyond the ceiling throws, rather than an oversized growth factor.
-        let doubled = std::cmp::min(old_capacity * 2, super::alloc::ARRAY_MAX_CAPACITY);
+        //
+        // A small array grows by at least 16 slots: a fresh `[]` (four slots)
+        // filled by a loop otherwise reallocates at 4, 8, 16 and 32 elements,
+        // and each reallocation (allocate, copy, forwarding stub) costs about
+        // 800 instructions, against about 55 for an in-capacity push. Sixteen
+        // pushes into `[]` paid two of them, 64% of the loop (the chess
+        // engine's per-node move lists); now one. Large arrays still double.
+        let grown = std::cmp::max(old_capacity.saturating_mul(2), old_capacity.saturating_add(16));
+        let doubled = std::cmp::min(grown, super::alloc::ARRAY_MAX_CAPACITY);
         let new_capacity =
             super::alloc::array_capacity_or_throw(std::cmp::max(doubled, min_capacity));
         // A named-property reserve (`named_props.rs`) travels with the array:
