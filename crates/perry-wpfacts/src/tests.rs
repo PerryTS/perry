@@ -1838,6 +1838,7 @@ mod native_proto_member;
 mod native_push;
 mod native_value_call;
 mod declared_global_write;
+mod native_parent;
 mod ns_receiver;
 mod proto_own_call;
 mod receiver_param_call;
