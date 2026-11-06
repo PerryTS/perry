@@ -224,6 +224,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
 /// facts directly; ordinary data/accessor resolution does not allocate.
 #[optimize(size)]
 pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnProperty> {
+    let scope =
+        crate::process::is_process_env_object(obj_value).then(crate::gc::RuntimeHandleScope::new);
+    let key = scope.as_ref().map(|scope| scope.root_nanbox_f64(key_value));
+    let obj_value = crate::process::refresh_process_env(obj_value);
+    let key_value = key.map_or(key_value, |key| key.get_nanbox_f64());
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
@@ -1108,6 +1113,7 @@ pub(crate) use builders::{
 /// Takes a NaN-boxed f64 object pointer, returns a NaN-boxed f64 array pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
+    let obj_value = crate::process::refresh_process_env(obj_value);
     // A class object stores everything it owns except `prototype`
     // (`class_object_has_prototype_property`), which was created with it,
     // right after `length` and `name`.
