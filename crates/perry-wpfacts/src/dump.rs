@@ -236,7 +236,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         }
         // DECISIONS 225: the bodies the whole program can run, the
         // exemption of the per-unit <= whole residual (`dead_site`).
-        for (file, id, name) in pf.active_bodies.iter().flatten() {
+        for (file, id, name) in &pf.body_reach.bodies {
             out.push_str(&format!(
                 "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
                 crate::diagnostics::quote(unit),
