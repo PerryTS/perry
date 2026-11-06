@@ -1,19 +1,37 @@
 #!/usr/bin/env python3
-"""Executable controls for diagnostic claim reports (release compiler/runtime)."""
+"""Runnable controls for runtime claim reports, copies and compile-time coverage."""
 import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
-import tempfile
 
 FIELDS = {"marker", "module", "byte_offset", "key", "verdict", "predicate",
           "proven_receivers", "observed_receiver", "observed_member",
           "observed_callee", "copy", "compile_sha"}
 
 
+def no_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        assert key not in result, f"duplicate JSON field: {key}"
+        result[key] = value
+    return result
+
+
 def run(args, **kw):
     return subprocess.run(args, timeout=300, capture_output=True, **kw)
+
+
+def report(observed):
+    assert observed.returncode == 86, (observed.returncode, observed.stdout, observed.stderr)
+    lines = observed.stderr.splitlines()
+    assert len(lines) == 1, lines
+    value = json.loads(lines[0], object_pairs_hook=no_duplicates)
+    assert FIELDS <= value.keys() and value["marker"] == "PERRY_FALSE_PROOF", value
+    assert value["copy"]["lowered"] and re.fullmatch(r"[0-9a-f]{40}", value["compile_sha"]), value
+    return value
 
 
 def main():
@@ -22,42 +40,102 @@ def main():
     parser.add_argument("--node", default="node")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    args.perry = args.perry.resolve()
+    args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
-    fixtures = Path(__file__).with_name("verify_facts_s0")
-    native = run(["cc", "-shared", "-fPIC", str(fixtures / "invoke.c"), "-o", str(fixtures / "invoke.node")])
-    assert native.returncode == 0, native.stderr
-    cases = json.loads((fixtures / "cases.json").read_text())
-    env = dict(os.environ, PERRY_VERIFY_FACTS="1", PERRY_FACTS_UNITS="0",
-               PERRY_NO_CACHE="1", PERRY_ALLOW_PERRY_FEATURES="1")
+    fixtures = Path(__file__).with_name("verify_facts_s0").resolve()
+    native = fixtures / "native-escape"
+    built = run(["cc", "-shared", "-fPIC", str(native / "invoke.c"), "-o", str(native / "invoke.node")])
+    assert built.returncode == 0, built.stderr
+    env = dict(os.environ, PERRY_VERIFY_FACTS="1", PERRY_FACTS_UNITS="0", PERRY_NO_CACHE="1",
+               PERRY_DISABLE_BUILD_CACHE="1", PERRY_NO_LINK_CACHE="1", PERRY_NO_ARCHIVE_CACHE="1",
+               PERRY_ALLOW_PERRY_FEATURES="1", PERRY_CONTRACTS_REPORT="1")
+    env.pop("PERRY_FACTS_SABOTAGE", None)
     results = []
-    for name, wrong_claim in cases.items():
-        source = fixtures / (name + ".ts")
-        oracle = run([args.node, "--experimental-strip-types", str(source)])
-        assert oracle.returncode == 0, oracle.stderr
+
+    def save(name, **values):
+        results.append(dict(name=name, **values))
+        (args.out / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+
+    def compile_(source, name, **overrides):
+        exe = args.out / name
+        e = dict(env, **overrides)
+        compiled = run([str(args.perry), "compile", "--cache-dir", str(args.out / "cache"),
+                        str(source), "-o", str(exe)], env=e)
+        (args.out / (name + ".compile")).write_bytes(compiled.stdout + compiled.stderr)
+        assert compiled.returncode == 0, (name, compiled.stderr)
+        return exe, e
+
+    def observe(exe, e, *argv):
+        value = run([str(exe), *argv], env=e)
+        suffix = "-" + "-".join(argv) if argv else ""
+        (args.out / (exe.name + suffix + ".stdout")).write_bytes(value.stdout)
+        (args.out / (exe.name + suffix + ".stderr")).write_bytes(value.stderr)
+        return value
+
+    def oracle(source, *argv):
+        value = run([args.node, "--expose-gc", "--experimental-strip-types", str(source), *argv])
+        assert value.returncode == 0, value.stderr
+        return value.stdout
+
+    for name, wrong_claim in json.loads((fixtures / "cases.json").read_text()).items():
+        source = (native if name == "activation-escape" else fixtures) / (name + ".ts")
+        expected = oracle(source)
         for claim in ["", wrong_claim]:
             arm = name + ("-false" if claim else "-correct")
-            exe = (args.out / arm).resolve()
-            e = dict(env, PERRY_FACTS_SABOTAGE=claim)
-            compiled = run([str(args.perry), "compile", str(source), "-o", str(exe)], env=e)
-            (args.out / (arm + ".compile")).write_bytes(compiled.stdout + compiled.stderr)
-            assert compiled.returncode == 0, f"{arm}: compile {compiled.returncode}"
-            observed = run([str(exe)], env=e)
-            (args.out / (arm + ".stdout")).write_bytes(observed.stdout)
-            (args.out / (arm + ".stderr")).write_bytes(observed.stderr)
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim)
+            observed = observe(exe, e)
             if claim:
-                assert observed.returncode == 86, f"{arm}: status {observed.returncode}, {observed.stdout!r} {observed.stderr!r}"
-                assert b"BODY:" not in observed.stdout, f"{arm}: body began before report"
-                lines = observed.stderr.splitlines()
-                assert len(lines) == 1, (arm, lines)
-                report = json.loads(lines[0])
-                assert FIELDS <= report.keys(), (arm, report)
-                assert report["marker"] == "PERRY_FALSE_PROOF", report
-                assert report["key"] == "<entry>" and report["observed_receiver"] is None, report
-                assert report["copy"] and report["compile_sha"], report
+                value = report(observed)
+                assert value["key"] == "<entry>" and value["observed_receiver"] is None, value
+                assert b"BODY:" not in observed.stdout, observed.stdout
             else:
-                assert observed.returncode == 0 and observed.stdout == oracle.stdout, (arm, observed)
-            results.append({"name": arm, "status": observed.returncode, "passed": True})
-            (args.out / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+                assert observed.returncode == 0 and observed.stdout == expected, observed
+            save(arm, status=observed.returncode)
+
+    for source in sorted(fixtures.glob("existing-*.ts")):
+        exe, e = compile_(source, source.stem)
+        value = report(observe(exe, e))
+        assert value["key"] != "<entry>", value
+        save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value["expectation"])
+
+    for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call")]:
+        source = fixtures / (name + ".ts")
+        exe, e = compile_(source, name, PERRY_FACTS_SABOTAGE=wrong_claim)
+        values = [report(observe(exe, e, branch)) for branch in ["first", "second"]]
+        assert values[0]["copy"] != values[1]["copy"], values
+        assert values[0]["module"] == values[1]["module"] and values[0]["key"] == values[1]["key"], values
+        exe, e = compile_(source, name + "-correct")
+        for branch in ["first", "second"]:
+            observed = observe(exe, e, branch)
+            assert observed.returncode == 0 and observed.stdout == oracle(source, branch), observed
+        save(name, copies=[value["copy"] for value in values])
+
+    exe, e = compile_(fixtures / "manifest.ts", "manifest")
+    inventory = [json.loads(line) for line in Path(str(exe) + ".facts.jsonl").read_text().splitlines() if line]
+    assert len({row["identity"] for row in inventory}) == len(inventory), inventory
+    assert all(bool(row.get("check")) + bool(row.get("reason")) + bool(row.get("dead")) == 1 for row in inventory), inventory
+    assert all(row.get("emitted_checks") for row in inventory if row.get("check")), inventory
+    uncovered = sum(bool(row.get("reason")) for row in inventory)
+    assert uncovered == 1, (uncovered, inventory)
+    save("manifest", consumed=len(inventory), uncovered=uncovered)
+
+    samples = []
+    for mode in ["0", "1"]:
+        exe, e = compile_(fixtures / "passing.ts", "passing-" + mode, PERRY_VERIFY_FACTS=mode, PERRY_GC_LOG="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(fixtures / "passing.ts"), observed
+        measured = observe(exe, e, "measure")
+        assert measured.returncode == 0, measured
+        collections = len(re.findall(rb"^\[gc-log\]", measured.stderr, re.M))
+        allocated = int(re.search(rb"^allocated (\d+)$", measured.stdout, re.M).group(1))
+        assert collections > 0, measured.stderr
+        samples.append(dict(collections=collections, allocated=allocated))
+        if mode == "1":
+            checks = re.search(rb"(\d+) checks, 0 violations", measured.stderr)
+            assert checks and int(checks.group(1)) >= 1000, measured.stderr
+    assert samples[0] == samples[1], samples
+    save("passing-path", **samples[1])
     print(f"{len(results)} executable controls passed")
 
 

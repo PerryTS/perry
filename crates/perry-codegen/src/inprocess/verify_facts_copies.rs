@@ -225,3 +225,152 @@ impl Copy<'_> {
         bail!("unsupported diagnostic metadata operand; refusing an unchecked copy")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inkwell::{
+        context::Context,
+        memory_buffer::MemoryBuffer,
+        passes::PassBuilderOptions,
+        targets::{CodeModel, RelocMode, Target, TargetTriple},
+        OptimizationLevel,
+    };
+    use std::collections::BTreeSet;
+
+    fn literal(emission: u64) -> (String, usize) {
+        let mut bytes = serde_json::to_vec(&json!({"marker":"PERRY_FALSE_PROOF",
+            "module":"fixture.ts","copy":{"body":"source","site":1,"emission":emission}}))
+        .unwrap();
+        bytes.pop();
+        let escaped: String = bytes.iter().map(|byte| format!("\\{byte:02X}")).collect();
+        (
+            format!(
+                "@site__verify_{emission} = private constant [{} x i8] c\"{escaped}\"\n",
+                bytes.len()
+            ),
+            bytes.len(),
+        )
+    }
+
+    #[test]
+    fn llvm_inlined_copies_keep_distinct_static_reports() {
+        super::super::global_init(&[]);
+        let context = Context::create();
+        let (global, length) = literal(0);
+        let ir = format!(
+            r#"{global}
+            declare void @perry_verify_facts_entry(i64, i64)
+            define internal void @body() alwaysinline {{
+              call void @perry_verify_facts_entry(i64 ptrtoint (ptr @site__verify_0 to i64), i64 {length})
+              ret void
+            }}
+            define void @first() {{ call void @body() ret void }}
+            define void @second() {{ call void @body() ret void }}
+        "#
+        );
+        let module = context
+            .create_module_from_ir(MemoryBuffer::create_from_memory_range_copy(
+                ir.as_bytes(),
+                "copies",
+            ))
+            .unwrap();
+        let inventory = Inventory::capture(&module).unwrap();
+        let triple = TargetTriple::create("x86_64-unknown-linux-gnu");
+        let machine = Target::from_triple(&triple)
+            .unwrap()
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                OptimizationLevel::Default,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .unwrap();
+        module
+            .run_passes(
+                "always-inline,globaldce",
+                &machine,
+                PassBuilderOptions::create(),
+            )
+            .unwrap();
+        assert!(
+            module.get_function("body").is_none(),
+            "the fixture must really inline"
+        );
+        inventory.finish(&module).unwrap();
+        module.verify().unwrap();
+        let mut copies = BTreeSet::new();
+        unsafe {
+            let mut global = LLVMGetFirstGlobal(module.as_mut_ptr());
+            while !global.is_null() {
+                if name(global).starts_with("__perry_verify_copy_") {
+                    let meta = metadata(global).unwrap().unwrap();
+                    assert_eq!(meta["copy"]["body"], "source");
+                    copies.insert(meta["copy"]["lowered"]["body"].as_str().unwrap().to_owned());
+                }
+                global = LLVMGetNextGlobal(global);
+            }
+        }
+        assert_eq!(copies, BTreeSet::from(["first".into(), "second".into()]));
+    }
+
+    #[test]
+    fn merged_failure_metadata_keeps_pointer_and_length_paired() {
+        super::super::global_init(&[]);
+        let context = Context::create();
+        let (a, an) = literal(0);
+        let (b, bn) = literal(1000);
+        let ir = format!(
+            r#"{a}{b}
+            declare void @perry_verify_facts_entry(i64, i64)
+            define void @choose(i1 %cond) {{
+            start: br i1 %cond, label %a, label %b
+            a: br label %join
+            b: br label %join
+            join:
+              %ptr = phi i64 [ptrtoint (ptr @site__verify_0 to i64), %a], [ptrtoint (ptr @site__verify_1000 to i64), %b]
+              %len = phi i64 [{an}, %a], [{bn}, %b]
+              call void @perry_verify_facts_entry(i64 %ptr, i64 %len)
+              ret void
+            }}
+        "#
+        );
+        let module = context
+            .create_module_from_ir(MemoryBuffer::create_from_memory_range_copy(
+                ir.as_bytes(),
+                "merged",
+            ))
+            .unwrap();
+        Inventory::capture(&module)
+            .unwrap()
+            .finish(&module)
+            .unwrap();
+        module.verify().unwrap();
+        unsafe {
+            let function = LLVMGetNamedFunction(module.as_mut_ptr(), c"choose".as_ptr());
+            let join = LLVMGetLastBasicBlock(function);
+            let mut call = LLVMGetFirstInstruction(join);
+            while LLVMIsACallInst(call).is_null() {
+                call = LLVMGetNextInstruction(call);
+            }
+            let pointers = LLVMGetOperand(call, 0);
+            let lengths = LLVMGetOperand(call, 1);
+            assert_eq!(LLVMCountIncoming(pointers), 2);
+            assert_eq!(LLVMCountIncoming(lengths), 2);
+            for i in 0..2 {
+                let ptr = LLVMGetIncomingValue(pointers, i);
+                let global = LLVMGetOperand(ptr, 0);
+                let init = LLVMGetInitializer(global);
+                let mut n = 0;
+                LLVMGetAsString(init, &mut n);
+                assert_eq!(
+                    LLVMConstIntGetZExtValue(LLVMGetIncomingValue(lengths, i)),
+                    n as u64
+                );
+                assert!(n > an, "final copy identity must grow the static payload");
+            }
+        }
+    }
+}

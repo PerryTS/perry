@@ -184,14 +184,14 @@ pub fn take_manifest() -> Vec<String> {
     }).collect()
 }
 
-pub(super) fn optimized(origins: &[(String, u64)]) {
+pub(crate) fn optimized(origins: &[(String, u64)]) {
     let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
     for origin in origins {
         inventory.copies.entry(origin.clone()).or_default();
     }
 }
 
-pub(super) fn emitted(module: &str, emission: u64, copy: Value) {
+pub(crate) fn emitted(module: &str, emission: u64, copy: Value) {
     let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
     let copies = inventory
         .copies
