@@ -391,14 +391,15 @@ impl<'a> Gen<'a> {
             }
             Expr::StructuredClone { value, options } => {
                 // E17: the clone does not keep identity (⊤-origin result);
-                // reading the source runs getters.
+                // serializing the source reads its values recursively (own
+                // getters run) and calls nothing.
                 let v = self.expr(fx, value);
                 let r = self.m.reason("structuredClone source");
                 self.m.cons(
                     v,
                     Cons::Implicit {
                         reason: r,
-                        proto: Protocol::Any,
+                        proto: Protocol::Clone,
                     },
                 );
                 let o = self.expr(fx, options);
