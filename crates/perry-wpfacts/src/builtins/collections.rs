@@ -143,14 +143,36 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // `{ value, done }`; a `yield*` re-yield (kind 2) hands back its
         // delegate's inner result object, returned as-is.
         Some("next" | "return" | "throw") | None => {
+            // The public protocol accepts one resume value. The runtime
+            // passes that value alone to a one-parameter step, otherwise
+            // (numeric operation, value); public extra arguments are ignored.
+            let arg = m.node_l("gen-resume-arg");
+            m.nodes[arg as usize].frame = m.call_run(call);
+            match c.args.first() {
+                Some(&value) => m.edge(value, arg),
+                None => m.add_prim(arg, prim::UNDEF),
+            }
+            for &spread in &c.spread {
+                let key = m.elem_key();
+                m.cons(spread, Cons::Load { key, dst: arg });
+            }
+            let args = if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].params.len() == 1)
+            {
+                vec![arg]
+            } else {
+                let op = m.node_l("gen-resume-op");
+                m.nodes[op as usize].frame = m.call_run(call);
+                m.add_prim(op, prim::NUM);
+                vec![op, arg]
+            };
             let raw = m.node_l("gen-step-raw");
             m.nodes[raw as usize].frame = m.call_run(call);
             let call2 = m.solver_call(
                 call,
                 CallSite {
                     this: c.this.clone(),
-                    args: c.args.clone(),
-                    spread: c.spread.clone(),
+                    args,
+                    spread: vec![],
                     ret: raw,
                     site: c.site,
                 },

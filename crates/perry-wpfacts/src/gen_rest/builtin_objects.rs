@@ -421,11 +421,32 @@ impl<'a> Gen<'a> {
             Expr::LinkGeneratorPrototype {
                 obj,
                 is_async,
+                fixed_state,
                 i32_controls,
                 i1_controls,
                 ..
             } => {
                 let o = self.expr(fx, obj);
+                // The fixed resume boundary writes the public next value
+                // into the step record's third capture before entering its
+                // body. Lowering therefore omits the corresponding body store.
+                if *fixed_state {
+                    if let Expr::Closure {
+                        params, captures, ..
+                    } = &**obj
+                    {
+                        let value = if params.len() == 1 {
+                            params.first()
+                        } else {
+                            params.get(1)
+                        };
+                        if let (Some(value), Some(&sent)) = (value, captures.get(2)) {
+                            let value = self.local(mi, value.id);
+                            let sent = self.local(mi, sent);
+                            self.m.edge(value, sent);
+                        }
+                    }
+                }
                 // The generator object is its step closure.
                 for t in self.m.nodes[o as usize].pts.to_sorted() {
                     if let TokKind::Func(f, _) = self.m.toks[t as usize] {
