@@ -481,6 +481,8 @@ mod tests {
                 package_dir: package,
                 entry_relative: PathBuf::from("demo.node"),
                 ship_package_payload: true,
+                reach: Default::default(),
+                node_api_imports: Default::default(),
                 #[cfg(feature = "target-wasi")]
                 wasm_archives: Vec::new(),
             },
@@ -556,6 +558,8 @@ mod tests {
             package_dir: package.clone(),
             entry_relative: kept[0].into(),
             ship_package_payload: true,
+            reach: Default::default(),
+            node_api_imports: Default::default(),
             #[cfg(feature = "target-wasi")]
             wasm_archives: Vec::new(),
         };
@@ -608,6 +612,8 @@ mod tests {
             package_dir: package.clone(),
             entry_relative: "index.node".into(),
             ship_package_payload: true,
+            reach: Default::default(),
+            node_api_imports: Default::default(),
             #[cfg(feature = "target-wasi")]
             wasm_archives: Vec::new(),
         };

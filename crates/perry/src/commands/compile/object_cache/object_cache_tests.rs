@@ -135,7 +135,12 @@ fn key_changes_with_gc_effects_table() {
             ("other", perry_gc_effects::Class::Reenters, true),
         ]
         .into_iter()
-        .map(|(sym, class, throws)| (sym.to_string(), perry_gc_effects::Entry { class, throws }))
+        .map(|(sym, class, throws)| {
+            (
+                sym.to_string(),
+                perry_gc_effects::Entry::unknown(class, throws),
+            )
+        })
         .collect();
         std::sync::Arc::new(perry_codegen::GcEffects::from_sidecar(&table))
     };

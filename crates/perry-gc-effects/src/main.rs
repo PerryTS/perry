@@ -15,6 +15,13 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Native throw origins and one shortest open witness per exported entry.
+    ThrowCensus {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long = "archive", required = true)]
+        archives: Vec<PathBuf>,
+    },
     Generate {
         #[arg(long)]
         target: String,
@@ -84,6 +91,9 @@ fn run() -> Result<()> {
         .unwrap_or_else(|| SEEDS.into());
     let rules = load_rules(&text)?;
     match cli.command {
+        Command::ThrowCensus { out, archives } => {
+            perry_gc_effects::census::write(&root, &archives, &out)?
+        }
         Command::Generate {
             target,
             out,

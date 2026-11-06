@@ -1047,13 +1047,7 @@ pub(super) fn build_summaries(m: &mut Model) {
                 let node = &m.nodes[x as usize];
                 node.succ.iter().map(|&y| m.nodes[y as usize].obs).collect()
             };
-            let node = &mut m.nodes[x as usize];
-            let mut it = keep.iter();
-            node.succ.retain(|_| *it.next().unwrap());
-            if node.succ_set.is_some() {
-                let set: crate::pts::FxHashSet<NodeId> = node.succ.iter().copied().collect();
-                node.succ_set = Some(Rc::new(set));
-            }
+            m.prune_successors(x, &keep);
         }
     }
     if m.explain {

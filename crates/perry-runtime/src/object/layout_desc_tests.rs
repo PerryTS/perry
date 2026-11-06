@@ -372,3 +372,56 @@ fn two_agents_install_a_runtime_layout_under_one_id() {
         "the shape is installed under the drawn id"
     );
 }
+
+#[test]
+fn prototype_image_preserves_nominal_receiver_set() {
+    crate::gc::initialize_runtime_fixture();
+    for (descriptor, class_id) in [
+        (runtime_layouts::ITERATOR_RESULT::desc(), 0x4cfa),
+        (runtime_layouts::ITERATOR_RESULT_DONE_FIRST::desc(), 0x4cfb),
+        (runtime_layouts::ITERATOR_RESULT::desc(), 0),
+    ] {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(descriptor) });
+        source.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {
+            for pos in 0..(*descriptor).key_count {
+                let key = &*(*descriptor).keys.add(pos as usize);
+                js_object_set_field_by_name(object, (*key.atom).string, 17.0 + f64::from(pos));
+            }
+            // Closed literal births carry their nominal class independently
+            // of the shared layout they use for their completed own keys.
+            (*object).class_id = class_id;
+        });
+        let source_value = source.with_const_ptr::<ObjectHeader, _>(|object| {
+            crate::value::js_nanbox_pointer(object as i64)
+        });
+        let before = [class_id];
+        let image = unsafe {
+            prototype_image(
+                &*descriptor,
+                source_value,
+                shapes::fresh_unique_proto_id(),
+                &[],
+            )
+        }
+        .expect("the complete literal matches its carried image");
+        let image = scope.root_nanbox_f64(image);
+        let object =
+            crate::value::js_nanbox_get_pointer(image.get_nanbox_f64()) as *const ObjectHeader;
+        unsafe {
+            assert_ne!(object, source.get_raw_const_ptr::<ObjectHeader>());
+            let after = [(*object).class_id];
+            assert_eq!(
+                after, before,
+                "a representation copy preserves the receiver set"
+            );
+            for pos in 0..(*descriptor).key_count {
+                let key = &*(*descriptor).keys.add(pos as usize);
+                assert_eq!(
+                    js_object_get_field_by_name_f64(object, (*key.atom).string),
+                    17.0 + f64::from(pos),
+                );
+            }
+        }
+    }
+}

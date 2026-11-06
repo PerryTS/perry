@@ -52,7 +52,7 @@ use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
 pub(crate) use handle_methods::try_dispatch_handle_method_value;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use namespace_override::namespace_override_depth;
 #[cfg(test)]
 pub(crate) use namespace_override::test_push_catch_namespace_override;

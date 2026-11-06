@@ -653,6 +653,7 @@ mod shadow_scan_tests {
             value: filler(),
             receiver: filler(),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }

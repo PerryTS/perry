@@ -65,25 +65,21 @@ impl<'a> Gen<'a> {
                 );
                 let key = self.const_key(mi, k);
                 let accessor = self.accessor_descriptor(mi, d);
+                // An accessor literal's own `get` / `set` is its constructor
+                // argument: each define installs its own, whatever its key.
+                // The literal's shape has one constructor for every site, so
+                // a read of the built descriptor's field joins them all.
+                let (dn, own) = match self.accessor_literal(mi, d) {
+                    Some((class_name, args, get, set)) => {
+                        let a = self.evaluate_all(fx, args);
+                        let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
+                        (self.new_named(fx, class_name, a, vec![]), own)
+                    }
+                    None => (self.expr(fx, d), [None, None]),
+                };
                 match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
-                    Some(kp) => {
-                        // An accessor literal's own `get` / `set` is its
-                        // constructor argument: each run defines its own (the
-                        // literal's token, one per birth site, holds them all).
-                        let (dn, own) = match self.accessor_literal(mi, d) {
-                            Some((class_name, args, get, set)) => {
-                                let a = self.evaluate_all(fx, args);
-                                let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
-                                (self.new_named(fx, class_name, a, vec![]), own)
-                            }
-                            None => (self.expr(fx, d), [None, None]),
-                        };
-                        self.define_keyed(fx, on, kp, dn, r, accessor, own);
-                    }
-                    None => {
-                        let dn = self.expr(fx, d);
-                        self.define_property(fx, on, key, dn, r, accessor);
-                    }
+                    Some(kp) => self.define_keyed(fx, on, kp, dn, r, accessor, own),
+                    None => self.define_property(fx, on, key, dn, r, accessor, own),
                 }
                 on
             }
@@ -184,7 +180,7 @@ impl<'a> Gen<'a> {
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
                     let descs = self.load(pv, Key::any());
-                    self.define_property(fx, n, None, descs, r, false);
+                    self.define_property(fx, n, None, descs, r, false, [None, None]);
                 }
                 n
             }
@@ -421,16 +417,72 @@ impl<'a> Gen<'a> {
             Expr::LinkGeneratorPrototype {
                 obj,
                 is_async,
+                fixed_state,
                 i32_controls,
                 i1_controls,
                 ..
             } => {
                 let o = self.expr(fx, obj);
-                // The generator object is its step closure.
+                // The fixed resume boundary writes the public next value
+                // into the step record's third capture before entering its
+                // body. Lowering therefore omits the corresponding body store.
+                if *fixed_state {
+                    if let Expr::Closure {
+                        params, captures, ..
+                    } = &**obj
+                    {
+                        let value = if params.len() == 1 {
+                            params.first()
+                        } else {
+                            params.get(1)
+                        };
+                        if let (Some(value), Some(&sent)) = (value, captures.get(2)) {
+                            let value = self.local(mi, value.id);
+                            let sent = self.local(mi, sent);
+                            self.m.edge(value, sent);
+                        }
+                    }
+                }
+                // The generator object is its step closure. Its [[Prototype]]
+                // is the running generator function's `prototype` object
+                // (OrdinaryCreateFromConstructor at the generator's start):
+                // an ordinary object the program may write (`g.prototype.next
+                // = ...`), whose members a lookup on the generator object
+                // finds before the generator protocol. It is the token a read
+                // of `g.prototype` gives (`tok_load`), so what is stored there
+                // and what escapes with either is the same value; a generator
+                // object born after `g.prototype = o` inherits from `o`, so the
+                // chain is the field, not this token. A generator
+                // function is never constructed (`new g()` throws), so the
+                // instance template's birth keys are never read. Every token
+                // of the step function (one per closure context) has it.
+                let g = fx.f;
+                let tm = self.m.fn_inst_template(g);
+                let p = self.m.tok(TokKind::Proto(tm));
+                let gt = self.m.funcs[g as usize].token;
+                let pa = self.m.atom("prototype");
+                let gf = self.m.field(gt, pa);
+                self.m.add_tok(gf, p);
+                // Every token of `g` (one per closure context, made later by
+                // `closure_tok`) feeds its own `prototype` field here.
+                let gp = match self.m.funcs[g as usize].gen_fn_protos {
+                    Some(n) => n,
+                    None => {
+                        let n = self.m.node_l("gen-fn-protos");
+                        self.m.funcs[g as usize].gen_fn_protos = Some(n);
+                        n
+                    }
+                };
+                self.m.edge(gf, gp);
                 for t in self.m.nodes[o as usize].pts.to_sorted() {
                     if let TokKind::Func(f, _) = self.m.toks[t as usize] {
-                        self.m.funcs[f as usize].gen_step = true;
+                        self.m.funcs[f as usize].gen_proto = Some(gp);
                         self.m.funcs[f as usize].gen_async = *is_async;
+                        // A chain made before this link (`proto_node` seeds
+                        // later ones from `gen_proto`).
+                        if let Some(&pn) = self.m.proto_node.get(&t) {
+                            self.m.edge(gp, pn);
+                        }
                     }
                 }
                 for id in i32_controls.iter().chain(i1_controls.iter()) {

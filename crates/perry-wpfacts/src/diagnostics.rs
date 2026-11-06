@@ -139,7 +139,7 @@ impl Model {
         let written = crate::builtins::census_native_written(self, t, a);
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
-            NativeMiss::Load(n) | NativeMiss::Global(n, _) => (false, n),
+            NativeMiss::Load(n) | NativeMiss::Lookup(n) | NativeMiss::Global(n, _) => (false, n),
             NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
         };
         c.reads.insert((t, a, call, id));
@@ -638,6 +638,7 @@ impl Gen<'_> {
             Expr::IndexGet {
                 object,
                 index,
+                element_offset: _,
                 byte_offset,
                 byte_end,
             } => (
@@ -956,7 +957,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let mut out = vec![format!(
         "{{\"record\":\"analysis\",\"aborted\":{},\"work\":{},\"maxWork\":{}}}",
-        m.aborted, m.work, m.max_work
+        m.aborted,
+        m.work.get(),
+        m.max_work
     )];
     let mut nodes = BTreeSet::new();
     let locations: BTreeMap<CallId, &Site> = d

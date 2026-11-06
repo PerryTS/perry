@@ -43,17 +43,15 @@ pub const WPF_NULLABLE: u32 = 2;
 /// The site reads the slot as a raw double (F64 lane, number-only kind).
 pub const WPF_RAW_F64: u32 = 4;
 
-/// A plain double, not a NaN-boxed tagged value: the tags are exactly the
-/// positive quiet-NaN prefixes 0x7FF9..=0x7FFF. Negative doubles (sign bit set,
-/// -0.0 = 0x8000_0000_0000_0000 included) and the canonical NaN are plain.
+/// Use the same numeric classification as runtime value dispatch.
 fn is_plain_f64(bits: u64) -> bool {
-    !(SHORT_STRING_TAG..=STRING_TAG | !TAG_MASK).contains(&bits)
+    crate::JSValue::from_bits(bits).is_number()
 }
 
 /// The kind bit of a NaN-boxed value (compiler `KindFact::mask` layout).
 fn kind_of(bits: u64) -> u32 {
     match bits & TAG_MASK {
-        POINTER_TAG => {
+        _ if crate::value::is_reference_bits(bits) => {
             if unsafe { crate::symbol::js_is_symbol(f64::from_bits(bits)) } != 0 {
                 K_SYMBOL
             } else {
@@ -360,6 +358,16 @@ pub extern "C" fn perry_wpfacts_check_miss(value: f64, site: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_handles_have_object_kind() {
+        assert_eq!(kind_of(crate::JSValue::handle(1).bits()), K_OBJ);
+    }
+
+    #[test]
+    fn native_handles_are_not_plain_f64() {
+        assert!(!is_plain_f64(crate::JSValue::handle(1).bits()));
+    }
 
     #[test]
     fn raw_f64_plain_bits() {

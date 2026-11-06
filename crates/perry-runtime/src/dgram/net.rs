@@ -127,13 +127,96 @@ pub(crate) fn build_address_info(address: &str, family: &str, port: u16) -> f64 
     boxed_pointer(obj as *const u8)
 }
 
-pub(crate) fn build_rinfo(address: &str, family: &str, port: u16, size: usize) -> f64 {
-    let obj = js_object_alloc(0, 4);
-    js_object_set_field_by_name(obj, key("address"), str_value(address));
-    js_object_set_field_by_name(obj, key("family"), str_value(family));
-    js_object_set_field_by_name(obj, key("port"), port as f64);
-    js_object_set_field_by_name(obj, key("size"), size as f64);
-    boxed_pointer(obj as *const u8)
+/// A `'message'` event's `rinfo`, `{ address, family, port, size }` in node's
+/// order: born in one allocation on its declared final shape (`DGRAM_RINFO`),
+/// each value stored by slot. A fresh, ordinary, mutable object per message,
+/// as node's object literal is. `address` becomes one fresh string (node makes
+/// a new one per message); the family is a static atom.
+pub(crate) fn build_rinfo(address: &[u8], ipv6: bool, port: u16, size: usize) -> f64 {
+    use crate::object::runtime_layouts::{dgram_family_atom, dgram_rinfo_slot as slot};
+    let address = crate::string::js_string_from_bytes(address.as_ptr(), address.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let address = scope.root_nanbox_u64(JSValue::string_ptr(address).bits());
+    unsafe {
+        let object = crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::DGRAM_RINFO::desc(),
+        );
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)).cast::<u64>();
+        let family = JSValue::string_ptr(dgram_family_atom(ipv6) as *mut _).bits();
+        for (index, bits) in [
+            (slot::ADDRESS, address.get_nanbox_u64()),
+            (slot::FAMILY, family),
+            (slot::PORT, (port as f64).to_bits()),
+            (slot::SIZE, (size as f64).to_bits()),
+        ] {
+            crate::gc::runtime_store_object_jsvalue_slot(
+                object as usize,
+                fields.add(index) as usize,
+                index,
+                bits,
+            );
+        }
+        boxed_pointer(object as *const u8)
+    }
+}
+
+/// The text of `ip` as node prints it, in a stack buffer: IPv4 by hand, IPv6
+/// through its `Display` into the same buffer. No heap allocation.
+pub(crate) struct IpText {
+    buf: [u8; 64],
+    len: usize,
+}
+
+impl IpText {
+    pub(crate) fn new(ip: &IpAddr) -> Self {
+        let mut text = IpText {
+            buf: [0; 64],
+            len: 0,
+        };
+        match ip {
+            IpAddr::V4(v4) => {
+                for (i, octet) in v4.octets().into_iter().enumerate() {
+                    if i > 0 {
+                        text.push(b'.');
+                    }
+                    if octet >= 100 {
+                        text.push(b'0' + octet / 100);
+                    }
+                    if octet >= 10 {
+                        text.push(b'0' + octet / 10 % 10);
+                    }
+                    text.push(b'0' + octet % 10);
+                }
+            }
+            IpAddr::V6(v6) => {
+                use std::fmt::Write as _;
+                let _ = write!(text, "{v6}");
+            }
+        }
+        text
+    }
+
+    fn push(&mut self, byte: u8) {
+        self.buf[self.len] = byte;
+        self.len += 1;
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl std::fmt::Write for IpText {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.len + s.len();
+        if end > self.buf.len() {
+            return Err(std::fmt::Error);
+        }
+        self.buf[self.len..end].copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
 }
 
 /// Whether `PERRY_DETERMINISTIC_NET=1` — use the in-process loopback registry
@@ -162,20 +245,20 @@ pub(crate) fn make_buffer(data: &[u8]) -> f64 {
 /// on the main thread from [`crate::dgram_reactor::pump`]. The `Buffer` is
 /// GC-rooted across the `rinfo` allocation so a collection between the two
 /// can't reclaim it.
-pub(crate) fn dgram_emit_message(
-    socket_bits: u64,
-    data: &[u8],
-    src_ip: &str,
-    src_port: u16,
-    src_family: &str,
-) {
+pub(crate) fn dgram_emit_message(socket_bits: u64, data: &[u8], src: SocketAddr) {
     let socket = f64::from_bits(socket_bits);
     let scope = crate::gc::RuntimeHandleScope::new();
     let buffer = scope.root_nanbox_f64(make_buffer(data));
-    let rinfo = scope.root_nanbox_f64(build_rinfo(src_ip, src_family, src_port, data.len()));
-    emit_event_value(
+    let address = IpText::new(&src.ip());
+    let rinfo = scope.root_nanbox_f64(build_rinfo(
+        address.as_bytes(),
+        src.is_ipv6(),
+        src.port(),
+        data.len(),
+    ));
+    emit_event(
         socket,
-        str_value("message"),
+        "message",
         &[buffer.get_nanbox_f64(), rinfo.get_nanbox_f64()],
     );
 }
@@ -660,6 +743,80 @@ mod errno_code_tests {
                 io_error_code(&std::io::Error::from_raw_os_error(errno)),
                 name
             );
+        }
+    }
+}
+
+/// rinfo is node's `{ address, family, port, size }` literal: keys in that
+/// order, a fresh object per message, ordinary and writable afterwards.
+#[cfg(test)]
+mod rinfo_tests {
+    use super::*;
+    use crate::object::{
+        js_object_delete_field, js_object_get_field_by_name_f64, js_object_get_prototype_of,
+        js_object_keys, ObjectHeader,
+    };
+
+    fn obj(v: f64) -> *mut ObjectHeader {
+        raw_ptr_from_value(v) as *mut ObjectHeader
+    }
+
+    fn keys(v: f64) -> Vec<String> {
+        let arr = js_object_keys(obj(v));
+        (0..crate::array::js_array_length(arr))
+            .filter_map(|i| string_to_rust(crate::array::js_array_get_f64(arr, i)))
+            .collect()
+    }
+
+    fn get(v: f64, k: &str) -> f64 {
+        js_object_get_field_by_name_f64(obj(v), key(k))
+    }
+
+    #[test]
+    fn rinfo_is_a_fresh_ordinary_object_in_node_key_order() {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let a = build_rinfo(b"127.0.0.1", false, 4242, 32);
+        let b = build_rinfo(b"127.0.0.1", false, 4242, 32);
+        assert_ne!(a.to_bits(), b.to_bits(), "each message gets a new object");
+        assert_eq!(keys(a), ["address", "family", "port", "size"]);
+        assert_eq!(string_to_rust(get(a, "address")).unwrap(), "127.0.0.1");
+        assert_eq!(string_to_rust(get(a, "family")).unwrap(), "IPv4");
+        assert_eq!(get(a, "port"), 4242.0);
+        assert_eq!(get(a, "size"), 32.0);
+        let v6 = build_rinfo(b"::1", true, 7, 0);
+        assert_eq!(keys(v6), ["address", "family", "port", "size"]);
+        assert_eq!(string_to_rust(get(v6, "family")).unwrap(), "IPv6");
+        assert_eq!(string_to_rust(get(v6, "address")).unwrap(), "::1");
+        // [[Prototype]] is Object.prototype, as a literal's.
+        let plain = boxed_pointer(js_object_alloc(0, 0) as *const u8);
+        assert_eq!(
+            js_object_get_prototype_of(a).to_bits(),
+            js_object_get_prototype_of(plain).to_bits()
+        );
+        // Writable, extensible, deletable; the other message is untouched.
+        js_object_set_field_by_name(obj(a), key("port"), 1.0);
+        js_object_set_field_by_name(obj(a), key("extra"), 2.0);
+        assert_eq!(get(a, "port"), 1.0);
+        assert_eq!(get(b, "port"), 4242.0);
+        assert_eq!(keys(a), ["address", "family", "port", "size", "extra"]);
+        assert_eq!(js_object_delete_field(obj(a), key("address")), 1);
+        assert_eq!(keys(a), ["family", "port", "size", "extra"]);
+        assert_eq!(keys(b), ["address", "family", "port", "size"]);
+    }
+
+    #[test]
+    fn ip_text_prints_as_node() {
+        for (ip, text) in [
+            ("0.0.0.0", "0.0.0.0"),
+            ("255.10.1.100", "255.10.1.100"),
+            ("10.0.99.9", "10.0.99.9"),
+            ("::1", "::1"),
+            ("::ffff:1.2.3.4", "::ffff:1.2.3.4"),
+            ("fe80::1:2", "fe80::1:2"),
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert_eq!(IpText::new(&ip).as_bytes(), text.as_bytes());
+            assert_eq!(IpText::new(&ip).as_bytes(), ip.to_string().as_bytes());
         }
     }
 }

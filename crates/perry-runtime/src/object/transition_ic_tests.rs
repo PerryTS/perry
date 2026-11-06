@@ -8,7 +8,6 @@ use crate::codegen_abi::LayoutWord;
 /// Every payload byte and the length must affect packed-key placement. The
 /// old low-bit mask ignored later bytes and forced literal/literals to
 /// collide throughout Effect schema construction, at every load address.
-#[cfg(target_pointer_width = "64")]
 #[test]
 fn content_transition_slots_use_every_payload_byte_and_length() {
     for (a, b) in [
@@ -49,13 +48,17 @@ fn transition_key_id_namespaces_are_exact_and_disjoint() {
 
     // Past the content window: pointer identity, marker 0.
     let long = crate::string::js_string_from_bytes(b"field_longer".as_ptr(), 12);
-    assert_eq!(transition_key_id(long), (long as usize, 0));
+    assert_eq!(transition_key_id(long), (interned_key_id(long as usize), 0));
     // Below it: also pointer identity (these reach sites as SSO immediates,
     // which the emitted probe rejects at its string-tag check).
     let short = crate::string::js_string_from_bytes(b"ab".as_ptr(), 2);
-    assert_eq!(transition_key_id(short), (short as usize, 0));
+    assert_eq!(
+        transition_key_id(short),
+        (interned_key_id(short as usize), 0)
+    );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// A content-namespace entry must be reachable by a DIFFERENT string object
 /// with the same bytes — the property the emitted probe relies on, since its
 /// key is freshly concatenated at every write and never the interned one.
@@ -99,7 +102,7 @@ fn transition_cache_hits_a_content_entry_through_a_fresh_key() {
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
         (*t)[slot] = TransitionEntry {
-            key_ptr: 0,
+            key_id: 0,
             next_keys: 0,
             prev_shape_id: LayoutWord(0),
             target_shape_id: LayoutWord(0),

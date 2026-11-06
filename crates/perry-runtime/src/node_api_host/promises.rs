@@ -24,7 +24,6 @@ pub unsafe extern "C" fn napi_create_promise(
         let mut record = Box::new(DeferredRecord {
             env_serial: env.serial,
             promise_bits,
-            settled: false,
         });
         let pointer = (&mut *record) as *mut DeferredRecord as NapiDeferred;
         env.deferred_lookup
@@ -50,24 +49,10 @@ unsafe fn settle_deferred(
         Ok(bits) => bits,
         Err(status) => return set_status(env, status, "settlement value is not a live handle"),
     };
-    let promise_bits = with_env(env, |env| {
-        env.deferred(deferred).map(|record| record.promise_bits)
-    })
-    .flatten();
+    let promise_bits = with_env_mut(env, |env| env.take_deferred(deferred)).flatten();
     let Some(promise_bits) = promise_bits else {
         return set_status(env, NapiStatus::InvalidArg, "deferred is not live");
     };
-    let marked = with_env_mut(env, |env| {
-        let Some(record) = env.deferred_mut(deferred) else {
-            return false;
-        };
-        record.settled = true;
-        record.promise_bits = crate::value::TAG_UNDEFINED;
-        true
-    });
-    if marked != Some(true) {
-        return set_status(env, NapiStatus::InvalidArg, "deferred is not live");
-    }
     let promise = JSValue::from_bits(promise_bits).as_pointer::<crate::promise::Promise>()
         as *mut crate::promise::Promise;
     match catch_value_call(env, || {

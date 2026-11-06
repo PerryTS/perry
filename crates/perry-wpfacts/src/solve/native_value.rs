@@ -23,10 +23,13 @@ impl Model {
     /// call's own `this`). `false`: not a named native, or a receiver its
     /// model does not cover: the caller runs the unknown callee's arm.
     pub(super) fn native_call(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
-        let TokKind::BuiltinFn(Native::Member { identity }) = self.toks[t as usize] else {
+        let TokKind::BuiltinFn(Native::Member { .. }) = self.toks[t as usize] else {
             return false;
         };
-        let Some((fam, what, name)) = builtins::native_model(identity) else {
+        if builtins::native_namespace_call(self, t, call) {
+            return true;
+        }
+        let Some((fam, what, name)) = builtins::native_model(self, t) else {
             return false;
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
@@ -46,7 +49,7 @@ impl Model {
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
-            self.with_b(|m| builtins::own_method(m, r, Key::Named(key), call));
+            self.with_b(|m| builtins::native_prototype_call(m, fam, r, key, call));
         }
         true
     }
@@ -97,10 +100,10 @@ impl Model {
         for &r in toks {
             self.call_tok(call, f, Some(r));
         }
-        let TokKind::BuiltinFn(Native::Member { identity }) = self.toks[f as usize] else {
+        let TokKind::BuiltinFn(Native::Member { .. }) = self.toks[f as usize] else {
             return;
         };
-        let Some((fam, _, name)) = builtins::native_model(identity) else {
+        let Some((fam, _, name)) = builtins::native_model(self, f) else {
             return;
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));

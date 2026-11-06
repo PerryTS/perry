@@ -31,7 +31,6 @@
 mod wasm;
 
 pub(crate) mod marks;
-pub(crate) use marks::CatchStack;
 pub use marks::{caller_frame_mark, frame_mark};
 mod native_call;
 pub(crate) use native_call::catch_native_callback;
@@ -283,7 +282,7 @@ pub(crate) unsafe fn catch_generator_resume(
     state: &crate::gc::RuntimeHandle<'_>,
     op: f64,
     arg: f64,
-) -> Result<f64, f64> {
+) -> Result<f64, Caught> {
     struct Invocation<'a, 'scope> {
         state: &'a crate::gc::RuntimeHandle<'scope>,
         arg: f64,
@@ -331,7 +330,7 @@ pub(crate) unsafe fn catch_generator_resume(
     if trap_raw::<false>(invoke, (&raw mut ctx).cast()) {
         Ok(ctx.result)
     } else {
-        Err(take_exception())
+        Err(Caught::mint(take_exception()))
     }
 }
 

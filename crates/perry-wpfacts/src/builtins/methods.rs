@@ -26,7 +26,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
                 m.cur_this = prev;
             }
         }
-        ChainAct::Store(_) => {}
+        ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
     }
 }
 
@@ -64,7 +64,42 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            m.sink_node(src, r);
+            let retained = if !m.unit_mode
+                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
+            {
+                match _key {
+                    Key::Named(a) => m
+                        .native_property(t, &m.atoms[a as usize])
+                        .and_then(|p| p.native),
+                    _ => None,
+                }
+                .and_then(|identity| {
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    match m.toks[value as usize] {
+                        TokKind::Builtin(_)
+                            if !m
+                                .native_shape(value)
+                                .is_none_or(|s| s.global_identity.matches(identity)) =>
+                        {
+                            None
+                        }
+                        _ => Some(value),
+                    }
+                })
+            } else {
+                None
+            };
+            if let Some(retained) = retained {
+                m.cons(
+                    src,
+                    Cons::RuntimeStore {
+                        reason: r,
+                        retained,
+                    },
+                );
+            } else {
+                m.sink_node(src, r);
+            }
             // `process.argv = v`: later reads of the property see `v`.
             if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
                 && match _key {
@@ -133,7 +168,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         // program runs.
         Some(Mem::Fn) if name == "__defineGetter__" || name == "__defineSetter__" => {}
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
-            ret_prim(m, call, prim::UNDEF)
+            annexb_lookup(m, None, call, name == "__lookupSetter__");
         }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
@@ -405,7 +440,23 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 ret_prim(m, call, prim::BOOL);
             }
-            "toString" | "toLocaleString" => {
+            // 20.1.3.6 step 15: `Get(O, @@toStringTag)` runs a getter there;
+            // what it returns is only shown.
+            "toString" => {
+                let key = Key::Named(m.atom(&format!("{WK_PREFIX}toStringTag")));
+                let recv = m.node_l("tostringtag-recv");
+                let dst = m.node_l("tostringtag-read");
+                m.nodes[dst as usize].sink = true;
+                m.cons(recv, Cons::Load { key, dst });
+                m.add_tok(recv, origin);
+                ret_prim(m, call, prim::STR);
+            }
+            // 20.1.3.5: `Invoke(O, "toString")`. ToPrimitive's calls include
+            // it (they also look up `valueOf` and `@@toPrimitive`: more can
+            // run, never less).
+            "toLocaleString" => {
+                let r = m.reason("ToPrimitive of a toLocaleString receiver");
+                m.implicit(origin, r, Protocol::ToPrimitive);
                 ret_prim(m, call, prim::STR);
             }
             "valueOf" => ret_tok(m, call, origin),
@@ -418,18 +469,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                 ret_prim(m, call, prim::UNDEF);
             }
             "__lookupGetter__" | "__lookupSetter__" => {
-                implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
-                m.implicit(origin, 0, Protocol::Any);
-                if origin != TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
-                    // The unmodeled lookup creates a new unknown result;
-                    // it does not copy TOP from a mixed receiver node.
-                    let ret = m.calls[call as usize].ret;
-                    m.add_top(ret, |_| {
-                        "result of an unmodeled native accessor lookup".into()
-                    });
-                } else {
-                    ret_tok(m, call, TOP);
-                }
+                annexb_lookup(m, Some(origin), call, name == "__lookupSetter__");
             }
             _ => {}
         },

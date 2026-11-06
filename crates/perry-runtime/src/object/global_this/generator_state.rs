@@ -617,6 +617,7 @@ pub(super) unsafe fn resume_fixed_state(
     resume_fixed_step(state, op, arg).into_result()
 }
 
+crate::fn_info!(#[realm(throws = passes(2))] declare
 /// The generator birth owns an inaccessible, two-parameter compiled resume
 /// body (one argument for bodies with no abrupt routes). Once the receiver's brand proves that edge, no general callable,
 /// rest-argument or arity dispatch remains to resolve. The body returns the
@@ -700,10 +701,11 @@ pub(crate) unsafe fn resume_fixed_step(
         }
         Err(value) => {
             set(1, crate::value::TAG_TRUE);
-            crate::exception::throw_program_value(value)
+            crate::exception::rethrow_caught(value)
         }
     }
 }
+);
 
 /// A previously marked prototype already owns its stable serial. Read those
 /// existing metadata facts before asking the general allocating mark path.

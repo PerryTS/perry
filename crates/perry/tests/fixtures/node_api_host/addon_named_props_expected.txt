@@ -5,8 +5,24 @@ array 3 ["zero",null,"two"] n 3 false true
 array length store 1 ["zero"]
 frozen 0 1 0 false
 chain yes true true false undefined
+shadowing store own
 read-only on prototype 1 0
 __proto__ 1 0
 utf8 ["ключ"] 1 1
 made 1000 {"msg":"payload","length":999,"offset":0,"port":4433,"address":"127.0.0.1"} ["msg","length","offset","port","address"] 1000 7
 made extra ["msg","length","offset","port","address","extra"] true false
+own getter own getter 0 own getter true
+binding getter 6 6
+own setter 3 undefined ["k","seen"]
+throwing setter threw
+own non-writable 0 1
+non-enumerable writable 2 0 2
+sealed 0 2 0 false
+non-extensible 0 2 0 false undefined
+shadowing store own base 1
+representation text 1.5 1 2 text 1.5
+proxy 42 0 false ["get t","set t 9","has zz"]
+class instance 1 11 10 true
+function fn 0 1 1
+typed array 7 undefined false 4 undefined t [0,7,0,0]
+async_hooks function true

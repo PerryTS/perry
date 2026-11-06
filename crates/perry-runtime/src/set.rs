@@ -6,7 +6,6 @@
 
 use crate::string::StringHeader;
 use std::alloc::Layout;
-use std::cell::RefCell;
 use std::ptr;
 
 mod index;
@@ -27,14 +26,15 @@ pub(crate) fn test_string_value(string: *const StringHeader) -> f64 {
     boxed_heap_string_value(string)
 }
 
-crate::perry_thread_local! {
-    /// Backing Sets whose `forEach` raw-index walk is currently in flight.
-    /// Deletes may leave holes but must not compact them while a cursor still
-    /// names the old raw layout (#9082). Nested walks are kept as a stack so
-    /// exception savepoints can discard precisely the frames a throw skips.
-    static SET_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// Backing Sets whose `forEach` raw-index walk is currently in flight.
+/// Deletes may leave holes but must not compact them while a cursor still
+/// names the old raw layout (#9082). Nested walks are kept as a stack so
+/// exception savepoints can discard precisely the frames a throw skips.
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static SET_FOREACH_STACK: crate::exception::marks::CatchStackKey<usize> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.set_foreach);
 
 #[inline]
 fn set_foreach_is_active(set: *const SetHeader) -> bool {
@@ -86,7 +86,7 @@ pub(crate) fn set_foreach_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn set_foreach_depth() -> usize {
     SET_FOREACH_STACK.with(|stack| stack.borrow().len())
 }

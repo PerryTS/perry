@@ -8,13 +8,118 @@
 #[cfg(test)]
 use super::*;
 
-const DECLARED: &str = include_str!("realm_declared_keys.tsv");
+pub(super) const DECLARED: &str = include_str!("realm_declared_keys.tsv");
 
 /// The canonical realm reference under a native prototype member key.
+#[cfg(test)]
 pub(super) fn native_identity(owner: &str, key: &str) -> Option<&'static str> {
     DECLARED.lines().find_map(|line| {
         let mut row = line.split('\t');
         (row.next()? == "native" && row.next()? == owner && row.next()? == key)
+            .then(|| row.next())
+            .flatten()
+    })
+}
+
+/// Coordinates of the canonical reference, including bracketed symbol
+/// names. Alias rows do not choose the call model's holder or key.
+#[cfg(test)]
+pub(super) fn identity_member(identity: &str) -> Option<(&'static str, &'static str)> {
+    DECLARED
+        .lines()
+        .find_map(|line| {
+            let mut row = line.split('\t');
+            if row.next()? != "native" {
+                return None;
+            }
+            let owner = row.next()?;
+            let key = row.next()?;
+            if row.next()? != identity {
+                return None;
+            }
+            let canonical = owner == "%Global%" && key == identity
+                || identity.strip_prefix(owner).is_some_and(|suffix| {
+                    suffix.strip_prefix('.') == Some(key)
+                        || suffix
+                            .strip_prefix("[\"")
+                            .and_then(|s| s.strip_suffix("\"]"))
+                            == Some(key)
+                });
+            canonical.then_some((owner, key))
+        })
+        .or_else(|| {
+            let reference = DECLARED.lines().find_map(|line| {
+                let mut row = line.split('\t');
+                if row.next()? != "native" {
+                    return None;
+                }
+                row.next()?;
+                row.next()?;
+                let reference = row.next()?;
+                (reference == identity).then_some(reference)
+            })?;
+            if let Some((owner, key)) = reference.rsplit_once("[\"") {
+                return Some((owner, key.strip_suffix("\"]")?));
+            }
+            reference.rsplit_once('.')
+        })
+}
+
+/// A namespace token may summarize several constructors. Exempting it as
+/// one known stored value requires every global reference it denotes to
+/// name the same realm object.
+#[cfg(test)]
+pub(super) fn namespace_singleton(ns: BuiltinNs, identity: &str) -> bool {
+    DECLARED
+        .lines()
+        .filter_map(|line| {
+            let mut row = line.split('\t');
+            if row.next()? != "native" || row.next()? != "%Global%" {
+                return None;
+            }
+            row.next()?;
+            row.next()
+        })
+        .filter(|candidate| ns_by_name(candidate) == Some(ns))
+        .all(|candidate| candidate == identity)
+}
+
+/// The realm gives this own accessor exactly the pure returns(this) effect.
+#[cfg(test)]
+pub(super) fn getter_returns_receiver(ns: BuiltinNs, key: &str) -> bool {
+    let key = key.replace(WK_PREFIX, "@@");
+    DECLARED.lines().any(|line| {
+        let mut row = line.split('\t');
+        row.next() == Some("getter-this")
+            && row.next().and_then(ns_by_name) == Some(ns)
+            && row.next() == Some(key.as_str())
+    })
+}
+
+/// Own declared keys of an identified constructor/namespace value. The
+/// same rows cover holders without a specialized namespace call model.
+#[cfg(test)]
+pub(super) fn namespace_own_key(identity: &str, key: &str) -> bool {
+    DECLARED.lines().any(|line| {
+        let mut row = line.split('\t');
+        row.next() == Some("ns") && row.next() == Some(identity) && row.next() == Some(key)
+    })
+}
+
+/// A callable property of a namespace (Other is the HIR global sentinel).
+/// Holder names and references come from the generated realm, not a second
+/// list of global function names.
+#[cfg(test)]
+pub(super) fn namespace_identity(ns: BuiltinNs, key: &str) -> Option<&'static str> {
+    let key = key.replace(WK_PREFIX, "@@");
+    let ns = if ns == BuiltinNs::Other {
+        BuiltinNs::GlobalThis
+    } else {
+        ns
+    };
+    DECLARED.lines().find_map(|line| {
+        let mut row = line.split('\t');
+        (row.next()? == "native" && ns_by_name(row.next()?) == Some(ns) && row.next()? == key)
             .then(|| row.next())
             .flatten()
     })
@@ -30,6 +135,9 @@ fn missing(list: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let row: Vec<&str> = line.split('\t').collect();
+        if let ["getter-this", _, _, _] = row[..] {
+            continue;
+        }
         if let ["native", owner, key, identity] = row[..] {
             assert_eq!(native_identity(owner, key), Some(identity));
             continue;

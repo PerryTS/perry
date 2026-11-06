@@ -778,6 +778,7 @@ mod tests {
     /// The pointer-high-half rows are only sound while the collector's
     /// address ceiling stays where `value::addr_class` puts it.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn rule3_heap_pointer_high_half_cannot_reach_the_shape_id_range() {
         assert!(((MAX_HEAP_ADDR_EXCLUSIVE - 1) >> 32) < SHAPE_ID_BASE as u64);
         let arr = crate::array::js_array_alloc(1) as usize;

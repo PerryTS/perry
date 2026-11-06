@@ -71,6 +71,21 @@ impl Model {
                     self.construct(call, t);
                 }
             }
+            Cons::ReflectNew { call, new_target } => {
+                for &target in toks {
+                    self.cons(new_target, Cons::ReflectNewTarget { call, target });
+                }
+            }
+            Cons::ReflectNewTarget { call, target } => {
+                // HIR uses undefined for the omitted third argument, as the
+                // runtime does: the target then also selects the allocation.
+                if prim & prim::UNDEF != 0 {
+                    self.construct(call, target);
+                }
+                for &new_target in toks {
+                    self.reflect_construct(call, target, new_target);
+                }
+            }
             Cons::NewNamed { name, call } => {
                 if !toks.is_empty() {
                     self.new_named(name, call);
@@ -96,11 +111,18 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
-            Cons::TopSink { reason } => {
+            Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
+                let retained = if let Cons::RuntimeStore { retained, .. } = c {
+                    Some(*retained)
+                } else {
+                    None
+                };
                 let chain = self.chain_sinks.contains(&n);
                 let saved = std::mem::replace(&mut self.chain_escape, chain);
                 for &t in toks {
-                    self.escape(t, reason);
+                    if retained != Some(t) {
+                        self.escape(t, reason);
+                    }
                 }
                 self.chain_escape = saved;
             }
@@ -766,6 +788,14 @@ impl Model {
                     self.with_b(|m| builtins::annexb_define(m, t, call, setter));
                 }
             }
+            Cons::AnnexBLookup { call, setter } => {
+                for &t in toks {
+                    self.with_b(|m| builtins::annexb_lookup(m, Some(t), call, setter));
+                }
+                if prim & !(prim::NULL | prim::UNDEF) != 0 {
+                    self.with_b(|m| builtins::annexb_lookup(m, None, call, setter));
+                }
+            }
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
@@ -946,7 +976,9 @@ impl Model {
                 for &q in toks {
                     match self.toks[q as usize] {
                         TokKind::Top => match act {
-                            ChainAct::Load(dst) => self.add_tok(dst, TOP),
+                            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => {
+                                self.add_tok(dst, TOP)
+                            }
                             ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                             ChainAct::Store(_) => {}
                         },
@@ -961,7 +993,7 @@ impl Model {
                             match act {
                                 ChainAct::Load(dst) => self.edge(f, dst),
                                 ChainAct::Call(call) => self.bind_via(f, call, origin),
-                                ChainAct::Store(_) => {}
+                                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
                             }
                         }
                     }
@@ -1001,7 +1033,7 @@ impl Model {
             Cons::OwnGate { .. } => {}
             Cons::OwnTest { dst, at } => self.own_test(dst, at, toks),
             Cons::IdxKey { obj, dst, shape } => {
-                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                let named = index_needs_general_key(toks, prim);
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any(shape), dst);
                 }
@@ -1015,7 +1047,7 @@ impl Model {
                 // `x = x.next[0]` per unit it made a marker per iteration
                 // (CHB11: 27k markers and 25 GB on tssrc).
                 if !self.is_marker(obj)
-                    && prim & (prim::NUM | prim::BIGINT) != 0
+                    && index_has_numeric_key(prim)
                     && self
                         .idx_done
                         .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
@@ -1068,8 +1100,10 @@ impl Model {
                     }
                     if self.idx_done.insert((idx, t, call, 0)) {
                         self.mark_use(t, crate::model::MARK_ESCAPE);
-                        let own = self.key_fields(t, Key::Any(shape));
-                        self.bind_via(own, call, t);
+                        if self.index_needs_all_own_fields(t) {
+                            let own = self.key_fields(t, Key::Any(shape));
+                            self.bind_via(own, call, t);
+                        }
                         self.plain_key(t, ChainAct::Call(call));
                         self.cons(
                             idx,
@@ -1089,7 +1123,7 @@ impl Model {
                 call,
                 shape,
             } => {
-                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                let named = index_needs_general_key(toks, prim);
                 // One rule per receiver: a token, or (⊤) primitive kinds.
                 let rule = match obj {
                     TOP => 128 | recv_prim as u8,
@@ -1101,6 +1135,16 @@ impl Model {
                             .with_b(|m| builtins::prim_method(m, recv_prim, Key::Any(shape), call)),
                         _ => self.method_on(obj, Key::Any(shape), call),
                     }
+                }
+                if obj != TOP
+                    && !self.is_marker(obj)
+                    && index_has_numeric_key(prim)
+                    && self.idx_done.insert((n, obj, call, IDX_CALL_NUM_OWN))
+                {
+                    let key = self.elem_key();
+                    self.builtin_field_use(obj, key, ChainAct::Call(call));
+                    let own = self.num_fields(obj);
+                    self.bind_via(own, call, obj);
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named && obj != TOP {
@@ -1297,7 +1341,7 @@ impl Model {
                 for &t in toks {
                     // Each receiver binds every call looked up through
                     // this node: solve work per call.
-                    self.work += calls.len() as u64;
+                    self.charge_work(calls.len() as u64);
                     self.this_to(t, origin, &calls);
                     self.this_calls(t, origin, &calls);
                 }

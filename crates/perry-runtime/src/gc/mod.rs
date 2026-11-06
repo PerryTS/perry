@@ -504,12 +504,13 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
-    // Not budgeted, so the low-pause veto does not apply and the policy is
-    // always allowed to run here (#7611 deleted the env veto that used to sit
-    // in this slot). The variable stays rather than being folded away: it is
-    // recorded in the cycle trace and read back by the evacuation-policy tests.
-    let evacuation_policy_allowed = true;
-    let force_evacuation = gc_force_evacuate_enabled();
+    // Not budgeted, so the low-pause veto does not apply here (#7611 deleted
+    // the env veto that used to sit in this slot); an imprecise point still
+    // vetoes every move. The allowance is recorded in the cycle trace and read
+    // back by the evacuation-policy tests.
+    let move_veto = evacuation_veto(false);
+    let evacuation_policy_allowed = move_veto.is_none();
+    let force_evacuation = evacuation_policy_allowed && gc_force_evacuate_enabled();
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
@@ -564,7 +565,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     // charged every ordinary minor an O(old pages) cost even though that path
     // cannot consume the selection. Defer both selection and source-block
     // expansion until the fast path has declined the collection.
-    let old_page_selection = if old_to_young_tracking_complete() {
+    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
         OldPageDefragSelection::default()
@@ -581,7 +582,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
         current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
-        EVACUATION_POLICY_DISABLED_REASON,
+        move_veto.unwrap_or(EVACUATION_POLICY_DISABLED_REASON),
         old_page_selection,
         old_page_source_blocks,
     );
@@ -638,13 +639,14 @@ pub fn gen_gc_enabled() -> bool {
 // caveat rather than treating it as the defect it is. Deleting the knob deletes
 // the way to disarm the instrument by accident.
 //
-// **The branch it gated is NOT deleted with it, because the branch has another
-// controller that IS exercised.** `evacuation_policy_allowed` is still false on
+// **The branch it gated is NOT deleted with it, because the branch has other
+// controllers that ARE exercised.** `evacuation_policy_allowed` is still false on
 // every budgeted low-pause cycle (`low_pause_non_moving` in
 // `gc_start_budgeted_minor_fallback_cycle_with_snapshot`), and
 // `budgeted_low_pause_minor_does_not_evacuate` asserts that arm behaviourally —
 // nothing moved, no forwarding stub, old-page selection skipped, and
-// `trace.evacuation_policy.reason == "low_pause_non_moving"`. So the losing
+// `trace.evacuation_policy.reason == "low_pause_non_moving"`; an imprecise point
+// vetoes it too (`an_imprecise_point_moves_no_object`). So the losing
 // mode still compiles and still has a test; what stopped existing is the
 // untested *configuration*.
 //

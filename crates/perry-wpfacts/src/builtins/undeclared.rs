@@ -29,6 +29,7 @@ pub fn builtin_function(m: &Model, t: Tok) -> bool {
     match m.toks[t as usize] {
         TokKind::BuiltinFn(_) => true,
         TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod) => true,
+        TokKind::Builtin(ns) => !m.unit_mode && members::ns_chain(ns) == Family::Function,
         _ => false,
     }
 }
@@ -40,7 +41,9 @@ pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
     }
     match m.toks[t as usize] {
         TokKind::BuiltinFn(Native::Member { .. }) => {
-            members::member(Family::Function, &m.atoms[a as usize]).is_none()
+            !m.native_property(t, &m.atoms[a as usize])
+                .is_some_and(|p| p.own_namespace)
+                && members::member(Family::Function, &m.atoms[a as usize]).is_none()
         }
         TokKind::Builtin(BuiltinNs::GlobalThis) => false,
         TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),

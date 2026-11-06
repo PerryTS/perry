@@ -17,6 +17,7 @@ mod once;
 mod own_guard;
 pub(crate) use own_guard::Region;
 mod primitives;
+mod private_methods;
 mod shared_closures;
 mod view;
 mod walk;
@@ -35,6 +36,17 @@ pub struct ReadSite {
     /// the atom `()`.
     pub value_call: bool,
     pub func: FnIdx,
+}
+
+/// A computed member operation over nodes already generated for the solve.
+#[derive(Clone, Debug)]
+pub(crate) struct ElementSite {
+    pub module: u32,
+    pub byte_offset: u32,
+    pub op: crate::derive::ElementOp,
+    pub recv: NodeId,
+    pub idx: NodeId,
+    pub key: Key,
 }
 
 /// Another unit's module namespace object as this unit holds it (§18.2,
@@ -132,6 +144,7 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    pub(crate) element_sites: Vec<ElementSite>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -485,6 +498,7 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            element_sites: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -1121,7 +1135,10 @@ impl<'a> Gen<'a> {
         let mut mapped = None;
         for p in params {
             let n = self.local(mi, p.id);
-            if p.is_rest {
+            // `arguments` beside a user rest parameter is no rest itself
+            // (the HIR appends it after `...r`), but the same object: every
+            // argument, never a positional one.
+            if p.is_rest || p.arguments_object.is_some() {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = match &p.arguments_object {
@@ -1152,7 +1169,9 @@ impl<'a> Gen<'a> {
                         mapped = Some((fa, self.m.all_fields(at)));
                     }
                 }
-                rest = Some(n);
+                if p.is_rest {
+                    rest = Some(n);
+                }
             } else if rest.is_some() && params.iter().all(|q| q.arguments_object.is_none()) {
                 // A parameter after a rest parameter is a capture slot the
                 // HIR appends to a class constructor (`...a, cap`): the rest
@@ -1207,7 +1226,8 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this,
             no_summary: false,
-            gen_step: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
             proto,
@@ -1310,16 +1330,25 @@ impl<'a> Gen<'a> {
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
-            // Its hidden capture parameters (DECISIONS 117): slot `i` of the
-            // class environment, in the order the HIR appends them.
+            // Only an environment-publishing constructor takes its hidden
+            // arguments from that environment. Instance captures forward the
+            // actual argument, which their ClassCaptureValue rebind prefers
+            // over the declaration snapshot (including an unseeded snapshot).
+            let publishes_environment = ctor.body.iter().any(|s| {
+                matches!(s, perry_hir::Stmt::Expr(perry_hir::Expr::ClassEnvSet {
+                    class_name, publish: true, ..
+                }) if class_name == &c.name)
+            });
             let caps = ctor
                 .params
                 .iter()
                 .rev()
                 .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
-            self.m.funcs[f as usize].captures =
-                (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            if publishes_environment {
+                self.m.funcs[f as usize].captures =
+                    (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            }
         }
         let proto = self.m.tok(TokKind::Proto(tm));
         let cobj = self.m.tok(TokKind::ClassObj(tm));
@@ -1489,7 +1518,8 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
-            gen_step: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
             proto: None,

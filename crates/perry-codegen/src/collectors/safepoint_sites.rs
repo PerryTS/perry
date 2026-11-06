@@ -334,6 +334,7 @@ mod tests {
             object: Box::new(this()),
             index: Box::new(Expr::Number(0.0)),
             value: Box::new(call(vec![])),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         };

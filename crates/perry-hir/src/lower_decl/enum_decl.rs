@@ -153,6 +153,7 @@ pub(crate) fn enum_value_binding(
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::String(member.name.clone())),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };
@@ -163,6 +164,7 @@ pub(crate) fn enum_value_binding(
                     object: Box::new(Expr::LocalGet(id)),
                     index: Box::new(forward),
                     value: Box::new(Expr::String(member.name.clone())),
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 });
@@ -179,6 +181,7 @@ pub(crate) fn enum_value_binding(
                     object: Box::new(Expr::LocalGet(id)),
                     index: Box::new(key),
                     value: Box::new(Expr::String(member.name.clone())),
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 });

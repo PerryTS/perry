@@ -120,6 +120,7 @@ mod tests {
             value: Box::new(Expr::Number(1.0)),
             receiver: Box::new(Expr::LocalGet(0)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }

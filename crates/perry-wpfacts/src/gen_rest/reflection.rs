@@ -138,7 +138,13 @@ impl<'a> Gen<'a> {
                 // constructs, an Array exotic object included (#13645).
                 self.m.array_member_write.get_or_insert(r);
                 let (call, ret) = self.new_call(ThisArg::Undef, vec![], vec![a]);
-                self.m.cons(t, Cons::New { call });
+                self.m.cons(
+                    t,
+                    Cons::ReflectNew {
+                        call,
+                        new_target: nt,
+                    },
+                );
                 ret
             }
             Expr::DynamicImport {

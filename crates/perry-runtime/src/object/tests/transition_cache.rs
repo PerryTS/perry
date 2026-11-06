@@ -27,11 +27,11 @@ fn transition_cache_lookup_rejects_mutated_edge_target() {
         transition_cache_lookup(LayoutWord(0), key).expect("the edge's target prefix is intact");
     assert_eq!((target.arr(), target.count(), slot_idx), (keys, 1, 0));
 
-    let slot = transition_cache_slot(LayoutWord(0), key as usize, 0);
+    let slot = transition_cache_slot(LayoutWord(0), interned_key_id(key as usize), 0);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
         (*t)[slot] = TransitionEntry {
-            key_ptr: 0,
+            key_id: 0,
             next_keys: 0,
             prev_shape_id: LayoutWord(0),
             target_shape_id: LayoutWord(0),
@@ -71,10 +71,10 @@ fn transition_cache_requires_exact_predecessor_shape_id() {
         ))
     );
 
-    let slot = transition_cache_slot(LayoutWord(PREDECESSOR), key as usize, 0);
+    let slot = transition_cache_slot(LayoutWord(PREDECESSOR), interned_key_id(key as usize), 0);
     with_transition_cache(|table| unsafe {
         (*table)[slot] = TransitionEntry {
-            key_ptr: 0,
+            key_id: 0,
             next_keys: 0,
             prev_shape_id: LayoutWord(0),
             target_shape_id: LayoutWord(0),
@@ -157,11 +157,11 @@ fn transition_cache_lookup_rejects_slot_key_mismatch() {
         "a genuine edge (target slot holds the key) must still hit (#6006)"
     );
 
-    let slot = transition_cache_slot(LayoutWord(0), want as usize, 0);
+    let slot = transition_cache_slot(LayoutWord(0), interned_key_id(want as usize), 0);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
         (*t)[slot] = TransitionEntry {
-            key_ptr: 0,
+            key_id: 0,
             next_keys: 0,
             prev_shape_id: LayoutWord(0),
             target_shape_id: LayoutWord(0),
@@ -215,11 +215,11 @@ fn transition_cache_lookup_rejects_grown_shared_target() {
         "the hit must carry the edge's count, not the grown array's length (#6006)"
     );
 
-    let slot = transition_cache_slot(LayoutWord(0), key as usize, 0);
+    let slot = transition_cache_slot(LayoutWord(0), interned_key_id(key as usize), 0);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
         (*t)[slot] = TransitionEntry {
-            key_ptr: 0,
+            key_id: 0,
             next_keys: 0,
             prev_shape_id: LayoutWord(0),
             target_shape_id: LayoutWord(0),

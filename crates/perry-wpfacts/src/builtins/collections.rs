@@ -127,7 +127,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // Generator protocol (a generator object is its step closure): the
         // step closure only; any other function value has no such methods
         // (a computed key on one is a runtime property: unknown).
-        Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step) => {
+        Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step()) => {
             if name.is_none() || !matches!(m.toks[t as usize], TokKind::Func(..)) {
                 unknown_method(m, call, "computed method of a function value");
             }
@@ -143,14 +143,36 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // `{ value, done }`; a `yield*` re-yield (kind 2) hands back its
         // delegate's inner result object, returned as-is.
         Some("next" | "return" | "throw") | None => {
+            // The public protocol accepts one resume value. The runtime
+            // passes that value alone to a one-parameter step, otherwise
+            // (numeric operation, value); public extra arguments are ignored.
+            let arg = m.node_l("gen-resume-arg");
+            m.nodes[arg as usize].frame = m.call_run(call);
+            match c.args.first() {
+                Some(&value) => m.edge(value, arg),
+                None => m.add_prim(arg, prim::UNDEF),
+            }
+            for &spread in &c.spread {
+                let key = m.elem_key();
+                m.cons(spread, Cons::Load { key, dst: arg });
+            }
+            let args = if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].params.len() == 1)
+            {
+                vec![arg]
+            } else {
+                let op = m.node_l("gen-resume-op");
+                m.nodes[op as usize].frame = m.call_run(call);
+                m.add_prim(op, prim::NUM);
+                vec![op, arg]
+            };
             let raw = m.node_l("gen-step-raw");
             m.nodes[raw as usize].frame = m.call_run(call);
             let call2 = m.solver_call(
                 call,
                 CallSite {
                     this: c.this.clone(),
-                    args: c.args.clone(),
-                    spread: c.spread.clone(),
+                    args,
+                    spread: vec![],
                     ret: raw,
                     site: c.site,
                 },
@@ -659,13 +681,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             for &a in added {
                 m.edge(a, ofa);
                 if name == Some("concat") {
-                    m.cons(
-                        a,
-                        Cons::Load {
-                            key: Key::any(),
-                            dst: ofa,
-                        },
-                    );
+                    // An array operand gives its elements (`Get(E, ToString(k))`),
+                    // never a method an any-key read could name.
+                    let key = m.elem_key();
+                    m.cons(a, Cons::Load { key, dst: ofa });
                 }
             }
             if name == Some("flat") {

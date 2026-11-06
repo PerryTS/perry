@@ -371,6 +371,7 @@ fn take_directive_reason(
     }
 }
 
+crate::fn_info!(#[realm(throws = passes(2))] declare
 extern "C" fn test_done(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -381,6 +382,7 @@ extern "C" fn test_done(
     }
     undefined_value()
 }
+);
 
 fn call_test_callback(callback: f64, name: &str) -> Result<f64, f64> {
     if !is_callable_value(callback) {

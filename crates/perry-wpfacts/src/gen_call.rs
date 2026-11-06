@@ -137,6 +137,7 @@ impl<'a> Gen<'a> {
                     None => self.expr(fx, object),
                 };
                 self.own_test_recv = Some(o);
+                let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
@@ -144,9 +145,9 @@ impl<'a> Gen<'a> {
                         module: fx.module,
                         byte_offset: off,
                         key: a,
-                        recv: o,
+                        recv: private.unwrap_or(o),
                         is_call: true,
-                        value_call: false,
+                        value_call: private.is_some(),
                         func: fx.f,
                     });
                 }
@@ -154,13 +155,16 @@ impl<'a> Gen<'a> {
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
-                self.m.cons(
-                    o,
-                    Cons::MCall {
-                        key: Key::Named(a),
-                        call,
-                    },
-                );
+                match private {
+                    Some(callee) => self.m.cons(callee, Cons::Call { call }),
+                    None => self.m.cons(
+                        o,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call,
+                        },
+                    ),
+                }
                 ret
             }
             Expr::IndexGet { object, index, .. } => {
@@ -174,6 +178,9 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
+                let key = self.read_key(index);
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
@@ -207,17 +214,12 @@ impl<'a> Gen<'a> {
             }
             // Direct host timer calls use the same guarded global lookup
             // as globalThis.setTimeout. Import/module bindings shadow them.
+            // Unit contracts retain their direct model. The whole-program
+            // path below reads the same value an alias reads.
             Expr::ExternFuncRef { name, .. }
-                if matches!(
-                    name.as_str(),
-                    "setTimeout"
-                        | "setInterval"
-                        | "setImmediate"
-                        | "clearTimeout"
-                        | "clearInterval"
-                        | "clearImmediate"
-                        | "queueMicrotask"
-                ) && !self.is_import(fx.module, name)
+                if self.m.unit_mode
+                    && crate::builtins::global_function(&self.m, name)
+                    && !self.is_import(fx.module, name)
                     && !self.mods[fx.module as usize].scope.contains_key(name) =>
             {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -275,6 +277,13 @@ impl<'a> Gen<'a> {
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
+        }
+        if !self.m.unit_mode && crate::builtins::global_function(&self.m, name) {
+            let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let dst = self.m.node_l("global-function-value");
+            let key = Key::Named(self.m.atom(name));
+            self.m.load_from(t, t, key, dst);
+            return dst;
         }
         self.m.top_val(&format!("extern value {name}"))
     }
@@ -765,17 +774,22 @@ impl<'a> Gen<'a> {
                 arg(0).unwrap_or(self.m.top_tok_node)
             }
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
-                let r = self.m.reason("__lookupGetter__ result");
-                for a in &args {
-                    self.m.cons(
-                        *a,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::Any,
-                        },
-                    );
+                let Some(o) = arg(0) else {
+                    return self.m.top_val("accessor lookup without a receiver");
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), args[1..].to_vec(), spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
                 }
-                self.m.top_val("__lookupGetter__ result")
+                self.m.cons(
+                    o,
+                    Cons::AnnexBLookup {
+                        call,
+                        setter: name == "js_object_lookup_setter",
+                    },
+                );
+                ret
             }
             "js_tdz_check_binding" | "js_tdz_check_binding_then" => {
                 let out = self.tmp("tdz");

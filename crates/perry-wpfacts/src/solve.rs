@@ -8,6 +8,7 @@
 //! for values leaving into it). The rules here are the executable form of
 //! design section 3.2; `scripts/wpfacts_recompute.py` re-implements them.
 
+mod accessor_lookup;
 mod copy;
 mod define;
 mod lookup;
@@ -16,8 +17,9 @@ mod own_read;
 use crate::builtins;
 mod call_and_construct;
 mod native_value;
+mod reflect_construct;
 mod shared;
-use crate::delta::{Targets, Tokens};
+use crate::delta::Tokens;
 use crate::model::*;
 
 #[path = "solve/apply.rs"]
@@ -31,6 +33,16 @@ mod escape;
 mod fields;
 mod shaped_keys;
 mod virt;
+
+// Property-key ranges come from value deltas, not source annotations. Keep
+// computed reads and calls on the same partition of ToPropertyKey's inputs.
+fn index_needs_general_key(toks: Tokens<'_>, prim: u16) -> bool {
+    prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty()
+}
+
+fn index_has_numeric_key(prim: u16) -> bool {
+    prim & (prim::NUM | prim::BIGINT) != 0
+}
 
 impl Model {
     // ---------------------------------------------------------------- nodes
@@ -71,14 +83,7 @@ impl Model {
                 }
                 false => None,
             };
-        let targets = if toks.is_empty() {
-            Targets::Empty
-        } else {
-            Targets::capture(
-                &self.nodes[n as usize].succ,
-                self.nodes[n as usize].succ_set.as_ref(),
-            )
-        };
+        let boundary = self.nodes[n as usize].succ.len() as u32;
         // Delta tokens are distinct; a slice may repeat one.
         let distinct =
             crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
@@ -119,7 +124,7 @@ impl Model {
             }
             if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
                 fresh.push(t);
-                node.delta.push_to(t, &targets);
+                self.pending.push_to(&mut node.delta, t, boundary);
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
@@ -135,7 +140,7 @@ impl Model {
                 for t in later {
                     if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
                         fresh.push(t);
-                        node.delta.push_to(t, &targets);
+                        self.pending.push_to(&mut node.delta, t, boundary);
                         changed = true;
                         self.pts_entries += 1;
                     }
@@ -186,7 +191,7 @@ impl Model {
     pub fn prof_mark(&mut self, n: NodeId, phase: &'static str) {
         let Some(p) = self.prof.as_mut() else { return };
         let (at, w0, ph) = p.at;
-        let w = self.work - w0;
+        let w = self.work.get() - w0;
         if w != 0 {
             if at == NO_NODE {
                 *p.phase.entry(ph).or_default() += w;
@@ -194,13 +199,13 @@ impl Model {
                 *p.node.entry(at).or_default() += w;
             }
         }
-        p.at = (n, self.work, phase);
-        if self.work >= p.next_curve {
-            p.next_curve = (self.work / WorkProfile::STEP + 1) * WorkProfile::STEP;
+        p.at = (n, self.work.get(), phase);
+        if self.work.get() >= p.next_curve {
+            p.next_curve = (self.work.get() / WorkProfile::STEP + 1) * WorkProfile::STEP;
             let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
             eprintln!(
                 "perry: wpfacts curve work={} pops={} nodes={} pts={} cons={} toks={} insts={} wl={}",
-                self.work,
+                self.work.get(),
                 self.pops,
                 self.nodes.len(),
                 self.pts_entries,
@@ -221,7 +226,7 @@ impl Model {
         let in_pops: u64 = p.node.values().sum();
         eprintln!(
             "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
-            self.work, p.step[0], p.step[1], p.step[2], p.step[3]
+            self.work.get(), p.step[0], p.step[1], p.step[2], p.step[3]
         );
         let [sites, shaped, no_ctor] = self.key_shape_census;
         eprintln!(
@@ -292,7 +297,7 @@ impl Model {
             .map(|p| p * 4096 / (1 << 20))
             .unwrap_or(0);
         let succ_cap: usize = self.nodes.iter().map(|n| n.succ.capacity()).sum();
-        let delta_cap: usize = self.nodes.iter().map(|n| n.delta.capacity()).sum();
+        let delta_cap = self.pending.retained_bytes() / std::mem::size_of::<u32>();
         let big: usize = self.nodes.iter().filter(|n| n.pts.is_hashed()).count();
         let mut hubs: Vec<(usize, usize)> = self
             .nodes
@@ -501,7 +506,7 @@ impl Model {
             self.own_read_census[0] += 1;
         }
         if self.diagnostic.is_some() {
-            if let Cons::TopSink { reason } = c {
+            if let Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } = c {
                 self.diagnostic_sink(n, reason);
             }
         }
@@ -539,7 +544,7 @@ impl Model {
         toks.clear();
         self.nodes[n as usize].pts.sorted_into(&mut toks);
         // The replay is solve work: the bound covers it.
-        self.work += toks.len() as u64 + 1;
+        self.charge_work(toks.len() as u64 + 1);
         if let Some(p) = self.prof.as_mut() {
             let e = p.kind.entry(c.kind_name()).or_default();
             e.2 += 1;
@@ -570,6 +575,7 @@ impl Model {
         self.rel_phase = b'S';
         self.mark_params();
         self.members_settled.get_mut().clear();
+        let mut delta = crate::delta::Delta::default();
         loop {
             self.prof_mark(NO_NODE, "instances");
             self.fill_instances();
@@ -604,13 +610,11 @@ impl Model {
                     return;
                 }
             }
-            let (mut delta, dprim) = {
+            let dprim = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
-                (
-                    std::mem::take(&mut node.delta),
-                    std::mem::take(&mut node.dprim),
-                )
+                self.pending.take(&mut node.delta, &mut delta);
+                std::mem::take(&mut node.dprim)
             };
             if delta.is_empty() && dprim == 0 {
                 continue;
@@ -627,7 +631,7 @@ impl Model {
             self.cur_src = n;
             self.cur_why = u32::MAX;
             let ncons0 = self.nodes[n as usize].cons.len();
-            self.work += (delta.len() as u64 + 1) * ncons0 as u64;
+            self.charge_work((delta.len() as u64 + 1) * ncons0 as u64);
             if let Some(p) = self.prof.as_mut() {
                 p.step[0] += (delta.len() as u64 + 1) * ncons0 as u64;
             }
@@ -636,19 +640,19 @@ impl Model {
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
-            if self.max_work != 0 && self.work > self.max_work {
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 return;
             }
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.try_copy_delivery(n, s, &delta, dprim) {
-                    self.work += 1 + delivery_overhead;
+                if self.try_copy_delivery(n, s, i as u32, &delta, dprim) {
+                    self.charge_work(1 + delivery_overhead);
                     if let Some(p) = self.prof.as_mut() {
                         p.step[1] += 1 + delivery_overhead;
                     }
-                    if self.max_work != 0 && self.work > self.max_work {
+                    if self.max_work != 0 && self.work.get() > self.max_work {
                         self.aborted = true;
                         return;
                     }
@@ -658,15 +662,15 @@ impl Model {
                 let (covered, checks) = if delta.is_empty() {
                     (true, 1)
                 } else {
-                    self.copy_coverage(n, s, Tokens::Delivery(&delta, s))
+                    self.copy_coverage(n, s, Tokens::Delivery(&delta, i as u32))
                 };
                 let toks = if covered {
                     Tokens::Slice(&[])
                 } else {
-                    Tokens::Delivery(&delta, s)
+                    Tokens::Delivery(&delta, i as u32)
                 };
                 let visits = toks.len() as u64;
-                self.work += visits + checks + delivery_overhead;
+                self.charge_work(visits + checks + delivery_overhead);
                 if let Some(p) = self.prof.as_mut() {
                     p.step[2] += visits + checks + delivery_overhead;
                 }
@@ -676,7 +680,7 @@ impl Model {
                         .or_default()
                         .0 += visits;
                 }
-                if self.max_work != 0 && self.work > self.max_work {
+                if self.max_work != 0 && self.work.get() > self.max_work {
                     self.aborted = true;
                     return;
                 }
@@ -684,11 +688,11 @@ impl Model {
                     self.add_tokens(s, toks, dprim);
                 } else {
                     let extra = self.copy_to(n, s, toks, dprim);
-                    self.work += extra;
+                    self.charge_work(extra);
                     if let Some(p) = self.prof.as_mut() {
                         p.step[3] += extra;
                     }
-                    if self.max_work != 0 && self.work > self.max_work {
+                    if self.max_work != 0 && self.work.get() > self.max_work {
                         self.aborted = true;
                         return;
                     }
@@ -702,13 +706,7 @@ impl Model {
                 self.cur_why = u32::MAX;
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), dprim);
             }
-            // Hand the delta's storage back to the node (no reallocation).
-            let mut delta = delta;
             delta.clear();
-            let node = &mut self.nodes[n as usize];
-            if node.delta.is_empty() && delta.capacity() <= 256 {
-                node.delta = delta;
-            }
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
@@ -778,6 +776,16 @@ impl Model {
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
+            // A generator object (its step closure) inherits from what its
+            // generator function's `prototype` holds (`FuncInfo::gen_proto`:
+            // the original object or a replacement), whose chain the
+            // runtime's generator prototypes continue.
+            TokKind::Func(f, _) if self.funcs[f as usize].gen_step() => {
+                if let Some(p) = self.funcs[f as usize].gen_proto {
+                    self.edge(p, n);
+                }
+                self.add_tok(n, objproto);
+            }
             TokKind::Func(_, _)
             | TokKind::Bound(_)
             | TokKind::BuiltinFn(_)
@@ -824,13 +832,13 @@ impl Model {
         }
         if self.profile.is_some() {
             let started = std::time::Instant::now();
-            let w0 = self.work;
+            let w0 = self.work.get();
             self.apply_inner(n, c, toks, prim);
             let name = c.kind_name();
             if let Some(p) = self.prof.as_mut() {
                 let e = p.kind.entry(name).or_default();
                 e.0 += 1;
-                e.1 += self.work - w0;
+                e.1 += self.work.get() - w0;
             }
             let e = self.profile.as_mut().unwrap().entry(name).or_default();
             e.0 += 1;
@@ -1031,8 +1039,8 @@ impl Model {
             if !seen.insert(x) {
                 continue;
             }
-            self.work += 1;
-            if self.max_work != 0 && self.work > self.max_work {
+            self.charge_work(1);
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 return;
             }
@@ -1258,6 +1266,10 @@ impl Model {
             Cons::Call { call } => format!("call {n} {call}"),
             Cons::CallThis { call, this } => format!("callthis {n} {call} {this}"),
             Cons::New { call } => format!("new {n} {call}"),
+            Cons::ReflectNew { call, new_target } => format!("reflectnew {n} {call} {new_target}"),
+            Cons::ReflectNewTarget { call, target } => {
+                format!("reflectnewtarget {n} {call} {target}")
+            }
             Cons::NewNamed { name, call } => format!(
                 "newnamed {n} {} {call}",
                 esc_key(&self.atoms[*name as usize])
@@ -1267,6 +1279,9 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::RuntimeStore { reason, retained } => {
+                format!("runtimestore {n} {retained} {reason}")
+            }
             Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
             Cons::CallerValue { dst, reason } => format!("callervalue {n} {dst} {reason}"),
@@ -1382,6 +1397,7 @@ impl Model {
                 )
             }
             Cons::AnnexBDefine { call, setter } => format!("annexbdefine {n} {call} {setter}"),
+            Cons::AnnexBLookup { call, setter } => format!("annexblookup {n} {call} {setter}"),
             Cons::AccessorInstall { key, f, setter } => {
                 format!(
                     "accinstall {n} {} {} {}",

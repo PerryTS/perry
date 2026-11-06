@@ -258,8 +258,15 @@ pub(crate) const RUNTIME_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY
 /// [`BuiltinProto`] family, sealed by `iterator_prototypes` (DEC 250 (i)).
 pub(crate) const ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 1;
 pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
+/// The meta family field of `%GeneratorPrototype%` and of
+/// `%AsyncGeneratorPrototype%` (DEC 250 as narrowed 2026-11-03): their image
+/// members (`next`, `return`, `throw`, `@@toStringTag`; not `constructor`)
+/// are locked, adds stay open. Sealed by `seal_generator_prototype` when
+/// `build_generator_tower` completes them.
+pub(crate) const GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 3;
+pub(crate) const ASYNC_GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 4;
 const _: () = assert!(
-    ARRAY_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
+    ASYNC_GENERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
 );
 
@@ -279,6 +286,23 @@ pub(crate) unsafe fn seal_iterator_prototypes(
         seal_object_family(shared, ITERATOR_FAMILY);
         seal_object_family(array_iterator, ARRAY_ITERATOR_FAMILY);
     });
+}
+
+/// Seal `%GeneratorPrototype%` (or `%AsyncGeneratorPrototype%`) the moment
+/// its tower is built, before any program code can reach it.
+///
+/// # Safety
+/// `proto` is the live, fully built generator prototype (or null).
+#[inline(never)]
+#[optimize(size)]
+pub(crate) unsafe fn seal_generator_prototype(proto: *mut ObjectHeader, is_async: bool) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let family = if is_async {
+        ASYNC_GENERATOR_FAMILY
+    } else {
+        GENERATOR_FAMILY
+    };
+    super::own_override::as_builtin_definition(|| unsafe { seal_object_family(proto, family) });
 }
 
 /// DEC 250 (i): the prototypes on which the program adds no key: compiled code
@@ -551,6 +575,9 @@ unsafe fn note_sealed_write(
         if !super::own_override::in_builtin_definition() {
             super::shadow::set_bit(obj.cast_mut());
         }
+    } else if family == GENERATOR_FAMILY || family == ASYNC_GENERATOR_FAMILY {
+        // Locked above (image members only); an add is the program's own
+        // member and nothing in the runtime answers from its absence.
     } else if family == ITERATOR_FAMILY || family == ARRAY_ITERATOR_FAMILY {
         // Locked above (adds included); nothing else models them, so a
         // definition add after the seal has no answer to withdraw: it aborts.
@@ -578,6 +605,8 @@ pub(crate) fn locked_family(family: usize) -> bool {
     family < super::builtin_namespace::FIRST
         || family == ITERATOR_FAMILY
         || family == ARRAY_ITERATOR_FAMILY
+        || family == GENERATOR_FAMILY
+        || family == ASYNC_GENERATOR_FAMILY
 }
 
 /// The image member `mutation` would write on the locked intrinsic `obj`, if
@@ -779,6 +808,10 @@ fn locked_object_name(family: usize) -> String {
         String::from("Iterator.prototype")
     } else if family == ARRAY_ITERATOR_FAMILY {
         String::from("%ArrayIteratorPrototype%")
+    } else if family == GENERATOR_FAMILY {
+        String::from("%GeneratorPrototype%")
+    } else if family == ASYNC_GENERATOR_FAMILY {
+        String::from("%AsyncGeneratorPrototype%")
     } else {
         crate::codegen_abi::BUILTIN_NAMESPACES[family - super::builtin_namespace::FIRST].to_string()
     }

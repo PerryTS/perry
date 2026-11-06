@@ -2,6 +2,7 @@
 """Reproduce the checked-in header-free LLVM 22 fixtures (not used by tests)."""
 from pathlib import Path
 import os
+import runpy
 import subprocess
 import tempfile
 
@@ -46,3 +47,6 @@ with tempfile.TemporaryDirectory() as tmp:
             obj.write_bytes(data)
         out.unlink(missing_ok=True)
         subprocess.run([str(llvm / "llvm-ar"), "rcs", str(out), str(obj)], check=True)
+
+# The same command also reproduces the typed-origin/sabotage archives.
+runpy.run_path(str(here / "rebuild_throws.py"), run_name="__main__")

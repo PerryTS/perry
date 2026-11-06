@@ -1487,6 +1487,7 @@ test_context_assertion3!(
 );
 test_context_assertion3!(test_context_assert_throws, crate::object::js_assert_throws);
 
+crate::fn_info!(#[realm(throws = passes(3))] declare
 extern "C" fn test_context_assert_ok(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -1496,6 +1497,7 @@ extern "C" fn test_context_assert_ok(
     record_test_context_assertion();
     crate::object::js_assert_ok(value, message)
 }
+);
 
 extern "C" fn test_context_assert_fail(
     _closure: *const ClosureHeader,

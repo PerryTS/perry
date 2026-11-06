@@ -5462,6 +5462,7 @@ dependencies = [
  "clap",
  "llvm-sys",
  "object 0.37.3",
+ "perry-abi",
  "perry-perex",
  "perry-runtime-manifest",
  "regex",

@@ -41,6 +41,7 @@ fn untyped_elem_field(index: Expr, prop: &str) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(ROWS_ID)),
@@ -512,12 +513,10 @@ fn the_class_keyed_arm_keeps_the_full_property_denylist() {
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    object: Box::new(Expr::IndexGet {
-                        byte_offset: 0,
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                        index: Box::new(Expr::LocalGet(COUNTER_ID)),
-                    }),
+                    object: Box::new(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(ARRAY_ID)),
+                        Box::new(Expr::LocalGet(COUNTER_ID)),
+                    )),
                     property: "length".to_string(),
                     byte_offset: 0,
                 }),

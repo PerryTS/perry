@@ -271,7 +271,7 @@ impl Model {
     }
 
     pub fn tok(&mut self, k: TokKind) -> Tok {
-        let k = crate::builtins::canonical_native(k);
+        let k = crate::builtins::canonical_native(k, !self.unit_mode);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
         }
@@ -281,7 +281,8 @@ impl Model {
                 self.site_toks.entry(tm).or_default().push(t);
             }
         }
-        self.toks.push(k.clone());
+        let shape = self.declarations.resolve(&k, self);
+        self.toks.push(k.clone(), shape);
         self.tok_index.insert(k, t);
         self.builtin_token_created(t);
         t
@@ -370,7 +371,7 @@ impl Model {
     pub fn shared_reads(&self) -> SharedReads {
         let mut r = SharedReads::default();
         // Shared objects expose their writes through ordinary field nodes.
-        for (k, &t) in &self.tok_index {
+        for (k, &t) in self.tok_index.iter() {
             let read = match k {
                 TokKind::ObjectProto
                 | TokKind::Builtin(_)
@@ -631,11 +632,12 @@ impl Model {
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
     /// it, or it escaped.
     pub fn activate(&mut self, f: FnIdx, path: &str) {
-        if self
-            .act
-            .as_ref()
-            .is_none_or(|a| a.fixed || a.sabotage.as_deref() == Some(path))
-            || f as usize >= self.funcs.len()
+        if self.act.as_ref().is_none_or(|a| {
+            a.fixed
+                || a.sabotage
+                    .as_deref()
+                    .is_some_and(|s| s.split('+').any(|p| p == path))
+        }) || f as usize >= self.funcs.len()
         {
             return;
         }
@@ -718,7 +720,7 @@ impl Model {
             let mut st = vec![(t, bits)];
             while let Some((x, b)) = st.pop() {
                 // Each marker the walk visits is solve work (113-CWL3).
-                self.work += 1;
+                self.charge_work(1);
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -976,7 +978,7 @@ impl Model {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
-            self.work += 1;
+            self.charge_work(1);
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;

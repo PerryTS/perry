@@ -126,7 +126,7 @@ mod evaluation_layout_tests {
     #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
     #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
     #[cfg_attr(
-        not(any(target_vendor = "apple", target_os = "windows")),
+        not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {

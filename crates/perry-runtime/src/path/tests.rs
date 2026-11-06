@@ -370,6 +370,7 @@ mod malloc_backed_string_arg_tests {
         assert_eq!(base_str, "c.txt");
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Forged pointers (not in the malloc registry, not in an arena) must
     /// still be rejected without dereferencing the candidate header.
     #[test]

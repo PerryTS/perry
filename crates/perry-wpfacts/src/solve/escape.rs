@@ -187,6 +187,14 @@ impl Model {
             TokKind::Builtin(BuiltinNs::GlobalThis)
         ) {
             crate::builtins::note_global_in_top(self);
+            if !self.unit_mode {
+                crate::builtins::note_native_write(
+                    self,
+                    t,
+                    None,
+                    "global object given to unknown code",
+                );
+            }
             self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
                 BuiltinNs::GlobalThis,
             )));
@@ -669,7 +677,7 @@ impl Model {
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
         if published
             || fi.lexical_this
-            || fi.gen_step
+            || fi.gen_step()
             || fi.ctor_of.is_some()
             || fi.func_id == u32::MAX
             || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f))
@@ -992,6 +1000,7 @@ impl Model {
                     site: 0,
                 });
                 self.construct(call, t);
+                self.reflect_escaped_target(t);
                 self.sink_node(ret, reason);
                 // DEC221: only what unknown construction returns escapes.
                 // NO_CTX is a template-wide mark, which would also expose

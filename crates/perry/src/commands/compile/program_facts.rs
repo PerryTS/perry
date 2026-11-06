@@ -761,3 +761,11 @@ fn facts_inputs(
 #[cfg(test)]
 #[path = "program_facts/worker_roots_tests.rs"]
 mod worker_roots_tests;
+
+#[cfg(test)]
+#[path = "program_facts/native_addon_tests.rs"]
+mod native_addon_tests;
+
+#[cfg(test)]
+#[path = "program_facts/element_tests.rs"]
+mod element_tests;

@@ -247,6 +247,7 @@ pub(crate) fn lower_assign_target_to_expr(
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
                     Ok(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object,

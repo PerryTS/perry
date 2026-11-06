@@ -241,7 +241,7 @@ pub use get_slow::{
 mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
 pub(crate) mod has_property;
-mod ic_miss;
+pub(crate) mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
@@ -341,9 +341,9 @@ pub use has_property::{js_in_operator, js_object_has_property};
 pub(crate) use ic_miss::get_field_miss;
 pub(crate) use ic_miss::intrinsic_private_add;
 pub(crate) use ic_miss::intrinsic_private_set;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use ic_miss::private_lexical_brand_depth;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use ic_miss::private_member_access_hints_depth;
 pub(crate) use ic_miss::RuntimePrivateElement;
 pub(crate) use ic_miss::{

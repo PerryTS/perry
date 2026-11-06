@@ -735,7 +735,8 @@ pub(crate) extern "C" fn throw_captured_error(
     _this: crate::closure::JsThis,
 ) -> f64 {
     let err = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
-    crate::exception::throw_program_value(err)
+    // A captured diagnostic error may originate in program code or native error construction.
+    crate::exception::throw_open(err)
 }
 
 pub(crate) fn schedule_uncaught(err: UncaughtError) {

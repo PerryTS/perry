@@ -12,7 +12,6 @@ pub type NapiAsyncCleanupHook =
 pub(crate) struct AsyncContextRecord {
     pub env_serial: u64,
     pub ids: AsyncResourceIds,
-    pub destroyed: bool,
 }
 
 pub(crate) struct CallbackScopeRecord {
@@ -106,7 +105,6 @@ pub unsafe extern "C" fn napi_async_init(
         let mut record = Box::new(AsyncContextRecord {
             env_serial: env.serial,
             ids,
-            destroyed: false,
         });
         let pointer = (&mut *record) as *mut AsyncContextRecord as NapiAsyncContext;
         env.async_context_lookup
@@ -123,12 +121,7 @@ pub unsafe extern "C" fn napi_async_init(
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_async_destroy(env: NapiEnv, context: NapiAsyncContext) -> NapiStatus {
-    let ids = with_env_mut(env, |env| {
-        let record = env.async_context_mut(context)?;
-        record.destroyed = true;
-        Some(record.ids)
-    })
-    .flatten();
+    let ids = with_env_mut(env, |env| env.take_async_context(context)).flatten();
     let Some(ids) = ids else {
         return set_status(env, NapiStatus::InvalidArg, "async context is not live");
     };

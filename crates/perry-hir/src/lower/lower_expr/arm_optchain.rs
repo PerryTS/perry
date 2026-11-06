@@ -231,6 +231,7 @@ pub(crate) fn lower_opt_chain_expr(
                 ast::MemberProp::Computed(comp) => {
                     let index = lower_expr(ctx, &comp.expr)?;
                     Expr::IndexGet {
+                        element_offset: member.span.lo.0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(obj_expr.clone()),
@@ -366,6 +367,7 @@ pub(crate) fn lower_opt_chain_expr(
                         ast::MemberProp::Computed(c) => {
                             let idx = lower_expr(ctx, &c.expr)?;
                             Expr::IndexGet {
+                                element_offset: member.span.lo.0,
                                 byte_offset: 0,
                                 byte_end: 0,
                                 object: Box::new(obj.clone()),
@@ -526,9 +528,11 @@ pub(crate) fn lower_opt_chain_expr(
                         Expr::IndexGet {
                             index,
                             byte_end,
+                            element_offset,
                             byte_offset,
                             ..
                         } => Expr::IndexGet {
+                            element_offset,
                             byte_offset,
                             byte_end,
                             object: inner_else,
