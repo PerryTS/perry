@@ -129,6 +129,7 @@ pub(crate) fn run(
         dce_bodies: perry_codegen::verify_facts::dce_enabled(),
         roots,
         diagnostics: dump.is_some(),
+        birth_census: std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
