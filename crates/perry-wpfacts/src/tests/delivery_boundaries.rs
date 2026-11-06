@@ -11,8 +11,9 @@ pub(crate) fn record(m: &Model) {
         }
     });
 }
+// The first program's `key` is an unseen module's global.
 const PROGRAMS: &[&str] = &[
-    r#"class A { x = 1; } class B { y = 's'; }
+    r#"import "unseen-host"; class A { x = 1; } class B { y = 's'; }
     const a: any = new A(); const b: any = new B();
     const key = (globalThis as any).key; a[key] = b;
     function get(o: any) { return o.x; }

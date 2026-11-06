@@ -60,8 +60,8 @@ fn a_key_something_may_write_stays_open() {
         ("an Object.prototype store", "(Object.prototype as any).maxDepth = 7;"),
         ("a store after birth", "const o: Opts = { level: 2 }; o.maxDepth = 1; console.log(search(o));"),
         ("a computed store", "const o: any = { level: 2 }; o[String(Date.now() % 2)] = 1; console.log(search(o));"),
-        ("an escape", "const o: Opts = { level: 2 }; (globalThis as any).out = o; console.log(search(o));"),
-        ("a store into ⊤", "const t: any = (globalThis as any).someHost; t.maxDepth = 3;"),
+        ("an escape", "import \"unseen-host\"; const o: Opts = { level: 2 }; (globalThis as any).out = o; console.log(search(o));"),
+        ("a store into ⊤", "import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.maxDepth = 3;"),
     ] {
         let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }})); {extra}"));
         assert!(open(&pf, "maxDepth"), "{what}: {:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());

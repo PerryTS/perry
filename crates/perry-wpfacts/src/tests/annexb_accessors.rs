@@ -89,7 +89,8 @@ fn computed_install_key_runs_on_any_read() {
 #[test]
 fn unknown_receiver_keeps_conservative_escape() {
     check(
-        r#"
+        r#"import "unseen-host";
+
         declare const o: any;
         class Machine { witness = 1; }
         function enter(machine: any) { return machine.witness; }
@@ -173,7 +174,8 @@ fn computed_getter_result_flows_to_the_read() {
 #[test]
 fn mixed_callable_and_noncallable_installs_functions_only() {
     check(
-        r#"
+        r#"import "unseen-host";
+
         declare const choose: boolean;
         declare function unknown(): any;
         class Cell { value: any = { witness: 1 }; }

@@ -125,7 +125,7 @@ fn a_forwarding_maker_keeps_two_memos_apart() {
 #[test]
 fn one_memo_shared_with_a_top_callback_stays_unproven() {
     let src = format!(
-        "{MEMO_ONE}
+        "import \"unseen-host\"; {MEMO_ONE}
         function mkShared() {{ return memoizeOne((k: number) => k > 400 ? (globalThis as any).host : () => ({{ kind: k }})); }}
         const shared = mkShared();
         const getHost = shared;
@@ -145,7 +145,7 @@ fn one_memo_shared_with_a_top_callback_stays_unproven() {
 #[test]
 fn one_site_in_a_loop_merges_its_memos() {
     let src = format!(
-        "{MEMO_ONE}
+        "import \"unseen-host\"; {MEMO_ONE}
         const cbs = [(k: number) => (globalThis as any).host, (k: number) => () => ({{ kind: k }})];
         function mkAll() {{ const out: any[] = []; for (const cb of cbs) out.push(memoizeOne(cb)); return out; }}
         const memos = mkAll();
@@ -188,6 +188,8 @@ let n = 0;
 for (let i = 0; i < 10; i++) n += factory.createAllType().kind + factory.createIdentifier("a").text.length;
 console.log(n, factory.flags);
 "#;
+    // `other` is an unseen module's global.
+    let src = &super::unseen(src);
     assert_eq!(whole(src).0, false, "whole: the reset cell stays unproven");
     assert!(!per_unit(src), "per unit: the reset cell stays unproven");
 }

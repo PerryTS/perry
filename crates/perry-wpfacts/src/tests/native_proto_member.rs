@@ -83,6 +83,7 @@ fn object_prototype_has_own_property_bind_reads_only() {
     assert!(proven(&v), "{v:?}");
 }
 
+/// Hands `this` to an unseen module (in the programs that load one).
 const HOOK: &str = "function (this: any) { (globalThis as any).hook = this; return [this[0]]; }";
 
 /// node (`slice` of the program's object): prints `1`. `Array` is a local
@@ -90,7 +91,7 @@ const HOOK: &str = "function (this: any) { (globalThis as any).hook = this; retu
 /// the array to code the analysis cannot see.
 #[test]
 fn a_shadowed_namespace_stays_unknown() {
-    let v = sv(&format!(
+    let v = sv(&unseen(&format!(
         r#"
         function main() {{
             const Array: any = {{ prototype: {{ slice: {HOOK} }} }};
@@ -100,7 +101,7 @@ fn a_shadowed_namespace_stays_unknown() {
         }}
         console.log(main());
     "#
-    ));
+    )));
     assert!(!proven(&v), "{v:?}");
 }
 
@@ -122,14 +123,14 @@ fn a_reassigned_namespace_stays_unknown() {
 /// node: prints `1`. A variable that may hold the program's object.
 #[test]
 fn a_variable_that_may_hold_a_program_object_stays_unknown() {
-    let v = sv(&format!(
+    let v = sv(&unseen(&format!(
         r#"
         const A: any = process.argv.length > 99 ? Array : {{ prototype: {{ slice: {HOOK} }} }};
         const arr = [new Sym(1)];
         A.prototype.slice.call(arr);
         console.log(g(arr[0]));
     "#
-    ));
+    )));
     assert!(!proven(&v), "{v:?}");
 }
 

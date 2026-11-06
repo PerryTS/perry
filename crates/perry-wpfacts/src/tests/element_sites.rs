@@ -78,8 +78,11 @@ fn parsed_json_receiver_has_json_domain_and_all_primitives() {
 
 #[test]
 fn unmodeled_global_receiver_is_explicit_top() {
-    let src = r#"const recv: any = (globalThis as any).unknownThing;
-        const key: any = "value"; console.log(recv[key]);"#;
+    // `unknownThing` is an unseen module's global.
+    let src = &unseen(
+        r#"const recv: any = (globalThis as any).unknownThing;
+        const key: any = "value"; console.log(recv[key]);"#,
+    );
     let pf = facts(src);
     let site = at(&pf, src, "recv[key]", ElementOp::Read);
     assert!(site.top, "{site:?}");

@@ -62,7 +62,8 @@ export const lit = { n: 1, createAllType() { return (globalThis as any).zz(this)
 
 #[test]
 fn a_literal_method_passing_this_to_a_value_read_from_top_escapes_the_literal() {
-    let a = r#"
+    let a = r#"import "unseen-host";
+
 const ext = (globalThis as any).ext;
 export const lit = { n: 1, createAllType() { return ext(this); } };
 "#;
@@ -74,7 +75,8 @@ fn a_literal_method_passing_this_to_its_parameter_escapes_the_literal() {
     let a = r#"
 export const lit = { n: 1, createAllType(f) { return f(this); } };
 "#;
-    let b = r#"
+    let b = r#"import "unseen-host";
+
 import { lit } from "./a";
 lit.createAllType((globalThis as any).zz);
 console.log(lit.n + 1);

@@ -74,7 +74,8 @@ fn diagnostic_capture_is_observational_and_off_by_default() {
 #[test]
 fn diagnostic_raw_callee_survives_a_failed_verdict() {
     let pf = facts_with(
-        r#"
+        r#"import "unseen-host";
+
         function invoke(f: any) { return f(1); }
         const source: any = (globalThis as any).TYC2Unknown;
         console.log(invoke(source));

@@ -206,7 +206,8 @@ fn a_value_that_may_be_no_function_is_not_proven() {
 #[test]
 fn a_callee_from_unknown_code_is_not_proven() {
     // The callee comes from a global no model describes: ⊤.
-    let src = r#"
+    let src = r#"import "unseen-host";
+
         const f: any = (globalThis as any).someHook;
         console.log(f(1));
     "#;
@@ -246,7 +247,8 @@ fn a_class_or_a_bound_function_in_the_set_is_not_proven() {
 fn a_body_beside_top_is_not_proven() {
     // One branch gives a body, the other a value from unknown code: the set
     // holds ⊤ beside `fa`.
-    let src = r#"
+    let src = r#"import "unseen-host";
+
         function fa(x: number) { return x + 1; }
         const f: any = Math.random() > 2 ? fa : (globalThis as any).hook;
         console.log(typeof f === "function" ? f(1) : 0);

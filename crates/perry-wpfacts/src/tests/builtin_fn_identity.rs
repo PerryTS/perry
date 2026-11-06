@@ -346,7 +346,8 @@ fn module_scope_timer_binding_wins_over_the_global() {
 #[test]
 fn undeclared_global_function_value_stays_unproven() {
     verdict(
-        &timer_source("", "const t=CXID_undeclared_timer; t(cb,0);"),
+        // The timer is an unseen module's global.
+        &unseen(&timer_source("", "const t=CXID_undeclared_timer; t(cb,0);")),
         "// CALLBACK",
         "field",
         false,
