@@ -350,10 +350,22 @@ impl<'a> Gen<'a> {
                 out
             }
             "iteratorCloseOnThrow" | "iteratorCloseIfNotDone" | "arrayRecordClose" => {
-                if let Some(it) = arg(0) {
-                    // `iterator.return()` runs.
+                if let Some(a) = arg(0) {
+                    // `iterator.return()` runs. An array record's is a
+                    // fresh array iterator over its array, at its index
+                    // (`js_array_record_close`), not the array.
+                    let it = if method == "arrayRecordClose" {
+                        let ek = self.m.elem_key();
+                        let el = self.load(a, ek);
+                        self.new_iter_from(fx.module, crate::builtins::ARRAY_ITERATOR_KIND, &[el])
+                    } else {
+                        a
+                    };
+                    // The runtime's IteratorClose: a protocol call.
                     let ra = self.m.atom("return");
-                    let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);
+                    let (rc, _) = self.new_call(ThisArg::Node(it), vec![], vec![]);
+                    self.m.protocol_calls.insert(rc);
+                    self.m.cons(it, Cons::MCall { key: Key::Named(ra), call: rc });
                 }
                 let out = self.tmp("close");
                 self.m.edge(self.thrown, out);

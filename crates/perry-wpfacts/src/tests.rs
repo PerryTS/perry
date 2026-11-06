@@ -1813,6 +1813,7 @@ mod constructor_values;
 mod date_methods;
 mod delegate_step;
 mod gen_proto_lock;
+mod array_iter_lock;
 mod gen_proto_members;
 mod generator_results;
 mod generator_resume_arguments;

@@ -481,7 +481,11 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             };
             keys.contains(&name) && find(COLLECTION, name).is_some()
         }
-        Family::Iterator | Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
+        // An array iterator's whole chain is add-locked (`ARRAY_ITERATOR`).
+        // The Map/Set/String iterator prototypes and the iterator helpers'
+        // take adds: not final.
+        Family::Iterator => what == Some(ARRAY_ITERATOR),
+        Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
     }
 }
 
@@ -494,11 +498,32 @@ pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     }
 }
 
+/// Builtin iterator template kinds (`TmplKind::BObj::what`, family
+/// `Iterator`): the iterator's intrinsic prototype, when the model knows it.
+pub(crate) const ANY_ITERATOR: &str = "Iterator";
+/// `%ArrayIteratorPrototype%` (`extends %IteratorPrototype%`): the runtime
+/// seals and add-locks both (`builtin_proto.rs` `add_locked`:
+/// `ITERATOR_FAMILY`, `ARRAY_ITERATOR_FAMILY`), so past them the chain is
+/// `Object.prototype`, add-locked too: every read but `constructor` is
+/// final (`locked_read`).
+pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
+pub(crate) const MAP_ITERATOR: &str = "MapIterator";
+pub(crate) const SET_ITERATOR: &str = "SetIterator";
+
+/// The iterator kind a collection of kind `what` (`Map`/`Set`) gives.
+pub(super) fn collection_iterator(what: &str) -> &'static str {
+    match what {
+        "Map" => MAP_ITERATOR,
+        "Set" => SET_ITERATOR,
+        _ => ANY_ITERATOR,
+    }
+}
+
 /// The family of a builtin object template kind (`TmplKind::BObj::what`).
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        "Iterator" => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {

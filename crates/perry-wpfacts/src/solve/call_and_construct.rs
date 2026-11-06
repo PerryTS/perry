@@ -824,6 +824,24 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // An array is never the iterator the iteration protocol steps or
+        // closes: the step of the iterated value itself (`v.next()`,
+        // `Gen::iterate`) is made only on a value `js_get_iterator` returns
+        // unchanged, never an array (it gives a fresh array iterator); a
+        // for-of record's payload holds the source array beside the
+        // iterator, and closes it through a fresh array iterator
+        // (`js_array_record_close`), not itself. The same predicate as
+        // `Cons::IterNext`'s: the runtime makes no such call on an array,
+        // whatever its chain holds.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && matches!(self.atoms[a as usize].as_str(), "next" | "return")
+                && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                    if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            {
+                return;
+            }
+        }
         // DECISIONS 242(2): a call of a key the receiver may not own.
         if t != TOP {
             self.note_chain_miss(t, key);

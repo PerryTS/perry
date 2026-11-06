@@ -354,10 +354,16 @@ fn iter_elems(m: &mut Model, it: Tok) -> NodeId {
     m.field(it, a)
 }
 
-/// A fresh builtin iterator (array/Map/Set/string iterator, one template
-/// per source call site) yielding the values in `values`.
-pub(super) fn iter_over(m: &mut Model, call: CallId, values: NodeId) -> Tok {
-    let it = site_tmpl(m, call, "Iterator");
+/// A fresh builtin iterator of kind `what` (one template per source call
+/// site and kind) yielding the values in `values`. The kind names the
+/// iterator's intrinsic prototype: `members::ARRAY_ITERATOR`
+/// (`%ArrayIteratorPrototype%`, what the realm declares Array, its
+/// prototype's methods and `%TypedArray%.prototype` birth),
+/// `members::MAP_ITERATOR`, `members::SET_ITERATOR`, or
+/// `members::ANY_ITERATOR` where the model does not know which (an iterator
+/// helper, a folded `.values()` whose receiver may be any iterable).
+pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values: NodeId) -> Tok {
+    let it = site_tmpl(m, call, what);
     let e = iter_elems(m, it);
     m.edge(values, e);
     it
@@ -423,7 +429,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     ret_prim(m, call, prim::UNDEF);
                 }
                 Some("map") => {
-                    let it = iter_over(m, call, r);
+                    let it = iter_over(m, call, members::ANY_ITERATOR, r);
                     ret_tok(m, call, it);
                 }
                 Some("flatMap") => {
@@ -436,17 +442,17 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                             dst: inner,
                         },
                     );
-                    let it = iter_over(m, call, inner);
+                    let it = iter_over(m, call, members::ANY_ITERATOR, inner);
                     ret_tok(m, call, it);
                 }
                 _ => {
-                    let it = iter_over(m, call, elems);
+                    let it = iter_over(m, call, members::ANY_ITERATOR, elems);
                     ret_tok(m, call, it);
                 }
             }
         }
         Some("take" | "drop") => {
-            let it = iter_over(m, call, elems);
+            let it = iter_over(m, call, members::ANY_ITERATOR, elems);
             ret_tok(m, call, it);
         }
         Some("reduce") => {
@@ -595,7 +601,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `[Symbol.iterator]()`: a fresh iterator over the elements.
         Some(WK_ITERATOR) => {
             let iterated = arr_iterated(m, t);
-            let it = iter_over(m, call, iterated);
+            let it = iter_over(m, call, members::ARRAY_ITERATOR, iterated);
             ret_tok(m, call, it);
         }
         // Any other computed-key method: one that returns the receiver, or
@@ -793,18 +799,18 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_prim(m, call, prim::STR);
         }
         Some("keys") => {
-            let it = iter_over(m, call, num);
+            let it = iter_over(m, call, members::ARRAY_ITERATOR, num);
             ret_tok(m, call, it);
         }
         Some("values") => {
             let iterated = arr_iterated(m, t);
-            let it = iter_over(m, call, iterated);
+            let it = iter_over(m, call, members::ARRAY_ITERATOR, iterated);
             ret_tok(m, call, it);
         }
         Some("entries") => {
             let iterated = arr_iterated(m, t);
             let pairs = entry_pairs(m, call, iterated, true);
-            let it = iter_over(m, call, pairs);
+            let it = iter_over(m, call, members::ARRAY_ITERATOR, pairs);
             ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
@@ -845,6 +851,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
     let (kind, fam) = (what, members::bobj_family(what));
     let what = match fam {
         Family::Collection => "Collection",
+        Family::Iterator => "Iterator",
         _ => what,
     };
     match (what, name) {
@@ -861,7 +868,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let vals = m.node_l("coll-iter");
             m.edge(elems, vals);
             m.edge(pairs, vals);
-            let it = iter_over(m, call, vals);
+            let it = iter_over(m, call, members::collection_iterator(kind), vals);
             ret_tok(m, call, it);
         }
         (_, None) => ret_tok(m, call, t),
@@ -878,12 +885,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
         ("Collection", Some("keys" | "values")) => {
-            let it = iter_over(m, call, elems);
+            let it = iter_over(m, call, members::collection_iterator(kind), elems);
             ret_tok(m, call, it);
         }
         ("Collection", Some("entries")) => {
             let pairs = entry_pairs(m, call, elems, false);
-            let it = iter_over(m, call, pairs);
+            let it = iter_over(m, call, members::collection_iterator(kind), pairs);
             ret_tok(m, call, it);
         }
         ("Collection", Some("forEach")) => {
@@ -1056,7 +1063,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             } else {
                 text
             };
-            let it = iter_over(m, call, vals);
+            let it = iter_over(m, call, members::ANY_ITERATOR, vals);
             ret_tok(m, call, it);
         }
         // Encoding: input ToString for encode/encodeInto, but decode's
