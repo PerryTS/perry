@@ -410,7 +410,7 @@ fn interrupted_solve_exports_incomplete_body_reach() {
     let pf = facts_with(
         src,
         FactsConfig {
-            max_work: Some(1),
+            budget_secs: Some(0),
             ..Default::default()
         },
     );
