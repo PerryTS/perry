@@ -52,9 +52,12 @@ pub(crate) enum Slot {
     ReactorId,
     AsyncId,
     TriggerAsyncId,
+    /// The socket's listeners (`listeners.rs`): a [[Prototype]]-null
+    /// ordinary object keyed by event name, as node's `_events`.
+    Events,
 }
 
-const SLOT_COUNT: usize = Slot::TriggerAsyncId as usize + 1;
+const SLOT_COUNT: usize = Slot::Events as usize + 1;
 
 /// Word 0 of every socket record: a plain double no state datum stores
 /// there (the slot is never written after the birth).

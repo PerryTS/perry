@@ -173,9 +173,9 @@ pub(crate) fn dgram_emit_message(
     let scope = crate::gc::RuntimeHandleScope::new();
     let buffer = scope.root_nanbox_f64(make_buffer(data));
     let rinfo = scope.root_nanbox_f64(build_rinfo(src_ip, src_family, src_port, data.len()));
-    emit_event_value(
+    emit_event(
         socket,
-        str_value("message"),
+        "message",
         &[buffer.get_nanbox_f64(), rinfo.get_nanbox_f64()],
     );
 }
