@@ -629,17 +629,24 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
 /// realm table's `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`, the
 /// same declaration the runtime seals)? `constructor` stays writable.
 fn generator_image_member(m: &Model, is_async: bool, name: &str) -> bool {
-    if name == "constructor" {
-        return false;
-    }
-    let holder = if is_async {
-        "%AsyncGeneratorPrototype%"
+    use perry_abi::lock::{final_on, LockHolder, LockKey};
+    let (holder, lock) = if is_async {
+        ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
     } else {
-        "%GeneratorPrototype%"
+        ("%GeneratorPrototype%", LockHolder::Generator)
     };
-    m.declarations
+    let key = if name == "constructor" {
+        LockKey::Constructor
+    } else if m
+        .declarations
         .named(holder, m)
         .is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    {
+        LockKey::Image
+    } else {
+        LockKey::Absent
+    };
+    final_on(lock, key)
 }
 
 /// The family whose intrinsic chain the lock sees on `t`: `seed_family`'s,

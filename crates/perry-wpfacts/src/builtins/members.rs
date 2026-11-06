@@ -458,31 +458,69 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
-    if name == "constructor" {
-        return false;
-    }
-    match fam {
-        Family::Object => true,
-        Family::Function => what == Some(FN_PROTO_ONLY),
-        Family::Array => name == crate::model::NUM_KEY || own(fam, name).is_some(),
-        Family::Str
-        | Family::Num
-        | Family::Bool
-        | Family::Sym
-        | Family::BigInt
-        | Family::Promise => own(fam, name).is_some(),
+    use perry_abi::lock::{final_on, LockHolder, LockKey};
+    use perry_abi::BuiltinProto as P;
+    // The family's own prototype (if the lock holds it) and whether `name`
+    // is one of its image members; `Object.prototype` follows on every chain.
+    let own_proto = match fam {
+        Family::Object => None,
+        Family::Function if what == Some(FN_PROTO_ONLY) => {
+            Some((P::Function, own(fam, name).is_some()))
+        }
+        Family::Array => Some((P::Array, own(fam, name).is_some())),
+        Family::Str => Some((P::String, own(fam, name).is_some())),
+        Family::Num => Some((P::Number, own(fam, name).is_some())),
+        Family::Bool => Some((P::Boolean, own(fam, name).is_some())),
+        Family::Sym => Some((P::Symbol, own(fam, name).is_some())),
+        Family::BigInt => Some((P::BigInt, own(fam, name).is_some())),
+        Family::Promise => Some((P::Promise, own(fam, name).is_some())),
         Family::Collection => {
-            let keys = match what {
-                Some("Map") => MAP_KEYS,
-                Some("Set") => SET_KEYS,
-                Some("WeakMap") => WEAKMAP_KEYS,
-                Some("WeakSet") => WEAKSET_KEYS,
+            let (proto, keys) = match what {
+                Some("Map") => (P::Map, MAP_KEYS),
+                Some("Set") => (P::Set, SET_KEYS),
+                Some("WeakMap") => (P::WeakMap, WEAKMAP_KEYS),
+                Some("WeakSet") => (P::WeakSet, WEAKSET_KEYS),
                 _ => return false,
             };
-            keys.contains(&name) && find(COLLECTION, name).is_some()
+            Some((
+                proto,
+                keys.contains(&name) && find(COLLECTION, name).is_some(),
+            ))
         }
-        Family::Iterator | Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
+        Family::Function
+        | Family::Iterator
+        | Family::Error
+        | Family::Box
+        | Family::Wrapper
+        | Family::Opaque => return false,
+    };
+    let class = |image: bool| {
+        if name == "constructor" {
+            LockKey::Constructor
+        } else if image {
+            LockKey::Image
+        } else if name == crate::model::NUM_KEY {
+            LockKey::Index
+        } else {
+            LockKey::Absent
+        }
+    };
+    // The lock's one decision (`perry_abi::lock`, the runtime's too) on each
+    // prototype the lookup passes: an image member ends it, an absent key
+    // goes on to the next prototype.
+    if let Some((proto, image)) = own_proto {
+        let key = class(image);
+        if !final_on(LockHolder::Proto(proto), key) {
+            return false;
+        }
+        if key == LockKey::Image {
+            return true;
+        }
     }
+    final_on(
+        LockHolder::Proto(P::Object),
+        class(find(OBJECT, name).is_some()),
+    )
 }
 
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every
