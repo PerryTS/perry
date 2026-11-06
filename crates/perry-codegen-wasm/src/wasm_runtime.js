@@ -4936,6 +4936,19 @@ function __classDispatch(objVal, mname, rawArgs) {
       return fn(objVal, ...rawArgs);
     }
   }
+  // 3) A host object's own method: Promise#then/catch/finally, Response#json, and the
+  // like, or a static method of a host constructor (`Promise.resolve`), whose receiver
+  // is a function. Without this arm `p.then(cb)` returns undefined and cb never runs,
+  // with no error anywhere. A Perry closure argument is an object, not a function, and
+  // a native method ignores a non-function callback, so each is wrapped before the call.
+  if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')
+      && typeof objVal[mname] === 'function') {
+    const args = rawArgs.map(a =>
+      (a && typeof a === 'object' && typeof a.funcIdx !== 'undefined')
+        ? (...cbArgs) => callWasmClosure(a, ...cbArgs)
+        : a);
+    return objVal[mname](...args);
+  }
   return undefined;
 }
 
