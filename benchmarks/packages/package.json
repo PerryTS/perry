@@ -24,7 +24,7 @@
     "mysql2": "3.24.4",
     "nanoid": "6.0.1",
     "node-cron": "4.6.0",
-    "node-forge": "1.4.0",
+    "node-forge": "1.4.1",
     "pg": "8.23.0",
     "qs": "6.16.0",
     "rate-limiter-flexible": "11.2.1",
