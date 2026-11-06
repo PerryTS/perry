@@ -25,6 +25,8 @@ pub enum ElementKey {
 pub struct ReceiverValue {
     pub token: Tok,
     pub kind: TokKind,
+    /// The token's resolved runtime shape, local to this solve.
+    pub shape: Option<usize>,
     /// Birth kind, including flow-only arrays absent from ProgramFacts.templates.
     pub template_kind: Option<TmplKind>,
     pub display: String,
@@ -93,6 +95,7 @@ impl ReceiverSet {
             .map(|&t| ReceiverValue {
                 token: t,
                 kind: m.toks[t as usize].clone(),
+                shape: m.toks.shape(t),
                 template_kind: m.tmpl_of(t).map(|tm| m.tmpls[tm as usize].kind.clone()),
                 display: match m.toks[t as usize] {
                     TokKind::Obj(tm, _) if !m.is_marker(t) => m.tmpls[tm as usize].display.clone(),

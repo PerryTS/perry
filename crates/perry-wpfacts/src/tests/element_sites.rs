@@ -205,3 +205,28 @@ fn wrapped_compound_access_keeps_both_source_operations() {
     let write = at(&pf, src, "get()[key]", ElementOp::Write);
     assert_eq!(read.receivers, write.receivers);
 }
+
+#[test]
+fn builtin_alias_receivers_reuse_canonical_identity_and_shape() {
+    let src = r#"const recv: any = new Set().keys;
+        const alias: any = new Set().values;
+        const key: any = "name";
+        console.log(recv[key], alias[key], recv.name);"#;
+    let pf = facts(src);
+    let indexed = at(&pf, src, "recv[key]", ElementOp::Read);
+    let alias = at(&pf, src, "alias[key]", ElementOp::Read);
+    assert!(!indexed.top, "{indexed:?}");
+    assert_eq!(indexed.prims, 0);
+    assert_eq!(indexed.receivers.len(), 1, "{indexed:?}");
+    let value = &indexed.receivers[0];
+    assert!(
+        matches!(
+            value.kind,
+            TokKind::BuiltinFn(crate::model::Native::Member { .. })
+        ),
+        "{value:?}"
+    );
+    assert!(value.shape.is_some(), "{value:?}");
+    assert_eq!(indexed.receivers, alias.receivers);
+    assert_eq!(site(&pf, "name").receiver_values, indexed.receivers);
+}
