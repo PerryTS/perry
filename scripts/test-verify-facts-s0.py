@@ -100,6 +100,15 @@ def main():
             assert value["predicate"] == "inactive body" and value["observed_receiver"] is None, value
         save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value["expectation"])
 
+    source = fixtures / "slot-key.ts"
+    exe, e = compile_(source, "slot-key-false", PERRY_FACTS_SABOTAGE="fixed_layout:Box")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "F3 slot", value
+    exe, e = compile_(source, "slot-key-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("slot-key", status=86, key=value["key"])
+
     for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call")]:
         source = fixtures / (name + ".ts")
         exe, e = compile_(source, name, PERRY_FACTS_SABOTAGE=wrong_claim)
@@ -122,7 +131,7 @@ def main():
     assert all(bool(row.get("check")) + bool(row.get("reason")) + bool(row.get("dead")) == 1 for row in inventory), inventory
     assert all(row.get("emitted_checks") for row in inventory if row.get("check")), inventory
     uncovered = sum(bool(row.get("reason")) for row in inventory)
-    assert uncovered == 1, (uncovered, inventory)
+    assert uncovered == 3, (uncovered, inventory)
     save("manifest", consumed=len(inventory), uncovered=uncovered)
 
     samples = []
