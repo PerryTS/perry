@@ -505,13 +505,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
+                        crate::verify_facts::Fact::Static,
+                        static_cid.as_slice(),
                     );
                     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let observed = if crate::verify_facts::enabled() {
+                        &recv
+                    } else {
+                        &undefined
+                    };
                     let _ = crate::verify_facts::check(
                         ctx,
                         I32,
                         "perry_wpfacts_check_miss",
-                        &[(DOUBLE, &undefined)],
+                        &[(DOUBLE, observed)],
                         &site,
                     );
                 } else if proven {

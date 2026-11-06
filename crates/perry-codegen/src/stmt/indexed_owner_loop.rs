@@ -657,7 +657,12 @@ fn verify_number_input(ctx: &mut FnCtx<'_>, number: &str, value: &str, id: u32) 
     let ok = ctx.current_block;
     ctx.current_block = miss;
     crate::verify_facts::number_checked(id);
-    let site = crate::verify_facts::site_arg(ctx, &format!("number input local {id}"));
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("number input local {id}"),
+        crate::verify_facts::Fact::NumberInput,
+        &[],
+    );
     let _ = crate::verify_facts::check(
         ctx,
         crate::types::I32,

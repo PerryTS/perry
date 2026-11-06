@@ -33,7 +33,7 @@ pub(crate) enum Fact {
     ProtoAdd,
 }
 impl Fact {
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Self::Receiver => "receiver set",
             Self::Slot => "field slot",

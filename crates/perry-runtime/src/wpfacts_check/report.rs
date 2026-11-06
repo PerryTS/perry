@@ -42,13 +42,25 @@ impl Witness {
     #[cold]
     #[inline(never)]
     pub(super) fn fail(self, predicate: &str, detail: String) -> ! {
+        self.report(Some(predicate), detail)
+    }
+    #[cold]
+    #[inline(never)]
+    pub(super) fn fail_static(self, detail: String) -> ! {
+        self.report(None, detail)
+    }
+    #[cold]
+    #[inline(never)]
+    fn report(self, predicate: Option<&str>, detail: String) -> ! {
         let Some(len) = self.len else {
-            super::violate(self.site, predicate, detail)
+            super::violate(self.site, predicate.expect("legacy predicate"), detail)
         };
         let metadata = unsafe { std::slice::from_raw_parts(self.site as *const u8, len) };
         let mut line = String::from_utf8_lossy(metadata).into_owned();
-        line.push_str(",\"predicate\":");
-        quote(&mut line, predicate);
+        if let Some(predicate) = predicate {
+            line.push_str(",\"predicate\":");
+            quote(&mut line, predicate);
+        }
         line.push_str(",\"observed_receiver\":");
         if let Some(bits) = self.receiver {
             let addr = (bits & POINTER_MASK) as usize;

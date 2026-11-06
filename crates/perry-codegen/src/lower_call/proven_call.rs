@@ -413,7 +413,12 @@ fn emit_proven_call(
 /// callee and its call form and returns its info, which must be one of the
 /// proven bodies' infos.
 fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, argc: usize) {
-    let site = crate::verify_facts::site_arg(ctx, &format!("proven call bodies={symbols:?}"));
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("proven call bodies={symbols:?}"),
+        crate::verify_facts::Fact::Bodies,
+        &[],
+    );
     let info = crate::verify_facts::check(
         ctx,
         PTR,

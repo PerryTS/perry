@@ -483,7 +483,7 @@ pub extern "C" fn perry_verify_facts_call_miss(
 pub extern "C" fn perry_verify_facts_miss(value: f64, site: i64, site_len: i64) -> i32 {
     Witness::raw(site, site_len)
         .receiver(value.to_bits())
-        .fail("inline check", describe(value.to_bits()))
+        .fail_static(describe(value.to_bits()))
 }
 
 #[no_mangle]

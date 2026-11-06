@@ -211,6 +211,8 @@ pub(super) fn emit_tower_pshape_call(
                 "method {} layout proven: shape {expected_shape_id} ({})",
                 route.clone_fn, route.keys_global
             ),
+            crate::verify_facts::Fact::FixedLayout,
+            &[],
         );
         let recv_box = crate::expr::nanbox_pointer_inline(ctx.block(), recv_handle);
         let _ = crate::verify_facts::check(

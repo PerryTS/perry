@@ -168,9 +168,14 @@ pub(crate) fn here() -> String {
 
 /// The site argument of a witness call: the handle of an interned string
 /// naming the site and what its lowering assumes (`here()` + `what`).
-pub(crate) fn site_arg(ctx: &mut FnCtx<'_>, what: &str) -> SiteArg {
+pub(crate) fn site_arg(ctx: &mut FnCtx<'_>, what: &str, fact: Fact, receivers: &[u32]) -> SiteArg {
     if enabled() {
-        return raw_site(ctx, "elision", None, &[], what);
+        let predicate = if matches!(fact, Fact::Bodies) {
+            None
+        } else {
+            Some(fact.name())
+        };
+        return raw_site_inner(ctx, fact.name(), None, receivers, what, predicate);
     }
     let text = format!("{} {what}", here());
     let idx = ctx.strings.intern(&text);
@@ -222,6 +227,17 @@ pub(crate) fn raw_site(
     receivers: &[u32],
     expectation: &str,
 ) -> SiteArg {
+    raw_site_inner(ctx, verdict, key, receivers, expectation, None)
+}
+
+fn raw_site_inner(
+    ctx: &mut FnCtx<'_>,
+    verdict: &str,
+    key: Option<&str>,
+    receivers: &[u32],
+    expectation: &str,
+    predicate: Option<&str>,
+) -> SiteArg {
     let (name, offset, ordinal) = MODULE.with(|m| {
         let m = m.borrow();
         let m = m.as_ref().expect("verification module initialized");
@@ -234,7 +250,7 @@ pub(crate) fn raw_site(
     let key = key
         .map(str::to_owned)
         .unwrap_or_else(|| KEY.with(|k| k.borrow().clone()));
-    let metadata = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "marker": "PERRY_FALSE_PROOF", "module": name, "byte_offset": offset,
         "key": key, "verdict": verdict,
         "proven_receivers": receivers,
@@ -242,6 +258,9 @@ pub(crate) fn raw_site(
         "compile_sha": option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown"),
         "expectation": expectation,
     });
+    if let Some(predicate) = predicate {
+        metadata["predicate"] = serde_json::json!(predicate);
+    }
     let mut bytes = serde_json::to_vec(&metadata).expect("static verification metadata");
     assert_eq!(bytes.pop(), Some(b'}'));
     let (pointer, len) = raw_bytes(ctx.strings.module_prefix(), &bytes);

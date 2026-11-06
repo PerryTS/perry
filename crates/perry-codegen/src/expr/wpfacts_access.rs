@@ -705,7 +705,8 @@ pub(crate) fn emit_witness(
         );
         return;
     }
-    let site_arg = crate::verify_facts::site_arg(ctx, &what);
+    let site_arg =
+        crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::Slot, &p.class_ids);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);

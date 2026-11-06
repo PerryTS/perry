@@ -554,6 +554,7 @@ fn lower_instance_method_call(
                 // facts-verification build lists every class and its default
                 // is the witness.
                 Some((map, nullable)) => {
+                    crate::verify_facts::tick(ctx);
                     let label_of = |i: usize| {
                         case_idxs
                             .iter()
@@ -562,7 +563,6 @@ fn lower_instance_method_call(
                             .expect("a proven class's implementor is cased")
                     };
                     let contracts = crate::verify_facts::witnesses();
-                    crate::verify_facts::tick(ctx);
                     let (listed, default) = if *nullable || contracts {
                         (&map[..], generic_label.clone())
                     } else {
@@ -675,6 +675,8 @@ fn lower_instance_method_call(
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("method .{property} receiver class_ids={ids:?}"),
+                        crate::verify_facts::Fact::Receiver,
+                        &ids,
                     );
                     let _ = crate::verify_facts::check(
                         ctx,
