@@ -406,11 +406,15 @@ fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
 
 #[test]
 fn interrupted_solve_exports_incomplete_body_reach() {
-    let src = "function f(x: any) { return x.k; } console.log(f({k: 1}));";
+    // Enough work to exercise the hard stop after whole-program widening.
+    let src = format!(
+        "function f(x: any) {{ return x.k; }} {}",
+        "console.log(f({k: 1}));".repeat(256)
+    );
     let pf = facts_with(
-        src,
+        &src,
         FactsConfig {
-            budget_secs: Some(0),
+            max_work: Some(1),
             ..Default::default()
         },
     );
@@ -419,7 +423,11 @@ fn interrupted_solve_exports_incomplete_body_reach() {
         !pf.body_reach.complete,
         "interruption cannot export negative reach proofs"
     );
-    let full = facts(src);
+    let full = facts(&src);
+    assert!(
+        full.stats.work > 1000,
+        "hard-stop fixture must do enough work"
+    );
     assert!(full.body_reach.complete);
     assert!(!full.body_reach.bodies.is_empty());
     for s in &full.sites {
