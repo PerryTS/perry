@@ -755,6 +755,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);
     module.declare_function("perry_wpfacts_check_call_miss", I32, &[PTR, I64]);
     module.declare_function("perry_wpfacts_check_miss", I32, &[DOUBLE, I64]);
+    if crate::verify_facts::dce_enabled() {
+        module.declare_function("llvm.trap", crate::types::VOID, &[]);
+    }
     if crate::verify_facts::enabled() {
         module.declare_function("perry_verify_facts_tick", crate::types::VOID, &[]);
         module.declare_function("perry_verify_facts_init", crate::types::VOID, &[]);

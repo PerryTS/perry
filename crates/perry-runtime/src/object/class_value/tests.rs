@@ -195,11 +195,7 @@ fn young_values_in_an_old_class_survive_moving_minors() {
     let _ = class_value_ptr(cid);
     // The class is old and pinned from birth; everything below is young.
     let proto = crate::object::js_object_alloc(0x6B05, 1);
-    crate::object::js_object_set_field(
-        proto,
-        0,
-        crate::value::JSValue::from_bits(crate::value::INT32_TAG | 4242),
-    );
+    crate::object::js_object_set_field(proto, 0, crate::value::JSValue::number(4242.0));
     let before = proto as usize;
     class_decl_prototype_link_store(cid, proto);
     let text = "young-static-6b04";
@@ -219,7 +215,7 @@ fn young_values_in_an_old_class_survive_moving_minors() {
         "forced evacuation must have moved the young prototype"
     );
     let field = crate::object::js_object_get_field(linked, 0);
-    assert_eq!(field.bits(), crate::value::INT32_TAG | 4242);
+    assert_eq!(field.bits(), 4242.0f64.to_bits());
     let got = class_static_get(cid, "k6b04").expect("the static survives minors");
     let hdr = crate::value::JSValue::from_bits(got.to_bits()).as_string_ptr();
     assert!(!hdr.is_null());
@@ -242,11 +238,7 @@ fn write_once_then_minors(cid: u32) -> bool {
     register(cid);
     let closure = class_value_ptr(cid);
     let proto = crate::object::js_object_alloc(cid + 1, 1);
-    crate::object::js_object_set_field(
-        proto,
-        0,
-        crate::value::JSValue::from_bits(crate::value::INT32_TAG | 777),
-    );
+    crate::object::js_object_set_field(proto, 0, crate::value::JSValue::number(777.0));
     class_decl_prototype_link_store(cid, proto);
     let slot = unsafe { prototype_link_slot(closure) } as usize;
     assert!(
@@ -276,17 +268,13 @@ fn write_once_then_minors(cid: u32) -> bool {
         );
         moved_from = linked as usize;
         let field = crate::object::js_object_get_field(linked, 0);
-        assert_eq!(field.bits(), crate::value::INT32_TAG | 777, "minor {minor}");
+        assert_eq!(field.bits(), 777.0f64.to_bits(), "minor {minor}");
     }
     // The fourth survival promotes it; the value is intact afterwards too.
     let _ = crate::gc::gc_collect_minor();
     let linked = class_decl_prototype_link(cid);
     let field = crate::object::js_object_get_field(linked, 0);
-    assert_eq!(
-        field.bits(),
-        crate::value::INT32_TAG | 777,
-        "after promotion"
-    );
+    assert_eq!(field.bits(), 777.0f64.to_bits(), "after promotion");
     true
 }
 

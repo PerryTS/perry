@@ -1282,6 +1282,8 @@ impl Model {
             Cons::Call { call } => format!("call {n} {call}"),
             Cons::CallThis { call, this } => format!("callthis {n} {call} {this}"),
             Cons::New { call } => format!("new {n} {call}"),
+            Cons::NewProgram { call } => format!("newprogram {n} {call}"),
+            Cons::FromArrayLike { dst } => format!("fromarraylike {n} {dst}"),
             Cons::ReflectNew { call, new_target } => format!("reflectnew {n} {call} {new_target}"),
             Cons::ReflectNewTarget { call, target } => {
                 format!("reflectnewtarget {n} {call} {target}")
@@ -1431,6 +1433,11 @@ impl Model {
             Cons::PlainKey { origin, act } => format!("plainkey {n} {origin} {act:?}"),
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
+            Cons::NativeParent {
+                tm,
+                expected,
+                reason,
+            } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Arith { dst } => format!("arith {n} {dst}"),
             Cons::Plus { str, num } => format!("plus {n} {str} {num}"),

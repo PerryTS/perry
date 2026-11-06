@@ -689,6 +689,104 @@ impl Model {
         }
     }
 
+    /// `Cons::NewProgram`: `call` constructs `t` when `t` is a program
+    /// constructor, a class or function of the program's code (a bound one
+    /// through its target). A realm constructor (`%Array%`, a builtin
+    /// function value, ⊤'s) is the built-in's own result, already made.
+    pub fn construct_program(&mut self, call: CallId, t: Tok) {
+        match self.toks[t as usize] {
+            TokKind::ClassObj(_) | TokKind::Func(_, _) => self.construct(call, t),
+            TokKind::Bound(b) => {
+                if !self.construct_done.insert((call, t)) {
+                    return;
+                }
+                let (target, _bthis, bargs) = self.bound[b as usize].clone();
+                let c = self.calls[call as usize].clone();
+                let mut args = bargs;
+                args.extend(c.args.iter().copied());
+                let call2 = self.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args,
+                        spread: c.spread.clone(),
+                        ret: c.ret,
+                        site: c.site,
+                    },
+                );
+                self.cons(target, Cons::NewProgram { call: call2 });
+            }
+            _ => {}
+        }
+    }
+
+    /// `Cons::FromArrayLike` of token `t`: `Array.from` reads a program
+    /// object whose `@@iterator` may be nullish as an array-like (ECMA-262
+    /// 23.1.2.1 step 5): ToLength(Get(t, "length")), then Get(t, k) for each
+    /// index, into `dst`. Only a program value (an object of a program
+    /// template, a function, a class, a prototype): an Array, a builtin's
+    /// object (a collection, an iterator, all of them iterable) or ⊤ is the
+    /// iteration's (`load_from` under the iteration key).
+    pub fn from_array_like(&mut self, t: Tok, dst: NodeId) {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _)
+                if self.tmpls[tm as usize].kind.is_fact_unit() && !self.is_array_like(t) => {}
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Proto(_) => {}
+            _ => return,
+        }
+        // GetMethod(t, @@iterator) is nullish when t's own value under the
+        // key is, or when t holds none and its chain's is. Each half may be
+        // nullish: the own fields under the key (stored values, no read of
+        // the absence: an instance never holds a class's method), and the
+        // read of the key from t's prototypes, which ends `undefined` where
+        // no link holds it.
+        let src = self.node_l("from-source");
+        self.add_tok(src, t);
+        let wk = self.atom(crate::builtins::WK_ITERATOR);
+        let protos = self.node_l("from-prototypes");
+        self.cons(src, Cons::ProtoOf { dst: protos });
+        let inherited = self.node_l("from-inherited-iterator");
+        self.cons(
+            protos,
+            Cons::Load {
+                key: Key::Named(wk),
+                dst: inherited,
+            },
+        );
+        let like = self.node_l("from-array-like");
+        let own = self.field(t, wk);
+        let any = self.field_any(t);
+        for test in [inherited, own, any] {
+            self.cons(
+                test,
+                Cons::Guard {
+                    test: guard::NULLISH,
+                    from: src,
+                    dst: like,
+                },
+            );
+        }
+        let la = self.atom("length");
+        let len = self.node_l("from-length");
+        self.cons(
+            like,
+            Cons::Load {
+                key: Key::Named(la),
+                dst: len,
+            },
+        );
+        let r = self.reason("ToLength of an Array.from array-like length");
+        self.cons(
+            len,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+        let ek = self.elem_key();
+        self.cons(like, Cons::Load { key: ek, dst });
+    }
+
     /// `super(...)` from a subclass constructor: the parent chain runs on
     /// the same instance; the `new` result is the subclass's.
     pub fn run_ctor_chain_this(&mut self, call: CallId, tm: TmplId, inst: Tok) {

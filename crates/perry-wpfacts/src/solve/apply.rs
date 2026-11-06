@@ -71,6 +71,16 @@ impl Model {
                     self.construct(call, t);
                 }
             }
+            Cons::NewProgram { call } => {
+                for &t in toks {
+                    self.construct_program(call, t);
+                }
+            }
+            Cons::FromArrayLike { dst } => {
+                for &t in toks {
+                    self.from_array_like(t, dst);
+                }
+            }
             Cons::ReflectNew { call, new_target } => {
                 for &target in toks {
                     self.cons(new_target, Cons::ReflectNewTarget { call, target });
@@ -1422,6 +1432,24 @@ impl Model {
                             self.call_tok(call, t, Some(origin));
                         }
                     }
+                }
+            }
+            Cons::NativeParent {
+                tm,
+                expected,
+                reason,
+            } => {
+                let mut other = prim & prim::NULL != 0;
+                for &t in toks {
+                    if t != expected {
+                        self.escape(t, reason);
+                        other = true;
+                    }
+                }
+                if other {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    self.escape(inst, reason);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                 }
             }
             Cons::NewTargetHard { reason } => {

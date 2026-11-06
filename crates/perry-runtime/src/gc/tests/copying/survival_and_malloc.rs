@@ -942,7 +942,7 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
         crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((old_addr) as i64)).is_some()
     );
 
-    set_regexp_expando(old_addr, "tag", crate::value::JSValue::int32(42));
+    set_regexp_expando(old_addr, "tag", crate::value::JSValue::number(42.0));
     js_shadow_slot_set(0, ptr_bits(old_addr));
 
     let cycles = crate::gc::copying_minor_cycles();
@@ -970,7 +970,7 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
             crate::string::intern_ascii_literal(b"tag")
         )
         .bits(),
-        crate::value::JSValue::int32(42).bits()
+        crate::value::JSValue::number(42.0).bits()
     );
 
     let source = crate::regex::js_regexp_get_source(new_addr as *const _);
@@ -1080,8 +1080,8 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
         crate::arena::pointer_in_nursery(dead_addr),
         "the header must be nursery-allocated"
     );
-    set_regexp_expando(dead_addr, "tag", crate::value::JSValue::int32(7));
-    set_regexp_expando(live_addr, "tag", crate::value::JSValue::int32(42));
+    set_regexp_expando(dead_addr, "tag", crate::value::JSValue::number(7.0));
+    set_regexp_expando(live_addr, "tag", crate::value::JSValue::number(42.0));
     fn programs() -> usize {
         let mut cursor =
             crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::Address);
@@ -1133,7 +1133,7 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
             )
             .bits()
         ),
-        Some(crate::value::JSValue::int32(42).bits()),
+        Some(crate::value::JSValue::number(42.0).bits()),
         "the surviving RegExp keeps its own value, not the dead one's"
     );
     assert_eq!(

@@ -396,7 +396,13 @@ impl<'a> Gen<'a> {
                 self.m.edge(k, fa);
                 n
             }
-            Expr::ArrayFrom(x, _) | Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
+            Expr::ArrayFrom(x, _) => {
+                let v = self.expr(fx, x);
+                let it = self.iterate(v);
+                self.m.cons(v, Cons::FromArrayLike { dst: it });
+                self.new_arr_from(mi, "from", &[it])
+            }
+            Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
                 self.new_arr_from(mi, "from", &[it])
@@ -421,6 +427,7 @@ impl<'a> Gen<'a> {
             } => {
                 let v = self.expr(fx, iterable);
                 let it = self.iterate(v);
+                self.m.cons(v, Cons::FromArrayLike { dst: it });
                 let f = self.expr(fx, map_fn);
                 let this = match this_arg {
                     Some(t) => ThisArg::Node(self.expr(fx, t)),

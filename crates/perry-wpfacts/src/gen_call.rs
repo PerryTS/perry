@@ -178,14 +178,14 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = self.read_key(index);
+                let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
-                match self.read_key(index) {
+                match self.read_key(fx.module, index) {
                     Key::Named(a) => {
                         self.m.cons(
                             o,
@@ -418,7 +418,19 @@ impl<'a> Gen<'a> {
         let mi = fx.module;
         let callee = if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
             let t = self.m.tok(TokKind::ClassObj(tm));
-            Some(self.tok_node(t))
+            let c = self.tok_node(t);
+            // A default-derived specialization may be constructed as the
+            // class it was specialized from (codegen `super_constructor::new`
+            // constructs that class value when the heritage is live): the
+            // program then builds an instance of the class as written and
+            // runs its default constructor and field initializers. Which of
+            // the two the program builds is decided by facts about the
+            // heritage, so the callee holds both.
+            for origin in self.written_classes(mi, name) {
+                let o = self.m.tok(TokKind::ClassObj(origin));
+                self.m.add_tok(c, o);
+            }
+            Some(c)
         } else if let Some(n) = self.import_value(mi, name) {
             Some(n)
         } else {
@@ -432,6 +444,28 @@ impl<'a> Gen<'a> {
             }
             None => self.new_builtin(fx, name, args, spread),
         }
+    }
+
+    /// The classes a default-derived specialization `name` of module `mi`
+    /// was specialized from, nearest first (`Class::is_default_derived`).
+    fn written_classes(&self, mi: u32, name: &str) -> Vec<TmplId> {
+        let module = self.modules[mi as usize].1;
+        let mut out = Vec::new();
+        let mut cur = module.classes.iter().find(|c| c.name == name);
+        for _ in 0..module.classes.len() {
+            let Some(c) = cur.filter(|c| c.is_default_derived()) else {
+                break;
+            };
+            let Some(origin) = c.specialized_from.as_deref() else {
+                break;
+            };
+            let Some(&tm) = self.mods[mi as usize].classes.get(origin) else {
+                break;
+            };
+            out.push(tm);
+            cur = module.classes.iter().find(|k| k.name == origin);
+        }
+        out
     }
 
     /// `new Name(...)` of a name that is not a program class: a builtin.
