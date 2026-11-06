@@ -23,6 +23,7 @@ impl<'a> Gen<'a> {
     /// a constant key the definition is an accessor key on every layout that
     /// does not hold the key as data, and either descriptor a key of a
     /// prototype (`Cons::DefineKey`), not E5 HARD.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn define_property(
         &mut self,
         fx: &Fx,
@@ -31,6 +32,7 @@ impl<'a> Gen<'a> {
         desc: NodeId,
         r: u32,
         accessor: bool,
+        own: [Option<NodeId>; 2],
     ) {
         // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
         // a given prototype holds (`settle_native_given`).
@@ -73,9 +75,15 @@ impl<'a> Gen<'a> {
         if key.is_some() {
             self.m.accessor_atoms.insert(ka);
         }
-        for (name, setter) in [("get", false), ("set", true)] {
-            let a = self.m.atom(name);
-            let f = self.load(desc, Key::Named(a));
+        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
+            // A literal descriptor's own get/set (`accessor_literal`).
+            let f = match own {
+                Some(f) => f,
+                None => {
+                    let a = self.m.atom(name);
+                    self.load(desc, Key::Named(a))
+                }
+            };
             self.m.cons(
                 f,
                 Cons::Accessor {

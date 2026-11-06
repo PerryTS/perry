@@ -65,25 +65,21 @@ impl<'a> Gen<'a> {
                 );
                 let key = self.const_key(mi, k);
                 let accessor = self.accessor_descriptor(mi, d);
+                // An accessor literal's own `get` / `set` is its constructor
+                // argument: each define installs its own, whatever its key.
+                // The literal's shape has one constructor for every site, so
+                // a read of the built descriptor's field joins them all.
+                let (dn, own) = match self.accessor_literal(mi, d) {
+                    Some((class_name, args, get, set)) => {
+                        let a = self.evaluate_all(fx, args);
+                        let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
+                        (self.new_named(fx, class_name, a, vec![]), own)
+                    }
+                    None => (self.expr(fx, d), [None, None]),
+                };
                 match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
-                    Some(kp) => {
-                        // An accessor literal's own `get` / `set` is its
-                        // constructor argument: each run defines its own (the
-                        // literal's token, one per birth site, holds them all).
-                        let (dn, own) = match self.accessor_literal(mi, d) {
-                            Some((class_name, args, get, set)) => {
-                                let a = self.evaluate_all(fx, args);
-                                let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
-                                (self.new_named(fx, class_name, a, vec![]), own)
-                            }
-                            None => (self.expr(fx, d), [None, None]),
-                        };
-                        self.define_keyed(fx, on, kp, dn, r, accessor, own);
-                    }
-                    None => {
-                        let dn = self.expr(fx, d);
-                        self.define_property(fx, on, key, dn, r, accessor);
-                    }
+                    Some(kp) => self.define_keyed(fx, on, kp, dn, r, accessor, own),
+                    None => self.define_property(fx, on, key, dn, r, accessor, own),
                 }
                 on
             }
@@ -184,7 +180,7 @@ impl<'a> Gen<'a> {
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
                     let descs = self.load(pv, Key::any());
-                    self.define_property(fx, n, None, descs, r, false);
+                    self.define_property(fx, n, None, descs, r, false, [None, None]);
                 }
                 n
             }
