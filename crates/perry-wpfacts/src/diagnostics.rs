@@ -405,16 +405,31 @@ impl Model {
         }
     }
 
-    /// A summary instance keeps its template call identity. `CallSite::site`
-    /// is an allocation context, and synthetic protocol calls may use zero:
-    /// it must never be used to attribute their callees to source call zero.
+    /// A summary instance keeps its template call identity; a call the
+    /// solver makes for a program call (a builtin calling a callback, a
+    /// bound target) reports that program call (`Model::solver_call`).
+    /// `CallSite::site` is an allocation context, and synthetic protocol
+    /// calls may use zero: it must never be used to attribute their callees
+    /// to source call zero.
     pub(crate) fn diagnostic_source_call(&self, call: CallId) -> Option<CallId> {
         let d = self.diagnostic.as_ref()?;
-        if d.source_calls.contains(&call) {
-            return Some(call);
+        let mut c = call;
+        loop {
+            if d.source_calls.contains(&c) {
+                return Some(c);
+            }
+            // Each step goes to an earlier call: the template's, or the one
+            // the solver made this call for.
+            let next = *self
+                .sum
+                .tmpl_of
+                .get(&c)
+                .or_else(|| self.sum.origin.get(&c))?;
+            if next >= c {
+                return None;
+            }
+            c = next;
         }
-        let source = *self.sum.tmpl_of.get(&call)?;
-        d.source_calls.contains(&source).then_some(source)
     }
     /// The function a node's rules run for: its body's owner, or the
     /// function of the run (instance or shared run) it belongs to.
