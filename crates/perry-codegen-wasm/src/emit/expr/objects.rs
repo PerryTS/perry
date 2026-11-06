@@ -142,6 +142,27 @@ impl<'a> FuncEmitCtx<'a> {
                         return true;
                     }
                 }
+                // A member of the unresolved-global sentinel (`Promise`, `Reflect`,
+                // `globalThis.foo`) is a property of globalThis. The sentinel alone lowers
+                // to undefined, so the generic arm below would read `undefined.Promise`.
+                if let Expr::GlobalGet(id) = object.as_ref() {
+                    if !self.emitter.global_map.contains_key(id) {
+                        let key_id = self
+                            .emitter
+                            .string_map
+                            .get(property.as_str())
+                            .copied()
+                            .unwrap_or(0);
+                        self.emit_frame_begin(func, 1);
+                        self.emit_store_const(
+                            func,
+                            0,
+                            f64::from_bits((STRING_TAG << 48) | (key_id as u64)),
+                        );
+                        self.emit_memcall(func, "global_property", 1);
+                        return true;
+                    }
+                }
                 // Special case: .length uses string_len which handles both strings and arrays
                 if property == "length" {
                     self.emit_frame_begin(func, 1);
