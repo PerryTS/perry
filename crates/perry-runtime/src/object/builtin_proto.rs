@@ -266,28 +266,51 @@ pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
 /// `build_generator_tower` completes them.
 pub(crate) const GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 3;
 pub(crate) const ASYNC_GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 4;
+/// The meta family fields of `%MapIteratorPrototype%`,
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` and
+/// `%RegExpStringIteratorPrototype%` (DEC 250 as narrowed 2026-11-03, like
+/// the generator prototypes): their image members (`next`,
+/// `@@toStringTag`) are locked, adds stay open. Sealed by
+/// `seal_iterator_prototypes` with the shared and array ones.
+pub(crate) const MAP_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 5;
+pub(crate) const SET_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 6;
+pub(crate) const STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 7;
+pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 8;
 const _: () = assert!(
-    ASYNC_GENERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
+    REGEXP_STRING_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
 );
 
-/// Seal the two iterator prototypes the moment `iterator_prototypes` completes
-/// them, before any program code can reach them.
+/// Seal the built-in iterator prototypes the moment `iterator_prototypes`
+/// completes them, before any program code can reach them: `shared`
+/// (`%IteratorPrototype%`), then the families in `ITERATOR_FAMILIES` order.
 ///
 /// # Safety
-/// Both are live, fully built ordinary objects (or null).
+/// Every one is a live, fully built ordinary object (or null).
 #[inline(never)]
 #[optimize(size)]
 pub(crate) unsafe fn seal_iterator_prototypes(
     shared: *mut ObjectHeader,
-    array_iterator: *mut ObjectHeader,
+    families: [*mut ObjectHeader; 5],
 ) {
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
         seal_object_family(shared, ITERATOR_FAMILY);
-        seal_object_family(array_iterator, ARRAY_ITERATOR_FAMILY);
+        for (proto, family) in families.into_iter().zip(ITERATOR_FAMILIES) {
+            seal_object_family(proto, family);
+        }
     });
 }
+
+/// The family of each built-in iterator prototype `seal_iterator_prototypes`
+/// seals past `%IteratorPrototype%`: Array, Map, Set, String, RegExp String.
+const ITERATOR_FAMILIES: [usize; 5] = [
+    ARRAY_ITERATOR_FAMILY,
+    MAP_ITERATOR_FAMILY,
+    SET_ITERATOR_FAMILY,
+    STRING_ITERATOR_FAMILY,
+    REGEXP_STRING_ITERATOR_FAMILY,
+];
 
 /// Seal `%GeneratorPrototype%` (or `%AsyncGeneratorPrototype%`) the moment
 /// its tower is built, before any program code can reach it.
@@ -328,6 +351,14 @@ pub(crate) fn lock_holder(family: usize) -> Option<LockHolder> {
         Some(LockHolder::Generator)
     } else if family == ASYNC_GENERATOR_FAMILY {
         Some(LockHolder::AsyncGenerator)
+    } else if family == MAP_ITERATOR_FAMILY {
+        Some(LockHolder::MapIterator)
+    } else if family == SET_ITERATOR_FAMILY {
+        Some(LockHolder::SetIterator)
+    } else if family == STRING_ITERATOR_FAMILY {
+        Some(LockHolder::StringIterator)
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        Some(LockHolder::RegExpStringIterator)
     } else {
         None
     }
@@ -593,9 +624,11 @@ unsafe fn note_sealed_write(
         if !super::own_override::in_builtin_definition() {
             super::shadow::set_bit(obj.cast_mut());
         }
-    } else if family == GENERATOR_FAMILY || family == ASYNC_GENERATOR_FAMILY {
-        // Locked above (image members only); an add is the program's own
-        // member and nothing in the runtime answers from its absence.
+    } else if (GENERATOR_FAMILY..=REGEXP_STRING_ITERATOR_FAMILY).contains(&family) {
+        // The generator and the Map/Set/String/RegExp String iterator
+        // prototypes: locked above (image members only); an add is the
+        // program's own member and nothing in the runtime answers from its
+        // absence.
     } else if family == ITERATOR_FAMILY || family == ARRAY_ITERATOR_FAMILY {
         // Locked above (adds included); nothing else models them, so a
         // definition add after the seal has no answer to withdraw: it aborts.
@@ -872,6 +905,14 @@ fn locked_object_name(family: usize) -> String {
         String::from("%GeneratorPrototype%")
     } else if family == ASYNC_GENERATOR_FAMILY {
         String::from("%AsyncGeneratorPrototype%")
+    } else if family == MAP_ITERATOR_FAMILY {
+        String::from("%MapIteratorPrototype%")
+    } else if family == SET_ITERATOR_FAMILY {
+        String::from("%SetIteratorPrototype%")
+    } else if family == STRING_ITERATOR_FAMILY {
+        String::from("%StringIteratorPrototype%")
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        String::from("%RegExpStringIteratorPrototype%")
     } else {
         crate::codegen_abi::BUILTIN_NAMESPACES[family - super::builtin_namespace::FIRST].to_string()
     }
