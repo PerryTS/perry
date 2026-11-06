@@ -169,6 +169,19 @@ pub unsafe extern "C" fn js_event_target_is_event_target(target: *const ObjectHe
         .get()
         .map_or_else(|| 0, |run| unsafe { run(target) })
 }
+static INITIALIZE_TARGET: Hook<fn(*mut ObjectHeader, bool)> = Hook::empty();
+pub(crate) fn initialize_target(target: *mut ObjectHeader, signal: bool) {
+    if let Some(run) = INITIALIZE_TARGET.get() {
+        run(target, signal);
+    }
+}
+static DISPATCH_EVENT: Hook<unsafe extern "C" fn(*mut ObjectHeader, f64) -> f64> = Hook::empty();
+pub unsafe fn dispatch_event(target: *mut ObjectHeader, event: f64) -> f64 {
+    DISPATCH_EVENT.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_TRUE),
+        |run| unsafe { run(target, event) },
+    )
+}
 static JS_EVENT_TARGET_NEW: Hook<extern "C" fn() -> *mut ObjectHeader> = Hook::empty();
 pub(crate) extern "C" fn js_event_target_new() -> *mut ObjectHeader {
     JS_EVENT_TARGET_NEW
@@ -369,6 +382,8 @@ pub(crate) fn install() {
         JS_EVENT_TARGET_GET_MAX_LISTENERS
             .set(crate::event_target::js_event_target_get_max_listeners);
         JS_EVENT_TARGET_IS_EVENT_TARGET.set(crate::event_target::js_event_target_is_event_target);
+        INITIALIZE_TARGET.set(crate::event_target::state::initialize_target);
+        DISPATCH_EVENT.set(crate::event_target::js_event_target_dispatch_event);
         JS_EVENT_TARGET_NEW.set(crate::event_target::js_event_target_new);
         JS_EVENT_TARGET_REMOVE_EVENT_LISTENER
             .set(crate::event_target::js_event_target_remove_event_listener);
