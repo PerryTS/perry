@@ -21,6 +21,10 @@
 //! the written class's default constructor and field initializers run
 //! (CXCHK0 witnesses test_gap_6232_class_extends_array, the Map/Promise
 //! subclass family, test_gap_sp_live_super_defaults).
+//! A static accessor is found on the class object (and through it on a
+//! subclass), where the program reads it (CXCHK0 gap witnesses
+//! test_gap_class_name_length_own, test_gap_class_accessor_shape_facts and
+//! the static-accessor family).
 //! `instance`, `composed` and `for-in` fire only inside a transfer that
 //! `call`, `accessor`, `this` or `for-in`'s caller already activates (an
 //! instance is made by a call binding; a composed callee's calls are
@@ -114,7 +118,42 @@ for (const v of src) { console.log(v); break; }
         "call+this",
         &["escape", "accessor", "computed"],
     ),
+    (
+        "static-getter-of-a-class",
+        r#"
+function hit() { return 1; }
+class G { static get x() { return hit(); } }
+console.log(G.x);
+"#,
+        "accessor",
+        &["call", "this", "escape", "computed"],
+    ),
+    (
+        "inherited-static-setter",
+        r#"
+function hit() { return 1; }
+class S { static set c(v: any) { hit(); } }
+class T extends S {}
+T.c = 1;
+console.log("set");
+"#,
+        "accessor",
+        &["call", "this", "escape", "computed"],
+    ),
 ];
+
+/// A static accessor is an own property of the class object, not of its
+/// prototype: an instance read under its name does not run it (Node prints
+/// `undefined`).
+#[test]
+fn an_instance_read_does_not_run_a_static_getter() {
+    let src = r#"
+function hit() { return 1; }
+class G { static get x() { return hit(); } }
+console.log((new G() as any).x);
+"#;
+    assert!(!hit_runs(src, None), "hit active through an instance read");
+}
 
 #[test]
 fn each_fixture_runs_its_body() {

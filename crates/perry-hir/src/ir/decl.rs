@@ -337,6 +337,12 @@ impl Class {
                 || self.native_extends.is_some())
     }
 
+    /// Accessor `f` of `getters` / `setters` is `static`: an own property of
+    /// the class constructor, not of its prototype (`static_accessor_fn_ids`).
+    pub fn is_static_accessor(&self, f: &Function) -> bool {
+        self.static_accessor_fn_ids.contains(&f.id)
+    }
+
     /// Some member's key is evaluated by ClassDefinitionEvaluation: the one
     /// question "does this class have keys the compiler cannot name". A member
     /// keyed by a known symbol is an ordinary member and does not count.
