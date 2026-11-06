@@ -192,6 +192,9 @@ pub(crate) fn run(
         perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check))
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+    if perry_codegen::verify_facts::enabled() {
+        perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));
+    }
     if let Some(path) = &dump {
         let synthetic = synthetic_module_dirs(cache_dir);
         let mut text = pf.dump_text();
@@ -345,6 +348,8 @@ pub(crate) fn view_for(
             None
         },
         verification_module: perry_codegen::verify_facts::enabled().then(|| key.clone()),
+        verification_sites: perry_codegen::verify_facts::enabled()
+            .then(|| Arc::new(verification_sites(pf, Some(&key)))),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
         // Set on the entry module by the driver, once R is closed.
@@ -783,3 +788,37 @@ mod native_addon_tests;
 #[cfg(test)]
 #[path = "program_facts/element_tests.rs"]
 mod element_tests;
+
+fn verification_sites(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: Option<&str>,
+) -> Vec<perry_codegen::verify_facts::SiteClaim> {
+    use perry_codegen::verify_facts::{SiteClaim, SiteVerdict};
+    pf.sites
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, site)| {
+            let module = pf.module_paths.get(site.module as usize)?;
+            if path.is_some_and(|path| path != module) {
+                return None;
+            }
+            let verdict = match site.verdict {
+                perry_wpfacts::Verdict::OwnLength => SiteVerdict::OwnLength,
+                perry_wpfacts::Verdict::NativeMember => SiteVerdict::NativeMember,
+                perry_wpfacts::Verdict::T0Mono => SiteVerdict::T0Mono,
+                perry_wpfacts::Verdict::T0Set => SiteVerdict::T0Set,
+                perry_wpfacts::Verdict::E0 => SiteVerdict::E0,
+                perry_wpfacts::Verdict::No(_) => return None,
+            };
+            Some(SiteClaim {
+                ordinal,
+                module: module.clone(),
+                byte_offset: site.byte_offset.saturating_sub(1),
+                key: site.key.clone(),
+                is_call: site.is_call,
+                bodies: site.bodies.clone(),
+                verdict,
+            })
+        })
+        .collect()
+}

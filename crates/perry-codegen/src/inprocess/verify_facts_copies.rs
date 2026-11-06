@@ -178,8 +178,7 @@ impl Copy<'_> {
             meta["copy"]["lowered"] = self.copy.clone();
             let mut bytes = serde_json::to_vec(&meta)?;
             bytes.pop();
-            let init =
-                LLVMConstStringInContext(context, bytes.as_ptr().cast(), bytes.len() as u32, 1);
+            let init = LLVMConstStringInContext2(context, bytes.as_ptr().cast(), bytes.len(), 1);
             let symbol = std::ffi::CString::new(format!(
                 "__perry_verify_copy_{}_{}",
                 self.ordinal, self.leaf

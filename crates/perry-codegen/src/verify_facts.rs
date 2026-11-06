@@ -15,6 +15,53 @@ pub(crate) use coverage::{consumed, Fact};
 #[cfg(feature = "llvm-inprocess")]
 pub(crate) use coverage::{emitted, optimized};
 
+/// A solver site identity, without a second derivation or display-string parsing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteClaim {
+    pub ordinal: usize,
+    pub module: String,
+    pub byte_offset: u32,
+    pub key: String,
+    pub is_call: bool,
+    pub bodies: Vec<(u32, String)>,
+    pub verdict: SiteVerdict,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SiteVerdict {
+    OwnLength,
+    NativeMember,
+    T0Mono,
+    T0Set,
+    E0,
+}
+impl SiteVerdict {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::OwnLength => "OwnLength",
+            Self::NativeMember => "NativeMember",
+            Self::T0Mono => "T0Mono",
+            Self::T0Set => "T0Set",
+            Self::E0 => "E0",
+        }
+    }
+    pub(crate) fn slice(self) -> u8 {
+        match self {
+            Self::OwnLength => 1,
+            Self::NativeMember => 2,
+            Self::T0Mono => 3,
+            Self::T0Set => 4,
+            Self::E0 => 5,
+        }
+    }
+}
+
+pub fn register_site_claims(claims: impl IntoIterator<Item = SiteClaim>) {
+    if enabled() {
+        coverage::sites(claims);
+    }
+}
+
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;

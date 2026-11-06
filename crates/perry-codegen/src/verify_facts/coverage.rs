@@ -108,6 +108,7 @@ fn record(predicate: &str, operands: Value, checked: bool) {
     let mut records = RECORDS.lock().expect("verification coverage poisoned");
     let entry = records.claims.entry(identity.clone()).or_insert_with(|| json!({
         "identity":identity, "module":module, "byte_offset":offset, "copy":{"body":copy,"site":site_copy},
+        "category":"consumed predicate","consumed":true,
         "predicate":predicate,"operands":operands,"check":null,
         "reason":"not covered before slice S6"}));
     if checked {
@@ -233,4 +234,20 @@ pub(crate) fn reset() {
     let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
     inventory.claims.clear();
     inventory.copies.clear();
+}
+
+pub(super) fn sites(claims: impl IntoIterator<Item = SiteClaim>) {
+    let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+    for claim in claims {
+        let identity = json!(["solver site", claim.module, claim.ordinal]).to_string();
+        inventory.claims.entry(identity.clone()).or_insert_with(|| {
+            json!({
+                "identity":identity, "category":"solver site", "consumed":false,
+                "module":claim.module, "byte_offset":claim.byte_offset, "key":claim.key,
+                "copy":{"solver_bodies":claim.bodies}, "predicate":claim.verdict.name(),
+                "operands":{"is_call":claim.is_call}, "check":null,
+                "reason":format!("not covered before slice S{}",claim.verdict.slice())
+            })
+        });
+    }
 }
