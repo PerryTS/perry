@@ -27,7 +27,7 @@ impl Model {
         let TokKind::BuiltinFn(Native::Member { .. }) = self.toks[t as usize] else {
             return false;
         };
-        if builtins::native_namespace_call(self, t, call) {
+        if builtins::native_namespace_call(self, t, call, this_tok) {
             return true;
         }
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
