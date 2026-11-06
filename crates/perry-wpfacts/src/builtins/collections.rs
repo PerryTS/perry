@@ -1254,9 +1254,27 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries",
+            | "fromEntries" | "mapGroups",
             Some(n),
-        ) => array_method(m, t, Some(n), call),
+        ) => match members::box_chain(kind) {
+            members::BoxChain::Array | members::BoxChain::Unknown => {
+                array_method(m, t, Some(n), call)
+            }
+            // No `Array.prototype` on the chain (`box_chain`): past the own
+            // values (never callable) an ordinary object finds
+            // `Object.prototype`'s methods, run through the chain, and any
+            // other key absent (final, `locked_read`); a null-prototype
+            // object finds nothing (a TypeError).
+            members::BoxChain::Object => undescribed_method(
+                m,
+                Family::Object,
+                t,
+                n,
+                call,
+                &format!("argument of {kind}.{n}"),
+            ),
+            members::BoxChain::Null => {}
+        },
         (_, Some(n)) => undescribed_method(m, fam, t, n, call, &format!("argument of {kind}.{n}")),
     }
 }

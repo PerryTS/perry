@@ -481,7 +481,7 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                 }
                 NativeMiss::PrimCall(_, call) => {
                     let name = m.atoms[a as usize].clone();
-                    unknown_method(
+                    unknown_prim_method(
                         m,
                         call,
                         &format!("argument of a written primitive method {name}"),
