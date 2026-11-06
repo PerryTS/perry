@@ -76,7 +76,7 @@ fn every_read_that_can_name_any_key_runs_every_getter() {
         // A key walk.
         "for (const k of Object.keys(ns)) console.log(ns[k](1));",
         // An escape to unknown code.
-        "const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(ns); console.log(0);",
+        "import \"unseen-host\"; const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(ns); console.log(0);",
     ] {
         let (exports, getters) = active(main);
         assert_eq!(exports, EXPORTS, "{main}");

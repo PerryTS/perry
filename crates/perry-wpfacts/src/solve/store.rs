@@ -135,8 +135,7 @@ impl Model {
                 continue;
             }
             self.charge_work(fresh.len() as u64);
-            if self.max_work != 0 && self.work.get() > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 return;
             }
             self.arg_readers
@@ -396,7 +395,7 @@ impl Model {
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
             (&self.toks[t as usize], key)
         {
-            if builtins::global_user_key(&self.atoms[a as usize])
+            if builtins::global_user_key(self, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
                 let f = builtins::global_field(self, t, a);

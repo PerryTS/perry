@@ -167,7 +167,7 @@ fn recursion_stays_sound() {
 #[test]
 fn sabotage_unknown_code_writes_a_helper_argument() {
     let pf = facts(&format!(
-        "{CLASSES}
+        "import \"unseen-host\"; {CLASSES}
         declare const ext: any;
         function pass(o: any, f: any) {{ f(o); return o; }}
         const a = pass(new A(), ext);
@@ -201,7 +201,7 @@ fn sabotage_unknown_code_writes_a_helper_argument() {
 #[test]
 fn sabotage_callback_passed_to_unknown_code() {
     let pf = facts(&format!(
-        "{CLASSES}
+        "import \"unseen-host\"; {CLASSES}
         declare const ext: any;
         function cb(o: any) {{ return o.x; }}
         function give(f: any) {{ ext(f); }}

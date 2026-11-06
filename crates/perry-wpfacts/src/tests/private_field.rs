@@ -149,7 +149,8 @@ fn a_private_field_value_reaches_a_public_copy() {
 
 #[test]
 fn a_private_map_handed_to_unknown_code_keeps_its_calls() {
-    let src = r#"
+    let src = r#"import "unseen-host";
+
         declare const ext: any;
         class E {
           #t: Map<string, any> = new Map<string, any>();

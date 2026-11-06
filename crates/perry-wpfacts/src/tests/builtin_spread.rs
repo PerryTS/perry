@@ -35,7 +35,17 @@ console.log(obj.len(), typeof r);
 
 /// (the read `o.a` proven, the call `obj.len()` proven)
 fn verdicts(source: &str, copy: &str) -> (bool, bool) {
-    let pf = facts(&fixture(source, copy));
+    verdicts_of(&fixture(source, copy))
+}
+
+/// The same with an unseen module loaded: its code may supply the global the
+/// source reads.
+fn verdicts_unseen(source: &str, copy: &str) -> (bool, bool) {
+    verdicts_of(&unseen(&fixture(source, copy)))
+}
+
+fn verdicts_of(program: &str) -> (bool, bool) {
+    let pf = facts(program);
     (
         proven(&site(&pf, "a").verdict),
         proven(&call_of(&pf, "len").verdict),
@@ -74,8 +84,8 @@ fn a_spread_of_an_unmodelled_builtin_object_stays_unproven() {
 #[test]
 fn a_spread_of_an_unknown_value_stays_unproven() {
     let top = "(globalThis as any).ext";
-    assert!(!verdicts(top, "{ a: obj, ...src }").1);
-    assert!(!verdicts(top, "Object.assign({ a: obj }, src)").1);
+    assert!(!verdicts_unseen(top, "{ a: obj, ...src }").1);
+    assert!(!verdicts_unseen(top, "Object.assign({ a: obj }, src)").1);
 }
 
 /// Sabotage twin: the parsed value is handed to unknown code first, which
@@ -91,8 +101,8 @@ fn json_data_handed_to_unknown_code_stays_unproven() {
 #[test]
 fn a_program_getter_result_is_copied() {
     let unknown = "{ get cb() { return (globalThis as any).g; } }";
-    assert!(!verdicts(unknown, "{ a: obj, ...src }").1);
-    assert!(!verdicts(unknown, "Object.assign({ a: obj }, src)").1);
+    assert!(!verdicts_unseen(unknown, "{ a: obj, ...src }").1);
+    assert!(!verdicts_unseen(unknown, "Object.assign({ a: obj }, src)").1);
 }
 
 /// Twin: the parsed data may hold any key, `b` among them; the copy's `b`
@@ -122,8 +132,8 @@ fn a_computed_key_write_into_json_data_is_copied() {
         "((x: any) => {{ x[String(Math.random())] = (globalThis as any).g; return x; }})({})",
         json()
     );
-    assert!(!verdicts(&source, "{ a: obj, ...src }").1);
-    assert!(!verdicts(&source, "Object.assign({ a: obj }, src)").1);
+    assert!(!verdicts_unseen(&source, "{ a: obj, ...src }").1);
+    assert!(!verdicts_unseen(&source, "Object.assign({ a: obj }, src)").1);
 }
 
 /// Sabotage twin: a primitive method's container (`"ab".match("a")`, an

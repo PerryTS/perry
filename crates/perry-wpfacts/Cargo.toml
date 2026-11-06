@@ -9,6 +9,7 @@ description = "Whole-program invariance facts for Perry (wpfacts): an inclusion-
 workspace = true
 
 [dependencies]
+perry-abi.workspace = true
 perry-hir.workspace = true
 perry-realm-table.workspace = true
 

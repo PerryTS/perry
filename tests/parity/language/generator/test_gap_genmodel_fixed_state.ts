@@ -1,3 +1,6 @@
+// DEC 250: %GeneratorPrototype% is locked in a compiled program; changes to it are
+// refused and print the TypeError. tests/parity/expected holds Perry output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // The public protocol is inherited; private state remains independent of
 // user properties, prototype replacement, and escaped lexical bindings.
 function* applySource(value: number) { yield value; }
@@ -42,13 +45,13 @@ print("b-return", b.return(17)); print("b-done", b.next());
 const gp: any = Object.getPrototypeOf(source.prototype);
 const original = gp.next;
 let calls = 0;
-gp.next = function (value: any) { calls++; return original.call(this, value); };
+locked(() => { gp.next = function (value: any) { calls++; return original.call(this, value); }; });
 const patched: any = source(8);
 print("patched", patched.next());
 let seen = 0;
 for (const value of source(3)) { seen += value; break; }
 console.log("patched-for-of", seen, calls);
-gp.next = original;
+locked(() => { gp.next = original; });
 patched.return();
 const fake = { next() {}, return() {}, throw() {} };
 try { original.call(fake); } catch (e) { console.log("brand", e instanceof TypeError); }
@@ -183,37 +186,37 @@ console.log('generator-log', new NamedLog().log().next().value);
 
 function* protocolTypeWitness() { yield 115; }
 const protocolTyped = protocolTypeWitness();
-gp.next = function(value: any, extra = 116) { return { done: 1, value: value + extra }; };
+locked(() => { gp.next = function(value: any, extra = 116) { return { done: 1, value: value + extra }; }; });
 const protocolResult: any = protocolTyped.next(1);
 console.log('protocol-result', protocolResult.value, protocolResult.done ? 'done' : 'more');
-gp.next = function() { return 117; };
+locked(() => { gp.next = function() { return 117; }; });
 const primitiveResult: any = protocolTyped.next();
 console.log('protocol-primitive', primitiveResult, primitiveResult.done);
-gp.next = 0;
+locked(() => { gp.next = 0; });
 try { protocolTyped.next(); } catch (e) { console.log('protocol-noncallable', e instanceof TypeError); }
-gp.next = original;
+locked(() => { gp.next = original; });
 protocolTyped.return();
 
 // A memo primed on the intrinsic holder must observe getters and argument order.
 let protocolOrder = "";
 const getterIterator: any = protocolTypeWitness();
 getterIterator.next();
-Object.defineProperty(gp, "next", {
+locked(() => { Object.defineProperty(gp, "next", {
   configurable: true,
   get() {
     protocolOrder += "get,";
     return function (value: any) { protocolOrder += "call,"; return { value, done: true }; };
   }
-});
+}); });
 function protocolArgument() { protocolOrder += "arg,"; return 118; }
 print("protocol-getter", getterIterator.next(protocolArgument()));
 console.log("protocol-order", protocolOrder);
-Object.defineProperty(gp, "next", { value: original, writable: true, configurable: true });
+locked(() => { Object.defineProperty(gp, "next", { value: original, writable: true, configurable: true }); });
 getterIterator.return();
 const builtinIterator: any = protocolTypeWitness();
-gp.next = Math.max;
+locked(() => { gp.next = Math.max; });
 console.log("protocol-builtin", builtinIterator.next(119, 120));
-gp.next = original;
+locked(() => { gp.next = original; });
 builtinIterator.return();
 
 // One warm call site must preserve Get-before-arguments without admitting

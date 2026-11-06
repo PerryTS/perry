@@ -653,13 +653,18 @@ fn a_property_of_a_broken_function_holds_anything() {
 
 /// CJL3 (fastify `new Reply`): whole program, `new Reply` escapes (its
 /// prototype comes from unknown code: `Reply` escaped through
-/// `Module._cache`). Per unit `m.js` holds `Reply` as an unknown value
+/// `Module._cache`, which `poke` hands to an unseen module). Per unit `m.js` holds `Reply` as an unknown value
 /// (`new` of it is ⊤) and the unit writing `Reply.prototype.f` holds the
 /// layout with no instance of its own: unknown code constructs the escaped
 /// function there, so its copy is escaped too, never a clean layout.
 #[test]
 fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
-    let (w, u) = both(&T7);
+    // `globalThis.keep` (which holds `poke`, and through it `Module`) is
+    // where an unseen module's code reads it: m.js loads one.
+    let m = super::unseen(T7[0].1);
+    let mut mods = T7;
+    mods[0].1 = &m;
+    let (w, u) = both(&mods);
     let wt = super::escaped_constructor::fn_inst(&w, "Reply#9");
     assert!(
         !wt.is_empty() && wt.iter().all(|t| t.escape.is_some() && !t.prefix_stable),

@@ -1,3 +1,6 @@
+// DEC 250: %GeneratorPrototype% and %AsyncGeneratorPrototype% are locked in a compiled
+// program; changes to them are refused and print the TypeError. tests/parity/expected holds Perry output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Reuse the same read/call sites across prototype mutations.
 function next(it: any, value?: any) { return it.next(value); }
 function* values() {
@@ -25,17 +28,17 @@ for (const name of ["next", "return", "throw"]) {
 }
 const warmed: any = values();
 show("warm", next(warmed));
-intrinsic.next = function () { return { value: "intrinsic", done: false }; };
+locked(() => { intrinsic.next = function () { return { value: "intrinsic", done: false }; }; });
 show("intrinsic replacement", next(warmed));
-Object.defineProperty(intrinsic, "next", descriptor);
+locked(() => { Object.defineProperty(intrinsic, "next", descriptor); });
 (values.prototype as any).next = function () { return { value: "function prototype", done: false }; };
 show("function replacement", next(warmed));
 delete (values.prototype as any).next;
 show("restored", next(warmed));
-delete intrinsic.next;
+locked(() => { delete intrinsic.next; });
 console.log("deleted", typeof warmed.next);
 try { next(warmed); } catch (error) { console.log("deleted call", error instanceof TypeError); }
-Object.defineProperty(intrinsic, "next", descriptor);
+locked(() => { Object.defineProperty(intrinsic, "next", descriptor); });
 show("restored again", next(warmed));
 const moved: any = values();
 show("before setPrototypeOf", next(moved));
@@ -62,19 +65,19 @@ async function checkAsync() {
   show("async return", await asyncValues().return(9));
   const aw: any = asyncValues();
   show("async warm", await next(aw));
-  proto.next = async function () { return { value: "async intrinsic", done: false }; };
+  locked(() => { proto.next = async function () { return { value: "async intrinsic", done: false }; }; });
   show("async replacement", await next(aw));
-  Object.defineProperty(proto, "next", original);
+  locked(() => { Object.defineProperty(proto, "next", original); });
   (asyncValues.prototype as any).next = async function () {
     return { value: "async function prototype", done: false };
   };
   show("async function replacement", await next(aw));
   delete (asyncValues.prototype as any).next;
   show("async restored", await next(aw));
-  delete proto.next;
+  locked(() => { delete proto.next; });
   console.log("async deleted", typeof aw.next);
   try { await next(aw); } catch (error) { console.log("async deleted call", error instanceof TypeError); }
-  Object.defineProperty(proto, "next", original);
+  locked(() => { Object.defineProperty(proto, "next", original); });
   show("async restored again", await next(aw));
   const movedAsync: any = asyncValues();
   show("async before setPrototypeOf", await next(movedAsync));

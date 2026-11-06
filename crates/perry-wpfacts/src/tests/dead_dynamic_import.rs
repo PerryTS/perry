@@ -103,7 +103,11 @@ fn hirs(main: &str) -> Vec<(String, perry_hir::Module)> {
 
 /// Is the formatter's `import()` held by a body that can run?
 fn imports_formatter(host: &str) -> bool {
-    let hirs = hirs(&main_with(host));
+    imports_formatter_of(&main_with(host))
+}
+
+fn imports_formatter_of(main: &str) -> bool {
+    let hirs = hirs(main);
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     let activation = crate::activation(&list, &FactsConfig::default());
@@ -143,11 +147,12 @@ fn every_way_the_default_can_be_taken_imports() {
         "{ cwd: \"/\", format: process.argv.length > 9 ? (c: string) => Promise.resolve(c) : 0 }",
         // The key is deleted before the call.
         "(() => { const h: any = { cwd: \"/\", format: (c: string) => Promise.resolve(c) }; if (process.argv.length > 9) delete h.format; return h; })()",
-        // The host comes from unknown code.
-        "(globalThis as any)[\"ho\" + \"st\"]",
     ] {
         assert!(imports_formatter(host), "{host}");
     }
+    // The host comes from unknown code: an unseen module may store it.
+    let host = "(globalThis as any)[\"ho\" + \"st\"]";
+    assert!(imports_formatter_of(&unseen(&main_with(host))), "{host}");
 }
 
 /// Is `oxmark` able to run in `src`?

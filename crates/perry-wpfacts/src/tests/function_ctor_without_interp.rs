@@ -79,7 +79,7 @@ fn with_an_interpreter_linked_it_is_dynamic_code() {
 fn an_unknown_callee_still_receives_its_arguments() {
     let src = program("", "d").replace(
         "const holder: any = { m: g.constructor };",
-        "declare const unknown: any; const holder: any = { m: unknown.f };",
+        "import \"unseen-host\"; declare const unknown: any; const holder: any = { m: unknown.f };",
     );
     let pf = facts(&src);
     assert!(!y_proven(&pf), "{:?}", y_reads(&pf));
@@ -90,7 +90,7 @@ fn an_unknown_callee_still_receives_its_arguments() {
 #[test]
 fn the_arguments_tostring_still_runs() {
     let pf = facts(&program(
-        "declare const unknown: any; const a = { toString() { unknown.take(d); return ''; } };",
+        "import \"unseen-host\"; declare const unknown: any; const a = { toString() { unknown.take(d); return ''; } };",
         "a",
     ));
     assert!(!y_proven(&pf), "{:?}", y_reads(&pf));

@@ -55,7 +55,7 @@ fn a_written_host_member_stays_open() {
         ("a store of the member", "write", "process.stdout.write = function (s: any) { return true; } as any;"),
         ("a store into console", "log", "console.log = function (...a: any[]) {};"),
         ("a computed store", "write", "(process.stdout as any)[\"wr\" + String(Date.now() % 2)] = 1;"),
-        ("a store into ⊤", "write", "const t: any = (globalThis as any).someHost; t.write = 3;"),
+        ("a store into ⊤", "write", "import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.write = 3;"),
         ("unknown code holding it", "write", "const g = new Function(\"o\", \"o.write = 1\"); g(process.stdout);"),
     ] {
         let pf = facts(&format!("console.log(\"ok\"); process.stdout.write(\"x\"); {extra}"));

@@ -69,7 +69,8 @@ fn an_unknown_getter_under_a_computed_key_writes_every_key() {
 fn an_unknown_getter_on_a_program_object_reads_top_under_its_key() {
     // The holder is the program's own object: its accessor key reads ⊤
     // (the getter is unknown code), and the object escapes to it.
-    let src = r#"
+    let src = r#"import "unseen-host";
+
         const g: any = (globalThis as any).hostGet;
         class Node { kind: number; constructor(k: number) { this.kind = k; } }
         const o: any = { k: new Node(1) };

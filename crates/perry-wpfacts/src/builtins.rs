@@ -6,6 +6,7 @@
 //! and the result is ⊤. A missing summary costs precision, never soundness.
 
 use crate::model::*;
+use perry_abi::lock::LockHolder;
 
 mod collections;
 mod constructors;
@@ -608,9 +609,9 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         let fi = &m.funcs[f as usize];
         if fi.gen_step() {
             let holder = if fi.gen_async {
-                "%AsyncGeneratorPrototype%"
+                ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
             } else {
-                "%GeneratorPrototype%"
+                ("%GeneratorPrototype%", LockHolder::Generator)
             };
             return image_member(m, holder, &m.atoms[a as usize]);
         }
@@ -641,16 +642,26 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
 }
 
-/// Is `name` an image member of the declared intrinsic prototype `holder`
-/// (the realm table's `%GeneratorPrototype%`, `%MapIteratorPrototype%` …,
-/// the same declaration the runtime seals)? `constructor` stays writable.
-fn image_member(m: &Model, holder: &str, name: &str) -> bool {
-    if name == "constructor" {
-        return false;
-    }
-    m.declarations
+/// Is a read of `name` on the declared intrinsic prototype `holder` final?
+/// `holder` is its realm-table name (`%GeneratorPrototype%`,
+/// `%MapIteratorPrototype%` …, the same declaration the runtime seals) and
+/// its lock holder; the lock's one decision (`perry_abi::lock::final_on`)
+/// classes the key: `constructor` stays writable, an image member is locked,
+/// an absent key may be added.
+fn image_member(m: &Model, (holder, lock): (&str, LockHolder), name: &str) -> bool {
+    use perry_abi::lock::{final_on, LockKey};
+    let key = if name == "constructor" {
+        LockKey::Constructor
+    } else if m
+        .declarations
         .named(holder, m)
         .is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    {
+        LockKey::Image
+    } else {
+        LockKey::Absent
+    };
+    final_on(lock, key)
 }
 
 /// The family whose intrinsic chain the lock sees on `t`: `seed_family`'s,

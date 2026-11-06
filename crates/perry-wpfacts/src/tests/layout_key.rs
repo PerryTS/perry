@@ -159,7 +159,7 @@ fn an_escaped_value_binds_no_layout_instance() {
     // no function's result, so nothing else runs (the base arm used to run
     // `a`, `b`, `c` already: the console's any-key touch escaped them).
     let base = facts(&src("")).stats.instances;
-    let esc = facts(&src("(globalThis as any).out = r;")).stats.instances;
+    let esc = facts(&src("import \"unseen-host\"; (globalThis as any).out = r;")).stats.instances;
     assert!(esc > base, "the value must escape: {base} -> {esc}");
     assert!(
         esc - base <= 4,

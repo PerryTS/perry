@@ -103,7 +103,8 @@ fn a_computed_constructor_key_on_a_function_may_be_the_constructor() {
 #[test]
 fn the_constructor_given_to_unknown_code_runs_interpreted_code() {
     let v = verdict(
-        r#"const sink: any = (globalThis as any).hostSink; if (sink) sink(Function);"#,
+        r#"import "unseen-host";
+const sink: any = (globalThis as any).hostSink; if (sink) sink(Function);"#,
         false,
     );
     assert!(!proven(&v), "{v:?}");
