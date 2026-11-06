@@ -461,7 +461,7 @@ impl<'a> Gen<'a> {
             // `builtins::global_field`). The global object itself is no value
             // of another unit: every unit reads it, none publishes it.
             let mut keys: Vec<(String, Atom)> = (0..self.m.atoms.len() as Atom)
-                .filter(|&a| crate::builtins::global_user_key(&self.m.atoms[a as usize]))
+                .filter(|&a| crate::builtins::global_user_key(&self.m, &self.m.atoms[a as usize]))
                 .map(|a| (self.m.atoms[a as usize].clone(), a))
                 .collect();
             keys.sort_unstable();

@@ -133,6 +133,14 @@ mod work_bound_widen;
 
 use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
 
+/// The program `src` loaded beside an unseen module: `import "unseen-host"`
+/// names a file the program does not contain, so its code runs at load and
+/// may write any global (whole-program rule G). A control whose unknown value
+/// comes from an undeclared global takes it from there.
+pub(super) fn unseen(src: &str) -> String {
+    format!("import \"unseen-host\";\n{src}")
+}
+
 fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())
 }
@@ -283,7 +291,8 @@ fn closure_writer_is_post_construction() {
 #[test]
 fn unknown_callee_escapes_argument() {
     let pf = facts(
-        r#"
+        r#"import "unseen-host";
+
         class P { x = 1; }
         declare const ext: any;
         const p = new P(); ext(p); console.log(p.x);
@@ -467,7 +476,8 @@ fn interpreted_function_is_a_summary_node() {
 #[test]
 fn top_call_connects_only_top_values() {
     let pf = facts_with(
-        r#"
+        r#"import "unseen-host";
+
         class Kept { x: number; constructor(x: number) { this.x = x; } }
         const u: any = (globalThis as any).someUnknown;
         const r = u("a", 1);
@@ -1819,6 +1829,7 @@ mod iter_result_array;
 mod gen_proto_members;
 mod generator_results;
 mod generator_resume_arguments;
+mod global_unresolved;
 mod helper_protocols;
 mod host_helpers;
 mod key_shape;
@@ -1865,7 +1876,7 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
             .fnproto_borrow_written
             .is_some()
     );
-    assert!(facts("const p = missing(); p.call = function() {}; ")
+    assert!(facts("import \"unseen-host\"; const p = missing(); p.call = function() {}; ")
         .fnproto_borrow_written
         .is_some());
     // A bind-specific write must not prevent a call/apply proof.

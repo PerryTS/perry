@@ -395,7 +395,7 @@ impl Model {
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
             (&self.toks[t as usize], key)
         {
-            if builtins::global_user_key(&self.atoms[a as usize])
+            if builtins::global_user_key(self, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
                 let f = builtins::global_field(self, t, a);

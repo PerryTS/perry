@@ -952,6 +952,22 @@ impl<'a> Gen<'a> {
                 self.store(fx, recv, key, v, name.to_string(), None, false);
                 v
             }
+            // Rule G: an unresolved identifier is `[[Get]](globalThis, NAME)`
+            // (`perry-runtime` `error/global_ref.rs`; absent = ReferenceError,
+            // `typeof` = "undefined"), as the load `globalThis.NAME` is.
+            // Whole-program mode only: in per-unit mode another unit's
+            // stores are unseen, so the read stays unknown.
+            "js_global_get_or_throw_unresolved" | "js_global_get_optional"
+                if !self.m.unit_mode =>
+            {
+                let Some(k) = lit(0) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.load(recv, key)
+            }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
                 self.extern_fail(name, &args, &spread)
