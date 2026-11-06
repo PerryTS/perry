@@ -153,8 +153,26 @@ unsafe fn advise_thp(data: *mut libc::c_void, len: usize, advice: libc::c_int) {
 
 /// Fresh private anonymous backing, or null on refusal. This entry never
 /// collects. The existing caller owns emergency reclaim outside arena borrows.
+///
+/// A GC block owns whole metadata pages: its start and its end are multiples of
+/// `GENERATION_PAGE_SIZE`, on every target and for every [`Kind`]. The page is
+/// the unit of old-gen metadata (live, dead and pinned bytes, the object index,
+/// dirty slots) and the block is the unit of release, so each page belongs to
+/// exactly one block and a page's base address finds it (old-page defrag and
+/// idle compaction select by it). Blocks change generation and keep their
+/// backing, so the rule covers every kind, not only large regions.
 #[inline(always)]
 pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
+    let data = map_extent(kind, len);
+    debug_assert!(
+        data.is_null() || (data as usize | len) % super::GENERATION_PAGE_SIZE == 0,
+        "a GC block owns whole metadata pages: {data:p} + {len:#x}"
+    );
+    data
+}
+
+#[inline(always)]
+unsafe fn map_extent(kind: Kind, len: usize) -> *mut u8 {
     #[cfg(target_os = "linux")]
     {
         let Some(mapped) = mapped_len(len) else {
@@ -168,13 +186,13 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        // A dedicated large region must own complete metadata pages. Other
-        // allocator-backed blocks preserve their existing alignment.
+        // Allocator backing (wasm, Windows) is page-aligned for every kind;
+        // callers ask for whole pages (block sizes and large extents), so the
+        // end is aligned too. See [`map`].
         #[cfg(not(target_vendor = "apple"))]
-        let alignment = if kind == Kind::LargeObject {
+        let alignment = {
+            let _ = kind;
             super::GENERATION_PAGE_SIZE
-        } else {
-            16
         };
         #[cfg(target_vendor = "apple")]
         let alignment = {
@@ -269,6 +287,35 @@ pub(crate) unsafe fn release_test_block_backing(data: *mut u8, size: usize) {
 #[cfg(all(test, target_vendor = "apple"))]
 #[path = "region/apple_tests.rs"]
 pub(super) mod apple_tests;
+
+/// Every target, every kind: the backing `map` returns starts and ends on a
+/// metadata page boundary (see [`map`]).
+#[cfg(test)]
+mod page_alignment_tests {
+    use super::*;
+
+    #[test]
+    fn every_block_kind_owns_whole_metadata_pages() {
+        let page = super::super::GENERATION_PAGE_SIZE;
+        for kind in [
+            Kind::NurseryBlock,
+            Kind::OldBlock,
+            Kind::CollectingHolder,
+            Kind::LargeObject,
+        ] {
+            for len in [super::super::BLOCK_SIZE, 2 * super::super::BLOCK_SIZE] {
+                unsafe {
+                    let data = map(kind, len);
+                    assert!(!data.is_null(), "{kind:?} backing of {len:#x}");
+                    let start = data as usize;
+                    unmap(data, len);
+                    assert_eq!(start % page, 0, "{kind:?} block start {start:#x}");
+                    assert_eq!((start + len) % page, 0, "{kind:?} block end");
+                }
+            }
+        }
+    }
+}
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
