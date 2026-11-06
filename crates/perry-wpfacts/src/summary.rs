@@ -721,6 +721,13 @@ impl Model {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
+            // The copy is the template's operation in this context: a
+            // runtime protocol's call (`Model::protocol_calls`: the step of
+            // an iterated value, ToPrimitive ...) stays one, so every rule
+            // that asks gets the template's answer.
+            if self.protocol_calls.contains(t) {
+                self.protocol_calls.insert(id);
+            }
             if lay != LAY_NONE {
                 self.sum.call_lay.insert(id, lay);
             }
