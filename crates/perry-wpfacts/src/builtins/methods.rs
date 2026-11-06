@@ -440,7 +440,23 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 ret_prim(m, call, prim::BOOL);
             }
-            "toString" | "toLocaleString" => {
+            // 20.1.3.6 step 15: `Get(O, @@toStringTag)` runs a getter there;
+            // what it returns is only shown.
+            "toString" => {
+                let key = Key::Named(m.atom(&format!("{WK_PREFIX}toStringTag")));
+                let recv = m.node_l("tostringtag-recv");
+                let dst = m.node_l("tostringtag-read");
+                m.nodes[dst as usize].sink = true;
+                m.cons(recv, Cons::Load { key, dst });
+                m.add_tok(recv, origin);
+                ret_prim(m, call, prim::STR);
+            }
+            // 20.1.3.5: `Invoke(O, "toString")`. ToPrimitive's calls include
+            // it (they also look up `valueOf` and `@@toPrimitive`: more can
+            // run, never less).
+            "toLocaleString" => {
+                let r = m.reason("ToPrimitive of a toLocaleString receiver");
+                m.implicit(origin, r, Protocol::ToPrimitive);
                 ret_prim(m, call, prim::STR);
             }
             "valueOf" => ret_tok(m, call, origin),
