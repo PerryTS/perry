@@ -72,6 +72,8 @@ mod search;
 #[cfg(test)]
 mod shift_queue_tests;
 #[cfg(test)]
+mod growth_in_place_tests;
+#[cfg(test)]
 mod small_capacity_tests;
 mod sort;
 mod sort_numeric;
@@ -314,11 +316,14 @@ pub use self::jsvalue_api::{
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
 pub(crate) use self::push_pop::{guard_writable_length, push_guard};
+#[cfg(test)]
+pub(crate) use self::push_pop::GrowInPlaceTestGuard;
 pub use self::push_pop::{
-    js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
-    js_array_push_f64, js_array_push_f64_spec, js_array_push_hole, js_array_push_spread_f64,
-    js_array_push_u31_with_length, js_array_set_length, js_array_set_length_strict,
-    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_delete, js_array_grow, js_array_grow_for_push, js_array_numeric_push_f64_unboxed,
+    js_array_pop_f64, js_array_push_f64, js_array_push_f64_spec, js_array_push_hole,
+    js_array_push_spread_f64, js_array_push_u31_with_length, js_array_set_length,
+    js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_unshift_variadic,
 };
 pub(crate) use self::push_pop::{push_spec_declined, push_spec_if_plain};
 pub use self::reduce_right::js_array_reduce_right;
