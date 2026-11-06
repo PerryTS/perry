@@ -627,6 +627,7 @@ mod tests {
         assert!(!is_small_handle(HANDLE_BAND_MAX));
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn try_read_gc_header_rejects_handles_without_deref() {
         // Would SIGSEGV on Linux if dereferenced (#4665/#4800) — must be None
@@ -640,6 +641,7 @@ mod tests {
         assert!(unsafe { try_read_gc_header(0x7FFD_0000_0000_0000) }.is_none());
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// #10479: only a `POINTER_TAG` payload or a raw pointer names an address.
     /// Every primitive band answers 0 — in particular the SSO and INT32 bands,
     /// whose payloads decode into the heap window.
@@ -693,6 +695,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn tracked_gc_classifier_accepts_injected_low_arena_membership() {
         use std::cell::Cell;
 
@@ -845,6 +848,7 @@ mod tests {
 mod known_plausible_alignment_tests {
     use super::*;
 
+    #[cfg(target_pointer_width = "64")]
     /// The alignment guard must be reachable from the DIRECT call path, not
     /// only through [`try_read_gc_header`].
     ///
@@ -881,6 +885,7 @@ mod known_plausible_alignment_tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The same property through the wrapper, so both entry points are pinned.
     #[test]
     fn the_wrapper_also_rejects_a_misaligned_in_range_address() {

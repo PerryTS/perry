@@ -4057,6 +4057,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// A Map value that names an Array growth stub is healed to the live head
     /// on `get`, and the entry itself is rewritten so later reads are direct.
     #[test]

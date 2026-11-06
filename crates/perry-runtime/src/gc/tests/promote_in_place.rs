@@ -301,6 +301,7 @@ fn a_stationary_fully_live_predictor_still_charges_implied_dead_bytes() {
 /// scaled to a configured heap budget rather than parking a flat 128 MB floor
 /// on a device heap smaller than that.
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn the_untraced_promotion_budget_is_bounded_and_scales_to_the_heap_budget() {
     // Unconstrained: the historical floor, growing with old-gen, capped.
     assert_eq!(

@@ -424,6 +424,7 @@ fn test_dead_closure_side_table_entries_pruned_on_full_gc() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The per-object sweep arm (`gc_type_clear_dead_payload_side_tables`) was an
 /// explicit no-op for `ClosureDynamicProps`; assert it now clears all three
 /// tables when the sweep reclaims a dead closure header.
@@ -442,6 +443,7 @@ fn test_closure_dead_payload_arm_clears_side_tables() {
     assert!(!crate::closure::closure_is_key_deleted(owner, "length"));
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The `ObjectModuleWrapper` dead-payload arm pruned only OVERFLOW_FIELDS;
 /// its address-keyed sibling KEYS_INDEX (the key→slot sidecar built for
 /// objects past KEYS_INDEX_THRESHOLD own keys) was never removed on death, so
@@ -950,6 +952,7 @@ fn object_meta_expando_is_appended_not_inserted() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// #6759 phase 3: a transition-cache entry must NOT keep its target keys array
 /// alive, and an entry whose target died must be reaped.
 ///

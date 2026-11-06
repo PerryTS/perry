@@ -895,6 +895,7 @@ mod gc_type_for_ptr_tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn unmapped_heap_range_receiver_is_rejected_without_dereferencing() {
         // This is inside the permissive heap-magnitude window but outside

@@ -1,15 +1,18 @@
 //! Symbol brands follow the owned GC header without address registration.
 use super::super::*;
 use super::support::*;
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn symbol_brand_moves_with_its_owner() {
     check_brand(false);
 }
+#[cfg(target_pointer_width = "64")]
 #[test]
 #[ignore = "negative control: erase the moved Symbol GC kind"]
 fn negative_control_objtables_symbol_brand() {
     check_brand(true);
 }
+#[cfg(target_pointer_width = "64")]
 fn check_brand(erase: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
