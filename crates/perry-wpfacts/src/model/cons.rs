@@ -254,6 +254,10 @@ pub enum Cons {
     /// The node is the prototype closure of `origin`: accessors of every
     /// holder on it run for a computed-key lookup with `origin` as `this`.
     AnyAccessors { origin: Tok, act: ChainAct },
+    /// The node is a copy source's unnamed-key field (`field_any`): once it
+    /// holds a value the source has an own key the model does not name, a
+    /// [[Set]] of some key on `target` (Object.assign, `spread_into`).
+    UnnamedSet { target: Tok },
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
     StoreTopProto { origin: Tok, src: NodeId },
@@ -557,6 +561,7 @@ impl Cons {
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
+            Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::Super { .. } => "super",
             Cons::SuperCtor { .. } => "superctor",
