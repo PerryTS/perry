@@ -48,6 +48,7 @@ pub(super) use super::{
 
 mod box_style;
 mod perf_hooks;
+mod walk_entry;
 
 use box_style::apply_box_style;
 

@@ -48,6 +48,18 @@ pub(crate) fn lower_let(
     if super::element_shape_loop::lower_virtual_clone_binding(ctx, id)? {
         return Ok(());
     }
+    // Inside a packed clone an element binding (`const x = a[k]`,
+    // `stable_packed_accumulator::collect_numeric_element_lets`) is a Number
+    // in a plain F64 alloca: no root slot, no barrier. Accumulators, the
+    // map's other entries, are declared outside the clone, so a `Let` found
+    // here is always one of those bindings.
+    if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(&id).cloned() {
+        if let Some(init) = init {
+            let value = crate::expr::lower_expr(ctx, init)?;
+            ctx.block().store(crate::types::DOUBLE, &value, &slot);
+            return Ok(());
+        }
+    }
     // `let C = SomeClass` aliases the local `C` to the class
     // `SomeClass` for `new C()` site rerouting. The HIR lowers
     // class identifiers referenced as values to `Expr::ClassRef`,

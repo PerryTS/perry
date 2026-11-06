@@ -965,5 +965,14 @@ mod tests {
             !fast.contains("guarded_add.dynamic"),
             "the element binding is a Number in the fast loop: {ir}"
         );
+        assert!(
+            ir.contains("forof.walk.inline"),
+            "no iteration member is writable: the entry tests the header inline: {ir}"
+        );
+        assert!(
+            !fast.contains("ptr addrspace(1)"),
+            "the fast loop roots nothing and reloads no root (a laundered reload \
+             pins the element-base loads in the loop): {ir}"
+        );
     }
 }

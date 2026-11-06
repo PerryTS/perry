@@ -886,6 +886,9 @@ struct PackedAccumulatorScope {
     /// cleared by `finish`. An inner scope reusing an outer descriptor does
     /// not record that receiver here.
     hoisted_receivers: Vec<u32>,
+    /// Element bindings this scope redirected to a plain F64 alloca
+    /// (`numeric_accumulator_f64_slots`); cleared by `finish`.
+    element_slots: Vec<u32>,
 }
 
 /// Materialize the address half shared by packed clones and phase 3 ordinary
@@ -1009,7 +1012,26 @@ impl PackedAccumulatorScope {
             deferred_integer: Vec::new(),
             side_exit_override: None,
             hoisted_receivers: Vec::new(),
+            element_slots: Vec::new(),
         }
+    }
+
+    /// Bind each element binding (`collect_numeric_element_lets`) to a plain
+    /// F64 alloca for the clone: its `Let` stores there and its reads load
+    /// from there (`stmt::let_stmt`, `expr::literals_vars`). Inside the clone
+    /// the value is a Number, so it needs no GC root, and a root slot's
+    /// escaped address would otherwise keep LLVM from hoisting the clone's
+    /// receiver loads past the per-element store.
+    fn with_element_slots(mut self, ctx: &mut FnCtx<'_>, element_lets: &[u32]) -> Self {
+        for id in element_lets {
+            if ctx.numeric_accumulator_f64_slots.contains_key(id) {
+                continue;
+            }
+            let alloca = ctx.func.alloca_entry(DOUBLE);
+            ctx.numeric_accumulator_f64_slots.insert(*id, alloca);
+            self.element_slots.push(*id);
+        }
+        self
     }
 }
 
@@ -1195,6 +1217,9 @@ impl PackedAccumulatorScope {
                 ctx.i32_counter_slots.remove(id);
             }
         }
+        for id in &self.element_slots {
+            ctx.numeric_accumulator_f64_slots.remove(id);
+        }
         for arr_id in &self.hoisted_receivers {
             let removed = ctx.receiver_descriptors.dematerialize(*arr_id);
             debug_assert!(removed, "scope owns every receiver it materialised");
@@ -1298,11 +1323,13 @@ fn emit_packed_numeric_accumulator_admission(
         ids.extend(element_lets.iter().copied().filter(|id| !accumulators.contains(id)));
         ids
     };
+    let element_lets: Vec<u32> = element_lets.iter().copied().collect();
     if accumulators.is_empty() && scope_deferred_integer.is_empty() {
         return PackedAccumulatorScope {
             accumulators: number_scope(),
             ..PackedAccumulatorScope::empty()
-        };
+        }
+        .with_element_slots(ctx, &element_lets);
     }
     if accumulators.is_empty() {
         return PackedAccumulatorScope {
@@ -1311,8 +1338,10 @@ fn emit_packed_numeric_accumulator_admission(
             deferred_integer: scope_deferred_integer,
             side_exit_override: None,
             hoisted_receivers: Vec::new(),
+            element_slots: Vec::new(),
         }
-        .with_deferred_trampoline(ctx, slow_pre_label, block_prefix);
+        .with_deferred_trampoline(ctx, slow_pre_label, block_prefix)
+        .with_element_slots(ctx, &element_lets);
     }
     let mut loaded: Vec<(u32, String, String)> = Vec::new();
     let mut all_numbers: Option<String> = None;
@@ -1398,7 +1427,9 @@ fn emit_packed_numeric_accumulator_admission(
         deferred_integer: scope_deferred_integer,
         side_exit_override,
         hoisted_receivers: Vec::new(),
+        element_slots: Vec::new(),
     }
+    .with_element_slots(ctx, &element_lets)
 }
 
 fn lower_packed_f64_versioned_for(

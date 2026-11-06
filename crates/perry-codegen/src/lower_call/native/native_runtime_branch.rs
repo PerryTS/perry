@@ -258,13 +258,7 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                     unreachable!("matched above");
                 };
                 let (values, roots) = super::lower_call_args_rooted(ctx, &args[..1])?;
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
-                let verdict = ctx.block().call(
-                    I32,
-                    "js_array_record_enter_counted",
-                    &[(DOUBLE, &values[0]), (crate::types::PTR, &slot), (I32, &writable)],
-                );
+                let (verdict, source) = walk_entry::lower(ctx, &values[0]);
                 let admission = ctx
                     .record_packed_admissions
                     .get(source_id)
@@ -275,7 +269,6 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 ctx.block().store(crate::types::I1, &admitted, &admission);
                 ctx.record_packed_admissions.insert(*source_id, admission);
                 let needs = ctx.block().and(I32, &verdict, "1");
-                let source = ctx.block().load(DOUBLE, &slot);
                 roots.release(ctx);
                 crate::expr::invalidate_local_write_facts(ctx, *source_id);
                 crate::expr::bind_lowered_value_to_local(ctx, *source_id, &source, &args[0])?;
@@ -792,3 +785,4 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
         return Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &input)]));
     }
 }
+
