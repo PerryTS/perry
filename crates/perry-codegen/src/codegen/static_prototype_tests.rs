@@ -164,9 +164,17 @@ fn known_symbol_members_are_birth_keys_after_the_strings() {
     );
     let ids = hir.classes.iter().map(|c| (c.name.clone(), c.id)).collect();
     let result = collect(&hir, "sym", &ids, &ProgramLayouts::default());
-    assert_eq!(result.len(), 1, "a known-symbol member must not refuse the class");
+    assert_eq!(
+        result.len(),
+        1,
+        "a known-symbol member must not refuse the class"
+    );
     let shape = &result[0].shape;
-    let keys: Vec<&[u8]> = shape.keys.split(|b| *b == 0).filter(|k| !k.is_empty()).collect();
+    let keys: Vec<&[u8]> = shape
+        .keys
+        .split(|b| *b == 0)
+        .filter(|k| !k.is_empty())
+        .collect();
     let wk = |name: &str| {
         let i = crate::runtime_abi::WELL_KNOWN_SYMBOLS
             .iter()
@@ -195,7 +203,9 @@ fn known_symbol_members_are_birth_keys_after_the_strings() {
 }
 #[test]
 fn known_symbol_member_past_slot_31_gets_a_constfn_birth() {
-    let methods: String = (0..40).map(|i| format!("m{i}() {{ return {i}; }} ")).collect();
+    let methods: String = (0..40)
+        .map(|i| format!("m{i}() {{ return {i}; }} "))
+        .collect();
     let hir = module(
         "/sym40",
         &format!("class C {{ {methods} *[Symbol.iterator]() {{ yield 1; }} }}"),
@@ -213,7 +223,9 @@ fn known_symbol_member_past_slot_31_gets_a_constfn_birth() {
 }
 #[test]
 fn methods_past_slot_31_get_constfn_births() {
-    let methods: String = (0..100).map(|i| format!("m{i}() {{ return {i}; }} ")).collect();
+    let methods: String = (0..100)
+        .map(|i| format!("m{i}() {{ return {i}; }} "))
+        .collect();
     let base = module(
         "/base",
         "export class Base { constructor() { this.base = 1; } }",

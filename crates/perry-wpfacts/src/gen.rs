@@ -1427,13 +1427,20 @@ impl<'a> Gen<'a> {
                 false,
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, g)),
             );
-            let this = self.m.funcs[f as usize].this;
-            self.m.this_class.insert(this, tm);
+            // A static accessor is an own property of the class object;
+            // its `this` is whatever reads it (a subclass, `Object.create`).
+            let holder = if c.is_static_accessor(g) {
+                cobj
+            } else {
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                proto
+            };
             let a = self.m.atom(name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.accessors.entry((proto, a)).or_default().0.push(ft);
-            push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+            self.m.accessors.entry((holder, a)).or_default().0.push(ft);
+            push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
         for (name, s) in &c.setters {
             let fname = format!("{}::set {name}", c.name);
@@ -1446,13 +1453,20 @@ impl<'a> Gen<'a> {
                 false,
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, s)),
             );
-            let this = self.m.funcs[f as usize].this;
-            self.m.this_class.insert(this, tm);
+            // A static accessor is an own property of the class object;
+            // its `this` is whatever reads it (a subclass, `Object.create`).
+            let holder = if c.is_static_accessor(s) {
+                cobj
+            } else {
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                proto
+            };
             let a = self.m.atom(name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.accessors.entry((proto, a)).or_default().1.push(ft);
-            push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+            self.m.accessors.entry((holder, a)).or_default().1.push(ft);
+            push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
         for (cm, named) in c.computed_members.iter().zip(named) {
             let f = self.register_fn(
@@ -1468,14 +1482,20 @@ impl<'a> Gen<'a> {
                 )),
             );
             if let Some((a, setter)) = named {
-                // Under a constant key: that key's accessor.
-                let this = self.m.funcs[f as usize].this;
-                self.m.this_class.insert(this, tm);
+                // Under a constant key: that key's accessor, on the class
+                // object when it is static.
+                let holder = if cm.is_static {
+                    cobj
+                } else {
+                    let this = self.m.funcs[f as usize].this;
+                    self.m.this_class.insert(this, tm);
+                    proto
+                };
                 self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
-                let e = self.m.accessors.entry((proto, a)).or_default();
+                let e = self.m.accessors.entry((holder, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
-                push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+                push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
                 continue;
             }
             let holder = if cm.is_static { cobj } else { proto };

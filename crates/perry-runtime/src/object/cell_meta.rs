@@ -144,6 +144,26 @@ pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHead
     )
 }
 
+/// Does a Map, Set or Date cell carry a meta record: an own property or its
+/// own `[[Prototype]]` (both live there)? Without one the cell reads every
+/// key it is asked for from its family's intrinsic prototype. The one
+/// receiver proof behind `builtin_proto::receiver_pristine` and the
+/// `builtin_method` entries; `false` for every other kind.
+///
+/// # Safety
+/// `user_ptr` is a live cell whose GC header type is `obj_type`.
+#[inline(always)]
+pub(crate) unsafe fn builtin_cell_has_meta(user_ptr: usize, obj_type: u8) -> bool {
+    match obj_type {
+        crate::gc::GC_TYPE_MAP => !map_cell_meta(user_ptr as *const crate::map::MapHeader).is_null(),
+        crate::gc::GC_TYPE_SET => !set_cell_meta(user_ptr as *const crate::set::SetHeader).is_null(),
+        crate::gc::GC_TYPE_DATE_CELL => {
+            !(*date_cell_meta_slot(user_ptr as *mut crate::date::DateCell)).is_null()
+        }
+        _ => false,
+    }
+}
+
 /// The meta word of a Map cell (its own header carries it, not an `ObjectHeader`).
 #[inline(always)]
 pub(crate) unsafe fn map_cell_meta(cell: *const crate::map::MapHeader) -> *mut ObjectMeta {

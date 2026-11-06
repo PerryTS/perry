@@ -788,6 +788,13 @@ pub(crate) fn apply_field_initializers_recursive(
     };
 
     for class_name_in_chain in chain {
+        if crate::verify_facts::enabled() {
+            crate::verify_facts::body_entry(
+                ctx,
+                u32::MAX,
+                &format!("{class_name_in_chain}::<fields>"),
+            );
+        }
         // Issue #26: prefer the authoritative chain's resolved fields for this
         // class (correct cross-module parent layout); fall back to the
         // name-keyed `ctx.classes` only when no authoritative entry exists.

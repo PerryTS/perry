@@ -178,15 +178,16 @@ pub(super) fn class_declaration_globals(
             let symbol = declared_symbol_member(member, cid, fresh)
                 .and_then(|s| named(s))
                 .map(|(name, len, _)| (name, len, FLAG_NAME_SYMBOL));
-            let (name, name_len, name_flag) =
-                symbol.unwrap_or(("ptr null".to_string(), 0, 0));
+            let (name, name_len, name_flag) = symbol.unwrap_or(("ptr null".to_string(), 0, 0));
             members.push(Member {
                 order: f.id,
                 name,
                 name_len,
                 name_flag,
                 code: format!("ptr @{}", method_symbol(&f.name)),
-                entry: if super::string_pool::method_entries::computed_method_has_entry(hir_module, member, cid, fresh) {
+                entry: if super::string_pool::method_entries::computed_method_has_entry(
+                    hir_module, member, cid, fresh,
+                ) {
                     format!(
                         "ptr {}",
                         info_ref(&format!("{}__eclo", method_symbol(&f.name)))
@@ -224,11 +225,7 @@ pub(super) fn class_declaration_globals(
             .map_or("null".to_owned(), |_| {
                 format!("@perry_family_variants_{cid}")
             });
-        let default_derived = class.constructor.is_none()
-            && (class.extends_name.is_some()
-                || class.extends_expr.is_some()
-                || class.extends.is_some()
-                || class.native_extends.is_some());
+        let default_derived = class.is_default_derived();
         let initializer = if default_derived {
             format!(
                 "@{}",

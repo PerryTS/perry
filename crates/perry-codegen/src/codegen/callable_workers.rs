@@ -92,7 +92,8 @@ pub(super) fn lower<T: Sync>(
     let diagnostic = crate::opt_report::enabled()
         || crate::typed_feedback_profile::callable_scope_active()
         || std::env::var_os("PERRY_REGION_DIAG").is_some()
-        || crate::fallback_diag::enabled();
+        || crate::fallback_diag::enabled()
+        || crate::verify_facts::enabled();
     let serial = !parallel || items.len() < 64 || diagnostic;
     let budget = crate::workers::current_budget();
     let mut grants = Vec::new();
