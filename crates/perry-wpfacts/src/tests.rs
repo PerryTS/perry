@@ -1843,6 +1843,7 @@ mod method_this_escape;
 mod native_proto_member;
 mod native_push;
 mod native_value_call;
+mod declared_constructor;
 mod declared_global_write;
 mod native_parent;
 mod ns_receiver;

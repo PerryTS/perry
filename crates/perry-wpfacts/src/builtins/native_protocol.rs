@@ -487,6 +487,12 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                         &format!("argument of a written primitive method {name}"),
                     );
                 }
+                NativeMiss::New(call) => {
+                    let name = m.atoms[a as usize].clone();
+                    let prev = m.cur_this.take();
+                    unknown_method(m, call, &format!("argument of written constructor {name}"));
+                    m.cur_this = prev;
+                }
             }
             if let Some(old) = saved_gate {
                 let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
