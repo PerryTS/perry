@@ -268,6 +268,7 @@ fn source_for_of(
             init: Some(Expr::IndexGet {
                 byte_offset: 0,
                 byte_end: 0,
+                element_offset: 0,
                 object: Box::new(Expr::LocalGet(array)),
                 index: Box::new(Expr::LocalGet(counter)),
             }),

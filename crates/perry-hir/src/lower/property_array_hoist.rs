@@ -998,6 +998,7 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
             index,
             byte_offset,
             byte_end,
+            element_offset,
         } => {
             let object = r(object, f);
             Expr::IndexGet {
@@ -1005,6 +1006,7 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                 index: r(index, f),
                 byte_offset: *byte_offset,
                 byte_end: *byte_end,
+                element_offset: *element_offset,
             }
         }
         Expr::Binary { op, left, right } => {
