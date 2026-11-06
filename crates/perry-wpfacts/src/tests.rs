@@ -1814,6 +1814,7 @@ mod date_methods;
 mod delegate_step;
 mod gen_proto_lock;
 mod array_iter_lock;
+mod iter_result_array;
 mod gen_proto_members;
 mod generator_results;
 mod generator_resume_arguments;
