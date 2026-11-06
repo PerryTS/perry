@@ -1268,10 +1268,16 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
         crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
         _ => return None,
     };
-    Some(ReceiverFact::Builtin(
-        family,
-        family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0,
-    ))
+    // The receiver's own link: an array's header bit; a Map, Set or Date
+    // cell's meta record (its own `[[Prototype]]` or an own key lives there).
+    let own = if family == BuiltinProto::Array {
+        header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    } else {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        // SAFETY: `header` is this live cell's validated header.
+        unsafe { super::cell_meta::builtin_cell_has_meta(addr, header.obj_type) }
+    };
+    Some(ReceiverFact::Builtin(family, own))
 }
 
 /// The intrinsic's shadow bit and the receiver's own prototype link are
