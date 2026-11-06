@@ -504,16 +504,27 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
         // key are final alike, so the answer does not depend on it. The
         // Map/Set/String iterator prototypes and the iterator helpers' take
         // adds: no other iterator kind is final.
+        // A container the model fills: the chain its creator gave it
+        // (`box_chain`). An ordinary object passes `Object.prototype` only,
+        // an array `Array.prototype` first; a null-prototype object has no
+        // chain, so nothing the program writes reaches a read past its own
+        // keys.
+        Family::Box => match what.map_or(BoxChain::Unknown, box_chain) {
+            BoxChain::Object => &[],
+            BoxChain::Array => &[(
+                LockHolder::Proto(P::Array),
+                own(Family::Array, name).is_some(),
+            )],
+            BoxChain::Null => return true,
+            BoxChain::Unknown => return false,
+        },
         Family::Iterator if what == Some(ARRAY_ITERATOR) => &[
             (LockHolder::ArrayIterator, false),
             (LockHolder::Iterator, false),
         ],
-        Family::Function
-        | Family::Iterator
-        | Family::Error
-        | Family::Box
-        | Family::Wrapper
-        | Family::Opaque => return false,
+        Family::Function | Family::Iterator | Family::Error | Family::Wrapper | Family::Opaque => {
+            return false
+        }
     };
     let class = |image: bool| {
         if name == "constructor" {
@@ -597,10 +608,37 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" => Family::Box,
+        | "fromEntries" | "mapGroups" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
+}
+
+/// The [[Prototype]] a `Family::Box` value of kind `what` is born with:
+/// the one its creator allocates it with. `JSON.parse` objects (its arrays
+/// are `TmplKind::Arr`), property descriptors and `Object.fromEntries`
+/// results are ordinary objects (`OrdinaryObjectCreate(%Object.prototype%)`);
+/// own-keys results are arrays (`CreateArrayFromList`); a match's `groups`
+/// and an `Object.groupBy` result have a null prototype (`perex_results.rs`
+/// `null_groups`, `groupby.rs`). The result of an undescribed method
+/// (`primbox`) and a `Map.groupBy` Map (`mapGroups`, whose entries the model
+/// keeps as a container's) have no chain the model describes.
+pub(crate) fn box_chain(what: &str) -> BoxChain {
+    match what {
+        "json" | "descriptor" | "descriptors" | "fromEntries" => BoxChain::Object,
+        "keys" | "arraybox" => BoxChain::Array,
+        "groups" => BoxChain::Null,
+        _ => BoxChain::Unknown,
+    }
+}
+
+/// [`box_chain`]'s answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BoxChain {
+    Object,
+    Array,
+    Null,
+    Unknown,
 }
 
 /// A canonical array index (`"0"`, `"17"`): an element, not a member.

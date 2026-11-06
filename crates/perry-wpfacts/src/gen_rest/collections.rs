@@ -357,7 +357,10 @@ impl<'a> Gen<'a> {
             Expr::ObjectFromEntries(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
-                let inner = self.load(it, Key::any());
+                // Each entry's key and value: its `"0"` and `"1"` (a
+                // [[Get]] under a number key), not every member of its chain.
+                let num = Key::Named(self.m.atom(crate::model::NUM_KEY));
+                let inner = self.load(it, num);
                 let (t, n) = self.bobj(mi, "fromEntries");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
@@ -375,7 +378,7 @@ impl<'a> Gen<'a> {
                 let pair = self.new_arr_from(mi, "entry", &[el, s]);
                 self.new_arr_from(mi, "entries", &[pair])
             }
-            Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
+            e @ (Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn }) => {
                 let v = self.expr(fx, items);
                 let it = self.iterate(v);
                 let f = self.expr(fx, key_fn);
@@ -390,7 +393,14 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let group = self.new_arr_from(mi, "group", &[it]);
-                let (t, n) = self.bobj(mi, "groups");
+                // `Object.groupBy` makes a null-prototype object, `Map.groupBy`
+                // a Map (`members::box_chain`).
+                let kind = if matches!(e, Expr::MapGroupBy { .. }) {
+                    "mapGroups"
+                } else {
+                    "groups"
+                };
+                let (t, n) = self.bobj(mi, kind);
                 let fa = self.m.field_any(t);
                 self.m.edge(group, fa);
                 self.m.edge(k, fa);
