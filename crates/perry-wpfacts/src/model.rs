@@ -530,10 +530,12 @@ pub struct FuncInfo {
     /// Something outside the call protocol writes the parameters (an object
     /// literal IIFE, a computed accessor): never summarized.
     pub no_summary: bool,
-    /// The step closure of a transformed generator: the generator object
+    /// The step closure of a transformed generator is the generator object
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
-    /// iteration protocol on it run the closure.
-    pub gen_step: bool,
+    /// iteration protocol on it run the closure. Its [[Prototype]] is this
+    /// token: the generator function's `prototype` object (`proto_node`),
+    /// where the program's members sit before the protocol.
+    pub gen_proto: Option<Tok>,
     /// An async generator's step closure (its `next` settles a Promise).
     pub gen_async: bool,
     /// A sync step closure with a `yield*`: a step may hand back its
@@ -2031,5 +2033,12 @@ mod token_values;
 impl Model {
     pub(crate) fn charge_work(&self, amount: u64) {
         self.work.set(self.work.get() + amount);
+    }
+}
+
+impl FuncInfo {
+    /// The step closure of a transformed generator (`gen_proto`).
+    pub fn gen_step(&self) -> bool {
+        self.gen_proto.is_some()
     }
 }

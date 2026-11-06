@@ -380,7 +380,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         ctor_of: None,
         lexical_this: true,
         no_summary: false,
-        gen_step: false,
+        gen_proto: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -428,7 +428,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -604,7 +604,7 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         // stands for the generator object (`FuncInfo::gen_step`).
         TokKind::Func(f, _) => {
             let fi = &m.funcs[*f as usize];
-            (fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step)
+            (fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step())
                 .then_some(members::FN_PROTO_ONLY)
         }
         _ => None,

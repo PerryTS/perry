@@ -1410,7 +1410,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1478,7 +1478,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1535,7 +1535,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1586,7 +1586,7 @@ fn marker_model() -> crate::model::Model {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
-        gen_step: false,
+        gen_proto: None,
         gen_async: false,
         gen_reyields: false,
         proto: None,
@@ -1804,6 +1804,7 @@ mod console_protocol;
 mod constructor_values;
 mod date_methods;
 mod delegate_step;
+mod gen_proto_members;
 mod generator_results;
 mod generator_resume_arguments;
 mod helper_protocols;

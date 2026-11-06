@@ -186,7 +186,7 @@ impl Model {
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
-            gen_step: false,
+            gen_proto: None,
             gen_async: false,
             gen_reyields: false,
             proto: None,

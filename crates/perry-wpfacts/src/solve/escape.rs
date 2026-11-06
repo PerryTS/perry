@@ -677,7 +677,7 @@ impl Model {
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
         if published
             || fi.lexical_this
-            || fi.gen_step
+            || fi.gen_step()
             || fi.ctor_of.is_some()
             || fi.func_id == u32::MAX
             || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f))

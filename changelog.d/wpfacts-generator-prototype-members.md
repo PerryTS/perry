@@ -1,0 +1,1 @@
+A generator object inherits from its generator function's `prototype` in whole-program facts: a `next` or `[Symbol.iterator]` the program writes there (`g.prototype.next = ...`) is what for-of and `next()` call, so a member read on the generator's yields is no longer proven when they are replaced (fixes a false proof and a crash).
