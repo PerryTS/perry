@@ -47,7 +47,7 @@ def main():
     if args.moving_gc and not args.native_runtime_dir:
         parser.error("--moving-gc requires --native-runtime-dir")
     root = Path(__file__).resolve().parent.parent
-    fixture = root / "test-wasi/components/transform"
+    fixture = root / "tests/integration/wasi/components/transform"
     output = args.output.resolve()
     work = output / "transform"
     work.mkdir(parents=True, exist_ok=True)

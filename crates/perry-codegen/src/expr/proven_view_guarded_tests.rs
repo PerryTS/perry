@@ -1,7 +1,7 @@
 //! Emission pins for the guarded proven-view tier
 //! (`expr/proven_view_guarded.rs`) and for `new TA(n)` ownership through a
 //! non-Object length. The behavioural half is
-//! `test-parity/language/typed-array/test_gap_typed_array_guarded_view_keys.ts` and
+//! `tests/parity/language/typed-array/test_gap_typed_array_guarded_view_keys.ts` and
 //! `test_gap_typed_array_length_ownership.ts`, compared against node.
 
 use super::class_field_barrier_tests::block_body;

@@ -17,9 +17,9 @@
 //! the Set family, which a program may still patch (F-I), and the copy-arm
 //! decline on Map / Set / String (D, E).
 //!
-//! The expected output below is Perry's (`test-parity/expected/`): node runs
+//! The expected output below is Perry's (`tests/parity/expected/`): node runs
 //! the array forms unrefused. Lines D-I are `node v26.5.1` running the same
-//! source (`test-parity/language/iterator/test_gap_iterator_prototype_next_patch.ts`) without
+//! source (`tests/parity/language/iterator/test_gap_iterator_prototype_next_patch.ts`) without
 //! section A. The discriminating lines are:
 //!
 //! * `D-set s1,s2` / `D-map-spread [["z",105]]` / `E-string A,B` — every one of these is a runtime element-COPY fast arm
@@ -52,7 +52,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const SOURCE: &str = include_str!(
-    "../../../test-parity/language/iterator/test_gap_iterator_prototype_next_patch.ts"
+    "../../../tests/parity/language/iterator/test_gap_iterator_prototype_next_patch.ts"
 );
 
 const EXPECTED: &str = "A-refused TypeError,TypeError,TypeError,TypeError,TypeError true\n\
@@ -127,7 +127,7 @@ fn patched_iterator_prototype_next_drives_every_iteration_form() {
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         EXPECTED,
-        "output must match test-parity/expected (node for D-I)\nstderr:\n{}",
+        "output must match tests/parity/expected (node for D-I)\nstderr:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
 }

@@ -168,9 +168,9 @@ unsafe extern "C" fn supplied_connection(
 }
 
 const CERT_PEM: &[u8] =
-    include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
+    include_bytes!("../../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem");
 const KEY_PEM: &[u8] =
-    include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-key.pem");
+    include_bytes!("../../../tests/parity/node-suite/tls/fixtures/localhost-key.pem");
 
 /// One nonblocking turn plus its dispatch.
 ///

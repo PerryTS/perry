@@ -8,7 +8,7 @@ fn request_input_inherits_fields_and_applies_init_overrides() {
     let binary = dir.path().join("request_copy");
     std::fs::write(
         &entry,
-        include_str!("../../../test-parity/node-suite/fetch/test_gap_10380_request_copy.ts"),
+        include_str!("../../../tests/parity/node-suite/fetch/test_gap_10380_request_copy.ts"),
     )
     .unwrap();
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))

@@ -19,7 +19,7 @@ use super::subclass::{mutation_receiver_allows_plain_tail, ValidatedObjectReceiv
 /// Array` instances; `PERRY_ARRAY_SUBCLASS_ELEMENTS=0` restores the
 /// shape-carried form (a bisecting kill switch, not a supported mode).
 ///
-/// Flipped on after: the whole `test-files/` corpus compiled once and run
+/// Flipped on after: the whole `tests/fixtures/programs/` corpus compiled once and run
 /// twice under both settings (1285 binaries, 9 output differences, every one
 /// of them nondeterministic output — random bytes, timestamps,
 /// `console.time`, a PID, a flaky watcher — each reproducible with the switch

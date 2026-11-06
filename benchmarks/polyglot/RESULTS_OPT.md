@@ -1,6 +1,6 @@
 # Polyglot Benchmark Results — Default vs Optimized
 
-Same benchmarks as [`RESULTS.md`](./RESULTS.md), but with a second column
+Same benchmarks as [`RESULTS.md`](RESULTS.md), but with a second column
 per native language showing what happens when the language is given the
 flags and idioms equivalent to **Perry `--fast-math`** (since v0.5.585,
 fast-math is opt-in; the previous "Perry default" through v0.5.584 is

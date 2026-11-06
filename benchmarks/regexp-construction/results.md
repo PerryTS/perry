@@ -193,9 +193,9 @@ python3 scripts/gc_runtime_root_holders.py
 ./scripts/pre-tag-check.sh --quick
 export PATH=/tmp/regexp-oracle/node-v26.5.1-linux-x64/bin:$PATH
 PERRY_RUNTIME_DIR=/tmp/regexp-lazy-libs /tmp/regexp-lazy-libs/perry compile \
-  test-files/test_gap_10179_regexp_cache.ts --no-auto-optimize \
+  tests/fixtures/programs/test_gap_10179_regexp_cache.ts --no-auto-optimize \
   -o /tmp/regexp-parity-final
-node --experimental-strip-types test-files/test_gap_10179_regexp_cache.ts \
+node --experimental-strip-types tests/fixtures/programs/test_gap_10179_regexp_cache.ts \
   > /tmp/regexp-parity-final-node.txt
 /tmp/regexp-parity-final > /tmp/regexp-parity-final-perry.txt
 diff -u /tmp/regexp-parity-final-node.txt /tmp/regexp-parity-final-perry.txt

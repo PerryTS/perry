@@ -34,7 +34,7 @@ This pattern combines several production-grade primitives:
 | `container_name: 'app-db'` | Forces a stable container name so docker's embedded DNS resolves `app-db` to the postgres container's IP. **See the [DNS gotcha below](#cross-service-dns).** |
 | `healthcheck: { test: [...], interval, retries, start_period }` | Per-service liveness probe. Compose-spec § service.healthcheck shape — Perry's engine honors it for `depends_on` gating. |
 | `depends_on: { db: { condition: 'service_healthy' } }` | Holds the dependent service back until the dependency reports healthy. Three valid conditions: `service_started`, `service_healthy`, `service_completed_successfully`. |
-| `networks: { ..., internal: true }` | Marks the network as internal-only — postgres is unreachable from the host or from sibling stacks. See [Networking](./networking.md). |
+| `networks: { ..., internal: true }` | Marks the network as internal-only — postgres is unreachable from the host or from sibling stacks. See [Networking](networking.md). |
 | `restart: 'unless-stopped'` | The runtime restarts the container after a crash, but not after an explicit `docker stop`. |
 
 The full `ComposeSpec` shape is exported from `perry/compose` as
@@ -47,7 +47,7 @@ non-external volumes and networks as `<name>_<declared-name>`, exactly
 like docker-compose's project prefix. It defaults to `"perry-stack"`
 when omitted, so set it whenever more than one stack can run on the
 same host (see [Volumes → Volume naming and
-ownership](./volumes.md#volume-naming-and-ownership)).
+ownership](volumes.md#volume-naming-and-ownership)).
 
 ### Recognised Service fields
 
@@ -198,7 +198,7 @@ not when each service is *ready*. To block until the stack is serving:
    'service_healthy' } }`, dependent services wait for the dependency
    to report healthy.
 2. **Run an explicit probe loop in your code.** The
-   [Forgejo example](./production-patterns.md) does this for both
+   [Forgejo example](production-patterns.md) does this for both
    postgres (`pg_isready`) and Forgejo (`/api/healthz` over HTTP), each
    with its own timeout budget.
 
@@ -223,9 +223,9 @@ try {
 
 ## See also
 
-- [Networking](./networking.md) — networks, ports, and the DNS gotcha.
-- [Volumes](./volumes.md) — preserving data across `down()`.
-- [Production patterns](./production-patterns.md) — case study with
+- [Networking](networking.md) — networks, ports, and the DNS gotcha.
+- [Volumes](volumes.md) — preserving data across `down()`.
+- [Production patterns](production-patterns.md) — case study with
   the Forgejo example.
-- [Security](./security.md) — image verification and capability
+- [Security](security.md) — image verification and capability
   isolation.

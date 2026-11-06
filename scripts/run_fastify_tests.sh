@@ -20,7 +20,7 @@ if [[ ! -x "$PERRY_BIN" ]]; then
     exit 2
 fi
 
-TEST_SRC="$(cd "$(dirname "$0")/.." && pwd)/test-parity/npm/fastify/test_fastify_integration.ts"
+TEST_SRC="$(cd "$(dirname "$0")/.." && pwd)/tests/parity/npm/fastify/test_fastify_integration.ts"
 if [[ ! -f "$TEST_SRC" ]]; then
     echo "test source not found at $TEST_SRC"
     exit 2

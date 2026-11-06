@@ -14,7 +14,7 @@ env['PERRY_RUNTIME_DIR']=str(art/(arm+'-runtime'))
 results=json.loads((art/(arm+'-acceptance.json')).read_text()) if selected else []
 results=[r for r in results if r['name'] not in names]
 for name in names:
- src=root/'test-files'/(name+'.ts');binary=art/(arm+'-'+name)
+ src=root/'tests/fixtures/programs'/(name+'.ts');binary=art/(arm+'-'+name)
  log=art/(arm+'-'+name+'.compile.log');obj=art/(name+'.o')
  if arm in ['changed','number','cache','utf16','unicode','scalar','primitive-array','direct-string','tape-scan','parse-scalar','parse-scalar-cache','data-record','record-array-proof','empty-object-leaf','primitive-object','bounded-preflight','parse-entry','record-output','integer-piece','tape-owned']:
   assert obj.exists(),obj

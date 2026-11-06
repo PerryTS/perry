@@ -42,7 +42,7 @@ def gap_sources(root: Path, filters: list[str] | tuple[str, ...] = (), *,
     """Resolve filtered sample IDs, retaining legacy locators and precedence."""
     names = [name for name in (GAP_SAMPLES if samples is None else samples)
              if not filters or any(f in name for f in filters)]
-    sources = {name: root / "test-files" / f"{name}.ts" for name in names}
+    sources = {name: root / "tests/fixtures/programs" / f"{name}.ts" for name in names}
     pending = [name for name in names if not sources[name].exists()]
     if pending:
         try:
@@ -176,7 +176,7 @@ def main() -> int:
         parser.error("--keep-intermediates requires --output")
     if args.flavour == "p1" and args.suite == "core":
         parser.error("--suite core is a P2 set; use smoke, acceptance or gap with --flavour p1")
-    fixtures = ROOT / "scripts" / ("wasi_smoke" if args.suite == "smoke" else "wasi_acceptance")
+    fixtures = ROOT / "tests/integration/wasi" / ("smoke" if args.suite == "smoke" else "acceptance")
     if args.flavour == "p1" and args.suite == "acceptance":
         fixtures /= "p1"
     try:

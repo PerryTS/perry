@@ -28,7 +28,7 @@ def main():
                         help="also require a real moving collection with matching _instr archives")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    fixture = root / "test-wasi/components/transform"
+    fixture = root / "tests/integration/wasi/components/transform"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     work = output / "transform"

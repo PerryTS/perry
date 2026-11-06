@@ -27,7 +27,7 @@ def main():
     if bool(args.library_component) != bool(args.library_bindings):
         parser.error("--library-component and --library-bindings must be supplied together")
     root = Path(__file__).resolve().parent.parent
-    fixture = root / "test-wasi/components/command"
+    fixture = root / "tests/integration/wasi/components/command"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     work = output / "fixture"

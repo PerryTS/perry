@@ -35,7 +35,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn fixture_dir() -> PathBuf {
-    workspace_root().join("test-files/fixtures/issue_8772_short_packed_spread")
+    workspace_root().join("tests/fixtures/programs/fixtures/issue_8772_short_packed_spread")
 }
 
 fn perry_bin() -> PathBuf {

@@ -283,7 +283,7 @@ def wasi_fixture_problems(root: Path, metadata_loader=None) -> list[str]:
     """
     metadata_loader = metadata_loader or load_metadata
     problems = []
-    for manifest in sorted((root / "test-wasi/components").glob("*/*/Cargo.toml")):
+    for manifest in sorted((root / "tests/integration/wasi/components").glob("*/*/Cargo.toml")):
         directory = manifest.parent
         label = str(directory.relative_to(root))
         for edge in edges_from_metadata(metadata_loader(directory)):
@@ -446,7 +446,7 @@ def self_test() -> int:
         subprocess.run(["git", "init", "--quiet", str(root)], check=True)
         (root / "Cargo.lock").write_text(clean_lock)
         (root / ".gitignore").write_text("target/\n")
-        nested = root / "test-wasi/components/nested/host/Cargo.lock"
+        nested = root / "tests/integration/wasi/components/nested/host/Cargo.lock"
         nested.parent.mkdir(parents=True)
         nested.write_text(clean_lock + '\n[[package]]\nname = "tokio-new"\nversion = "1.0.0"\n')
         ignored = root / "target/Cargo.lock"
@@ -487,7 +487,7 @@ renamed = { package = "tokio-new", version = "1", optional = true }
     import tempfile
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        fixture = root / "test-wasi/components/probe/rust"
+        fixture = root / "tests/integration/wasi/components/probe/rust"
         (fixture / "src").mkdir(parents=True)
         (fixture / "Cargo.toml").write_text("[workspace]\n")
         lock = fixture / "Cargo.lock"

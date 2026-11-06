@@ -7,7 +7,7 @@
 //! only perry-runtime can — so nothing here observes a completion.
 //!
 //! The end-to-end coverage (a real socket, a real server, real protocol events)
-//! is in `scripts/turnloop/apps/`, because a database core needs a database to
+//! is in `tests/integration/turnloop/apps/`, because a database core needs a database to
 //! say anything.
 
 use super::*;

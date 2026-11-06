@@ -520,7 +520,7 @@ fn win32_parse_preserves_input_components() {
     use super::*;
     // All five fields were captured from the repository's pinned Node oracle.
     let cases: Vec<(String, [String; 5])> = serde_json::from_str(include_str!(
-        "../../../../test-files/fixtures/path_win32_parse.json"
+        "../../../../tests/fixtures/programs/fixtures/path_win32_parse.json"
     ))
     .unwrap();
     let _suppress = crate::gc::GcSuppressScope::new();

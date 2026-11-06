@@ -7,7 +7,7 @@ use std::process::Command;
 #[test]
 fn orphan_dispatch_compiles_with_bytes_owned_by_another_unit() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-files/test_codegen_unit_orphan_dispatch.ts");
+        .join("../../tests/fixtures/programs/test_codegen_unit_orphan_dispatch.ts");
     for backend in ["native", "1"] {
         let dir = tempfile::tempdir().expect("temporary compile directory");
         let ll_dir = dir.path().join("ll");

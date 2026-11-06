@@ -63,7 +63,7 @@ def main():
     assert match, "fixture subject did not execute"
     guest = out / "guest"
     shutil.move(match.group(1), guest)
-    fixture = root / "test-wasi/components/async-guest-resources"
+    fixture = root / "tests/integration/wasi/components/async-guest-resources"
     for name in ["world.wit", "guest.ts"]:
         assert (guest / name).read_bytes() == (fixture / name).read_bytes(), "stale fixture binary"
     run("host-build", ["cargo", "-Z", "checksum-freshness", "build", "--locked",

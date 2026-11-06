@@ -347,7 +347,7 @@ stores a pointer to a single heap object and returns it on every hit.
 Without the cache, two cold-path calls would materialize two distinct
 trees and `===` would return false — a correctness bug, not a
 performance bug. Verified by `test_json_lazy_per_element.ts`
-(`test-files/test_json_lazy_per_element.ts:31-37`).
+(`tests/fixtures/programs/test_json_lazy_per_element.ts:31-37`).
 
 ### 5.5 Stringify
 
@@ -601,7 +601,7 @@ Non-obvious cases and how the implementation handles them.
 
 ### 10.1 Perry-internal test files
 
-Located in `test-files/`. Each compiles + runs on Perry, and the output
+Located in `tests/fixtures/programs/`. Each compiles + runs on Perry, and the output
 is compared byte-for-byte to `node --experimental-strip-types`:
 
 - `test_json_lazy_indexed.ts` — indexed reads, field access, for-loop,
@@ -651,7 +651,7 @@ No regression introduced by any of v0.5.208–211.
 
 ### 10.5 Gap suite
 
-`test-files/test_gap_*.ts` — 28 tests covering TypeScript feature
+`tests/fixtures/programs/test_gap_*.ts` — 28 tests covering TypeScript feature
 parity with Node. At v0.5.211: 24/28 pass. The 4 failures
 (`async_advanced`, `console_methods`, `fetch_response`,
 `typed_arrays`) predate the lazy path and are unrelated to JSON.
@@ -733,7 +733,7 @@ For reviewers verifying this document against source:
 - [ ] `js_json_parse` dispatch logic (size threshold + env mode):
       `json.rs:967-998`.
 - [ ] `tape_mode_from_env` cached via `OnceLock`: `json.rs:1061-1080`.
-- [ ] Every test in `test-files/test_json_{lazy,typed}_*.ts` passes
+- [ ] Every test in `tests/fixtures/programs/test_json_{lazy,typed}_*.ts` passes
       byte-for-byte vs Node under default + `PERRY_JSON_TAPE=1` modes.
 
 ---

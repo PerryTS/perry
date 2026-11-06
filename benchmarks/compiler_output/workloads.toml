@@ -2253,7 +2253,7 @@ regex_none = [
 detail = "the stable arm does not directly allocate or rebuild generic key lists"
 
 [workloads.issue_8693_imported_this]
-source = "test-files/fixtures/issue_8693_imported_this/main.js"
+source = "tests/fixtures/programs/fixtures/issue_8693_imported_this/main.js"
 kind = "imported_class_method_specialization"
 allow_hot_loop_conversions = true
 allow_dynamic_property_runtime = true
@@ -2290,7 +2290,7 @@ notes_contains = "generic_dispatch_fallback=js_native_call_method_by_id"
 min = 2
 
 [workloads.issue_8775_imported_object]
-source = "test-files/fixtures/issue_8775_imported_object/main.js"
+source = "tests/fixtures/programs/fixtures/issue_8775_imported_object/main.js"
 kind = "imported_object_literal_method_specialization"
 allow_hot_loop_conversions = true
 allow_dynamic_property_runtime = true

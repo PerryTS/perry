@@ -803,7 +803,7 @@ thread_local! {
 ///    reallocation loop. The third disjunct does NOT rescue that case: under
 ///    `gc_incremental_enabled()` (the default) it reduces to "any COPY-ONLY
 ///    scanner", and a compiled program has none — the reasoning
-///    `test-parity/gc_matrix_inert_arms.txt` recorded for the `cons_scan_off`
+///    `tests/parity/gc_matrix_inert_arms.txt` recorded for the `cons_scan_off`
 ///    arm, and the thing that made a first attempt at repairing
 ///    `generator_attach_prototype` fail for a third distinct reason.
 ///

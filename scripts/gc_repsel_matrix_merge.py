@@ -32,7 +32,7 @@ from gc_matrix_liveness_check import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = REPO_ROOT / "test-parity" / "gc_repsel_corpus.txt"
+MANIFEST = REPO_ROOT / "tests/parity" / "gc_repsel_corpus.txt"
 RESULTS = ("PASS", "UNVER", "XFAIL", "FAIL")
 
 

@@ -53,11 +53,11 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
 
 ## Which layer owns a test
 
-Ask what the assertion needs to see; `docs/src/testing/test-structure.md` has the full table. A test in the wrong layer either cannot see its subject or duplicates another layer's work:
+When adding or moving an external suite, use `tests/README.md` for placement and runner entry points. Ask what the assertion needs to see; `docs/src/testing/test-structure.md` has the full layer table. A test in the wrong layer either cannot see its subject or duplicates another layer's work:
 
 - **Beside the code** (`#[cfg(test)]`, `tests.rs` siblings) asserts an invariant of the implementation: an allocation count, a rooting or ordering rule, a release path, private state. This is the layer that can see what a compiled program cannot, and it is where acceptance coverage goes, because a failure here names the mechanism.
 - **`crates/*/tests/`** asserts the public API across modules, and `crates/perry/tests/` what the `perry` binary prints: diagnostics, CLI output, determinism. CI selects these from the changed paths (`scripts/ci_test_scope.py`), so a behavior that must never regress silently belongs in a unit test instead.
-- **A program case** under `test-parity/<root>/<subject>/` asserts what a compiled program prints or exits with, diffed against Node: `node-suite/<module>`, `language/<area>`, `typescript/<feature>`, `perry/<api>` (with committed expected output) or `npm/<package>`. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not. `test-files/test_gap_*` takes no new files; `lint` refuses one.
+- **A program case** under `tests/parity/<root>/<subject>/` asserts what a compiled program prints or exits with, diffed against Node: `node-suite/<module>`, `language/<area>`, `typescript/<feature>`, `perry/<api>` (with committed expected output) or `npm/<package>`. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not. `tests/fixtures/programs/test_gap_*` takes no new files; `lint` refuses one.
 
 The duplication worth deleting is a Rust test whose only assertion is output a parity case already compares byte for byte, and a parity case built to observe something the runtime must keep internal.
 
@@ -65,8 +65,9 @@ The duplication worth deleting is a Rust test whose only assertion is output a p
 
 `scripts/parity.py` is the one runner: it compiles each case, runs it, and compares merged stdout+stderr and the exit status with `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`; the runner refuses any other, because Node's output is the expected output. Select by subject or path: `python3 scripts/parity.py run node-suite/<module> --mode auto`. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
 
-- Each subject has a snapshot, `test-parity/snapshots/<platform>-<mode>/<subject>.json`, listing the cases that do not pass. It is checked both ways: a new failure is red, and so is a listed case that starts passing. Re-baseline with `--update`; never hand-edit a status. A crash is never accepted into a snapshot.
-- A PR runs every `test_gap_*` in `test-files/` and the subject trees in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
+- `--suite test-files` is a logical compatibility selector for `tests/fixtures/programs/`; its bare IDs and `test-files` snapshot subject are retained. New program cases go to their parity subject.
+- Each subject has a snapshot, `tests/parity/snapshots/<platform>-<mode>/<subject>.json`, listing the cases that do not pass. It is checked both ways: a new failure is red, and so is a listed case that starts passing. Re-baseline with `--update`; never hand-edit a status. A crash is never accepted into a snapshot.
+- A PR runs every `test_gap_*` in `tests/fixtures/programs/` and the subject trees in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
 - Before believing a red gap shard, A/B the named tests against a pristine `main` build.
 
 ## Silent failures

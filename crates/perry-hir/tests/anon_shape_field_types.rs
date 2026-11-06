@@ -20,7 +20,7 @@
 //! typed `Number` that receives a pointer relies on the raw-f64 store guard
 //! rejecting it and `layout_note_slot` downgrading the descriptor. That
 //! self-healing is real (see `gc/tests/layout_trace/declared_at_allocation.rs`
-//! and `test-parity/language/class/test_gap_7544_anon_shape_numeric_fields.ts`), but it is a
+//! and `tests/parity/language/class/test_gap_7544_anon_shape_numeric_fields.ts`), but it is a
 //! recovery path, not a licence — a value we cannot type must still mint
 //! `Any` so the collector's view is right the first time.
 

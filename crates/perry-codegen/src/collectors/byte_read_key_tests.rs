@@ -1,7 +1,7 @@
 //! #7700: the key-kind condition on `Expr::Uint8ArrayGet`.
 //!
 //! These are unit tests on purpose. The acceptance case is
-//! `test-parity/language/typed-array/test_gap_uint8array_nonnumeric_key_7700.ts`, and the gap suite
+//! `tests/parity/language/typed-array/test_gap_uint8array_nonnumeric_key_7700.ts`, and the gap suite
 //! is TAG-gated — a regression there would sit red for days (#5960). The
 //! predicate is `--lib`-visible, so this file runs on every PR.
 

@@ -176,7 +176,7 @@ def gc(root, names):
 
 
 def gaps(root):
-    source = root / 'src/test-parity/language/object/test_gap_objops_shape_keys_typeof_instanceof.ts'
+    source = root / 'src/tests/parity/language/object/test_gap_objops_shape_keys_typeof_instanceof.ts'
     expected = oracle(root, 'gaps', source, [], root / 'src')
     for arm in ('main', 'head'):
         result = compile_one(root, arm, 'gaps', source, root / 'src', expected, [])

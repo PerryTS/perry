@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[2] / "tests/integration/wasi/addon"
 ADDONS = ("hello", "second")
 CASES = ("one", "two")
 

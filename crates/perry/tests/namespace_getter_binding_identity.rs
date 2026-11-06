@@ -5,7 +5,7 @@ use std::{path::Path, process::Command};
 fn standalone_regression() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new("node")
-        .arg(root.join("scripts/test-namespace-getter-binding-identity.mjs"))
+        .arg(root.join("tests/integration/harnesses/test-namespace-getter-binding-identity.mjs"))
         .env("PERRY_BIN", env!("CARGO_BIN_EXE_perry"))
         .env("PERRY_WORKSPACE_ROOT", &root)
         .current_dir(&root)

@@ -20,11 +20,11 @@ use std::time::{Duration, Instant};
 
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-parity/node-suite/worker_threads/test_stdin_owned_by_main_thread.ts"
+    "/../../tests/parity/node-suite/worker_threads/test_stdin_owned_by_main_thread.ts"
 ));
 const WORKER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-files/_helpers/stdin_owner_spin_worker.ts"
+    "/../../tests/fixtures/programs/_helpers/stdin_owner_spin_worker.ts"
 ));
 
 const CHUNKS: usize = 200;
@@ -38,7 +38,7 @@ fn compile(dir: &Path) -> PathBuf {
     std::fs::write(
         &source,
         SOURCE.replace(
-            "../../../test-files/_helpers/stdin_owner_spin_worker.ts",
+            "../../../fixtures/programs/_helpers/stdin_owner_spin_worker.ts",
             "./_helpers/stdin_owner_spin_worker.ts",
         ),
     )
