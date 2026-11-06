@@ -34,12 +34,7 @@ fn a_literal_loop_element_is_its_strings() {
         console.log(n);
         "#,
     );
-    assert!(
-        native(&pf, "trim"),
-        "{:?}\n{}",
-        verdicts(&pf, "trim"),
-        pf.dump_text()
-    );
+    assert!(native(&pf, "trim"), "{:?}\n{}", verdicts(&pf, "trim"), pf.dump_text());
 }
 
 #[test]
@@ -56,18 +51,8 @@ fn a_bound_and_a_pushed_array_loop_element_is_its_strings() {
         console.log(n);
         "#,
     );
-    assert!(
-        native(&pf, "trim"),
-        "{:?}\n{}",
-        verdicts(&pf, "trim"),
-        pf.dump_text()
-    );
-    assert!(
-        native(&pf, "trimEnd"),
-        "{:?}\n{}",
-        verdicts(&pf, "trimEnd"),
-        pf.dump_text()
-    );
+    assert!(native(&pf, "trim"), "{:?}\n{}", verdicts(&pf, "trim"), pf.dump_text());
+    assert!(native(&pf, "trimEnd"), "{:?}\n{}", verdicts(&pf, "trimEnd"), pf.dump_text());
 }
 
 /// Soundness: a program iterator that yields `undefined` (a result that is
@@ -90,12 +75,7 @@ fn a_program_iterator_yielding_undefined_keeps_it() {
         console.log(n);
         "#,
     );
-    assert!(
-        open(&pf, "trim"),
-        "{:?}\n{}",
-        verdicts(&pf, "trim"),
-        pf.dump_text()
-    );
+    assert!(open(&pf, "trim"), "{:?}\n{}", verdicts(&pf, "trim"), pf.dump_text());
 }
 
 /// Soundness: an index store past the end leaves a hole the loop reads.
@@ -110,12 +90,7 @@ fn a_holey_array_loop_element_keeps_undefined() {
         console.log(n);
         "#,
     );
-    assert!(
-        open(&pf, "trim"),
-        "{:?}\n{}",
-        verdicts(&pf, "trim"),
-        pf.dump_text()
-    );
+    assert!(open(&pf, "trim"), "{:?}\n{}", verdicts(&pf, "trim"), pf.dump_text());
 }
 
 /// Soundness: a destructuring past the yielded values reads `undefined`.
@@ -129,10 +104,5 @@ fn a_destructuring_past_the_end_keeps_undefined() {
         console.log(n);
         "#,
     );
-    assert!(
-        open(&pf, "trim"),
-        "{:?}\n{}",
-        verdicts(&pf, "trim"),
-        pf.dump_text()
-    );
+    assert!(open(&pf, "trim"), "{:?}\n{}", verdicts(&pf, "trim"), pf.dump_text());
 }

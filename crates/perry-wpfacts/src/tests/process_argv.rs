@@ -38,12 +38,7 @@ fn an_argv_element_is_a_string_receiver() {
     "#,
     );
     for key in ["trim"] {
-        assert!(
-            native(&pf, key),
-            "{key}: {:?}\n{}",
-            calls(&pf, key),
-            pf.dump_text()
-        );
+        assert!(native(&pf, key), "{key}: {:?}\n{}", calls(&pf, key), pf.dump_text());
     }
 }
 
@@ -53,12 +48,7 @@ fn an_argv_element_is_a_string_receiver() {
 fn a_write_to_argv_reaches_its_reads() {
     let use_ = "console.log((process.argv[process.argv.length - 1] ?? \"\").trim());";
     let control = facts(use_);
-    assert!(
-        native(&control, "trim"),
-        "{:?}\n{}",
-        calls(&control, "trim"),
-        control.dump_text()
-    );
+    assert!(native(&control, "trim"), "{:?}\n{}", calls(&control, "trim"), control.dump_text());
     for write in [
         // The program's own push.
         "process.argv.push(5 as any);",
@@ -73,12 +63,7 @@ fn a_write_to_argv_reaches_its_reads() {
         "const h: any = (globalThis as any)[\"hook\" + process.argv.length]; if (h) h(globalThis);",
     ] {
         let pf = facts(&format!("{write}\n{use_}"));
-        assert!(
-            unproven(&pf, "trim"),
-            "{write}: {:?}\n{}",
-            calls(&pf, "trim"),
-            pf.dump_text()
-        );
+        assert!(unproven(&pf, "trim"), "{write}: {:?}\n{}", calls(&pf, "trim"), pf.dump_text());
     }
 }
 
@@ -92,10 +77,5 @@ fn an_object_pushed_onto_argv_is_an_element() {
         console.log((process.argv[process.argv.length - 1] as any).x.toFixed());
     "#,
     );
-    assert!(
-        unproven(&pf, "toFixed"),
-        "{:?}\n{}",
-        calls(&pf, "toFixed"),
-        pf.dump_text()
-    );
+    assert!(unproven(&pf, "toFixed"), "{:?}\n{}", calls(&pf, "toFixed"), pf.dump_text());
 }

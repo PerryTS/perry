@@ -135,10 +135,7 @@ fn a_replaced_iterator_prototype_is_not_final() {
 /// the iteration protocol's) runs it.
 #[test]
 fn a_program_call_of_next_on_an_array_is_not_final() {
-    let (r, v) = receivers(
-        NEXT,
-        "const a: any = [new Svc()]; console.log(g(a.next()));",
-    );
+    let (r, v) = receivers(NEXT, "const a: any = [new Svc()]; console.log(g(a.next()));");
     assert!(!proven(&v), "{r:?} {v:?}");
 }
 
