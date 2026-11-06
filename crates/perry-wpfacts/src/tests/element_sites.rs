@@ -111,7 +111,7 @@ fn computed_write_and_call_keep_distinct_operations() {
     let write = at(&pf, src, "recv[key] = 3", ElementOp::Write);
     assert!(!write.top);
     let call = at(&pf, src, "recv[method]", ElementOp::Call);
-    assert_eq!(call.key, ElementKey::AnyString);
+    assert_eq!(call.key, ElementKey::Named("method".into()));
     assert!(pf.element(0, call.byte_offset, ElementOp::Read).is_none());
 }
 
@@ -137,10 +137,25 @@ fn named_and_element_sites_share_unguarded_receiver_values() {
     );
 }
 
+/// A `const` holding a string literal names that key, as the solver reads
+/// it (`Gen::key_of`): the site fact is the solver's key, nothing more.
 #[test]
-fn string_key_variable_does_not_invent_a_constant_set() {
+fn const_string_key_names_its_field() {
     let src = r#"const recv: any = { value: 7 };
         const key: any = "value"; console.log(recv[key]);"#;
+    let pf = facts(src);
+    assert_eq!(
+        at(&pf, src, "recv[key]", ElementOp::Read).key,
+        ElementKey::Named("value".into())
+    );
+}
+
+/// A string variable that may be reassigned does not invent a constant.
+#[test]
+fn string_key_variable_does_not_invent_a_constant_set() {
+    let src = r#"const recv: any = { value: 7, other: 8 };
+        let key: any = "value"; if (recv.value === 9) key = "other";
+        console.log(recv[key]);"#;
     let pf = facts(src);
     assert_eq!(
         at(&pf, src, "recv[key]", ElementOp::Read).key,
