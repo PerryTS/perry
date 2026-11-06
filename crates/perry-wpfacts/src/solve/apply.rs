@@ -71,6 +71,16 @@ impl Model {
                     self.construct(call, t);
                 }
             }
+            Cons::NewProgram { call } => {
+                for &t in toks {
+                    self.construct_program(call, t);
+                }
+            }
+            Cons::FromArrayLike { dst } => {
+                for &t in toks {
+                    self.from_array_like(t, dst);
+                }
+            }
             Cons::ReflectNew { call, new_target } => {
                 for &target in toks {
                     self.cons(new_target, Cons::ReflectNewTarget { call, target });
