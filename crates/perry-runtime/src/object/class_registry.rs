@@ -93,7 +93,6 @@ pub use state::async_local_storage_prototype_value;
 pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
-pub(crate) use state::install_evaluation_prototype_symbol_members;
 pub(crate) use state::retire_displaced_decl_prototype;
 pub(crate) use state::stashed_dynamic_parent_value;
 pub(crate) use state::{
@@ -122,8 +121,7 @@ pub(crate) use state::{
 pub use state::{
     AccessorDecl, CLASS_DYNAMIC_PARENT_VALUE, CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES,
     CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS,
-    CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS,
-    CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS, REGISTERED_CLASS_IDS,
+    CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STRING_MEMBER_ORDERS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -232,14 +230,11 @@ pub(crate) use parent_static::{
     class_method_slot_value, class_method_slot_value_bytes, class_object_own_field_bytes,
     class_object_owns_key_bytes, class_object_pinned_parent, class_own_static_method_code,
     class_own_static_method_code_bytes, class_own_static_method_entry,
-    class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
-    class_table_symbol_member_keys,
     class_private_instance_getter_value, class_private_instance_setter_apply,
     class_static_accessor_getter_value, class_static_accessor_getter_value_bytes,
     class_static_accessor_setter_apply, class_static_accessor_setter_apply_bytes,
-    class_symbol_getter_value, class_symbol_setter_apply, dynamic_value_class_id,
-    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    lookup_static_method_in_chain_bytes, lookup_static_method_owner,
+    dynamic_value_class_id, get_parent_class_id, install_prototype_symbol_members,
+    lookup_static_method_in_chain, lookup_static_method_in_chain_bytes, lookup_static_method_owner,
     lookup_static_method_owner_bytes, register_class, register_class_dynamic_static_accessor,
     static_accessor_in_chain,
 };

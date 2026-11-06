@@ -573,130 +573,6 @@ unsafe fn native_call_method_value_inner(
     let key_jsval = JSValue::from_bits(key.to_bits());
     let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
 
-    // Well-known symbol calls must use the current property value below;
-    // direct registry dispatch bypasses own/prototype replacements (#9788).
-    if is_symbol_key && !crate::symbol::is_well_known_symbol(crate::symbol::sym_key_from_f64(key)) {
-        let sym_key = crate::symbol::sym_key_from_f64(key);
-        if sym_key != 0 {
-            let bits = object.to_bits();
-            let top16 = bits >> 48;
-            let _ = top16;
-            if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
-                let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
-                if is_prototype_ref {
-                    if let Some((func_ptr, param_count, has_rest, entry)) =
-                        lookup_class_symbol_method_in_chain(class_id, sym_key, false)
-                    {
-                        if entry != 0
-                            && crate::closure::info_has(
-                                &*(entry as *const crate::closure::JsFunctionInfo),
-                                crate::closure::FN_GENERATOR,
-                            )
-                        {
-                            return crate::object::call_generator_symbol_method(
-                                object, key, args_ptr, args_len,
-                            );
-                        }
-                        return call_vtable_method(
-                            func_ptr,
-                            object.to_bits() as i64,
-                            args_ptr,
-                            args_len,
-                            param_count,
-                            // Computed symbol methods never synthesize an
-                            // `arguments` object, but DO carry a `has_rest`
-                            // flag for a trailing user rest param.
-                            false,
-                            has_rest,
-                        );
-                    }
-                } else {
-                    if let Some((func_ptr, param_count, has_rest, entry)) =
-                        lookup_class_symbol_method_in_chain(class_id, sym_key, true)
-                    {
-                        if entry != 0
-                            && crate::closure::info_has(
-                                &*(entry as *const crate::closure::JsFunctionInfo),
-                                crate::closure::FN_GENERATOR,
-                            )
-                        {
-                            return crate::object::call_generator_symbol_method(
-                                object, key, args_ptr, args_len,
-                            );
-                        }
-                        return call_registered_static_method(
-                            func_ptr,
-                            args_ptr,
-                            args_len,
-                            param_count,
-                            has_rest,
-                        );
-                    }
-                }
-            } else if is_class_object_value(object) {
-                let obj = JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-                let class_id = js_object_get_class_id(obj);
-                if let Some((func_ptr, param_count, has_rest, entry)) =
-                    lookup_class_symbol_method_in_chain(class_id, sym_key, true)
-                {
-                    if entry != 0
-                        && crate::closure::info_has(
-                            &*(entry as *const crate::closure::JsFunctionInfo),
-                            crate::closure::FN_GENERATOR,
-                        )
-                    {
-                        return crate::object::call_generator_symbol_method(
-                            object, key, args_ptr, args_len,
-                        );
-                    }
-                    return call_registered_static_method(
-                        func_ptr,
-                        args_ptr,
-                        args_len,
-                        param_count,
-                        has_rest,
-                    );
-                }
-            } else if key_jsval.is_pointer() || JSValue::from_bits(bits).is_pointer() {
-                let obj_val = JSValue::from_bits(bits);
-                if obj_val.is_pointer() {
-                    let obj = obj_val.as_pointer::<ObjectHeader>();
-                    if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
-                        let class_id = js_object_get_class_id(obj);
-                        if class_id != 0 {
-                            if let Some((func_ptr, param_count, has_rest, entry)) =
-                                lookup_class_symbol_method_in_chain(class_id, sym_key, false)
-                            {
-                                if entry != 0
-                                    && crate::closure::info_has(
-                                        &*(entry as *const crate::closure::JsFunctionInfo),
-                                        crate::closure::FN_GENERATOR,
-                                    )
-                                {
-                                    return crate::object::call_generator_symbol_method(
-                                        object, key, args_ptr, args_len,
-                                    );
-                                }
-                                let this_i64 = obj as i64;
-                                return call_vtable_method(
-                                    func_ptr,
-                                    this_i64,
-                                    args_ptr,
-                                    args_len,
-                                    param_count,
-                                    // Computed symbol methods never synthesize an
-                                    // `arguments` object, but DO carry `has_rest`.
-                                    false,
-                                    has_rest,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // #6328: NUMERIC key — `fns[i](x)`, `resolvers[i](i)`. `js_to_property_key`
     // canonicalizes the index to the string `"i"`, and the string branch below
     // hands that to `js_native_call_method`, which dispatches by *method name*:
@@ -824,6 +700,9 @@ unsafe fn native_call_method_value_inner(
     };
     let fv = JSValue::from_bits(field.to_bits());
     if fv.is_undefined() || fv.is_null() {
+        if is_symbol_key {
+            crate::closure::throw_not_callable();
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 

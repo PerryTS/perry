@@ -6,11 +6,8 @@ use super::*;
 pub(crate) mod shape_presence;
 
 /// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
-/// (#6160). Covers the registration schemes the generic symbol resolver
-/// (`js_object_get_symbol_property`, which only reads the data-valued
-/// class function object's static symbols) skips:
-///   * user computed-symbol methods/accessors (`static [S]() {}`,
-///     `static get [S]()`) → CLASS_SYMBOL_METHODS / CLASS_SYMBOL_ACCESSORS;
+/// Includes own descriptors on each actual constructor and the immutable
+/// well-known-symbol dispatch inputs:
 ///   * `static [Symbol.hasInstance]` → the lifted per-class has-instance hook;
 ///   * `static [Symbol.iterator]` / `[Symbol.asyncIterator]` → the synthetic
 ///     `@@iterator` / `@@asyncIterator` static-method names the HIR renames them
