@@ -122,12 +122,6 @@ impl LlBlock {
         self.terminated = true;
     }
 
-    /// Reopen a block whose terminator a whole-function pass moved into a
-    /// split-off tail block (`stack_guard::finish_stack_guard`).
-    pub(crate) fn clear_terminated(&mut self) {
-        self.terminated = false;
-    }
-
     /// #5093: true if this block contains a `call` to anything other than an
     /// `@llvm.*` intrinsic or an inline-asm marker. The class-field versioned
     /// loop uses this to verify AT COMPILE TIME that its fast clone came out
