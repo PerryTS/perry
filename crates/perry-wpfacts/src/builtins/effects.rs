@@ -25,7 +25,11 @@
 //! - `stores(fresh)`: nothing beyond the fresh result.
 //! - `returns(v)`: a primitive, the receiver token, a slot's values, a
 //!   fresh array born at the call site (`site_tmpl`) holding its `elems`,
-//!   or the bound function `bound` makes (`bound_into_result`).
+//!   the bound function `bound` makes (`bound_into_result`), or the array
+//!   `species(this, args, elems)` makes: ArraySpeciesCreate on the
+//!   receiver, a fresh array holding `elems` whose program species
+//!   constructor is constructed with `args` and takes them too
+//!   (`collections::species_from`, `Cons::NewProgram`).
 //!
 //! A slot's field step is [[Get]] wherever the slot is used: its value is
 //! what the load reads.
@@ -81,10 +85,10 @@ pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry
     interpretable(e.effects).then_some(e)
 }
 
-/// Every effect is one `run_native` runs: not `open`, no species
-/// construction, fresh objects only `Array.prototype` arrays, `bound` only
-/// as the result, slots at most one `elems` or `field` step deep over the
-/// receiver or one argument.
+/// Every effect is one `run_native` runs: not `open`, fresh objects only
+/// `Array.prototype` arrays, `bound` and species construction (of the
+/// receiver) only as the result, slots at most one `elems` or `field` step
+/// deep over the receiver or one argument.
 pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
     fn slot(s: &RealmSlot) -> bool {
         matches!(
@@ -117,6 +121,12 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
             RealmEffect::Returns(RealmOperand::Bound) => true,
+            RealmEffect::Returns(RealmOperand::Species { of, args, elems }) => {
+                of.root == RealmSlotRoot::This
+                    && of.steps.is_empty()
+                    && args.iter().all(operand)
+                    && elems.iter().all(slot)
+            }
             RealmEffect::Returns(o) => operand(o),
             RealmEffect::Open => false,
         })
@@ -263,7 +273,9 @@ impl Run {
                 }
                 out
             }
-            RealmOperand::Species { .. } => unreachable!("interpretable() refused species"),
+            RealmOperand::Species { .. } => {
+                unreachable!("interpretable() takes species as a result only")
+            }
             RealmOperand::Bound => unreachable!("interpretable() takes bound as a result only"),
         }
     }
@@ -310,7 +322,15 @@ impl Run {
                 }
             }
             RealmOperand::Bound => super::collections::bound_into_result(m, self.t, self.call),
-            RealmOperand::Species { .. } => unreachable!("interpretable() refused species"),
+            // ArraySpeciesCreate on the receiver (`interpretable`): the
+            // builtin's array holds `elems`; a program species constructor
+            // is constructed with `args` and takes them as well.
+            RealmOperand::Species { args, elems, .. } => {
+                let out = self.fresh(m, elems);
+                let args = args.iter().map(|a| self.operand(m, a)).collect();
+                super::collections::species_from(m, out, self.t, self.call, Some(args));
+                ret_tok(m, self.call, out);
+            }
         }
     }
 }
