@@ -226,7 +226,10 @@ fn detached_buffer_mark_is_found_after_the_idle_fast_path_ran() {
 /// An address no allocator on any supported platform can return: above
 /// `addr_class::is_valid_obj_ptr`'s heap ceiling, so no concurrently running
 /// test can widen a registry window to cover it.
+#[cfg(target_pointer_width = "64")]
 const FAR_OUTSIDE_ANY_WINDOW: usize = 0x7000_0000_0000_0000;
+#[cfg(target_pointer_width = "32")]
+const FAR_OUTSIDE_ANY_WINDOW: usize = 0xF000_0000;
 
 /// The class-prototype probe uses an exact inverse address index. Keep both
 /// positive and negative membership covered: class-heavy bundles saturate the

@@ -863,6 +863,7 @@ mod request_tests {
         }
     }
 
+    #[cfg(not(target_os = "wasi"))]
     #[test]
     fn streaming_verification_checks_complete_payload_and_size() {
         let root = std::env::temp_dir().join(format!(

@@ -711,6 +711,7 @@ fn test_moving_defer_reachable_when_the_arena_trigger_is_due() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn test_moving_defer_slack_still_has_a_safety_valve() {
     use super::super::policy::moving_defer_within_slack;
     const MB: usize = 1024 * 1024;

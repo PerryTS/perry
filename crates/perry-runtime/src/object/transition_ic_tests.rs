@@ -56,6 +56,7 @@ fn transition_key_id_namespaces_are_exact_and_disjoint() {
     assert_eq!(transition_key_id(short), (short as usize, 0));
 }
 
+#[cfg(target_pointer_width = "64")]
 /// A content-namespace entry must be reachable by a DIFFERENT string object
 /// with the same bytes — the property the emitted probe relies on, since its
 /// key is freshly concatenated at every write and never the interned one.

@@ -36,11 +36,11 @@ pub use accessors::symbol_accessor_held_for_test;
 
 // Symbol constructor + value FFI (no_mangle entry points re-exported so existing
 // `crate::symbol::js_symbol_*` call paths keep resolving).
+pub(crate) use constructors::symbol_for_text;
 pub use constructors::{
     js_symbol_description, js_symbol_equals, js_symbol_for, js_symbol_key_for, js_symbol_new,
     js_symbol_new_empty, js_symbol_to_string, js_symbol_typeof,
 };
-pub(crate) use constructors::symbol_for_text;
 
 // Symbol-keyed own property operations.
 pub(crate) use properties::{
@@ -895,6 +895,7 @@ mod symbol_identity_is_header {
         by_value
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn symbol_identity_is_header() {
         // SYMBOL_MAGIC in a cell whose header is not a symbol's: rejected.
