@@ -114,6 +114,11 @@ pub struct FactsConfig {
     /// written to as each unit is captured at the fixpoint, instead of being
     /// held for the dump (`ProgramFacts::diag_stream`).
     pub diag_sidecar: Option<std::path::PathBuf>,
+    /// Dump only (with `diagnostics`): the birth census records (`birth-*`
+    /// lines: arrivals, escapes, the reads and writes of intrinsic keys and
+    /// the receiver of a missed intrinsic method call). The compiler sets it
+    /// from `PERRY_FACTS_BIRTH_CENSUS`. Facts do not depend on it.
+    pub birth_census: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -400,8 +405,7 @@ fn generate<'a>(
     let loud = act.as_ref().is_none_or(|a| a.fixed);
     // Node IDs name the final observed model. Never apply its diagnostic
     // suppression selector to intermediate liveness models with other IDs.
-    let birth_census =
-        cfg.diagnostics && loud && std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some();
+    let birth_census = cfg.diagnostics && loud && cfg.birth_census;
     let mut g = gen::Gen::new_observed(
         sorted.to_vec(),
         cfg.relations && loud,
@@ -413,9 +417,7 @@ fn generate<'a>(
     if cfg.diagnostics && loud {
         g.diagnostic = Some(Default::default());
         g.m.diagnostic.get_or_insert_with(Default::default);
-        if std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some()
-            && g.m.diagnostic.as_ref().unwrap().census.is_none()
-        {
+        if cfg.birth_census && g.m.diagnostic.as_ref().unwrap().census.is_none() {
             g.m.diagnostic.as_mut().unwrap().census = Some(crate::diagnostics::BirthCensus {
                 suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
                     .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())

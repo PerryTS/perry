@@ -138,3 +138,54 @@ fn a_program_call_of_next_on_an_array_is_not_final() {
     let (r, v) = receivers(NEXT, "const a: any = [new Svc()]; console.log(g(a.next()));");
     assert!(!proven(&v), "{r:?} {v:?}");
 }
+
+/// node: prints `3`. The for-of runs in a method instance: the copy of its
+/// step of the iterated array is the same runtime protocol call, which
+/// `js_get_iterator` never makes on an array.
+#[test]
+fn for_of_over_an_array_in_a_method_instance_is_final() {
+    let (r, v) = receivers(
+        COMPUTED,
+        "class Box { items = [new Svc()]; each() { for (const s of this.items) console.log(g(s)); } }
+         new Box().each();",
+    );
+    assert!(proven(&v), "{r:?} {v:?}");
+}
+
+/// node: prints `3` twice. The same, in a function called from two sites.
+#[test]
+fn for_of_over_an_array_in_a_function_called_twice_is_final() {
+    let (r, v) = receivers(
+        COMPUTED,
+        "function each(xs: Svc[]) { for (const s of xs) console.log(g(s)); }
+         each([new Svc()]); each([new Svc()]);",
+    );
+    assert!(proven(&v), "{r:?} {v:?}");
+}
+
+/// A program call of `next` on an array in a method instance is no protocol
+/// call: a `next` the program writes onto `Array.prototype` (through the
+/// unknown value) runs, with the array as `this`.
+#[test]
+fn a_program_next_on_an_array_in_a_method_instance_is_not_final() {
+    let (r, v) = receivers(
+        NEXT,
+        "class Box { items: any = [new Svc()]; each() { console.log(g(this.items.next())); } }
+         new Box().each();",
+    );
+    assert!(!proven(&v), "{r:?} {v:?}");
+}
+
+/// A custom iterable in a method instance: its iterator is a program object
+/// whose own `next` the unknown store may replace: not final.
+#[test]
+fn a_custom_iterator_in_a_method_instance_is_not_final() {
+    let (r, v) = receivers(
+        NEXT,
+        "class Box { it: any = { i: 0, next() { return this.i++ ? { done: true, value: undefined } : { done: false, value: new Svc() }; } };
+           [Symbol.iterator]() { return this.it; }
+           each() { for (const s of this) console.log(g(s)); } }
+         const b = new Box(); u.it = b.it; b.each();",
+    );
+    assert!(!proven(&v), "{r:?} {v:?}");
+}
