@@ -112,7 +112,11 @@ pub(crate) fn literal_descriptor_worker_ir() -> String {
 }
 #[cfg(test)]
 mod map_entry_at_tests;
+#[cfg(test)]
+mod member_update_class_field_tests;
 pub(crate) mod stack_guard;
+#[cfg(test)]
+mod stack_guard_leaf_tests;
 pub(crate) mod tdz_module_check;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
@@ -254,10 +258,6 @@ mod class_evaluation_owner_tests;
 pub(crate) mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
-#[cfg(test)]
-mod member_update_class_field_tests;
-#[cfg(test)]
-mod stack_guard_leaf_tests;
 mod dispatch;
 #[cfg(test)]
 mod ek_prefix_tests;

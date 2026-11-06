@@ -76,8 +76,7 @@ pub(crate) fn lower_body_literal_for_of(
     })
 }
 
-type LowerFallback<'a> =
-    dyn FnMut(&mut LoweringContext, &ast::ForOfStmt) -> Result<Vec<Stmt>> + 'a;
+type LowerFallback<'a> = dyn FnMut(&mut LoweringContext, &ast::ForOfStmt) -> Result<Vec<Stmt>> + 'a;
 
 const TEMP_PREFIX: &str = "__forof_lit_";
 const MAX_ELEMENTS: usize = 8;
@@ -220,7 +219,8 @@ fn source_for_of(
         let value = lower_expr(ctx, &stmt.right)?;
         let source = ctx.fresh_local();
         let source_name = format!("{TEMP_PREFIX}src_{source}");
-        ctx.locals.push((source_name.clone(), source, source_ty.clone()));
+        ctx.locals
+            .push((source_name.clone(), source, source_ty.clone()));
         out.push(Stmt::Let {
             id: source,
             name: source_name.clone(),
@@ -241,7 +241,8 @@ fn source_for_of(
         };
         let array = ctx.fresh_local();
         let array_name = format!("{TEMP_PREFIX}arr_{array}");
-        ctx.locals.push((array_name.clone(), array, array_ty.clone()));
+        ctx.locals
+            .push((array_name.clone(), array, array_ty.clone()));
         let element_ty = match &array_ty {
             Type::Array(element) => element.as_ref().clone(),
             _ => Type::Any,
@@ -338,6 +339,37 @@ fn source_for_of(
     result.map(|()| Some(out))
 }
 
+/// How many rewritten loops may enclose another rewrite. Each rewrite lowers
+/// its body once per arm, so a loop nested inside `n` rewrites is lowered 2^n
+/// times; past this depth a loop takes the IteratorRecord lowering alone, and
+/// nested eligible loops cost at most 2^MAX_REWRITE_NESTING body copies.
+const MAX_REWRITE_NESTING: u32 = 3;
+
+thread_local! {
+    static REWRITE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Marks one rewrite in progress for as long as it lives, so the bodies it
+/// lowers see one more enclosing rewrite.
+struct Nesting;
+
+impl Nesting {
+    fn enter() -> Option<Self> {
+        REWRITE_DEPTH.with(|d| {
+            (d.get() < MAX_REWRITE_NESTING).then(|| {
+                d.set(d.get() + 1);
+                Nesting
+            })
+        })
+    }
+}
+
+impl Drop for Nesting {
+    fn drop(&mut self) {
+        REWRITE_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
 fn literal_for_of(
     ctx: &mut LoweringContext,
     stmt: &ast::ForOfStmt,
@@ -346,6 +378,9 @@ fn literal_for_of(
     if stmt.is_await || std::env::var("PERRY_LITERAL_FOR_OF").as_deref() == Ok("0") {
         return Ok(None);
     }
+    let Some(_nesting) = Nesting::enter() else {
+        return Ok(None);
+    };
     let ast::Expr::Array(lit) = stmt.right.as_ref() else {
         return source_for_of(ctx, stmt, lower_fallback);
     };

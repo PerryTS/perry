@@ -96,7 +96,10 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // 800 instructions, against about 55 for an in-capacity push. Sixteen
         // pushes into `[]` paid two of them, 64% of the loop (the chess
         // engine's per-node move lists); now one. Large arrays still double.
-        let grown = std::cmp::max(old_capacity.saturating_mul(2), old_capacity.saturating_add(16));
+        let grown = std::cmp::max(
+            old_capacity.saturating_mul(2),
+            old_capacity.saturating_add(16),
+        );
         let doubled = std::cmp::min(grown, super::alloc::ARRAY_MAX_CAPACITY);
         let new_capacity =
             super::alloc::array_capacity_or_throw(std::cmp::max(doubled, min_capacity));

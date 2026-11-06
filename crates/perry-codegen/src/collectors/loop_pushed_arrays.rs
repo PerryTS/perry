@@ -141,6 +141,11 @@ impl Walk<'_> {
     }
 
     fn expr(&mut self, e: &Expr) {
+        // A closure's pushes run when it is called, not in this loop; the
+        // walker would still visit its parameter defaults.
+        if matches!(e, Expr::Closure { .. }) {
+            return;
+        }
         if let Expr::ArrayPush { array_id, .. } | Expr::ArrayPushSpread { array_id, .. } = e {
             if self.declared.get(array_id).is_some_and(|d| *d < self.depth) {
                 self.out.insert(*array_id);
