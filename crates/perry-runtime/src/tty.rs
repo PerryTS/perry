@@ -80,11 +80,13 @@ pub(crate) fn scan_tty_resize_callback_root_mut(visitor: &mut crate::gc::Runtime
 
 #[cfg(unix)]
 fn isatty_impl(fd: i32) -> bool {
+    crate::effect!(host_read, tty);
     unsafe { libc::isatty(fd) != 0 }
 }
 
 #[cfg(unix)]
 fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
+    crate::effect!(host_read, tty);
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
         if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
@@ -97,6 +99,7 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
 
 #[cfg(windows)]
 fn isatty_impl(fd: i32) -> bool {
+    crate::effect!(host_read, tty);
     // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
     // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
     // and the same criterion libuv uses to classify a handle as `UV_TTY`.
@@ -106,6 +109,7 @@ fn isatty_impl(fd: i32) -> bool {
 
 #[cfg(windows)]
 fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
+    crate::effect!(host_read, tty);
     // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
     // bottom-top+1) for the stdout/stderr console handle.
     crate::win_console::window_size(fd)
@@ -113,11 +117,13 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
 
 #[cfg(not(any(unix, windows)))]
 fn isatty_impl(_fd: i32) -> bool {
+    crate::effect!(host_read, tty);
     false
 }
 
 #[cfg(not(any(unix, windows)))]
 fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
+    crate::effect!(host_read, tty);
     None
 }
 

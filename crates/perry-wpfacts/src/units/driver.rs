@@ -1145,6 +1145,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if cfg.unit_io {
             pf.unit_io = unit_io(sorted, &solves, &order, &per_unit, &input);
         }
+        // SNAP census (dump only, `PERRY_SNAP_FACTS=<file>`): what each
+        // unit's code may write and read outside itself, at the fixpoint.
+        if let Some(path) = std::env::var_os("PERRY_SNAP_FACTS") {
+            snap_facts_dump(std::path::Path::new(&path), sorted, &solves, &per_unit);
+        }
         // The cells' writes at the fixpoint, each once per unit writing it
         // (each unit holds its own), for the tests to read their size.
         #[cfg(test)]
@@ -1400,6 +1405,47 @@ pub(super) fn solve_level(
             .flat_map(|w| w.join().expect("a unit solve panicked"))
             .collect()
     })
+}
+
+/// SNAP census dump: per unit, its writes of other units' bindings, its
+/// stores into other units' layouts, its shared-object effects (⊤ included),
+/// its cells, and what it reads of them. One line per fact, tab-separated.
+fn snap_facts_dump(
+    path: &std::path::Path,
+    sorted: &[(&str, &Module)],
+    solves: &[Solve],
+    per_unit: &[Option<ProgramFacts>],
+) {
+    use std::io::Write;
+    let Ok(f) = std::fs::File::create(path) else {
+        return;
+    };
+    let mut f = std::io::BufWriter::new(f);
+    for (si, s) in solves.iter().enumerate() {
+        let Some(u) = per_unit[si].as_ref() else {
+            continue;
+        };
+        let _ = writeln!(f, "unit\t{}\t{}", sorted[s.mi].0, s.key);
+        for ((p, n), _) in &u.writes_out {
+            let _ = writeln!(f, "write\t{p}\t{n}");
+        }
+        for (d, k, _) in &u.stores_out {
+            let _ = writeln!(f, "store\t{d}\t{k}");
+        }
+        for w in &u.shared_out {
+            let _ = writeln!(f, "shared_w\t{w:?}");
+        }
+        for (k, _) in &u.cells_out {
+            let _ = writeln!(f, "cell_w\t{k}");
+        }
+        for k in &u.cells_read {
+            let _ = writeln!(f, "cell_r\t{k}");
+        }
+        for (d, _) in &u.layouts_read {
+            let _ = writeln!(f, "layout_r\t{d}");
+        }
+        let _ = writeln!(f, "shared_r\t{:?}", u.shared_reads);
+    }
 }
 
 /// `FactsConfig::unit_io` (design §13.3): per unit, a digest of every input

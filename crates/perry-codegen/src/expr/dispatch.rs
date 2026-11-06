@@ -50,6 +50,9 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // one. Handlers that care receive it as an argument, because they consult
     // it after lowering their operands — by which point the field is gone.
     let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
+    // SNAP census (instrumented compiles only): an env read whose value this
+    // expression stores is a store site (`expr/snap_env_site.rs`).
+    super::snap_env_site::note_store_parent(ctx, expr);
     // #9856: under `--debug-symbols`, record this expression's source line
     // for the DWARF line table (`crate::debug_info`). No-op otherwise.
     crate::debug_info::mark_expr_location(ctx, expr);

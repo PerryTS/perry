@@ -25,6 +25,7 @@ pub(crate) fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
 /// `args` must be a valid NaN-boxed args array pointer, or null.
 #[no_mangle]
 pub unsafe extern "C" fn js_process_next_tick(callback_bits: i64, args: *const ArrayHeader) {
+    crate::effect!(host_write, tick);
     // Mirror codegen's setTimeout/queueMicrotask validation: the timer
     // validator always reports the `"callback"` argument name, which is the
     // wording Node uses for `process.nextTick`.

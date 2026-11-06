@@ -188,6 +188,7 @@ fn flush_completely(handle: &mut impl std::io::Write, fd: i32) -> bool {
 /// chunk is never interleaved with a concurrent `console.log`, and drains
 /// that handle's buffer first so the two funnels stay in program order.
 pub(super) fn write_stdout(bytes: &[u8]) {
+    crate::effect!(host_write, stdio);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     #[cfg(unix)]
@@ -206,6 +207,7 @@ pub(super) fn write_stdout(bytes: &[u8]) {
 
 /// Put `bytes` on fd 2. Same contract as [`write_stdout`].
 pub(super) fn write_stderr(bytes: &[u8]) {
+    crate::effect!(host_write, stdio);
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();
     #[cfg(unix)]

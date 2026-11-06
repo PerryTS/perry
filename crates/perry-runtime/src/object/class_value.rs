@@ -368,6 +368,9 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 #[cold]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
+    // A class function object is a static cell built on first use, the same
+    // whichever init asks first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::runtime_scope();
     // Any class id may own one: a native class whose prototype carries
     // registered members (fs.Stats' Date getters) keeps its prototype link
     // here like a compiled class. Its band, not its magnitude, places it.

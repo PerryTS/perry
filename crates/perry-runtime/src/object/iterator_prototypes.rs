@@ -534,6 +534,8 @@ mod override_probe_premise_tests {
 
 pub(crate) fn ensure_iterator_prototypes() {
     if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_iterator_prototypes();
     }
 }

@@ -138,6 +138,16 @@ unsafe fn try_data_lookup_key(
     if FORCE_SLOW.with(|value| value.get()) {
         return None;
     }
+    // Census builds: a lookup on the realm global names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        if receiver.is_pointer() {
+            receiver.as_pointer::<u8>() as usize
+        } else {
+            0
+        },
+        || Some(key),
+    );
     if !receiver.is_pointer() || key.first() == Some(&b'#') || key == b"constructor" {
         return None;
     }

@@ -4101,3 +4101,6 @@ mod map_tombstone_tests;
 pub(crate) fn test_enter_catch_foreach(mark: usize) {
     map_foreach_enter_at(mark, js_map_alloc(4));
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use store::snap_native_index_range;

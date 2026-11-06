@@ -1042,6 +1042,9 @@ pub extern "C" fn js_closure_alloc_singleton(
     if let Some(cached) = SINGLETON_CLOSURES.with(|s| s.borrow().get(&(info as usize)).copied()) {
         return cached;
     }
+    // The body's one no-capture closure, minted on its first use whichever
+    // init asks first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     let allocated = js_closure_alloc(info, 0);
     SINGLETON_CLOSURES.with(|s| {
         s.borrow_mut().insert(info as usize, allocated);
@@ -1150,7 +1153,6 @@ pub(crate) fn test_captured_singleton_closure_cache_entries(
             .unwrap_or_default()
     })
 }
-
 /// Maximum number of (captures-tuple, ClosureHeader) entries cached
 /// per-`func_ptr` in `SINGLETON_CAPTURED_CLOSURES`. Sized to absorb the
 /// parallel-instance async-await pattern (e.g. `Promise.all` of N
@@ -1172,7 +1174,6 @@ const _: () = assert!(
     MAX_CAPTURED_CLOSURE_SLOTS <= u8::MAX as usize,
     "hint_indices_plus_one stores an entry index plus one in a u8"
 );
-
 /// Per-body cache miss-streak counter for the adaptive bypass.
 /// Closures whose captures change every call (per-call boxes for
 /// `__step` / `__gen_state`, etc.) miss 100% of the time on the
@@ -1184,7 +1185,6 @@ const _: () = assert!(
 /// threshold reset the counter.
 const CAPTURED_MISS_STREAK_DISABLE: u32 = 256;
 const CAPTURED_DISABLED_SENTINEL: u32 = u32::MAX;
-
 crate::perry_thread_local! {
     static CAPTURED_MISS_STREAK: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
