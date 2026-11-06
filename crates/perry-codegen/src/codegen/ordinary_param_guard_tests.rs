@@ -1271,12 +1271,10 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
                     type_args: vec![],
                     byte_offset: 0,
                 }),
-                Stmt::Return(Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                })),
+                Stmt::Return(Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                ))),
             ],
             is_async: false,
             is_generator: false,

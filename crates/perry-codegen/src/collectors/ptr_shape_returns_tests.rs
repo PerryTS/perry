@@ -1812,6 +1812,7 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
             key: Box::new(Expr::String("input".into())),
             value: Box::new(Expr::Number(2.0)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),

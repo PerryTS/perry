@@ -1036,7 +1036,10 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
         (Expr::String("hi".to_string()), "heap pointer"),
     ] {
         let ir = ir_for(build(val));
-        assert!(ir.contains("call double @perry_store_or_put("), "{what}:\n{ir}");
+        assert!(
+            ir.contains("call double @perry_store_or_put("),
+            "{what}:\n{ir}"
+        );
         assert!(!ir.contains("class_field_set.fast"), "{what}:\n{ir}");
         assert!(
             !ir.contains("call void @js_write_barrier_slot"),
@@ -1311,19 +1314,15 @@ fn typed_feedback_guards_array_index_specialization() {
         vec![param(1, "xs", array_ty)],
         Type::Number,
         vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Number(0.0)),
-                value: Box::new(Expr::Number(7.0)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
-            Stmt::Return(Some(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Number(0.0)),
-            })),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Number(0.0)),
+                Box::new(Expr::Number(7.0)),
+            )),
+            Stmt::Return(Some(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Number(0.0)),
+            ))),
         ],
     ));
 
@@ -1433,13 +1432,11 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::Number(0.0)),
-                value: Box::new(Expr::String("not-number".to_string())),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::Number(0.0)),
+                Box::new(Expr::String("not-number".to_string())),
+            )),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
                 value: Box::new(Expr::String("still-not-number".to_string())),
@@ -1462,16 +1459,14 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         "typed_feedback_computed_array.ts",
         vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Binary {
+        vec![Stmt::Return(Some(Expr::synthetic_index_get(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Binary {
                 op: BinaryOp::BitAnd,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::Integer(63)),
             }),
-        }))],
+        )))],
     ));
 
     // The default lowering of a number[] read is the inline guard (receiver
@@ -1500,12 +1495,10 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
         "replay.ts",
         vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Number(0.0)),
-        }))],
+        vec![Stmt::Return(Some(Expr::synthetic_index_get(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Number(0.0)),
+        )))],
     );
     let identity = ModuleIdentity {
         module: source.name.clone(),

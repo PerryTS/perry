@@ -1790,24 +1790,20 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Integer(0)),
-                value: Box::new(Expr::Object(Vec::new())),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(0)),
+                Box::new(Expr::Object(Vec::new())),
+            )),
             Stmt::Let {
                 id: 2,
                 name: "x".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::Integer(0)),
+                )),
             },
         ];
         let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
@@ -1823,12 +1819,8 @@ mod tests {
     /// bindings hold the heap class object and must be rooted (#11862).
     #[test]
     fn a_boxed_class_evaluation_owner_binding_keeps_its_shadow_slot() {
-        let owner_read = || Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Integer(0)),
-        };
+        let owner_read =
+            || Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)));
         let stmts = vec![
             Stmt::Let {
                 id: 1,
@@ -1843,13 +1835,11 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Sequence(vec![
-                    Expr::IndexSet {
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::Integer(0)),
-                        value: Box::new(Expr::Object(Vec::new())),
-                        byte_offset: 0,
-                        byte_end: 0,
-                    },
+                    Expr::synthetic_index_set(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::Integer(0)),
+                        Box::new(Expr::Object(Vec::new())),
+                    ),
                     owner_read(),
                 ])),
             },

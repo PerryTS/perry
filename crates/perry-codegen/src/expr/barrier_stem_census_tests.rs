@@ -460,8 +460,13 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
             ));
         }
         for label in &book {
-            let pred_body =
-                verify_gate_instance(ir, stem, label, check_value_predicate, Some(OBLIGATIONS_CALL))?;
+            let pred_body = verify_gate_instance(
+                ir,
+                stem,
+                label,
+                check_value_predicate,
+                Some(OBLIGATIONS_CALL),
+            )?;
             if !store_dominates_gate(ir, label, &pred_body) {
                 return Err(format!(
                     "{stem}: the slot store must stay UNCONDITIONAL, in the block                      that branches into %{label} — a guard that also skips the                      store is a dropped write:\n{pred_body}"
@@ -477,7 +482,13 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
         ));
     }
     for label in &barrier_labels {
-        verify_gate_instance(ir, stem, label, check_generation_predicate, Some(BARRIER_CALL))?;
+        verify_gate_instance(
+            ir,
+            stem,
+            label,
+            check_generation_predicate,
+            Some(BARRIER_CALL),
+        )?;
     }
     match kind {
         StemKind::GenerationTested | StemKind::ObligationsCall => {}
@@ -504,8 +515,7 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
                 ));
             }
             for label in &book {
-                let pred_body =
-                    verify_gate_instance(ir, stem, label, check_value_predicate, None)?;
+                let pred_body = verify_gate_instance(ir, stem, label, check_value_predicate, None)?;
                 if !store_dominates_gate(ir, label, &pred_body) {
                     return Err(format!(
                         "{stem}: the slot store must stay UNCONDITIONAL, in the block                          that branches into %{label} — a guard that also skips the                          store is a dropped write:\n{pred_body}"
@@ -578,13 +588,11 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(ARR_ID)),
-                    index: Box::new(Expr::LocalGet(IDX_ID)),
-                    value: Box::new(Expr::LocalGet(VAL_ID)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(ARR_ID)),
+                    Box::new(Expr::LocalGet(IDX_ID)),
+                    Box::new(Expr::LocalGet(VAL_ID)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
@@ -680,13 +688,11 @@ fn idxset_recv_global_ir() -> String {
                 // multi-statement store bodies, this probe goes red again —
                 // deliberately — and must be re-shaped, not deleted.
                 body: vec![
-                    Stmt::Expr(Expr::IndexSet {
-                        object: Box::new(Expr::LocalGet(G_ID)),
-                        index: Box::new(Expr::LocalGet(IDX_ID)),
-                        value: Box::new(Expr::LocalGet(VAL_ID)),
-                        byte_offset: 0,
-                        byte_end: 0,
-                    }),
+                    Stmt::Expr(Expr::synthetic_index_set(
+                        Box::new(Expr::LocalGet(G_ID)),
+                        Box::new(Expr::LocalGet(IDX_ID)),
+                        Box::new(Expr::LocalGet(VAL_ID)),
+                    )),
                     Stmt::Expr(Expr::Call {
                         byte_end: 0,
                         callee: Box::new(Expr::LocalGet(VAL_ID)),
@@ -770,13 +776,11 @@ fn idxset_recv_captured_ir() -> String {
                             op: UpdateOp::Increment,
                             prefix: false,
                         }),
-                        body: vec![Stmt::Expr(Expr::IndexSet {
-                            object: Box::new(Expr::LocalGet(ARR_ID)),
-                            index: Box::new(Expr::LocalGet(IDX_ID)),
-                            value: Box::new(Expr::LocalGet(VAL_ID)),
-                            byte_offset: 0,
-                            byte_end: 0,
-                        })],
+                        body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                            Box::new(Expr::LocalGet(ARR_ID)),
+                            Box::new(Expr::LocalGet(IDX_ID)),
+                            Box::new(Expr::LocalGet(VAL_ID)),
+                        ))],
                     }],
                     captures: vec![ARR_ID, VAL_ID],
                     mutable_captures: Vec::new(),
@@ -877,13 +881,11 @@ fn idxset_runtime_key_ir() -> String {
         ],
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(ARR_ID)),
-                index: Box::new(Expr::LocalGet(IDX_ID)),
-                value: Box::new(Expr::LocalGet(VAL_ID)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(ARR_ID)),
+                Box::new(Expr::LocalGet(IDX_ID)),
+                Box::new(Expr::LocalGet(VAL_ID)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
         is_async: false,
@@ -922,13 +924,11 @@ fn dynarr_set_ir() -> String {
         params: vec![param(ARR_ID, "a"), param(IDX_ID, "k"), param(VAL_ID, "v")],
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(ARR_ID)),
-                index: Box::new(Expr::LocalGet(IDX_ID)),
-                value: Box::new(Expr::LocalGet(VAL_ID)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(ARR_ID)),
+                Box::new(Expr::LocalGet(IDX_ID)),
+                Box::new(Expr::LocalGet(VAL_ID)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
         is_async: false,
@@ -997,13 +997,11 @@ fn idxset_bounded_ir() -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(ARR_ID)),
-                    index: Box::new(Expr::LocalGet(IDX_ID)),
-                    value: Box::new(Expr::LocalGet(VAL_ID)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(ARR_ID)),
+                    Box::new(Expr::LocalGet(IDX_ID)),
+                    Box::new(Expr::LocalGet(VAL_ID)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
@@ -1317,7 +1315,10 @@ fn the_store_site_keeps_only_the_fast_store_inline() {
         let functions: Vec<_> = function_bodies(&ir)
             .filter(|f| !all_numbered_labels(f, &format!("{stem}.gc_bookkeeping.")).is_empty())
             .collect();
-        assert!(!functions.is_empty(), "{stem}: the probe must reach the arm");
+        assert!(
+            !functions.is_empty(),
+            "{stem}: the probe must reach the arm"
+        );
         for f in functions {
             for inline in [
                 "@js_write_barrier_slot_validated_parent(",

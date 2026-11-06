@@ -1375,6 +1375,7 @@ mod tests {
                 value: Box::new(anon_shape("__AnonShape_user", Vec::new())),
                 receiver: Box::new(Expr::LocalGet(77)),
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),

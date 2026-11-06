@@ -883,12 +883,10 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                index: Box::new(Expr::LocalGet(DERIVED_ID)),
-            })),
+            Stmt::Return(Some(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(ARRAY_ID)),
+                Box::new(Expr::LocalGet(DERIVED_ID)),
+            ))),
         ],
     );
     assert!(
