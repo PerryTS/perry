@@ -681,13 +681,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             for &a in added {
                 m.edge(a, ofa);
                 if name == Some("concat") {
-                    m.cons(
-                        a,
-                        Cons::Load {
-                            key: Key::any(),
-                            dst: ofa,
-                        },
-                    );
+                    // An array operand gives its elements (`Get(E, ToString(k))`),
+                    // never a method an any-key read could name.
+                    let key = m.elem_key();
+                    m.cons(a, Cons::Load { key, dst: ofa });
                 }
             }
             if name == Some("flat") {
