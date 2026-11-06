@@ -1,5 +1,7 @@
 use super::*;
 
+const DEFAULT_THREAD_NAME: &str = "WorkerThread";
+
 #[derive(Clone, Copy)]
 pub(super) struct WorkerResourceLimits {
     pub(super) max_young_generation_size_mb: f64,
@@ -116,7 +118,7 @@ impl WorkerOptions {
             thread_name: if perry_runtime::value::js_is_truthy(name.get_nanbox_f64()) != 0 {
                 string_value_to_string(name.get_nanbox_f64()).unwrap_or_default()
             } else {
-                String::new()
+                DEFAULT_THREAD_NAME.to_owned()
             },
             resource_limits,
             stdin,
@@ -132,7 +134,7 @@ impl WorkerOptions {
 impl Default for WorkerOptions {
     fn default() -> Self {
         Self {
-            thread_name: String::new(),
+            thread_name: DEFAULT_THREAD_NAME.to_owned(),
             argv: None,
             resource_limits: WorkerResourceLimits::node_default(),
             stdin: false,
