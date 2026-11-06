@@ -658,7 +658,17 @@ impl Model {
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`. An
         // `arguments` object's chain is an ordinary one (`Object.prototype`).
+        // Its own properties are ordinary ones, though: an accessor the
+        // program defines on it after its birth (`defineProperty` on a
+        // `JSON.parse` record) runs with the receiver as `this`, now or
+        // when it is defined later in the solve (as in `own_values_of`).
         if key == Key::any() && self.is_array_like(t) && !self.is_args(t) {
+            let act = ChainAct::Load(dst);
+            self.any_walk_holders
+                .entry(t)
+                .or_default()
+                .push((origin, act));
+            self.accessor_hit(origin, t, Key::any(), act);
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
