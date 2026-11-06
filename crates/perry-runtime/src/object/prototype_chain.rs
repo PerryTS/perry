@@ -599,6 +599,16 @@ fn object_set_static_prototype_impl_with(
                 std::ptr::addr_of!((*meta).prototype) as usize,
                 proto_bits,
             );
+            // A Map, Set or Date cell that takes its own `[[Prototype]]` no
+            // longer reads its family's builtins: arm the emitted own-override
+            // guard, so a folded site asks `receiver_pristine`, which reads the
+            // cell's meta record. Only holder-owning receivers reach here.
+            if matches!(
+                receiver_header_type(obj_ptr),
+                Some(crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_DATE_CELL)
+            ) {
+                crate::object::own_override::note_builtin_proto_modified();
+            }
         }
     }
 }

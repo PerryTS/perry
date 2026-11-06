@@ -68,11 +68,12 @@ fn shadowable_builtin_name(property: &str) -> bool {
     // `getUTCHours`, `setTime` or `toUTCString` reached the direct call with no
     // guard at all (#11493).
     super::builtin_kind_guard::is_direct_date_builtin_name(property)
+        // Map / Set: every name the direct collection lowering claims.
+        || super::map_set::is_direct_collection_builtin_name(property)
         || matches!(
             property,
             // Map / Set
-            "get" | "set" | "has" | "delete" | "add" | "clear" | "entries" | "keys" | "values"
-            | "forEach"
+            "forEach"
         // Array. `push` is ABSENT, and needs no diamond: a proven array's
         // push is folded by HIR into `Expr::ArrayPush`, whose slow arms honour
         // an own `push` themselves (`expr/array_push_own.rs`, #11021). A
