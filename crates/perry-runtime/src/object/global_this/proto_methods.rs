@@ -898,7 +898,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                crate::fn_info!(#[realm(Function.prototype.bind)] export native_args crate::object::global_this::array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.bind, effects = { reads(field(this, length), field(this, name)); stores(fresh); returns(bound) })] export native_args crate::object::global_this::array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand

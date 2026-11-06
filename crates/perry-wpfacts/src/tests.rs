@@ -80,6 +80,7 @@ mod logical_and;
 mod map_identity_ops;
 mod memo_context;
 mod named_accessors;
+mod native_accessor_get;
 mod native_coercion;
 mod native_fs;
 mod native_given_proto;

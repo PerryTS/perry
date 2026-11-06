@@ -92,6 +92,11 @@ pub enum RealmOperand {
         #[serde(default)]
         elems: Cow<'static, [RealmSlot]>,
     },
+    /// BoundFunctionCreate(this, arg(0), rest(1)) (`Function.prototype.bind`):
+    /// a bound function exotic object whose target is the receiver, whose
+    /// bound `this` is the first argument and whose bound arguments are the
+    /// rest. Calling it calls the target with those.
+    Bound,
     /// Any one of these values (at least two; no union inside a union).
     Union(Cow<'static, [RealmOperand]>),
 }
@@ -148,6 +153,7 @@ impl RealmOperand {
             }
             Self::Prim(_) => Ok(()),
             Self::Slot(slot) => slot.validate(at),
+            Self::Bound => Ok(()),
             Self::Fresh { proto, elems } => {
                 if !names(proto) {
                     return Err(format!(
@@ -210,7 +216,7 @@ pub fn validate_effects(
     };
     fn slots_in<'a>(o: &'a RealmOperand, out: &mut Vec<&'a RealmSlot>) {
         match o {
-            RealmOperand::Prim(_) => {}
+            RealmOperand::Prim(_) | RealmOperand::Bound => {}
             RealmOperand::Slot(slot) => out.push(slot),
             RealmOperand::Fresh { elems, .. } => out.extend(elems.iter()),
             RealmOperand::Species { of, args, elems } => {
@@ -293,6 +299,7 @@ pub mod emit {
                 list(kinds, |k| format!("{p}RealmPrim::{k:?}"))
             ),
             RealmOperand::Slot(s) => format!("{p}RealmOperand::Slot({})", slot(p, s)),
+            RealmOperand::Bound => format!("{p}RealmOperand::Bound"),
             RealmOperand::Fresh { proto, elems } => format!(
                 "{p}RealmOperand::Fresh {{ proto: ::std::borrow::Cow::Borrowed({proto:?}), elems: {} }}",
                 list(elems, |s| slot(p, s))
