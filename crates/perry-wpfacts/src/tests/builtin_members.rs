@@ -466,6 +466,25 @@ fn a_global_field_is_open_only_to_unseen_code() {
     }
 }
 
+/// DEC 250 contrast in a whole program without unseen code (CWN 11-06): the
+/// program holds unknown values from imprecision too, here a key and a value
+/// taken from parsed input. An own store into the escaped global object
+/// under that unknown key may replace the held field: the field stays open.
+/// Replacing `Object.prototype.toString` is refused (a locked built-in
+/// member) and is no own write on the global object: the field keeps `M`.
+#[test]
+fn an_unknown_key_store_opens_a_global_field_a_refused_prototype_write_does_not() {
+    let unknown_key = "const k: string = Object.keys(JSON.parse(process.argv[2] ?? \"{}\"))[0];
+                       g[k] = JSON.parse(process.argv[3] ?? \"0\");";
+    let refused = "Object.prototype.toString = function () { return \"\"; };";
+    for (write, open) in [("", false), (refused, false), (unknown_key, true)] {
+        let src = held_global(write);
+        assert!(!src.contains("unseen"), "{src}");
+        let pf = facts(&src);
+        assert_eq!(proven(&pf, "m"), !open, "{src}\n{}", pf.dump_text());
+    }
+}
+
 /// `M` held in a global field, `write` run before the held method is called.
 fn held_global(write: &str) -> String {
     format!(
