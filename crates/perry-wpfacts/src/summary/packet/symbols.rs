@@ -56,6 +56,8 @@ impl Model {
                 self.packet_token(this, packet)
             ),
             Cons::New { call } => format!("New call={:?}", call),
+            Cons::NewProgram { call } => format!("NewProgram call={:?}", call),
+            Cons::FromArrayLike { dst } => format!("FromArrayLike dst={:?}", dst),
             Cons::ReflectNew { call, new_target } => {
                 format!("ReflectNew call={:?} new_target={:?}", call, new_target)
             }
