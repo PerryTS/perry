@@ -329,6 +329,10 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             }
         },
         TokKind::NativeProto(_) => {}
+        // `Object.prototype`'s own members are its methods: called on it
+        // they run with it as the receiver (the chain walk starts past it,
+        // at its null prototype, and finds none of them).
+        TokKind::ObjectProto => proto_method(m, t, t, key, call),
         TokKind::Obj(tm, _) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => array_method(m, t, name.as_deref(), call),
             TmplKind::BObj { what, .. } => bobj_method(m, t, what, name.as_deref(), call),
@@ -501,7 +505,10 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         .then(|| m.call_lit.get(&call).copied())
         .flatten()
         .unwrap_or_else(|| m.atom(crate::STAR_KEY));
-    if accessor_receiver(m, origin, key) {
+    // Object.prototype is a modeled holder: the define records the accessor
+    // there as defineProperty does (an accessor on it is E23), under a
+    // computed key too (the AccessorInstall any-key branch).
+    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto) {
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
         // Spread positions are not retained in CallSite: any direct or

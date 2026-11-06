@@ -275,6 +275,7 @@ impl Model {
             | Cons::CallThis { call, .. }
             | Cons::NativeThis { call, .. }
             | Cons::New { call }
+            | Cons::NewProgram { call }
             | Cons::ReflectNew { call, .. }
             | Cons::ReflectNewTarget { call, .. }
             | Cons::NewNamed { call, .. }

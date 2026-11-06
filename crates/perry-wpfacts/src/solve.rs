@@ -1309,6 +1309,8 @@ impl Model {
             Cons::Call { call } => format!("call {n} {call}"),
             Cons::CallThis { call, this } => format!("callthis {n} {call} {this}"),
             Cons::New { call } => format!("new {n} {call}"),
+            Cons::NewProgram { call } => format!("newprogram {n} {call}"),
+            Cons::FromArrayLike { dst } => format!("fromarraylike {n} {dst}"),
             Cons::ReflectNew { call, new_target } => format!("reflectnew {n} {call} {new_target}"),
             Cons::ReflectNewTarget { call, target } => {
                 format!("reflectnewtarget {n} {call} {target}")

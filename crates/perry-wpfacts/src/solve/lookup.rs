@@ -505,6 +505,16 @@ impl Model {
                 self.index_accessors(origin, t, ChainAct::Load(dst));
                 return;
             }
+            // A builtin object other than an array the runtime made walks
+            // its own internal entries (a Set's list, a Map's entries, an
+            // iterator's steps, a string's code points): no [[Get]] of an
+            // index, so no index accessor runs.
+            if self.iterates_internal(t) {
+                let all = self.all_fields(t);
+                self.edge(all, dst);
+                self.add_prim(dst, prim::UNDEF);
+                return;
+            }
             let ek = self.elem_key();
             return self.load_from(origin, t, ek, dst);
         }
@@ -1098,6 +1108,15 @@ impl Model {
             }
             _ => false,
         }
+    }
+
+    /// A builtin object whose iteration is not Array iteration: every
+    /// builtin object template but the arrays the runtime makes
+    /// (`builtins::iterates_indices`).
+    fn iterates_internal(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind,
+                TmplKind::BObj { what, .. } if !builtins::iterates_indices(what)))
     }
 
     pub fn is_array_like(&self, t: Tok) -> bool {

@@ -170,6 +170,7 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
                 ]),
             ))
         }
+        ("bound", None) => Ok(Value::String("bound".into())),
         ("species", Some(inner)) => {
             let parts = info::split(inner, ",");
             let usage = "species(slot, args = [operand, ...], elems = [slot, ...])";

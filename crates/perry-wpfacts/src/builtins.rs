@@ -29,8 +29,8 @@ pub(crate) use native_protocol::{census_native_op_writes, census_native_written}
 pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
-pub(crate) use collections::array_species;
 use collections::{array_method, bobj_method, function_method, iterate};
+pub(crate) use collections::{array_species, construct_into};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an iterator whose prototype the model does not know.
 pub(crate) const ITERATOR_KIND: &str = members::ANY_ITERATOR;
@@ -894,6 +894,14 @@ pub(crate) fn is_collection(what: &str) -> bool {
     members::bobj_family(what) == Family::Collection
 }
 
+/// A builtin object template kind whose iteration reads indices as an
+/// Array's does (`Family::Box`: the arrays and records the runtime fills,
+/// `Object.keys` results among them). Every other builtin object iterates
+/// its internal entries, or has no `@@iterator`.
+pub(crate) fn iterates_indices(what: &str) -> bool {
+    members::bobj_family(what) == Family::Box
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property
@@ -1447,6 +1455,35 @@ fn ns_method_inner(
                 m.edge(ret, fa);
             }
             ret_tok(m, call, arr);
+            // IsConstructor(C) (23.1.2.1 step 4, 23.1.2.3 step 4): the
+            // result is Construct(C) of the `this` value, with «len» (an
+            // array-like source, `of`) or no argument (an iterable).
+            let c = m.calls[call as usize].clone();
+            let this = match c.this {
+                ThisArg::Node(n) => Some(n),
+                ThisArg::Tok(t) => {
+                    let n = m.node_l("from-this");
+                    m.add_tok(n, t);
+                    Some(n)
+                }
+                ThisArg::Undef => None,
+            };
+            if let Some(this) = this {
+                let len = m.node_l("from-length");
+                m.add_prim(len, prim::NUM | prim::UNDEF);
+                let made = m.node_l("from-constructed");
+                let mc = m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args: vec![len],
+                        spread: vec![],
+                        ret: made,
+                        site: c.site,
+                    },
+                );
+                construct_into(m, this, mc, arr, made, c.ret);
+            }
         }
         (BuiltinNs::Json, "stringify") => {
             // The value is serialized; a replacer is called back.
