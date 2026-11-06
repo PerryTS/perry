@@ -2773,6 +2773,37 @@ fn packed_f64_range_loop_dense_stmts_collect(
                 }
                 written.insert(*id);
             }
+            // `this.P = <int32>` on a raw-f64 lane of a proven `this`: the
+            // value is a finite int32 by construction, so `property_set` emits
+            // the plain store with no finite check and no fallback call, and
+            // the store has no side exit — an iteration still runs entirely
+            // in one copy.
+            Stmt::Expr(Expr::PropertySet {
+                object,
+                property,
+                value,
+                ..
+            }) if matches!(object.as_ref(), Expr::This) => {
+                let lane = this_raw_f64_field(ctx, property);
+                let i32_value = crate::expr::is_known_i32_range(ctx, value);
+                let proof = masked_window_expression_proof(ctx, value, None)
+                    .is_some_and(|p| p.inert && p.numeric);
+                if !lane || !i32_value || !proof {
+                    range_loop_reject(if !lane {
+                        "this_field_not_raw_f64"
+                    } else if !i32_value {
+                        "this_field_store_not_i32"
+                    } else {
+                        "this_field_store_not_inert"
+                    });
+                    return false;
+                }
+                if !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses, None)
+                {
+                    range_loop_reject("this_field_store_not_pure");
+                    return false;
+                }
+            }
             Stmt::Expr(expr) => {
                 // Masked STORE: `a[e & K] = <RHS>` where the RHS provably
                 // materializes a genuine (unboxed) double — dense mode has no
@@ -2983,6 +3014,47 @@ struct MaskedWindowExpressionProof {
 /// two result facts its parents need. This is deliberately an allowlist:
 /// `None` is the conservative answer for forms the masked structural walkers
 /// do not admit.
+/// `this.P` where `this` is a proven `Ptr<Shape>` and `P`'s lane holds a raw
+/// f64: the read is a plain load of a genuine double and the store of a
+/// finite double is a plain store (`property_set`'s raw-f64 route), so both
+/// are inert, call-free and numeric. `PERRY_UNBOXED_CLASS_FIELDS=0` keeps
+/// `this.P` out of the packed tiers.
+/// `PERRY_UNBOXED_CLASS_FIELDS=0`.
+pub(crate) fn this_field_fast_off() -> bool {
+    matches!(
+        std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+pub(super) fn this_raw_f64_field(ctx: &FnCtx<'_>, property: &str) -> bool {
+    if matches!(
+        std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    ) {
+        return false;
+    }
+    // The class proof regardless of the representation-selection context: the
+    // matcher runs outside statement lowering. Each access still lowers by its
+    // own route, and the clone's call-free scan discards the copy if any of
+    // them took a call.
+    let Some(class_name) = ctx.ptr_shape_region_class(&perry_hir::Expr::This) else {
+        range_loop_reject("this_not_ptr_shape");
+        return false;
+    };
+    let Some(index) = crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+    else {
+        range_loop_reject("this_field_no_index");
+        return false;
+    };
+    let raw =
+        crate::expr::class_field_inline_guard::class_field_site_raw_f64(ctx, &class_name, property, index);
+    if !raw {
+        range_loop_reject("this_field_lane_not_raw_f64");
+    }
+    raw
+}
+
 fn masked_window_expression_proof(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
@@ -3003,6 +3075,11 @@ fn masked_window_expression_proof(
             Some(proof(true, true))
         }
         Expr::Number(_) | Expr::Integer(_) => Some(proof(true, true)),
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) && this_raw_f64_field(ctx, property) => {
+            Some(proof(true, true))
+        }
         Expr::Bool(_) | Expr::Null | Expr::Undefined => Some(proof(true, false)),
         Expr::LocalGet(id) => {
             // A pending accumulator is numeric BY CONTRACT, not by static
@@ -3188,6 +3265,11 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Undefined => true,
+        // A read of a field of `this`: effect-free only on a raw-f64 lane,
+        // which every caller that admits it also proves through
+        // `masked_window_expression_proof` (dense mode) — and the clone's
+        // call-free scan discards any copy where it lowered to a call.
+        Expr::PropertyGet { object, .. } if matches!(object.as_ref(), Expr::This) => true,
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
@@ -3569,6 +3651,20 @@ fn push_packed_f64_range_facts(
                 });
         }
         if let Some((lo, hi)) = access.stat {
+            // The guard has passed: the array behind the poll-refreshed
+            // handle cache is a validated plain array, so its element base
+            // can be derived once here (and again after every fired poll).
+            let elements_slot = (!crate::stmt::loops::this_field_fast_off())
+                .then(|| ctx.receiver_descriptors.base_handle_slot(access.array_id).map(str::to_owned))
+                .flatten()
+                .map(|handle_slot| {
+                    let slot = ctx.func.alloca_entry(I64);
+                    let blk = ctx.block();
+                    let handle = blk.load(I64, &handle_slot);
+                    let elements = blk.array_elements_addr(&handle);
+                    blk.store(I64, &elements, &slot);
+                    slot
+                });
             ctx.receiver_descriptors.materialize_masked_window_array(
                 crate::expr::MaskedWindowArrayFact {
                     array_local_id: access.array_id,
@@ -3579,6 +3675,7 @@ fn push_packed_f64_range_facts(
                     values_i32,
                     elem: crate::expr::MaskedWindowElem::PlainF64,
                     allows_stores: allow_masked_stores,
+                    elements_slot,
                 },
             );
         }
@@ -3682,6 +3779,7 @@ fn lower_masked_window_ta_tier(
                 values_i32,
                 elem,
                 allows_stores: false,
+                elements_slot: None,
             },
         );
     }
@@ -8087,6 +8185,27 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             let bits = blk.bitcast_double_to_i64(&fresh);
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
             blk.store(I64, &handle, &recipe.base_handle_slot);
+        }
+    }
+    // Cached element bases of validated windows, from their refreshed handles.
+    let element_refresh: Vec<(String, String)> = ctx
+        .receiver_descriptors
+        .masked_window_array_facts()
+        .filter_map(|fact| {
+            let slot = fact.elements_slot.clone()?;
+            let handle = ctx
+                .receiver_descriptors
+                .base_handle_slot(fact.array_local_id)?
+                .to_owned();
+            Some((handle, slot))
+        })
+        .collect();
+    {
+        let blk = ctx.block();
+        for (handle_slot, elements_slot) in &element_refresh {
+            let handle = blk.load(I64, handle_slot);
+            let elements = blk.array_elements_addr(&handle);
+            blk.store(I64, &elements, elements_slot);
         }
     }
     // Loop regions' array bases (S3), from the same GC-updated roots.

@@ -169,6 +169,14 @@ fn canonical_str_cmp_dispatch(
 /// `lower_string_method/char_code_at.rs` pins.
 const STRING_HEADER_BYTE_LEN_OFFSET: &str = "4";
 const STRING_HEADER_SIZE: usize = 20;
+/// `StringHeader.flags` (perry-runtime `string/mod.rs`: after `utf16_len`,
+/// `byte_len`, `capacity`, `refcount`).
+const STRING_HEADER_FLAGS_OFFSET: &str = "16";
+/// perry-runtime `string/intern.rs` `PROPERTY_ATOM`: the one atom of its text
+/// in this agent.
+const STRING_FLAG_PROPERTY_ATOM: &str = "8";
+/// perry-runtime `string/intern.rs` `INTERN_MAX_BYTE_LEN`.
+const STRING_INTERN_MAX_BYTE_LEN: usize = 64;
 
 /// The SSO (`SHORT_STRING_TAG`) immediate for `bytes`, or `None` when the
 /// literal is too long to have one. The encoding is canonical — length in bits
@@ -220,11 +228,50 @@ pub(super) fn i8_literal(b: u8) -> String {
 /// same-length heap string of a longer literal reaches `js_string_equals`.
 ///
 /// Returns an `i1` that is true iff the two operands are `===`.
+/// The string-literal members of `e`'s declared type when that type is a
+/// union of string literals (empty otherwise, and with
+/// `PERRY_UNBOXED_CLASS_FIELDS=0`).
+fn literal_union_members(ctx: &FnCtx<'_>, e: &Expr) -> Vec<String> {
+    if crate::stmt::this_field_fast_off() {
+        return Vec::new();
+    }
+    match crate::type_analysis::static_type_of(ctx, e) {
+        Some(perry_hir::types::Type::Union(members)) => {
+            let lits: Vec<String> = members
+                .iter()
+                .filter_map(|m| match m {
+                    perry_hir::types::Type::StringLiteral(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+            if lits.len() == members.len() {
+                lits
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn lower_string_literal_strict_eq(
     ctx: &mut FnCtx<'_>,
     val: &str,
     lit_box: &str,
     lit: &str,
+) -> String {
+    lower_string_literal_strict_eq_with_others(ctx, val, lit_box, lit, &[])
+}
+
+/// [`lower_string_literal_strict_eq`], plus `others`: boxed pool handles of
+/// literals with different bytes. A value identical to one of them is
+/// unequal, decided right after the identity test.
+pub(crate) fn lower_string_literal_strict_eq_with_others(
+    ctx: &mut FnCtx<'_>,
+    val: &str,
+    lit_box: &str,
+    lit: &str,
+    others: &[String],
 ) -> String {
     let bytes = lit.as_bytes().to_vec();
     let n = bytes.len();
@@ -265,7 +312,25 @@ pub(crate) fn lower_string_literal_strict_eq(
     // under test and the literal are the same pool entry.
     let ident = ctx.block().icmp_eq(I64, &bits, &lit_bits);
     let after_ident = sso_l.clone().unwrap_or_else(|| tag_l.clone());
-    ctx.block().cond_br(&ident, &true_l, &after_ident);
+    if others.is_empty() {
+        ctx.block().cond_br(&ident, &true_l, &after_ident);
+    } else {
+        let other_idx = ctx.new_block("streqlit.others");
+        let other_l = ctx.block_label(other_idx);
+        ctx.block().cond_br(&ident, &true_l, &other_l);
+        ctx.current_block = other_idx;
+        let mut any: Option<String> = None;
+        for other in others {
+            let other_bits = ctx.block().bitcast_double_to_i64(other);
+            let hit = ctx.block().icmp_eq(I64, &bits, &other_bits);
+            any = Some(match any {
+                Some(prev) => ctx.block().or(I1, &prev, &hit),
+                None => hit,
+            });
+        }
+        let any = any.expect("non-empty others");
+        ctx.block().cond_br(&any, &false_l, &after_ident);
+    }
 
     // SSO immediate: equal => true. SSO but a *different* immediate => the
     // encoding is canonical, so the contents differ; the tag block below
@@ -291,7 +356,32 @@ pub(crate) fn lower_string_literal_strict_eq(
     // or tiny payload is not a dereferenceable header.
     let hp_ok = ctx.block().icmp_ugt(I64, &hp, "4095");
     let heap_ok = ctx.block().and(I1, &is_heap, &hp_ok);
-    ctx.block().cond_br(&heap_ok, &len_l, &false_l);
+    // A literal the pool atomises (non-empty UTF-8 of at most
+    // `INTERN_MAX_BYTE_LEN` bytes, `js_string_pool_atom`) IS the one property
+    // atom of its spelling in this agent. A heap string that is also a
+    // property atom but failed the identity test above therefore has
+    // different bytes: unequal on one flags load, before the length and byte
+    // compares.
+    let atom_lit = !crate::stmt::this_field_fast_off()
+        && n >= 1
+        && n <= STRING_INTERN_MAX_BYTE_LEN
+        && std::str::from_utf8(&bytes).is_ok();
+    if atom_lit {
+        let atom_idx = ctx.new_block("streqlit.atom");
+        let atom_l = ctx.block_label(atom_idx);
+        ctx.block().cond_br(&heap_ok, &atom_l, &false_l);
+        ctx.current_block = atom_idx;
+        let hdr = ctx.block().inttoptr(I64, &hp);
+        let flags_ptr = ctx
+            .block()
+            .gep_inbounds(I8, &hdr, &[(I64, STRING_HEADER_FLAGS_OFFSET)]);
+        let flags = ctx.block().load(I32, &flags_ptr);
+        let atom_bit = ctx.block().and(I32, &flags, STRING_FLAG_PROPERTY_ATOM);
+        let is_atom = ctx.block().icmp_ne(I32, &atom_bit, "0");
+        ctx.block().cond_br(&is_atom, &false_l, &len_l);
+    } else {
+        ctx.block().cond_br(&heap_ok, &len_l, &false_l);
+    }
 
     // `byte_len` is the pool's `value.len()`, hence a compile-time constant.
     ctx.current_block = len_idx;
@@ -1445,6 +1535,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     return Ok(blk.bitcast_i64_to_double(&tagged));
                 }
+                // The `this.F` hoist's dispatch check: a runtime identity test
+                // only while the module proves the class's prototype stable
+                // (`hoist_dispatch`), else a constant mismatch.
+                if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+                    if let Some((class, _)) =
+                        crate::expr::hoist_dispatch::dispatch_check(left.as_ref(), right.as_ref())
+                    {
+                        if !crate::expr::hoist_dispatch::prototype_is_stable(&ctx.module_slug, class) {
+                            let bits = if matches!(op, CompareOp::Eq) {
+                                crate::nanbox::TAG_FALSE_I64
+                            } else {
+                                crate::nanbox::TAG_TRUE_I64
+                            };
+                            return Ok(ctx.block().bitcast_i64_to_double(bits));
+                        }
+                    }
+                }
                 // Strict equality against a string LITERAL. Decidable inline for
                 // every runtime shape (see `lower_string_literal_strict_eq`), so it
                 // pre-empts all the arms below — including the `js_eq` tail that an
@@ -1467,7 +1574,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         };
                         (r, l, s.clone())
                     };
-                    let bit = lower_string_literal_strict_eq(ctx, &val, &lit_box, &lit);
+                    // The operand's declared literal union (`c: "white" |
+                    // "black"`) names the values it usually holds: the other
+                    // members' pool handles settle the false case by identity
+                    // alone. Only a speed hint — a value matching none of them
+                    // takes the full test, so a lying annotation costs nothing.
+                    let operand = if lit_on_right { left.as_ref() } else { right.as_ref() };
+                    let others: Vec<String> = literal_union_members(ctx, operand)
+                        .into_iter()
+                        .filter(|m| *m != lit)
+                        .take(4)
+                        .collect();
+                    let other_boxes: Vec<String> = others
+                        .iter()
+                        .map(|m| super::lower_expr(ctx, &Expr::String(m.clone())))
+                        .collect::<Result<_>>()?;
+                    let bit = lower_string_literal_strict_eq_with_others(
+                        ctx,
+                        &val,
+                        &lit_box,
+                        &lit,
+                        &other_boxes,
+                    );
                     let blk = ctx.block();
                     let bit_final = if matches!(op, CompareOp::Ne) {
                         blk.xor(I1, &bit, "true")

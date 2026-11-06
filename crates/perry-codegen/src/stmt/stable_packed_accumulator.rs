@@ -117,6 +117,21 @@ fn accumulator_rhs_is_numeric(
                 candidates,
             )
         }
+        // `a ?? b` with a numeric `a` is `a`: a Number is never nullish.
+        Expr::Logical {
+            op: perry_hir::LogicalOp::Coalesce,
+            left,
+            ..
+        } if !super::this_field_fast_off() => accumulator_rhs_is_numeric(
+            ctx,
+            left,
+            array_ids,
+            counter_id,
+            offset_reads_inlined,
+            masked_reads_validated,
+            affine_reads,
+            candidates,
+        ),
         Expr::NumberCoerce(operand) => accumulator_rhs_is_numeric(
             ctx,
             operand,
