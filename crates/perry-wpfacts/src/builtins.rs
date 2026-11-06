@@ -1082,16 +1082,31 @@ pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> 
 }
 
 /// The function value carries its canonical namespace call coordinates.
-pub(crate) fn native_namespace_call(m: &mut Model, t: Tok, call: CallId) -> bool {
+/// It runs on the receiver token `this_tok` the call is made for (a method
+/// call binds one per receiver value), else on the call's own `this`: what
+/// the namespace's model does to its receiver is decided per token, as for
+/// a call by name on that token (`own_method`). A bare `fetch(u)` is made
+/// on the unresolved-global sentinel, the namespace's own object, which
+/// the native gives to no one (`unknown_method_proto`'s `own`).
+pub(crate) fn native_namespace_call(
+    m: &mut Model,
+    t: Tok,
+    call: CallId,
+    this_tok: Option<Tok>,
+) -> bool {
     if m.unit_mode {
         return false;
     }
     let Some((ns, name)) = m.native_coordinates(t).and_then(|c| c.namespace) else {
         return false;
     };
-    if m.bind_done.insert((call, t, u32::MAX - 6)) {
+    if m.bind_done
+        .insert((call, t, this_tok.unwrap_or(u32::MAX - 6)))
+    {
         m.diagnostic_callee(call, t);
+        let prev = std::mem::replace(&mut m.cur_this, this_tok);
         m.with_b(|m| ns_method_inner(m, ns, Some(name), call, true));
+        m.cur_this = prev;
     }
     true
 }
