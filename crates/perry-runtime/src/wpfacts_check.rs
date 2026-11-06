@@ -173,7 +173,7 @@ pub extern "C" fn perry_wpfacts_check_field(
     site: i64,
 ) -> i32 {
     let key = string_bytes(key as usize as *const StringHeader).unwrap_or_default();
-    check_field(
+    perry_wpfacts_check_field_impl(
         obj,
         value,
         &key,
@@ -188,7 +188,8 @@ pub extern "C" fn perry_wpfacts_check_field(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn check_field(
+#[inline(always)]
+fn perry_wpfacts_check_field_impl<const RAW: bool>(
     obj: f64,
     value: f64,
     key: &[u8],
@@ -198,7 +199,7 @@ fn check_field(
     off: i32,
     kind_mask: i32,
     flags: i32,
-    site: Witness,
+    site: Witness<RAW>,
 ) -> i32 {
     let (site, flags, slot, off, kind_mask) = (
         site,
@@ -329,10 +330,15 @@ pub extern "C" fn perry_wpfacts_check_call(
     argc: i64,
     site: i64,
 ) -> *const crate::closure::JsFunctionInfo {
-    check_call(callee, argc, Witness::legacy(site))
+    perry_wpfacts_check_call_impl(callee, argc, Witness::legacy(site))
 }
 
-fn check_call(callee: f64, argc: i64, site: Witness) -> *const crate::closure::JsFunctionInfo {
+#[inline(always)]
+fn perry_wpfacts_check_call_impl<const RAW: bool>(
+    callee: f64,
+    argc: i64,
+    site: Witness<RAW>,
+) -> *const crate::closure::JsFunctionInfo {
     let site = site.callee(callee.to_bits());
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let bits = callee.to_bits();
@@ -441,7 +447,7 @@ pub unsafe extern "C" fn perry_verify_facts_field(
     site: i64,
     site_len: i64,
 ) -> i32 {
-    check_field(
+    perry_wpfacts_check_field_impl(
         obj,
         value,
         std::slice::from_raw_parts(key as usize as *const u8, key_len as usize),
@@ -462,7 +468,7 @@ pub extern "C" fn perry_verify_facts_call(
     site: i64,
     site_len: i64,
 ) -> *const crate::closure::JsFunctionInfo {
-    check_call(callee, argc, Witness::raw(site, site_len))
+    perry_wpfacts_check_call_impl(callee, argc, Witness::raw(site, site_len))
 }
 
 #[no_mangle]

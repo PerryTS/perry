@@ -1,17 +1,16 @@
 //! Failure formatting never runs on the passing path. Raw site metadata belongs
 //! to the executable image; the checker borrows its exact bytes and length.
 use super::*;
-use std::fmt::Write;
 
 #[derive(Clone, Copy)]
-pub(super) struct Witness {
+pub(super) struct Witness<const RAW: bool> {
     site: u64,
     len: Option<usize>,
     receiver: Option<u64>,
     callee: Option<u64>,
 }
 
-impl Witness {
+impl Witness<false> {
     pub(super) fn legacy(site: i64) -> Self {
         Self {
             site: site as u64,
@@ -20,6 +19,8 @@ impl Witness {
             callee: None,
         }
     }
+}
+impl Witness<true> {
     pub(super) fn raw(site: i64, len: i64) -> Self {
         Self {
             site: site as u64,
@@ -28,8 +29,10 @@ impl Witness {
             callee: None,
         }
     }
+}
+impl<const RAW: bool> Witness<RAW> {
     pub(super) fn is_legacy(self) -> bool {
-        self.len.is_none()
+        !RAW
     }
     pub(super) fn receiver(mut self, bits: u64) -> Self {
         self.receiver = Some(bits);
@@ -52,9 +55,10 @@ impl Witness {
     #[cold]
     #[inline(never)]
     fn report(self, predicate: Option<&str>, detail: String) -> ! {
-        let Some(len) = self.len else {
-            super::violate(self.site, predicate.expect("legacy predicate"), detail)
-        };
+        if !RAW {
+            super::violate(self.site, predicate.expect("legacy predicate"), detail);
+        }
+        let len = self.len.unwrap();
         let metadata = unsafe { std::slice::from_raw_parts(self.site as *const u8, len) };
         let mut line = String::from_utf8_lossy(metadata).into_owned();
         if let Some(predicate) = predicate {
@@ -87,27 +91,29 @@ impl Witness {
                     )
                 })
                 .unwrap_or_default();
-            let _ = write!(
-                line,
-                "{{\"tag\":{},\"shape_id\":{},\"family\":{},\"kind\":{}}}",
-                bits >> 48,
-                number(shape),
-                number(family),
-                kind_of(bits)
-            );
+            line.push_str("{\"tag\":");
+            line.push_str(&(bits >> 48).to_string());
+            line.push_str(",\"shape_id\":");
+            line.push_str(&number(shape));
+            line.push_str(",\"family\":");
+            line.push_str(&number(family));
+            line.push_str(",\"kind\":");
+            line.push_str(&kind_of(bits).to_string());
+            line.push('}');
         } else {
             line.push_str("null");
         }
         line.push_str(",\"observed_member\":");
         quote(&mut line, &detail);
-        let _ = write!(
-            line,
-            ",\"checks_executed\":{}",
-            CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+        line.push_str(",\"checks_executed\":");
+        line.push_str(
+            &CHECKS
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .to_string(),
         );
         line.push_str(",\"observed_callee\":");
         if let Some(bits) = self.callee {
-            let _ = write!(line, "{bits}");
+            line.push_str(&bits.to_string());
         } else {
             line.push_str("null");
         }
@@ -145,7 +151,10 @@ fn quote(out: &mut String, value: &str) {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if c < ' ' => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
+                out.push_str("\\u00");
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                out.push(HEX[(c as usize >> 4) & 15] as char);
+                out.push(HEX[c as usize & 15] as char);
             }
             c => out.push(c),
         }
