@@ -2,6 +2,7 @@
 
 mod absent_key;
 mod accessor_keys;
+mod accessor_reach;
 mod accessor_receiver;
 mod annexb_accessors;
 mod arguments_object;
