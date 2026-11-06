@@ -125,6 +125,7 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        verify_facts: perry_codegen::verify_facts::enabled(),
         roots,
         diagnostics: dump.is_some(),
         relations,
@@ -331,6 +332,19 @@ pub(crate) fn view_for(
     };
     perry_codegen::ProgramFactsView {
         fallback: super::fallback_diag::facts_for(pf, &key),
+        verification_bodies: if perry_codegen::verify_facts::enabled() {
+            pf.verification_bodies.as_ref().map(|b| {
+                Arc::new(
+                    b.iter()
+                        .filter(|((path, _, _), _)| path == &key)
+                        .map(|((_, id, name), active)| ((*id, name.clone()), *active))
+                        .collect(),
+                )
+            })
+        } else {
+            None
+        },
+        verification_module: perry_codegen::verify_facts::enabled().then(|| key.clone()),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
         // Set on the entry module by the driver, once R is closed.

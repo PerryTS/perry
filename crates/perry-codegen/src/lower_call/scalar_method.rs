@@ -317,6 +317,7 @@ fn lower_scalar_method_inline_body(
     fact_detail: &'static str,
     extra_notes: Vec<String>,
 ) -> Result<String> {
+    crate::verify_facts::body_entry(ctx, method.id, "");
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
     let saved_proven_local_types = ctx.proven_local_types.clone();
@@ -422,6 +423,7 @@ fn lower_scalar_method_int32_inline_body(
     fact_detail: &'static str,
     extra_notes: Vec<String>,
 ) -> Result<String> {
+    crate::verify_facts::body_entry(ctx, method.id, "");
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
     let saved_proven_local_types = ctx.proven_local_types.clone();

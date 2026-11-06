@@ -5250,6 +5250,12 @@ perry_updater_check_url	ptr	f64
 perry_updater_get_config	ptr	
 perry_updater_record_response	i64	f64
 perry_updater_refresh_due	i64	
+perry_verify_facts_call	ptr	f64,i64,i64,i64
+perry_verify_facts_call_miss	i32s	ptr,i64,i64
+perry_verify_facts_entry	void	i64,i64
+perry_verify_facts_field	i32s	f64,f64,i64,i64,i64,i64,i32s,i32s,i32s,i32s,i64,i64
+perry_verify_facts_init	void	
+perry_verify_facts_miss	i32s	f64,i64,i64
 perry_watchos_classes_registered	void	
 perry_wpfacts_check_call	ptr	f64,i64,i64
 perry_wpfacts_check_call_miss	i32s	ptr,i64

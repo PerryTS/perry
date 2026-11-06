@@ -21,6 +21,10 @@ pub struct ProgramFactsView {
     /// Observational diagnostics; excluded from every emitted-code digest.
     pub fallback: std::sync::Arc<crate::fallback_diag::Facts>,
     pub digest: u64,
+    /// Known body classifications; absent without the verification mode.
+    pub verification_bodies:
+        Option<std::sync::Arc<std::collections::BTreeMap<(u32, String), bool>>>,
+    pub verification_module: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// The program's realm reach R, on the entry module only: its `main`
     /// emits the runtime layouts R reaches (DESIGN §3.2 item 9). Other

@@ -466,6 +466,11 @@ pub(super) fn compile_module_entry(
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
+        if crate::verify_facts::enabled() {
+            main.block_mut(0)
+                .unwrap()
+                .call_void("perry_verify_facts_init", &[]);
+        }
         {
             let blk = main.block_mut(0).unwrap();
             if let Some((const_name, byte_len)) = process_entry_path.as_ref() {

@@ -496,7 +496,10 @@ fn lower_instance_method_call(
             // `arms`: the implementors a selection names (one per switch arm);
             // `None` for a proven site, whose switch lists every class.
             let (selected, arms) = if let Some((_, nullable)) = &proven {
-                (crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable), None)
+                (
+                    crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable),
+                    None,
+                )
             } else if cased.contains(&true) {
                 let (selected, arms) = select::select(ctx, &recv, property, &implementors, &cased);
                 (selected, Some(arms))
@@ -672,10 +675,12 @@ fn lower_instance_method_call(
                         ctx,
                         &format!("method .{property} receiver class_ids={ids:?}"),
                     );
-                    let _ = ctx.block().call(
+                    let _ = crate::verify_facts::check(
+                        ctx,
                         I32,
                         "perry_wpfacts_check_miss",
-                        &[(DOUBLE, &recv_box), (I64, &site)],
+                        &[(DOUBLE, &recv_box)],
+                        &site,
                     );
                 }
                 ctx.block().unreachable();

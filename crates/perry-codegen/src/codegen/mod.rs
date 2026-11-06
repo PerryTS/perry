@@ -247,9 +247,9 @@ mod ctor_arity;
 pub use ctor_arity::{
     context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
 };
-mod checked_integer;
 #[cfg(test)]
 mod buffer_alias_metadata_tests;
+mod checked_integer;
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -504,6 +504,7 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
         opts.module_source.as_deref(),
         opts.debug_source_line_offset,
     );
+    crate::verify_facts::bodies(&opts.program_facts);
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -526,6 +527,7 @@ pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<
         opts.module_source.as_deref(),
         opts.debug_source_line_offset,
     );
+    crate::verify_facts::bodies(&opts.program_facts);
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -3719,7 +3721,8 @@ fn lower_module(
     // Bounded: one entry per function (the dominant tuple),
     // `PERRY_SPECIALIZED_ABI_MAX` per module.
     if spec_abi::spec_abi_enabled() {
-        let spec_facts = crate::collectors::collect_spec_abi_facts_with(hir, &cross_module.definite_init);
+        let spec_facts =
+            crate::collectors::collect_spec_abi_facts_with(hir, &cross_module.definite_init);
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
         for f in &hir.functions {
@@ -4521,6 +4524,7 @@ fn emit_lowered_module(lowered: LoweredModule) -> Result<Vec<u8>> {
     crate::root_reload::apply_to_module(&mut llmod);
 
     crate::typed_feedback_profile::finish_module(&mut llmod.native_rep_records);
+    crate::verify_facts::finish(&mut llmod);
 
     let verify_native_regions = opts.verify_native_regions
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");

@@ -36,6 +36,11 @@ pub(super) fn strip_final_binary(
     is_harmonyos: bool,
 ) -> anyhow::Result<()> {
     super::fallback_diag::emit(exe_path)?;
+    if perry_codegen::verify_facts::enabled() {
+        let lines = perry_codegen::verify_facts::take_manifest();
+        let path = PathBuf::from(format!("{}.facts.jsonl", exe_path.display()));
+        std::fs::write(path, lines.join("\n") + "\n")?;
+    }
     // Dump only: the sites codegen read a program fact for (the file named by PERRY_FACTS_CONSUMED).
     if let Some(path) = std::env::var_os("PERRY_FACTS_CONSUMED").filter(|p| !p.is_empty()) {
         let mut text = perry_codegen::facts_consumed::take_lines().join("\n");

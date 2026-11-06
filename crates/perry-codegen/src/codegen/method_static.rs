@@ -89,6 +89,7 @@ pub(in crate::codegen) fn compile_static_method(
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
 
     let _ = lf.create_block("entry");
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let current_closure_slot = if generator_owner {
         lf.reserve_shadow_slot().map(|idx| {

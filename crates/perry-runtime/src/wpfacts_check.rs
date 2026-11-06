@@ -18,6 +18,9 @@
 use crate::object::ObjectHeader;
 use crate::StringHeader;
 
+mod report;
+use report::Witness;
+
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -82,17 +85,19 @@ fn string_bytes(ptr: *const StringHeader) -> Option<Vec<u8>> {
     }
 }
 
-/// The bytes of a key in an object's key list, without materializing or
-/// interning anything (heap string or SSO immediate).
-fn key_value_bytes(bits: u64) -> Option<Vec<u8>> {
+fn key_matches(bits: u64, expected: &[u8]) -> bool {
     match bits & TAG_MASK {
-        STRING_TAG => string_bytes((bits & POINTER_MASK) as *const StringHeader),
+        STRING_TAG => unsafe {
+            let ptr = (bits & POINTER_MASK) as *const StringHeader;
+            std::slice::from_raw_parts(crate::string::string_data(ptr), (*ptr).byte_len as usize)
+                == expected
+        },
         SHORT_STRING_TAG => {
-            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            let mut buf = [0; crate::value::SHORT_STRING_MAX_LEN];
             let n = crate::JSValue::from_bits(bits).short_string_to_buf(&mut buf);
-            Some(buf[..n].to_vec())
+            &buf[..n] == expected
         }
-        _ => None,
+        _ => false,
     }
 }
 
@@ -167,14 +172,42 @@ pub extern "C" fn perry_wpfacts_check_field(
     flags: i32,
     site: i64,
 ) -> i32 {
+    let key = string_bytes(key as usize as *const StringHeader).unwrap_or_default();
+    check_field(
+        obj,
+        value,
+        &key,
+        cids01,
+        cids23,
+        slot,
+        off,
+        kind_mask,
+        flags,
+        Witness::legacy(site),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_field(
+    obj: f64,
+    value: f64,
+    key: &[u8],
+    cids01: i64,
+    cids23: i64,
+    slot: i32,
+    off: i32,
+    kind_mask: i32,
+    flags: i32,
+    site: Witness,
+) -> i32 {
     let (site, flags, slot, off, kind_mask) = (
-        site as u64,
+        site,
         flags as u32,
         slot as u32,
         off as u32,
         kind_mask as u32,
     );
-    if CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+    if CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 && site.is_legacy() {
         REPORT.call_once(|| {
             if std::env::var_os("PERRY_CONTRACTS_REPORT").is_some() {
                 unsafe {
@@ -184,17 +217,15 @@ pub extern "C" fn perry_wpfacts_check_field(
         });
     }
     let bits = obj.to_bits();
-    let key_ptr = key as usize as *const StringHeader;
-    let key_text = string_bytes(key_ptr).unwrap_or_default();
-    let key_name = String::from_utf8_lossy(&key_text).into_owned();
+    let site = site.receiver(bits);
+    let key_name = String::from_utf8_lossy(key);
     if bits & TAG_MASK != POINTER_TAG {
         let k = kind_of(bits);
         if flags & WPF_NULLABLE != 0 && (k == K_NULL || k == K_UNDEF) {
             // The site kept its receiver test; nothing was elided here.
             return 0;
         }
-        violate(
-            site,
+        site.fail(
             "F4 receiver set",
             format!(".{key_name}: receiver bits {bits:#018x} are not an object"),
         );
@@ -208,8 +239,7 @@ pub extern "C" fn perry_wpfacts_check_field(
             )
             .is_none()
         {
-            violate(
-                site,
+            site.fail(
                 "F4 receiver set",
                 format!(".{key_name}: receiver {addr:#x} is not an ordinary object"),
             );
@@ -231,8 +261,7 @@ pub extern "C" fn perry_wpfacts_check_field(
             && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
     });
     if !admitted {
-        violate(
-            site,
+        site.fail(
             "F4 receiver set",
             format!(".{key_name}: receiver class_id {cid} not in {ids:?}"),
         );
@@ -240,8 +269,7 @@ pub extern "C" fn perry_wpfacts_check_field(
     // F3: the key lives at the claimed slot of the object's real layout.
     let (keys, live) = unsafe { crate::object::object_keys_and_live_slot_count(addr as *const _) };
     if slot >= live || slot >= keys.count() {
-        violate(
-            site,
+        site.fail(
             "F3 slot",
             format!(
                 ".{key_name}: slot {slot} beyond the layout (live {live}, keys {}) of class_id {cid}",
@@ -250,13 +278,12 @@ pub extern "C" fn perry_wpfacts_check_field(
         );
     }
     let at = unsafe { keys.get(slot) }.bits();
-    if key_value_bytes(at).as_deref() != Some(key_text.as_slice()) {
-        violate(
-            site,
+    if !key_matches(at, key) {
+        site.fail(
             "F3 slot",
             format!(
                 ".{key_name}: slot {slot} of class_id {cid} holds key {:?}",
-                key_value_bytes(at).map(|b| String::from_utf8_lossy(&b).into_owned())
+                at
             ),
         );
     }
@@ -267,24 +294,21 @@ pub extern "C" fn perry_wpfacts_check_field(
     if flags & WPF_RAW_F64 != 0 {
         // A raw-f64 read: the slot must hold a plain double.
         if !is_plain_f64(vbits) {
-            violate(
-                site,
+            site.fail(
                 "F2 kind (raw f64)",
                 format!(".{key_name}: slot holds tagged bits {vbits:#018x}"),
             );
         }
     }
     if in_slot != vbits && flags & WPF_STORE == 0 {
-        violate(
-            site,
+        site.fail(
             "F3 slot",
             format!(".{key_name}: loaded {vbits:#018x}, slot now {in_slot:#018x}"),
         );
     }
     let k = kind_of(in_slot);
     if k & kind_mask == 0 {
-        violate(
-            site,
+        site.fail(
             "F2 kind",
             format!(".{key_name}: value {in_slot:#018x} (kind {k:#x}) outside mask {kind_mask:#x}"),
         );
@@ -305,28 +329,29 @@ pub extern "C" fn perry_wpfacts_check_call(
     argc: i64,
     site: i64,
 ) -> *const crate::closure::JsFunctionInfo {
-    let site = site as u64;
+    check_call(callee, argc, Witness::legacy(site))
+}
+
+fn check_call(callee: f64, argc: i64, site: Witness) -> *const crate::closure::JsFunctionInfo {
+    let site = site.callee(callee.to_bits());
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let bits = callee.to_bits();
     if bits & TAG_MASK != POINTER_TAG {
-        violate(
-            site,
+        site.fail(
             "callee set",
             format!("callee bits {bits:#018x} are not a function object"),
         );
     }
     let closure = (bits & POINTER_MASK) as usize as *const crate::closure::ClosureHeader;
     let Some(info) = crate::closure::closure_info(closure) else {
-        violate(
-            site,
+        site.fail(
             "callee set",
             format!("callee {closure:p} is not a function object"),
         );
     };
     let params = info.plain_params();
     if params == crate::codegen_abi::NOT_PLAIN || i64::from(params) > argc {
-        violate(
-            site,
+        site.fail(
             "call form",
             format!("the body declares {params} plain parameters, the site passes {argc}"),
         );
@@ -397,4 +422,84 @@ mod tests {
             assert!(!is_plain_f64(tag | POINTER_MASK), "{tag:#018x}");
         }
     }
+}
+
+/// Raw metadata ABI used only by the compile-time verification mode.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn perry_verify_facts_field(
+    obj: f64,
+    value: f64,
+    key: i64,
+    key_len: i64,
+    cids01: i64,
+    cids23: i64,
+    slot: i32,
+    off: i32,
+    kind_mask: i32,
+    flags: i32,
+    site: i64,
+    site_len: i64,
+) -> i32 {
+    check_field(
+        obj,
+        value,
+        std::slice::from_raw_parts(key as usize as *const u8, key_len as usize),
+        cids01,
+        cids23,
+        slot,
+        off,
+        kind_mask,
+        flags,
+        Witness::raw(site, site_len),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_call(
+    callee: f64,
+    argc: i64,
+    site: i64,
+    site_len: i64,
+) -> *const crate::closure::JsFunctionInfo {
+    check_call(callee, argc, Witness::raw(site, site_len))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_call_miss(
+    info: *const crate::closure::JsFunctionInfo,
+    site: i64,
+    site_len: i64,
+) -> i32 {
+    Witness::raw(site, site_len)
+        .callee(info as usize as u64)
+        .fail(
+            "callee set",
+            format!("body info {info:p} is not a proven body"),
+        )
+}
+
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_miss(value: f64, site: i64, site_len: i64) -> i32 {
+    Witness::raw(site, site_len)
+        .receiver(value.to_bits())
+        .fail("inline check", describe(value.to_bits()))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_entry(site: i64, site_len: i64) {
+    Witness::raw(site, site_len).fail("inactive body", "body entered".into())
+}
+
+/// Diagnostic startup only. Witnesses themselves neither inspect the environment
+/// nor register process callbacks on the passing path.
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_init() {
+    REPORT.call_once(|| {
+        if std::env::var_os("PERRY_CONTRACTS_REPORT").is_some() {
+            unsafe {
+                libc::atexit(report_at_exit);
+            }
+        }
+    });
 }

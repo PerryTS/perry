@@ -54,14 +54,28 @@ fn with_census<R>(f: impl FnOnce(&perry_hir::ProtoCensus) -> R) -> Option<R> {
 /// and can no object gain an own property of that name except through a
 /// write that sets its shadow bit?
 pub fn method_is_constant(name: &str) -> bool {
-    with_census(|c| c.method_is_constant(name)).unwrap_or(false)
+    let proved = with_census(|c| c.method_is_constant(name)).unwrap_or(false);
+    if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::ProtoHolder,
+            || serde_json::json!({"key":name}),
+        );
+    }
+    proved
 }
 
 /// Object model step 1: is a key add of `name` on an object whose
 /// prototype is a closed literal never intercepted (`ProtoCensus::
 /// create_add_free`)? False with no census installed.
 pub(crate) fn create_add_free(name: &str) -> bool {
-    with_census(|c| c.create_add_free(name)).unwrap_or(false)
+    let proved = with_census(|c| c.create_add_free(name)).unwrap_or(false);
+    if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::ProtoAdd,
+            || serde_json::json!({"key":name}),
+        );
+    }
+    proved
 }
 
 /// Is `name` a prototype name (`ProtoCensus::prototype_names`, the list the
@@ -309,10 +323,7 @@ pub(crate) fn shared_holder_proof(
 /// class prototype is materialized lazily, on first demand through the
 /// agent's class-value directory; one that was never materialized was never
 /// reachable by any write, so it is unshadowed.
-pub(crate) fn case_holders_unshadowed(
-    ctx: &mut crate::expr::FnCtx<'_>,
-    extras: &[u32],
-) -> String {
+pub(crate) fn case_holders_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, extras: &[u32]) -> String {
     if extras.is_empty() {
         return "true".to_string();
     }
@@ -368,9 +379,7 @@ fn holder_unshadowed(
     let present = ctx.block().icmp_ult(I64, page_idx, &len);
     ctx.block().cond_br(&present, &pl, &ml);
     ctx.current_block = page;
-    let at = ctx
-        .block()
-        .gep(PTR, &pages, &[(I64, page_idx)]);
+    let at = ctx.block().gep(PTR, &pages, &[(I64, page_idx)]);
     let p = ctx.block().load(PTR, &at);
     let present = ctx.block().icmp_ne(PTR, &p, "null");
     ctx.block().cond_br(&present, &cl, &ml);

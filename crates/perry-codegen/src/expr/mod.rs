@@ -2669,6 +2669,16 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// The whole-program facts (#13645) clear a bit the census sets when compiled
 /// code provably never writes what it guards.
 pub(crate) fn array_iteration_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
+    if wpfacts.array_iteration_unwritten {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::ArrayIteration, || {
+            serde_json::json!({})
+        });
+    }
+    if wpfacts.array_iterator_close_unwritten {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose, || {
+            serde_json::json!({})
+        });
+    }
     let names = crate::program_patched_proto_methods();
     let mut facts = 0;
     if !wpfacts.array_iteration_unwritten

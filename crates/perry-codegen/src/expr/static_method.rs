@@ -495,16 +495,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let direct_pred = ctx.block().label.clone();
                 ctx.block().br(&join_label);
                 ctx.current_block = generic_idx;
+                if proven {
+                    crate::verify_facts::normal_call_miss(class_name, method_name);
+                }
                 if proven && contracts {
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
                     );
                     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let _ = ctx.block().call(
+                    let _ = crate::verify_facts::check(
+                        ctx,
                         I32,
                         "perry_wpfacts_check_miss",
-                        &[(DOUBLE, &undefined), (I64, &site)],
+                        &[(DOUBLE, &undefined)],
+                        &site,
                     );
                 } else if proven {
                     let site = ctx.wpfacts_sites as i64;
