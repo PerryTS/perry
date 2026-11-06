@@ -1147,6 +1147,9 @@ pub(crate) unsafe fn prototype_image(
     let obj = (built.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ObjectHeader;
     let (keys, live) = super::object_keys_and_live_slot_count(obj);
     let image = image.with_mut_ptr(|p: *mut ObjectHeader| p);
+    // GC_STORE_AUDIT(POINTER_FREE): a storage-only copy preserves nominal
+    // identity; the shared carried layout does not name the source's class.
+    (*image).class_id = (*obj).class_id;
     for (pos, key) in std::slice::from_raw_parts(d.keys, d.key_count as usize)
         .iter()
         .enumerate()
