@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Lossless syscall evidence plus a per-thread user instruction counter.
-Unknown syscalls stay explicit and invalidate input-completeness claims.
-This is a diagnostic companion, never part of a produced executable.
+"""Native input values, exact per-thread instruction positions and module returns.
+
+Only instrumented executables exposing js_snap_entry_body get return probes.
+A guarded-evaluation return is recorded after its registry commit, not at
+the earlier census callback exit. Runtime perf reads calibrate the two
+counter domains exactly; account.py checks every census Ir charge.
+Unknown syscalls and unreadable buffers remain explicit, never silently
+certified. Crypto entry probes audit otherwise unhooked RNG providers;
+their names are evidence, never an image-admission rule.
+This diagnostic companion is never linked into a produced executable.
 """
-import ctypes as C, errno, json, os, signal, struct, sys
+import ctypes as C, errno, json, os, signal, struct, sys, subprocess, hashlib
 from pathlib import Path
 L=C.CDLL(None,use_errno=True)
 L.ptrace.restype=C.c_long
@@ -34,8 +41,9 @@ NAMES={0:"read",1:"write",2:"open",3:"close",4:"stat",5:"fstat",6:"lstat",
 436:"close_range",439:"faccessat2"}
 REP={3,8,9,10,11,12,13,14,15,24,25,28,32,33,60,72,73,158,186,202,218,231,233,234,273,291,292,293,298,334,436}
 def ptrace(req,pid,addr=0,data=0):
+ C.set_errno(0)
  r=L.ptrace(req,pid,C.c_void_p(addr),C.c_void_p(data))
- if r==-1:
+ if r==-1 and C.get_errno():
   e=C.get_errno()
   raise OSError(e,os.strerror(e))
  return r
@@ -62,6 +70,7 @@ def main():
  active={pid:{"perf":counter(pid),"entry":None,"mem":None,"diagnostic_fds":set()}}
  sequence=0; main_rc=None; failures=[]
  out=open(output,"w")
+ out.write(json.dumps({"kind":"collector","sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),"command":command})+"\n")
  def memory(tid,addr,n):
   if n==0:return b""
   if not addr:return None
@@ -100,6 +109,94 @@ def main():
    size=min(length,max(0,returned))
    values.append(blob(tid,base,size));returned-=size
   return values
+ breakpoints={}; returns={}; audit_names={}; probe_number=0
+ def message(tid,address,returned):
+  header=memory(tid,address,56)
+  if header is None:return {"unreadable_msghdr":address}
+  name,nlen,vec,count,control,clen,flags=struct.unpack("QI4xQQQQi4x",header)
+  return {"name":blob(tid,name,nlen) if name and nlen else "",
+   "iov":iov(tid,vec,count,returned),"control":blob(tid,control,clen) if control and clen else "",
+   "flags":flags}
+ def put_breakpoint(tid,address,kind):
+  if address in breakpoints:return
+  word=ptrace(1,tid,address)&((1<<64)-1)
+  ptrace(4,tid,address,(word&~255)|0xcc)
+  breakpoints[address]=(word,kind)
+ def install_probes(tid):
+  # Probe a sealed runtime ABI, not a module-name inventory.
+  exe=os.readlink(f"/proc/{tid}/exe")
+  symbols={}; audit={}
+  result=subprocess.run(["nm","-n","--defined-only",exe],capture_output=True,text=True)
+  if result.returncode:return
+  for line in result.stdout.splitlines():
+   fields=line.split()
+   if len(fields)==3:
+    if fields[2].startswith(("js_crypto_","js_webcrypto_")):
+     audit.setdefault(int(fields[0],16),[]).append(fields[2])
+    if fields[2] in ("js_snap_entry_body","js_run_module_init_guarded"):
+     symbols[fields[2]]=int(fields[0],16)
+  if not all(k in symbols for k in ("js_snap_entry_body","js_run_module_init_guarded")):return
+  with open(exe,"rb") as f:header=f.read(20)
+  bias=0
+  if struct.unpack_from("<H",header,16)[0]==3:
+   for line in open(f"/proc/{tid}/maps"):
+    fields=line.split(None,5)
+    if len(fields)==6 and fields[5].strip()==exe and int(fields[2],16)==0:
+     bias=int(fields[0].split("-")[0],16);break
+  address=symbols["js_run_module_init_guarded"]+bias
+  put_breakpoint(tid,address,"entry")
+  for address0,names in audit.items():
+   pointer=address0+bias
+   audit_names[pointer]=names
+   put_breakpoint(tid,pointer,"audit")
+  out.write(json.dumps({"kind":"probes_installed","tid":tid,"guard_entry":address,"ir":ir(active[tid]["perf"])})+"\n")
+ def handle_probe(tid):
+  nonlocal probe_number
+  regs=(C.c_ulonglong*27)()
+  ptrace(12,tid,0,C.addressof(regs))
+  address=int(regs[16])-1
+  if address not in breakpoints:return False
+  info=C.create_string_buffer(128)
+  ptrace(0x4202,tid,0,C.addressof(info))
+  code=struct.unpack_from("i",info.raw,8)[0]
+  if code not in (1,128):return False
+  original,kind=breakpoints[address]
+  pos=ir(active[tid]["perf"])
+  if kind=="entry":
+   raw=memory(tid,int(regs[19]),8)
+   if raw is None:raise RuntimeError("guard return address unreadable")
+   return_address=struct.unpack("Q",raw)[0]
+   probe_number+=1
+   record={"kind":"guard_enter","guard_id":probe_number,"tid":tid,"init_addr":int(regs[14]),
+      "guard_addr":int(regs[13]),"return_pc":return_address,"ir":pos,"pc":address}
+   returns.setdefault(return_address,[]).append(record)
+   put_breakpoint(tid,return_address,"return")
+   out.write(json.dumps(record,separators=(",",":"))+"\n")
+  elif kind=="audit":
+   fp=C.create_string_buffer(512)
+   ptrace(14,tid,0,C.addressof(fp))
+   out.write(json.dumps({"kind":"native_api_enter","tid":tid,"ir":pos,"pc":address,
+      "api":audit_names[address],"gpr":[int(regs[i]) for i in (14,13,12,11,9,8)],
+      "xmm":fp.raw[160:288].hex()},separators=(",",":"))+"\n")
+  else:
+   pending=returns.get(address)
+   if not pending:raise RuntimeError("guard completion without entry")
+   previous=pending.pop()
+   record=dict(previous,kind="guard_complete",ir=pos,pc=address)
+   out.write(json.dumps(record,separators=(",",":"))+"\n")
+  # Execute exactly the replaced instruction, then restore the entry probe.
+  ptrace(4,tid,address,original)
+  regs[16]=address
+  ptrace(13,tid,0,C.addressof(regs))
+  ptrace(9,tid)
+  got,status=os.waitpid(tid,WALL)
+  if got!=tid or not os.WIFSTOPPED(status) or os.WSTOPSIG(status)!=signal.SIGTRAP:
+   raise RuntimeError(f"probe single-step did not stop normally: {got} {status}")
+  if kind in ("entry","audit") or returns.get(address):
+   ptrace(4,tid,address,(original&~255)|0xcc)
+  else:
+   del breakpoints[address]
+  return True
  ptrace(SYSCALL,pid)
  while active:
   tid,status=os.waitpid(-1,WALL)
@@ -122,6 +219,8 @@ def main():
    state=active[tid]
    if state["mem"] is not None:os.close(state["mem"])
    state["mem"]=None
+   breakpoints.clear();returns.clear();audit_names.clear()
+   install_probes(tid)
   elif sig==(signal.SIGTRAP|0x80):
    buf=C.create_string_buffer(128)
    ptrace(INFO,tid,128,C.addressof(buf))
@@ -147,6 +246,7 @@ def main():
     if nr==157 and a[0]==15:entry["input_name"]=string(tid,a[1])
     if nr in (1,18,44):entry["input_bytes"]=blob(tid,a[1],a[2])
     elif nr==20:entry["input_bytes"]=iov(tid,a[1],a[2],1<<63)
+    elif nr==46:entry["message"]=message(tid,a[1],1<<63)
     elif nr in (42,49):entry["sockaddr"]=blob(tid,a[1],a[2])
     elif nr==54:entry["option"]=blob(tid,a[3],a[4])
     if nr==8 and (a[0]&0xffffffff)==0xffffffff and a[2]==0x5321:
@@ -193,10 +293,20 @@ def main():
       e["option"]=blob(tid,a[3],struct.unpack("I",size)[0]) if size else {"unreadable_socklen":a[4]}
      elif nr==53:e["fds"]=blob(tid,a[3],8)
      elif nr in (22,293):e["fds"]=blob(tid,a[0],8)
-     elif nr in (47,299,307):e["unsupported_payload"]=True
+     elif nr==47:e["message"]=message(tid,a[1],ret)
+     elif nr in (299,307):
+      messages=[]
+      for index in range(ret):
+       item=a[1]+index*64
+       length=memory(tid,item+56,4)
+       if length is None:messages.append({"unreadable_mmsghdr":item});continue
+       messages.append(message(tid,item,struct.unpack("I",length)[0]))
+      e["messages"]=messages
     if e["name"]=="UNKNOWN" or e.get("unsupported_payload"):e["complete"]=False
     else:e["complete"]=True
     out.write(json.dumps(e,separators=(",",":"))+"\n")
+  elif event == 0 and sig==signal.SIGTRAP and handle_probe(tid):
+   pass
   elif event == 0 and sig != signal.SIGSTOP:
    out.write(json.dumps({"kind":"signal","tid":tid,"signal":sig,"ir":ir(active[tid]["perf"])})+"\n")
    ptrace(SYSCALL,tid,0,sig);continue
