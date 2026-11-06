@@ -53,6 +53,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
+    /// Export body classifications for the compiler diagnostic mode only.
+    pub verify_facts: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.
     pub roots: Vec<String>,
@@ -191,6 +193,8 @@ pub struct ProgramFacts {
     pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
+    /// Diagnostic-only export of the activation pass's seen body classifications.
+    pub verification_bodies: Option<std::collections::BTreeMap<(String, u32, String), bool>>,
     /// Completed whole-program reach, or an incomplete conservative view
     /// when activation was unavailable or the solve stopped early.
     pub body_reach: BodyReach,
@@ -1985,7 +1989,24 @@ fn compute_act<'a>(
         g.m.fnproto_borrow_write
             .map(|r| g.m.reasons[r as usize].clone())
     };
+    let verification_bodies = if cfg.verify_facts && !stats.aborted {
+        g.m.act.as_ref().map(|a| {
+            a.seen
+                .iter()
+                .filter_map(|(mi, id, name)| {
+                    let path = sorted.get(*mi as usize)?.0.to_owned();
+                    Some((
+                        (path, *id, name.clone()),
+                        a.on.contains(&(*mi, *id, name.clone())),
+                    ))
+                })
+                .collect()
+        })
+    } else {
+        None
+    };
     let mut pf = ProgramFacts {
+        verification_bodies,
         diag_stream: None,
         diagnostics,
         diagnostic_sites,

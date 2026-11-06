@@ -514,4 +514,3 @@ fn actual_tiny_entry_image_preserves_the_generated_reference_contract() {
         .to_string()
         .contains("root contract violated"));
 }
-

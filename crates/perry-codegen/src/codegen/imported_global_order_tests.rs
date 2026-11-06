@@ -72,6 +72,10 @@ fn imported_object_globals_are_stable_and_deduplicated() {
     assert!(!first.contains("@perry_class_shape_id_consumer__C = external"));
     assert!(!first.contains("@perry_global_consumer__"));
     for _ in 0..3 {
-        assert_eq!(first, emit(), "fresh capability maps must produce byte-identical IR");
+        assert_eq!(
+            first,
+            emit(),
+            "fresh capability maps must produce byte-identical IR"
+        );
     }
 }

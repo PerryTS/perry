@@ -41,7 +41,7 @@ try {
     }
     const run = spawnSync(output, [], { cwd: work, encoding: 'utf8', timeout: 15_000 });
     fs.writeFileSync(output + '-run.log', (run.stdout ?? '') + (run.stderr ?? ''));
-    if (run.status !== 0 || run.stdout !== oracle.stdout || /wpfacts false proof/.test(run.stderr ?? '')) {
+    if (run.status !== 0 || run.stdout !== oracle.stdout || /PERRY_FALSE_PROOF/.test(run.stderr ?? '')) {
       throw new Error('Native regression failed (units=' + units + '): ' + (run.error ?? run.status) + '\n' +
         (run.stdout ?? '') + (run.stderr ?? ''));
     }

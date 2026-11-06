@@ -94,8 +94,8 @@ pub(crate) fn site_of(e: &Expr) -> Option<(u32, u32, &'static str)> {
 }
 
 /// Starts the expression's own lookups; ends them when dropped.
-pub(crate) fn enter(e: &Expr) -> Option<Guard> {
-    let verify = crate::verify_facts::enter(e);
+pub(crate) fn enter(e: &Expr, copy: &str) -> Option<Guard> {
+    let verify = crate::verify_facts::enter(e, copy);
     if !enabled() && verify.is_none() {
         return None;
     }
