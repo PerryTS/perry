@@ -81,6 +81,20 @@ fn normalize_navigator_locale(locale: &str) -> Option<String> {
 }
 
 fn navigator_language() -> String {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("locale.navigator", &format!("{:?}", ()), || {
+            crate::effect!(host_read, locale);
+            std::env::var("LC_ALL")
+                .ok()
+                .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
+                .or_else(|| std::env::var("LANG").ok())
+                .as_deref()
+                .and_then(normalize_navigator_locale)
+                .unwrap_or_else(|| "en-US".to_string())
+        });
+    }
+
     crate::effect!(host_read, locale);
     std::env::var("LC_ALL")
         .ok()

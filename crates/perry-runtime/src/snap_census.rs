@@ -681,3 +681,40 @@ pub(crate) fn init_guard(addr: usize, guard: usize) {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     let _ = (addr, guard);
 }
+
+// Values and calls are retained only by the Linux instrumented census.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub use runner::input_record::Value as InputValue;
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub fn input_call<T: InputValue>(operation: &str, arguments: &str, call: impl FnOnce() -> T) -> T {
+    if !runner::on() {
+        return call();
+    }
+    let before_errno = unsafe { *libc::__errno_location() };
+    let token = runner::input_event(operation, arguments.to_owned());
+    unsafe {
+        *libc::__errno_location() = before_errno;
+    }
+    runner::input_scope(1);
+    let result = call();
+    let saved_errno = unsafe { *libc::__errno_location() };
+    runner::input_scope(-1);
+    runner::input_event("result", format!("{token}:{}", result.input_value()));
+    unsafe {
+        *libc::__errno_location() = saved_errno;
+    }
+    result
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub fn runner_on_for_inputs() -> bool {
+    runner::on()
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
+    if runner::on() {
+        runner::input_event(operation, value.input_value());
+    }
+}

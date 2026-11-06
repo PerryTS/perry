@@ -35,6 +35,8 @@
 //!
 //! Linux x86_64 only (the reservation, `REG_ERR`, the trap flag).
 
+#[path = "input_record.rs"]
+pub(super) mod input_record;
 use super::Effect;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering::Relaxed};
 
@@ -86,6 +88,43 @@ pub(super) fn on() -> bool {
 /// Collection is held until the boundary (not in the weights run).
 pub(super) fn holds_collection() -> bool {
     on() && !state().noprotect
+}
+
+// Native helper threads are visible in the syscall companion, but must not
+// borrow the main thread's census buffers.
+fn on_main_thread() -> bool {
+    let p = ANCHOR.state.load(Relaxed);
+    !p.is_null() && unsafe { (*p).main_tid == libc::syscall(libc::SYS_gettid) }
+}
+
+unsafe fn foreign_input(operation: &[u8], argument: &[u8], value: &[u8]) {
+    let header = b"SNAP21_FOREIGN_INPUT";
+    let mut rows = [
+        libc::iovec {
+            iov_base: header.as_ptr() as *mut _,
+            iov_len: header.len(),
+        },
+        libc::iovec {
+            iov_base: operation.as_ptr() as *mut _,
+            iov_len: operation.len(),
+        },
+        libc::iovec {
+            iov_base: argument.as_ptr() as *mut _,
+            iov_len: argument.len(),
+        },
+        libc::iovec {
+            iov_base: value.as_ptr() as *mut _,
+            iov_len: value.len(),
+        },
+    ];
+    let saved_errno = *libc::__errno_location();
+    libc::syscall(
+        libc::SYS_writev,
+        -1 as libc::c_int,
+        rows.as_mut_ptr(),
+        rows.len(),
+    );
+    *libc::__errno_location() = saved_errno;
 }
 
 fn state() -> &'static mut State {
@@ -488,6 +527,7 @@ impl PageMap {
 }
 
 struct State {
+    inputs: input_record::Record,
     out: String,
     inits: Vec<Init>,
     frames: Vec<Frame>,
@@ -827,6 +867,7 @@ unsafe fn start_census(out: String) {
     );
     let tls_block = (fs.saturating_sub(executable_tls_size()), fs);
     let mut st = Box::new(State {
+        inputs: input_record::Record::default(),
         out,
         inits: Vec::with_capacity(4096),
         frames: Vec::with_capacity(256),
@@ -1059,8 +1100,21 @@ unsafe fn start_census(out: String) {
             }
         }
     }
+    st.inputs.allocated_bytes = st.births.as_slice().iter().map(|b| b.size as u64).sum();
     install_handlers();
     ANCHOR.on.store(true, Relaxed);
+    input_record::event(st, "census_start", String::new());
+    let mut raw_env = Vec::<Vec<u8>>::new();
+    let mut env_entry = environ;
+    while !env_entry.is_null() && !(*env_entry).is_null() {
+        raw_env.push(std::ffi::CStr::from_ptr(*env_entry).to_bytes().to_vec());
+        env_entry = env_entry.add(1);
+    }
+    input_record::event(
+        st,
+        "initial_environment",
+        input_record::Value::input_value(&raw_env),
+    );
     crate::arena::refresh_inline_allocation_limit();
 }
 
@@ -1226,7 +1280,9 @@ fn set_mode_for_top(st: &mut State) {
         };
     }
     let want = top != 0 && st.inits[top].in_d && !st.noprotect;
-    if want != st.d_mode {
+    let watching = input_record::watch(st);
+    if want != st.d_mode || watching != st.inputs.watching {
+        st.inputs.watching = watching;
         st.d_mode = want;
         unsafe { apply_protection(st) };
     }
@@ -1311,12 +1367,14 @@ pub(super) fn init_enter(addr: usize) {
         init: id,
         kind: FrameKind::Init,
     });
+    input_record::event(st, "init_enter", format!("{addr:x}"));
     set_mode_for_top(st);
 }
 
 pub(super) fn init_exit(threw: bool) {
     let st = state();
     charge(st);
+    input_record::event(st, "init_exit", format!("threw={threw}"));
     let Some(f) = st.frames.pop() else {
         return;
     };
@@ -1347,6 +1405,8 @@ pub(super) fn init_part() {
             i.parts = i.parts.saturating_add(1);
         }
     }
+    input_record::event(st, "init_part", String::new());
+    set_mode_for_top(st);
 }
 
 pub(super) fn require_depth(delta: i32) {
@@ -1382,11 +1442,13 @@ pub(super) fn job_enter(owner: u32) {
         init: owner,
         kind: FrameKind::Job,
     });
+    input_record::event(st, "job_enter", owner.to_string());
     set_mode_for_top(st);
 }
 
 pub(super) fn job_exit() {
     let st = state();
+    input_record::event(st, "job_exit", String::new());
     charge(st);
     if st.frames.last().is_some_and(|f| f.kind == FrameKind::Job) {
         st.frames.pop();
@@ -1416,6 +1478,7 @@ pub(super) fn entry_body() {
         });
         st.inits.push(init);
         st.entry_init = id;
+        input_record::event(st, "entry_body", String::new());
         st.frames.push(Frame {
             init: id,
             kind: FrameKind::Init,
@@ -1563,8 +1626,42 @@ pub(super) fn dyn_code(kind: u8) {
     }
 }
 
+pub(super) fn input_scope(delta: i32) {
+    let st = state();
+    if delta > 0 {
+        st.inputs.call_depth += 1;
+    } else {
+        st.inputs.call_depth -= 1;
+    }
+    set_mode_for_top(st);
+}
+
+pub(super) fn input_event(op: &str, value: String) -> u64 {
+    input_record::event(state(), op, value)
+}
+
 pub(super) fn host(class: Effect, what: &'static str) {
     let st = state();
+    let input_top = top_init(st) as usize;
+    if class != Effect::TargetFact
+        && st.inputs.call_depth == 0
+        && input_top != 0
+        && st.inputs.writes.get(input_top).is_some_and(Option::is_none)
+    {
+        st.inputs.seq += 1;
+        st.inputs.writes[input_top] = Some(input_record::Write {
+            seq: st.inputs.seq,
+            ir: read_ir(st.perf_fd),
+            word: 0,
+            pc: 0,
+        });
+        st.inputs.watching = false;
+        unsafe {
+            apply_protection(st);
+        }
+    }
+
+    input_record::event(st, "effect", format!("{class:?}:{what}"));
     if st.sabotage_env && what == "env" {
         return;
     }
@@ -1637,6 +1734,7 @@ fn object_start(st: &State, word: usize) -> Option<usize> {
 
 pub(super) fn birth(addr: usize, size: usize) {
     let st = state();
+    st.inputs.allocated_bytes += size as u64;
     // Memory handed out again (a free-list slot, a rewound bump) holds new
     // locations: an earlier birth there and what members of D did to its
     // words are gone.
@@ -1702,10 +1800,7 @@ pub(super) fn global_root(slot: usize) {
     // That member is skipped here, so the first registration this run sees
     // is an importer's duplicate: bookkeeping as above, and the slot stays
     // D's binding, owned by no imaged init.
-    if st.slot_owner_rule
-        && !st.skip.is_empty()
-        && st.env_words.get(slot as u64) == Some(POISON)
-    {
+    if st.slot_owner_rule && !st.skip.is_empty() && st.env_words.get(slot as u64) == Some(POISON) {
         return;
     }
     count_unwatched_root(st, slot);
@@ -1801,6 +1896,11 @@ fn tls_slot(st: &State, addr: usize) -> Option<*mut u8> {
 // ---------------------------------------------------------------------------
 
 fn policy(st: &State, page: usize) -> i32 {
+    if input_record::watch(st)
+        && page_flags(st, page).is_some_and(|f| unsafe { *f & PF_TRACKED != 0 })
+    {
+        return libc::PROT_READ;
+    }
     // The weights run (`PERRY_SNAP_NOPROTECT=1`) takes no fault: its Ir per
     // init is the program's, not the census's.
     if st.noprotect {
@@ -1858,6 +1958,12 @@ unsafe fn for_each_tracked_range(st: &State, mut f: impl FnMut(usize, usize)) {
 }
 
 unsafe fn apply_protection(st: &mut State) {
+    if input_record::watch(st) {
+        for_each_tracked_range(st, |b, e| {
+            libc::mprotect(b as *mut _, e - b, libc::PROT_READ);
+        });
+        return;
+    }
     if st.top_mode {
         for_each_tracked_range(st, |b, e| {
             libc::mprotect(b as *mut _, e - b, libc::PROT_READ | libc::PROT_WRITE);
@@ -2327,6 +2433,15 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         st.faults_ignored += 1;
         return;
     }
+    if write && input_record::watch(st) {
+        input_record::changed_word(st, word, pc);
+        if !input_record::watch(st) {
+            st.inputs.watching = false;
+            unsafe {
+                apply_protection(st);
+            }
+        }
+    }
     if st.transp_globals.contains(word as u64) {
         st.transparent_hits += 1;
         return;
@@ -2638,9 +2753,19 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
             e = e.add(1);
         }
     }
-    if on() {
+    if on() && on_main_thread() {
         let st = state();
         let top = st.frames.last().map_or(0, |f| f.init);
+        let raw_value = if found.is_null() {
+            "unset".to_owned()
+        } else {
+            input_record::hex(std::ffi::CStr::from_ptr(found).to_bytes())
+        };
+        input_record::event(
+            st,
+            "getenv",
+            format!("{}={}", input_record::hex(key), raw_value),
+        );
         if st.env_reads.len() < 1 << 20 {
             let value = (!found.is_null()).then(|| {
                 std::ffi::CStr::from_ptr(found)
@@ -2650,6 +2775,14 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
             st.env_reads
                 .push((top, String::from_utf8_lossy(key).into_owned(), value));
         }
+    }
+    if on() && !on_main_thread() {
+        let value = if found.is_null() {
+            b"<unset>".as_slice()
+        } else {
+            std::ffi::CStr::from_ptr(found).to_bytes()
+        };
+        foreign_input(b"getenv", key, value);
     }
     found
 }
@@ -2669,6 +2802,7 @@ pub(super) fn boundary(at: &'static str) {
     if st.boundary_seq != 0 {
         return;
     }
+    input_record::event(st, "boundary", at.to_owned());
     charge(st);
     st.seq += 1;
     st.boundary_seq = st.seq;
@@ -2682,6 +2816,7 @@ pub(super) fn boundary(at: &'static str) {
     }
     crate::arena::refresh_inline_allocation_limit();
     write_report(st);
+    input_record::write(st).expect("write ordered input record");
     // The check run proves the image at the boundary; what runs after it
     // reads bindings of the skipped members of D, so the run ends here.
     if !st.skip.is_empty() {
@@ -3883,6 +4018,7 @@ pub(super) fn env_storage(begin: usize, obj: usize) {
 
 pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
     let st = state();
+    input_record::event(st, "env_get", format!("{name:?}={value:?}"));
     let top = top_init(st);
     let site = st.env_site.take().filter(|s| s.0 == top).map(|s| s.1);
     if !st.env_rule {
@@ -3915,6 +4051,7 @@ pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
 
 pub(super) fn env_has(name: &str, present: bool) {
     let st = state();
+    input_record::event(st, "env_has", format!("{name:?}={present}"));
     if !st.env_rule {
         return host(Effect::HostRead, "env");
     }
@@ -4292,4 +4429,115 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
             }
         }
     }
+}
+
+// Calling the kernel directly also covers libc callers that would otherwise
+// read the vDSO without a syscall visible to the companion native trace.
+#[no_mangle]
+pub unsafe extern "C" fn clock_gettime(
+    clock: libc::clockid_t,
+    out: *mut libc::timespec,
+) -> libc::c_int {
+    let rc = libc::syscall(libc::SYS_clock_gettime, clock, out) as libc::c_int;
+    let saved_errno = *libc::__errno_location();
+    if on() && on_main_thread() {
+        let value = if rc == 0 && !out.is_null() {
+            format!(
+                "clock={clock};sec={};nsec={}",
+                (*out).tv_sec,
+                (*out).tv_nsec
+            )
+        } else {
+            format!("clock={clock};rc={rc};errno={saved_errno}")
+        };
+        input_event("native.clock_gettime", value);
+    }
+    *libc::__errno_location() = saved_errno;
+    rc
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gettimeofday(
+    out: *mut libc::timeval,
+    zone: *mut libc::c_void,
+) -> libc::c_int {
+    let rc = libc::syscall(libc::SYS_gettimeofday, out, zone) as libc::c_int;
+    let saved_errno = *libc::__errno_location();
+    if on() && on_main_thread() {
+        let value = if rc == 0 && !out.is_null() {
+            format!("sec={};usec={}", (*out).tv_sec, (*out).tv_usec)
+        } else {
+            format!("rc={rc};errno={saved_errno}")
+        };
+        input_event("native.gettimeofday", value);
+    }
+    *libc::__errno_location() = saved_errno;
+    rc
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn time(out: *mut libc::time_t) -> libc::time_t {
+    let rc = libc::syscall(libc::SYS_time, out) as libc::time_t;
+    let saved_errno = *libc::__errno_location();
+    if on() && on_main_thread() {
+        input_event("native.time", format!("seconds={rc};errno={saved_errno}"));
+    }
+    *libc::__errno_location() = saved_errno;
+    rc
+}
+
+// Environment mutations have no syscall and must not disappear from native
+// evidence. Resolve the libc operation afresh; this is instruments-only.
+#[no_mangle]
+pub unsafe extern "C" fn unsetenv(name: *const libc::c_char) -> libc::c_int {
+    let saved_errno = *libc::__errno_location();
+    if on() && on_main_thread() {
+        let key = if name.is_null() {
+            "null".into()
+        } else {
+            input_record::hex(std::ffi::CStr::from_ptr(name).to_bytes())
+        };
+        input_event("native.unsetenv", key);
+        host(Effect::HostWrite, "env");
+    }
+    let next = libc::dlsym(libc::RTLD_NEXT, c"unsetenv".as_ptr());
+    assert!(!next.is_null(), "libc unsetenv missing");
+    let call: unsafe extern "C" fn(*const libc::c_char) -> libc::c_int = std::mem::transmute(next);
+    *libc::__errno_location() = saved_errno;
+    call(name)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setenv(
+    name: *const libc::c_char,
+    value: *const libc::c_char,
+    overwrite: libc::c_int,
+) -> libc::c_int {
+    let saved_errno = *libc::__errno_location();
+    if on() && on_main_thread() {
+        let key = if name.is_null() {
+            "null".into()
+        } else {
+            input_record::hex(std::ffi::CStr::from_ptr(name).to_bytes())
+        };
+        let val = if value.is_null() {
+            "null".into()
+        } else {
+            input_record::hex(std::ffi::CStr::from_ptr(value).to_bytes())
+        };
+        input_event(
+            "native.setenv",
+            format!("{key}={val};overwrite={overwrite}"),
+        );
+        host(Effect::HostWrite, "env");
+    }
+    let next = libc::dlsym(libc::RTLD_NEXT, c"setenv".as_ptr());
+    assert!(!next.is_null(), "libc setenv missing");
+    let call: unsafe extern "C" fn(
+        *const libc::c_char,
+        *const libc::c_char,
+        libc::c_int,
+    ) -> libc::c_int = std::mem::transmute(next);
+    *libc::__errno_location() = saved_errno;
+    call(name, value, overwrite)
 }

@@ -1461,6 +1461,10 @@ fn js_process_env_impl() -> f64 {
     }
 
     let vars: Vec<(String, String)> = std::env::vars().collect();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if crate::snap_census::runner_on_for_inputs() {
+        crate::snap_census::record_input_value("env_block", &vars);
+    }
     // Pad alloc_limit so small env sets still have headroom; large
     // environments (CI runners) spill to the overflow Vec path.
     let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
