@@ -1424,6 +1424,24 @@ impl Model {
                     }
                 }
             }
+            Cons::NativeParent {
+                tm,
+                expected,
+                reason,
+            } => {
+                let mut other = prim & prim::NULL != 0;
+                for &t in toks {
+                    if t != expected {
+                        self.escape(t, reason);
+                        other = true;
+                    }
+                }
+                if other {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    self.escape(inst, reason);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
+                }
+            }
             Cons::NewTargetHard { reason } => {
                 for &t in toks {
                     match self.toks[t as usize] {
