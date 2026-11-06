@@ -373,6 +373,7 @@ pub(super) fn compile_method(
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
 
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, method.id);
 
     let current_closure_slot = if generator_owner {

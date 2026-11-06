@@ -161,27 +161,39 @@ pub fn take_manifest() -> Vec<String> {
     let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
     let claims = std::mem::take(&mut inventory.claims);
     let copies = std::mem::take(&mut inventory.copies);
-    claims.into_values().map(|mut r| {
-        if let Some(emissions) = r.as_object_mut().unwrap().remove("raw_emissions") {
-            let mut checks = Vec::new();
-            let mut optimized = true;
-            for emission in emissions.as_array().unwrap() {
-                let identity = (r["module"].as_str().unwrap().to_owned(), emission.as_u64().unwrap());
-                match copies.get(&identity) {
-                    Some(c) => checks.extend(c.iter().cloned()),
-                    None => optimized = false,
+    claims
+        .into_values()
+        .map(|mut r| {
+            if let Some(emissions) = r.as_object_mut().unwrap().remove("raw_emissions") {
+                r["lowered_emissions"] = emissions.clone();
+                let mut checks = Vec::new();
+                let mut optimized = true;
+                for emission in emissions.as_array().unwrap() {
+                    let identity = (
+                        r["module"].as_str().unwrap().to_owned(),
+                        emission.as_u64().unwrap(),
+                    );
+                    match copies.get(&identity) {
+                        Some(c) => checks.extend(c.iter().cloned()),
+                        None => optimized = false,
+                    }
+                }
+                assert!(
+                    optimized,
+                    "checked claim did not reach final copy accounting: {r}"
+                );
+                if checks.is_empty() {
+                    r["check"] = Value::Null;
+                    r["dead"] = json!(
+                        "No live use of the failure metadata after lowering and LLVM optimization"
+                    );
+                } else {
+                    r["emitted_checks"] = json!(checks);
                 }
             }
-            assert!(optimized, "checked claim did not reach final copy accounting: {r}");
-            if checks.is_empty() {
-                r["check"] = Value::Null;
-                r["dead"] = json!("LLVM optimization removed every use of this failure site's static metadata");
-            } else {
-                r["emitted_checks"] = json!(checks);
-            }
-        }
-        r.to_string()
-    }).collect()
+            r.to_string()
+        })
+        .collect()
 }
 
 pub(crate) fn optimized(origins: &[(String, u64)]) {

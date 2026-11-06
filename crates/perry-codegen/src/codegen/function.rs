@@ -100,6 +100,7 @@ pub(super) fn compile_typed_f64_function(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
 
     let value = {
@@ -135,6 +136,7 @@ pub(super) fn compile_typed_i32_function(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
 
     let value = {
@@ -171,6 +173,7 @@ pub(super) fn compile_typed_i1_function(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
 
     let value = {
@@ -210,6 +213,7 @@ pub(super) fn compile_typed_string_function(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
 
     let value = {
@@ -828,6 +832,7 @@ pub(super) fn compile_function(
         lf.inline_hint = true;
     }
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
 
     let mut boxed_vars = module_boxed_vars.clone();

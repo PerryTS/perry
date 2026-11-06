@@ -85,6 +85,43 @@ pub(crate) fn begin_module(name: &str, source: Option<&str>, prefix_lines: u32) 
     SITE.with(|s| s.set(None));
 }
 
+pub(crate) struct BodyGuard {
+    copy: String,
+    site: Option<(u32, &'static str)>,
+    site_copy: u64,
+    key: String,
+}
+
+pub(crate) fn body_scope(copy: &str) -> Option<BodyGuard> {
+    if !enabled() {
+        return None;
+    }
+    let outer = MODULE.with(|m| {
+        let mut m = m.borrow_mut();
+        let m = m.as_mut().expect("verification module initialized");
+        std::mem::replace(&mut m.copy, copy.to_owned())
+    });
+    Some(BodyGuard {
+        copy: outer,
+        site: SITE.with(|s| s.replace(None)),
+        site_copy: COPY_SITE.with(|s| s.replace(0)),
+        key: KEY.with(|k| k.replace(String::new())),
+    })
+}
+
+impl Drop for BodyGuard {
+    fn drop(&mut self) {
+        MODULE.with(|m| {
+            if let Some(m) = m.borrow_mut().as_mut() {
+                m.copy = std::mem::take(&mut self.copy);
+            }
+        });
+        SITE.with(|s| s.set(self.site));
+        COPY_SITE.with(|s| s.set(self.site_copy));
+        KEY.with(|k| *k.borrow_mut() = std::mem::take(&mut self.key));
+    }
+}
+
 pub(crate) struct SiteGuard {
     outer: Option<(u32, &'static str)>,
     outer_copy: Option<u64>,
@@ -101,9 +138,11 @@ pub(crate) fn enter(e: &Expr, copy: &str) -> Option<SiteGuard> {
     let outer_body = if enabled() {
         MODULE.with(|m| {
             if let Some(m) = m.borrow_mut().as_mut() {
+                let outer = m.copy.clone();
                 if m.copy != copy {
-                    return Some(std::mem::replace(&mut m.copy, copy.to_owned()));
+                    m.copy = copy.to_owned();
                 }
+                return Some(outer);
             }
             None
         })
