@@ -1377,8 +1377,8 @@ include!("native_module/class_method_values.rs");
 /// 3/4 on a 3-capture name closure are bounds-checked to 0 → undefined.
 pub(crate) static SYMBOL_BOUND_METHOD_NAME: &[u8] = b"@@__perry_symbol_bound_method__";
 
-/// #6173: materialize a symbol-keyed class method (already resolved via
-/// `lookup_class_symbol_method_in_chain`) as a callable bound-method value.
+/// Materialize a raw ClassBody method without a closure-convention entry.
+/// The body and calling convention come from its declaration.
 /// See [`SYMBOL_BOUND_METHOD_NAME`] for the capture layout. All captures are
 /// populated immediately after allocation, BEFORE any allocating call — the
 /// capture slots are GC-scanned roots (mirrors `build_bound_method_closure`).

@@ -135,8 +135,8 @@ pub(crate) use generator::{
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub(crate) use generator_state::{
-    call_generator_symbol_method, fixed_generator_state, install_class_symbol_method,
-    install_evaluation_generator_symbols, STEP_DONE, STEP_INNER_RESULT,
+    fixed_generator_state, install_class_symbol_method,
+    STEP_DONE, STEP_INNER_RESULT,
 };
 pub(crate) use generator_state::{
     generator_observe_record_prototype, generator_original_prototype_key,

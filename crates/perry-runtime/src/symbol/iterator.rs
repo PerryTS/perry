@@ -49,12 +49,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
             let proto = crate::object::class_decl_prototype_value(class_id);
             return js_object_get_own_property_symbols(proto);
         }
-        let mut entries = crate::object::class_own_symbol_member_keys(class_id, true);
-        for sym_key in class_static_symbol_keys_for_class(class_id) {
-            if !entries.contains(&sym_key) {
-                entries.push(sym_key);
-            }
-        }
+        let mut entries = class_static_symbol_keys_for_class(class_id);
         let mut arr = crate::array::js_array_alloc(entries.len() as u32);
         for sym_ptr_usize in entries.drain(..) {
             let boxed = f64::from_bits(POINTER_TAG | (sym_ptr_usize as u64 & POINTER_MASK));
