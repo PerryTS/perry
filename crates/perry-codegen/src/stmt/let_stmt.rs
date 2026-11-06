@@ -1,11 +1,11 @@
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
 use super::let_object_facts::record_imported_object_alias;
+use super::let_scalar_new::{is_scalar_split, scalar_rebind, scalar_slot};
 use super::let_stmt_facts::{
     buffer_local_alias_source, is_global_this_value, native_i32_alias_source,
     pod_view_count_source, record_array_length_snapshot, record_pod_rejection,
     record_scalar_aggregate_field,
 };
-use super::let_scalar_new::{scalar_rebind, scalar_slot};
 use super::unused_expr::lower_unused_expr;
 use super::*;
 use crate::expr::{
@@ -652,16 +652,7 @@ pub(crate) fn lower_let(
     // substring allocations. The escape collector admits this exact shape and
     // rejects `.length`, mutation, captures, and dynamic indices.
     if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
-        if ctx.non_escaping_arrays.contains_key(&id)
-            && matches!(args.as_slice(), [perry_hir::Expr::String(s)] if !s.is_empty())
-            && matches!(
-                callee.as_ref(),
-                perry_hir::Expr::PropertyGet { object, property, .. }
-                    if is_string_expr(ctx, object)
-                        && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
-                        && property == "split"
-            )
-        {
+        if ctx.non_escaping_arrays.contains_key(&id) && is_scalar_split(ctx, callee, args) {
             let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
                 unreachable!();
             };

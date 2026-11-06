@@ -33,6 +33,16 @@ fn call(id: u32) -> Expr {
     }
 }
 
+/// Options for a target that emits stack checks. The host target would not do
+/// on Windows, whose runtime publishes no stack limit (`emit_check` emits none
+/// there), so the assertions below would fail on a Windows host.
+fn guarded_opts() -> crate::CompileOptions {
+    crate::CompileOptions {
+        target: Some("aarch64-apple-darwin".into()),
+        ..super::class_field_barrier_tests::ir_opts()
+    }
+}
+
 /// The body of `@perry_fn_stack_guard_leaf_ts__<name>`.
 fn body_of<'a>(ir: &'a str, name: &str) -> &'a str {
     let header = format!("@perry_fn_stack_guard_leaf_ts__{name}(");
@@ -57,10 +67,7 @@ fn a_leaf_drops_its_check_and_a_recursive_body_keeps_it() {
     ];
     m.init = vec![Stmt::Expr(call(2)), Stmt::Expr(call(3))];
     m.init_kind = ModuleInitKind::Eager;
-    let ir = String::from_utf8(
-        compile_module(&m, super::class_field_barrier_tests::ir_opts()).unwrap(),
-    )
-    .unwrap();
+    let ir = String::from_utf8(compile_module(&m, guarded_opts()).unwrap()).unwrap();
     assert!(
         !body_of(&ir, "leaf").contains("@js_stack_overflow"),
         "a body that calls nothing needs no check:\n{}",
@@ -117,10 +124,7 @@ fn a_call_on_one_branch_moves_the_check_in_front_of_its_block() {
         byte_offset: 0,
     })];
     m.init_kind = ModuleInitKind::Eager;
-    let ir = String::from_utf8(
-        compile_module(&m, super::class_field_barrier_tests::ir_opts()).unwrap(),
-    )
-    .unwrap();
+    let ir = String::from_utf8(compile_module(&m, guarded_opts()).unwrap()).unwrap();
     let body = body_of(&ir, "branchy$generic");
     let entry: Vec<&str> = body
         .lines()
@@ -128,10 +132,15 @@ fn a_call_on_one_branch_moves_the_check_in_front_of_its_block() {
         .take_while(|l| !l.ends_with(':') || l.starts_with("entry"))
         .collect();
     assert!(
-        !entry.iter().any(|l| l.contains("PERRY_HOT_TSD_KEY") || l.contains("read_register")),
+        !entry
+            .iter()
+            .any(|l| l.contains("PERRY_HOT_TSD_KEY") || l.contains("read_register")),
         "the entry block runs no check:\n{body}"
     );
-    assert!(body.contains("@js_stack_overflow"), "the calling arm keeps one:\n{body}");
+    assert!(
+        body.contains("@js_stack_overflow"),
+        "the calling arm keeps one:\n{body}"
+    );
     // The check is laid out just before the block holding the call.
     let lines: Vec<&str> = body.lines().collect();
     let check = lines

@@ -1921,6 +1921,9 @@ pub(super) fn compile_function(
                     f.body.len(),
                 ) {
                     lowered.pre_statepoint_inline = true;
+                    // Under the physical-site growth bound with the other
+                    // guarded bodies (`preinline_growth`).
+                    lowered.guarded_preinline = true;
                 }
             }
         }

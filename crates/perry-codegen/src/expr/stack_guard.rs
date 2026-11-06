@@ -175,11 +175,7 @@ const MAX_CALL_SITE_CHECKS: usize = 8;
 /// than [`MAX_CALL_SITE_CHECKS`] calling blocks, a call in its entry block,
 /// or any exception-handling construct (a check inside a `try` would have to
 /// unwind to its handler).
-fn move_check_to_call_sites(
-    ctx: &mut FnCtx<'_>,
-    site: &GuardSite,
-    safe: &dyn Fn(&str) -> bool,
-) {
+fn move_check_to_call_sites(ctx: &mut FnCtx<'_>, site: &GuardSite, safe: &dyn Fn(&str) -> bool) {
     // A body with a source loop keeps its entry check: a call in the loop may
     // be inlined later (a guarded trampoline), and a check before it would
     // then run every iteration instead of once per entry. A cycle that is no
@@ -262,7 +258,10 @@ fn take_leading_phis(insts: &mut Vec<crate::inst::LlInst>) -> Vec<crate::inst::L
         .iter()
         .take_while(|inst| match inst {
             crate::inst::LlInst::Phi { .. } => true,
-            crate::inst::LlInst::Raw(text) => text.trim_start().split_once(" = ").is_some_and(|(_, rhs)| rhs.starts_with("phi ")),
+            crate::inst::LlInst::Raw(text) => text
+                .trim_start()
+                .split_once(" = ")
+                .is_some_and(|(_, rhs)| rhs.starts_with("phi ")),
             _ => false,
         })
         .count();
@@ -341,7 +340,11 @@ fn place_before_calling_blocks(
     let blocks = ctx.func.blocks_mut();
     let mut taken: Vec<Option<crate::block::LlBlock>> =
         std::mem::take(blocks).into_iter().map(Some).collect();
-    blocks.extend(order.iter().map(|&idx| taken[idx].take().expect("each block placed once")));
+    blocks.extend(
+        order
+            .iter()
+            .map(|&idx| taken[idx].take().expect("each block placed once")),
+    );
     ctx.current_block = new_index[ctx.current_block];
 }
 

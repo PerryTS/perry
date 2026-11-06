@@ -847,6 +847,20 @@ mod tests {
     }
 
     #[test]
+    fn nested_source_walks_bound_their_body_copies() {
+        // Each rewritten loop lowers its body once per arm; twenty nested
+        // loops would be 2^20 copies of the innermost body without a bound.
+        let mut src = String::from("function f(a: number[]) { let s = 0;");
+        for i in 0..20 {
+            src.push_str(&format!(" for (const x{i} of a)"));
+        }
+        src.push_str(" console.log('deep-body', s); }");
+        let ir = hir(&src);
+        let copies = ir.matches("deep-body").count();
+        assert!((2..=8).contains(&copies), "{copies} copies");
+    }
+
+    #[test]
     fn array_record_one_body_and_shape_entry() {
         for source in [
             "const a = [1,2,3]; for (const x of a) console.log('unique-body', x);",
