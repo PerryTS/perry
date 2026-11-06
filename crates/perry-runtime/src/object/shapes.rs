@@ -1570,7 +1570,14 @@ pub(crate) fn proto_id_kind(proto_id: u64) -> u32 {
     }
 }
 
-static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// The semantic generation of the lineage a runtime intrinsic prototype
+/// holder is born on ([`stamp_born_prototype_root`]). It lies in the counter
+/// namespace below [`SHAPE_SEMANTIC_NEXT`]'s first value, so the counter never
+/// hands it out: only those holders carry a shape of this lineage.
+pub(crate) const BORN_PROTOTYPE_GENERATION: u64 = 1;
+
+static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(BORN_PROTOTYPE_GENERATION + 1);
 
 #[inline]
 pub(crate) fn is_layout_word(v: u32) -> bool {
@@ -4768,6 +4775,53 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id
+}
+
+/// Move `obj`, a keyless newborn the runtime is about to build into an
+/// intrinsic prototype holder, to the born-prototype lineage
+/// ([`BORN_PROTOTYPE_GENERATION`]): its keyless shape at that generation. Every
+/// shape it takes while it is built descends from that root, so none is
+/// carried by an ordinary object, and its builder's prototype mark
+/// (`proto_validity::ensure_meta_for_mark`) mints no private lineage: the one
+/// it would mint is the one it already has. The builder marks every holder it
+/// births here before the holder is exposed; the holders share the lineage,
+/// as the births on one prototype layout share theirs.
+///
+/// # Safety
+/// `obj` is a live, unexposed, keyless `ObjectHeader`, or null; collection is
+/// suppressed by the caller.
+pub(crate) unsafe fn stamp_born_prototype_root(obj: *mut crate::object::ObjectHeader) {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return;
+    }
+    let Some(current) = object_shape_descriptor(obj) else {
+        return;
+    };
+    debug_assert_eq!(current.logical_key_count, 0, "a born prototype root is keyless");
+    if current.logical_key_count != 0 || current.semantic_generation != 0 {
+        return;
+    }
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        current.keys_view(),
+        0,
+        current.live_inline_slot_count,
+        BORN_PROTOTYPE_GENERATION,
+        store_kind::mint_kind(current.object_kind, obj),
+        current.proto_id,
+        receiver_facts_of_current(obj, &current),
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+}
+
+/// Is `obj`'s shape on the born-prototype lineage ([`stamp_born_prototype_root`])?
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn object_on_born_prototype_lineage(
+    obj: *const crate::object::ObjectHeader,
+) -> bool {
+    object_shape_descriptor(obj).is_some_and(|d| d.semantic_generation == BORN_PROTOTYPE_GENERATION)
 }
 
 /// Give `obj`'s current shape a ConstFn lane for every inline slot `claims`

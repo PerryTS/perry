@@ -345,8 +345,17 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         // the meta record is reached through the owner again afterwards.
         // A prototype mark changes no slot and no descriptor, so the new
         // shape keeps the ConstFn lanes the object still satisfies.
+        //
+        // A runtime intrinsic prototype holder born on the born-prototype
+        // lineage (`shapes::stamp_born_prototype_root`) already carries a
+        // shape no ordinary object carries, and nothing has seen it yet: the
+        // private lineage the transition would mint is the one it has.
+        let born = flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+            && crate::object::shapes::object_on_born_prototype_lineage(object);
         let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-            if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+            if born {
+                crate::object::shapes::object_shape_stamp(object)
+            } else if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
                 crate::object::shapes::transition_object_shape_semantics_keeping_constfn(object)
             } else {
                 crate::object::shapes::transition_object_shape_semantics(object)
