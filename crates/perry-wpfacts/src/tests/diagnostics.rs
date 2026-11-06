@@ -261,3 +261,48 @@ fn diagnostic_solver_call_reports_its_program_call() {
         );
     }
 }
+
+/// The birth census names the receiver of a missed intrinsic method call
+/// (`birth-read` `origin`/`originName`), only when asked for; facts and
+/// verdicts are the same either way.
+#[test]
+fn birth_census_names_the_receiver_of_a_missed_method_call() {
+    let src = r#"
+        class Svc { size = 3; }
+        const m: any = new Map([["a", new Svc()]]);
+        try { m.notAMapMethod(); } catch {}
+        console.log(m.get("a").size);
+    "#;
+    let cfg = |census: bool| FactsConfig {
+        diagnostics: true,
+        birth_census: census,
+        ..Default::default()
+    };
+    let off = facts_with(src, cfg(false));
+    let on = facts_with(src, cfg(true));
+    let reads = |p: &ProgramFacts| -> Vec<String> {
+        p.diagnostics
+            .iter()
+            .flat_map(|d| d.1.iter())
+            .filter(|l| l.contains("\"record\":\"birth-read\""))
+            .cloned()
+            .collect()
+    };
+    assert!(reads(&off).is_empty(), "{:?}", reads(&off));
+    let miss: Vec<String> = reads(&on)
+        .into_iter()
+        .filter(|l| l.contains("\"key\":\"notAMapMethod\"") && l.contains("\"isCall\":true"))
+        .collect();
+    assert!(!miss.is_empty(), "{:?}", reads(&on));
+    assert!(
+        miss.iter().all(|l| l.contains("\"originName\":\"obj:Map")),
+        "{miss:?}"
+    );
+    let verdicts = |p: &ProgramFacts| {
+        p.sites
+            .iter()
+            .map(|s| format!("{} {} {:?}", s.key, s.is_call, s.verdict))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(verdicts(&off), verdicts(&on));
+}

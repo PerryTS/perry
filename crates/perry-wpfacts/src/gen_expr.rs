@@ -303,10 +303,17 @@ impl<'a> Gen<'a> {
         });
     }
 
-    pub(crate) fn key_of(&mut self, index: &Expr) -> Key {
+    /// The key a computed access names: a string literal, or a binding that
+    /// always holds one (`const k = "name"; o[k]`: `Gen::const_key`, the
+    /// resolver constant stores and definitions use). A binding read before
+    /// its initialization throws (TDZ) and names no key at all.
+    pub(crate) fn key_of(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
-            _ => Key::any(),
+            _ => match self.const_key(mi, index) {
+                Some(s) => Key::Named(self.m.atom(&s)),
+                None => Key::any(),
+            },
         }
     }
 
@@ -315,7 +322,7 @@ impl<'a> Gen<'a> {
     /// sentinel, one symbol per name, so the read names it. Stores keep
     /// `Key::Any`, which every named read sees; as an atom it can only
     /// merge with a string key of the same spelling (more flow, never less).
-    pub(crate) fn read_key(&mut self, index: &Expr) -> Key {
+    pub(crate) fn read_key(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::SymbolFor(name) => match name.as_ref() {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
@@ -323,7 +330,7 @@ impl<'a> Gen<'a> {
                 }
                 _ => Key::any(),
             },
-            _ => self.key_of(index),
+            _ => self.key_of(mi, index),
         }
     }
 
@@ -1029,7 +1036,7 @@ impl<'a> Gen<'a> {
                 } else {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
-                    let key = match self.key_of(key) {
+                    let key = match self.key_of(fx.module, key) {
                         Key::Any(_) => Key::Any(self.m.key_shape(key)),
                         k => k,
                     };
@@ -1124,7 +1131,7 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = self.read_key(index);
+                let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
                 match key {
@@ -1196,7 +1203,7 @@ impl<'a> Gen<'a> {
                 } else {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
-                    let key = match self.key_of(index) {
+                    let key = match self.key_of(fx.module, index) {
                         Key::Any(_) => Key::Any(self.m.key_shape(index)),
                         k => k,
                     };
@@ -1221,7 +1228,7 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = self.key_of(index);
+                let key = self.key_of(fx.module, index);
                 self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Read);
                 self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Write);
                 let cur = self.load(o, key);
@@ -1874,7 +1881,7 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertySet { key, value, .. } => {
                 let _ = self.expr(fx, key);
                 let v = self.expr(fx, value);
-                let k = self.key_of(key);
+                let k = self.key_of(fx.module, key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
                 for start in self.super_starts(fx) {
                     self.m.cons(

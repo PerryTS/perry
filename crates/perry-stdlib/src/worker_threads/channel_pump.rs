@@ -178,86 +178,29 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         }
     }
 
-    struct BroadcastDispatch {
-        target_bits: u64,
-        event_cbs: Vec<EventListener>,
-        handler_cb: Option<u64>,
-        msg: SerializedValue,
-    }
-
     loop {
-        let candidates: Vec<(u64, u64)> = BROADCAST_CHANNELS.with(|channels| {
+        let next = BROADCAST_CHANNELS.with(|channels| {
             channels
-                .borrow()
-                .iter()
-                .filter_map(|(channel_id, state)| {
-                    (!state.closed && !state.inbox.is_empty())
-                        .then_some((*channel_id, state.object_bits))
-                })
-                .collect()
+                .borrow_mut()
+                .values_mut()
+                .find_map(|state| state.inbox.pop_front().map(|msg| (state.object_bits, msg)))
         });
-        let mut next: Option<BroadcastDispatch> = None;
-        for (channel_id, target_bits) in candidates {
-            let handler_cb = object_event_handler(target_bits, "onmessage");
-            next = BROADCAST_CHANNELS.with(|channels| {
-                let mut channels = channels.borrow_mut();
-                let state = channels.get_mut(&channel_id)?;
-                if state.closed || (state.message_event_cbs.is_empty() && handler_cb.is_none()) {
-                    return None;
-                }
-                state.inbox.pop_front().map(|msg| {
-                    let event_cbs = state.message_event_cbs.clone();
-                    state.message_event_cbs.retain(|listener| !listener.once);
-                    BroadcastDispatch {
-                        target_bits: state.object_bits,
-                        event_cbs,
-                        handler_cb,
-                        msg,
-                    }
-                })
-            });
-            if next.is_some() {
-                break;
-            }
+        let Some((target_bits, msg)) = next else {
+            break;
+        };
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(f64::from_bits(target_bits));
+        let value = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&msg) });
+        let event = perry_runtime::event_target_hook_slots::node_message_event(value, None);
+        let event = scope.root_nanbox_f64(event);
+        unsafe {
+            perry_runtime::event_target_hook_slots::dispatch_event(
+                perry_runtime::value::js_nanbox_get_pointer(target.get_nanbox_f64())
+                    as *mut perry_runtime::ObjectHeader,
+                event.get_nanbox_f64(),
+            );
         }
-        match next {
-            Some(dispatch) => {
-                let scope = perry_runtime::gc::RuntimeHandleScope::new();
-                let target = scope.root_nanbox_f64(f64::from_bits(dispatch.target_bits));
-                let event_cbs = dispatch
-                    .event_cbs
-                    .into_iter()
-                    .map(|listener| scope.root_nanbox_f64(f64::from_bits(listener.callback_bits)))
-                    .collect::<Vec<_>>();
-                let handler_cb = dispatch
-                    .handler_cb
-                    .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
-                let value =
-                    f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&dispatch.msg) });
-                let value = scope.root_nanbox_f64(value);
-                let event = perry_runtime::event_target_hook_slots::node_message_event(
-                    value.get_nanbox_f64(),
-                    None,
-                );
-                let event = scope.root_nanbox_f64(event);
-                if let Some(callback) = handler_cb {
-                    call_message_callback1(
-                        callback.get_nanbox_f64().to_bits(),
-                        target.get_nanbox_f64().to_bits(),
-                        event.get_nanbox_f64(),
-                    );
-                }
-                for callback in event_cbs {
-                    call_message_callback1(
-                        callback.get_nanbox_f64().to_bits(),
-                        target.get_nanbox_f64().to_bits(),
-                        event.get_nanbox_f64(),
-                    );
-                }
-                dispatched += 1;
-            }
-            None => break,
-        }
+        dispatched += 1;
     }
 
     // Fire `close` callbacks once for newly-closed ports.
@@ -386,30 +329,10 @@ pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
         return 1;
     }
 
-    let broadcast_pending = BROADCAST_CHANNELS.with(|channels| {
-        channels.borrow().values().any(|state| {
-            !state.closed && !state.inbox.is_empty() && !state.message_event_cbs.is_empty()
-        })
-    });
-    if broadcast_pending {
-        return 1;
-    }
-
-    let broadcast_onmessage_targets: Vec<u64> = BROADCAST_CHANNELS.with(|channels| {
+    BROADCAST_CHANNELS.with(|channels| {
         channels
             .borrow()
             .values()
-            .filter_map(|state| {
-                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
-            })
-            .collect()
-    });
-    if broadcast_onmessage_targets
-        .into_iter()
-        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
-    {
-        1
-    } else {
-        0
-    }
+            .any(|state| !state.inbox.is_empty()) as i32
+    })
 }
