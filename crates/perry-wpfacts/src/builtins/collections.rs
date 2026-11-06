@@ -433,15 +433,9 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     ret_tok(m, call, it);
                 }
                 Some("flatMap") => {
-                    // The callback's results are iterated in turn.
-                    let inner = m.node_l("flatmap-inner");
-                    m.cons(
-                        r,
-                        Cons::Load {
-                            key: Key::any(),
-                            dst: inner,
-                        },
-                    );
+                    // The callback's results are iterated in turn
+                    // (GetIteratorFlattenable): what iterating them yields.
+                    let inner = iterate(m, call, r);
                     let it = iter_over(m, call, members::ANY_ITERATOR, inner);
                     ret_tok(m, call, it);
                 }
@@ -631,18 +625,15 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
         // on every iterable).
         Some("next" | "return" | "throw") => {}
+        // A spread argument supplies its elements, never a member a
+        // computed key could name.
         Some("unshift") => {
             for &a in &c.args {
                 m.edge(a, elems);
             }
+            let key = m.elem_key();
             for &s in &c.spread {
-                m.cons(
-                    s,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: elems,
-                    },
-                );
+                m.cons(s, Cons::Load { key, dst: elems });
             }
             ret_prim(m, call, prim::NUM);
         }
