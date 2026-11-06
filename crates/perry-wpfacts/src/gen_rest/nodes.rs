@@ -123,13 +123,23 @@ impl<'a> Gen<'a> {
         src: NodeId,
     ) -> NodeId {
         let tm = self.new_arr_template(mi, what);
-        crate::builtins::array_species(&mut self.m, tm, src);
+        let fresh = crate::builtins::array_species(&mut self.m, tm, src);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {
             self.m.edge(e, fa);
         }
-        self.tok_node(t)
+        let arr = self.tok_node(t);
+        let Some(sc) = self.m.tmpls[tm as usize].species.filter(|_| fresh) else {
+            return arr;
+        };
+        // ArraySpeciesCreate's `new C(length)` of a program species `C`.
+        let num = self.prim_node(prim::NUM);
+        let (mc, made) = self.new_call(ThisArg::Undef, vec![num], vec![]);
+        let out = self.tmp("species-array");
+        self.m.edge(arr, out);
+        crate::builtins::construct_into(&mut self.m, sc, mc, t, made, out);
+        out
     }
 
     /// A builtin iterator object of kind `what` (`builtins::ITERATOR_KIND`
