@@ -150,16 +150,17 @@ impl<'a> Gen<'a> {
             match arg {
                 CallArg::Expr(e) => a.push(self.expr(fx, e)),
                 CallArg::Spread(e) => {
+                    // The argument list of a spread (CreateListFromIterable,
+                    // ECMA-262 13.3.8.1): what iterating `v` yields, as the
+                    // elements of a list. A call site's spread entry is read
+                    // at its elements, whatever made it.
                     let v = self.expr(fx, e);
-                    let r = self.m.reason("spread argument iteration");
-                    self.m.cons(
-                        v,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::Iterate,
-                        },
-                    );
-                    s.push(v);
+                    let tm = self.new_arr_birth(fx.module, "spread-args", true);
+                    let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                    let fa = self.m.field_any(t);
+                    let it = self.iterate(v);
+                    self.m.edge(it, fa);
+                    s.push(self.tok_node(t));
                 }
             }
         }
