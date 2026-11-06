@@ -852,7 +852,7 @@ pub(crate) fn class_accessor_decl_bytes(class_id: u32, name: &[u8]) -> Option<Ac
 }
 
 /// Index of the first member of `decl` the definition has not named.
-fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
+pub(super) fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
     if !decl.has_computed_members() {
         return None;
     }
@@ -1207,7 +1207,12 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
     let mut installed: Vec<Vec<u8>> = Vec::new();
+    let owner = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     for member in &decl.members()[index..end] {
+        if super::parent_static::install_prototype_symbol_member(&proto_h, class_id, &owner, member)
+        {
+            continue;
+        }
         let MemberName::Str(name) = class_member_name(class_id, member) else {
             continue;
         };
