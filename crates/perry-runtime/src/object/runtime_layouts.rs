@@ -421,6 +421,43 @@ mod spawn_sync_result {
 pub(crate) use spawn_sync_result::spawn_sync_slot;
 pub use spawn_sync_result::SPAWN_SYNC_RESULT;
 
+/// A dgram socket's `'message'` event `rinfo`: node builds it as the literal
+/// `{ address, family, port, size }`, so it is born on that final shape in one
+/// allocation and its values are stored by slot. It stays an ordinary,
+/// mutable object of `Object.prototype`. The family is one of two static
+/// atoms; the address is a fresh string per message, as in node.
+mod dgram_rinfo {
+    use super::record_atoms::*;
+    use super::*;
+    runtime_atom!(DGRAM_ATOM_IPV4, "IPv4", "49507634");
+    runtime_atom!(DGRAM_ATOM_IPV6, "IPv6", "49507636");
+    runtime_layout!(
+        DGRAM_RINFO,
+        0x4447_5249,
+        0,
+        crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+        [RECORD_ATOM_4, RECORD_ATOM_17, RECORD_ATOM_8, RECORD_ATOM_26,],
+        realm = ["node:dgram", "node:dgram.createSocket", "node:dgram.Socket"]
+    );
+    /// The slots of [`DGRAM_RINFO`], in node's key order.
+    pub(crate) mod dgram_rinfo_slot {
+        pub(crate) const ADDRESS: usize = 0;
+        pub(crate) const FAMILY: usize = 1;
+        pub(crate) const PORT: usize = 2;
+        pub(crate) const SIZE: usize = 3;
+    }
+    /// The static `"IPv4"` / `"IPv6"` atom string.
+    pub(crate) fn family_atom(ipv6: bool) -> *const StringHeader {
+        if ipv6 {
+            DGRAM_ATOM_IPV6.string
+        } else {
+            DGRAM_ATOM_IPV4.string
+        }
+    }
+}
+pub use dgram_rinfo::DGRAM_RINFO;
+pub(crate) use dgram_rinfo::{dgram_rinfo_slot, family_atom as dgram_family_atom};
+
 /// Allocate a fixed record with every declared property present, including undefined values.
 ///
 /// # Safety
@@ -1011,6 +1048,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     if same(name, "ARRAY_PROTOTYPE_NAMED") {
         return crate::codegen_abi::native_layout_word("ARRAY_PROTOTYPE_NAMED", 0);
+    }
+    if same(name, "DGRAM_RINFO") {
+        return crate::codegen_abi::native_layout_word("DGRAM_RINFO", 0);
     }
     if same(name, "DUPLEX") {
         return crate::codegen_abi::native_layout_word("DUPLEX", 1);

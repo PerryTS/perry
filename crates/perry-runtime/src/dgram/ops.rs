@@ -384,7 +384,12 @@ pub(crate) fn send_impl(socket: f64, args: &[f64]) -> f64 {
     let source_port = hidden_port(socket, KEY_PORT);
     if let Some(target) = lookup_bound_socket(&address, port, socket) {
         if !is_truthy_hidden(target, KEY_CLOSED) {
-            let rinfo = build_rinfo(&source_address, &source_family, source_port, size);
+            let rinfo = build_rinfo(
+                source_address.as_bytes(),
+                source_family == "IPv6",
+                source_port,
+                size,
+            );
             emit_event(target, "message", &[message, rinfo]);
         }
     }
