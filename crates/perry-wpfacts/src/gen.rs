@@ -1135,7 +1135,10 @@ impl<'a> Gen<'a> {
         let mut mapped = None;
         for p in params {
             let n = self.local(mi, p.id);
-            if p.is_rest {
+            // `arguments` beside a user rest parameter is no rest itself
+            // (the HIR appends it after `...r`), but the same object: every
+            // argument, never a positional one.
+            if p.is_rest || p.arguments_object.is_some() {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = match &p.arguments_object {
@@ -1166,7 +1169,9 @@ impl<'a> Gen<'a> {
                         mapped = Some((fa, self.m.all_fields(at)));
                     }
                 }
-                rest = Some(n);
+                if p.is_rest {
+                    rest = Some(n);
+                }
             } else if rest.is_some() && params.iter().all(|q| q.arguments_object.is_none()) {
                 // A parameter after a rest parameter is a capture slot the
                 // HIR appends to a class constructor (`...a, cap`): the rest
