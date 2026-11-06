@@ -1705,6 +1705,7 @@ impl<'a> Gen<'a> {
     /// no parent value (its `extends` resolved statically, or none) cannot
     /// take one: its instances escape and `v` is sunk, as before.
     pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
+        let native = tm.and_then(|tm| self.native_parent_value(tm));
         match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
             Some((tm, (pv, _))) => {
                 self.m.edge(v, pv);
@@ -1720,6 +1721,28 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, chk);
                 self.m.parent_checks.push((tm, chk));
             }
+            // A class linked by name to a built-in parent (`extends Error`):
+            // `super()` runs the evaluated `extends` value with `this` = the
+            // instance. The native summary (`native_parent_ctor`) is that run
+            // only when the value is the constructor the global object
+            // declares under the name; whether it is depends on what the
+            // solve finds (a program or an unseen module may write the
+            // global, rule G), and anything else runs before the solve ends,
+            // so the value is checked during the solve (`Cons::NativeParent`).
+            None if native.is_some() => {
+                let tm = tm.unwrap();
+                let chk = self.m.node_l("native-parent-check");
+                self.m.edge(v, chk);
+                let reason = self.m.reason(why);
+                self.m.cons(
+                    chk,
+                    Cons::NativeParent {
+                        tm,
+                        expected: native.unwrap(),
+                        reason,
+                    },
+                );
+            }
             None => {
                 self.to_sink(v, why);
                 if let Some(tm) = tm {
@@ -1730,6 +1753,19 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    /// The value of the global object's declared constructor that class `tm`'s
+    /// built-in parent names (`extends Error`: the realm's `Error`); `None`
+    /// when the class has no built-in parent or the global declares none
+    /// under that name (`EventEmitter` is a module export).
+    fn native_parent_value(&mut self, tm: TmplId) -> Option<Tok> {
+        let (_, name) = self.m.tmpls[tm as usize].native_parent.clone()?;
+        let identity = self
+            .m
+            .namespace_property(BuiltinNs::GlobalThis, &name)?
+            .native?;
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity })))
     }
 
     /// After the bodies: a parent value no evaluated parent fed takes the

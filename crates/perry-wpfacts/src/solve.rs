@@ -1458,6 +1458,11 @@ impl Model {
             Cons::PlainKey { origin, act } => format!("plainkey {n} {origin} {act:?}"),
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
+            Cons::NativeParent {
+                tm,
+                expected,
+                reason,
+            } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Arith { dst } => format!("arith {n} {dst}"),
             Cons::Plus { str, num } => format!("plus {n} {str} {num}"),

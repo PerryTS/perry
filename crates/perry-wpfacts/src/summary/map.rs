@@ -222,6 +222,15 @@ pub fn map_cons(
         ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
+        NativeParent {
+            tm,
+            expected,
+            reason,
+        } => NativeParent {
+            tm,
+            expected,
+            reason,
+        },
         IdxLoad { idx, dst, shape } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
@@ -443,6 +452,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | BirthField { .. }
             | CreateProto { .. }
             | NewTargetHard { .. }
+            | NativeParent { .. }
             | ShareBuffer { .. }
             | AnnexBDefine { .. }
             | AnnexBLookup { .. }

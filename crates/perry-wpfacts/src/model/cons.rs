@@ -302,6 +302,17 @@ pub enum Cons {
     IterNext { dst: NodeId },
     /// The node holds `Reflect.construct` new-targets (E11).
     NewTargetHard { reason: u32 },
+    /// The node is the evaluated `extends` value of class `tm`, linked by
+    /// name to a built-in parent whose summary `super()` runs: any value
+    /// other than `expected`, the global object's declared constructor
+    /// (⊤, a program-written global, `null`), runs as the parent
+    /// constructor with `this` = the instance: it escapes, and the instance
+    /// escapes with hard E11.
+    NativeParent {
+        tm: TmplId,
+        expected: Tok,
+        reason: u32,
+    },
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
@@ -549,6 +560,7 @@ impl Cons {
             Cons::PlainKey { .. } => "plainkey",
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
+            Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
