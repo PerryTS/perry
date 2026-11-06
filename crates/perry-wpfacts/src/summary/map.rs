@@ -46,6 +46,8 @@ pub fn map_cons(
             this,
         },
         New { call } => New { call: k(call) },
+        NewProgram { call } => NewProgram { call: k(call) },
+        FromArrayLike { dst } => FromArrayLike { dst: n(dst) },
         ReflectNew { call, new_target } => ReflectNew {
             call: k(call),
             new_target: n(new_target),
@@ -409,6 +411,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Store { .. }
             | Call { .. }
             | New { .. }
+            | NewProgram { .. }
+            | FromArrayLike { .. }
             | ReflectNew { .. }
             | NewNamed { .. }
             | SuperCtor { .. }
@@ -479,6 +483,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | Arith { dst }
         | ArrayLenArg { dst }
         | IterNext { dst }
+        | FromArrayLike { dst }
         | ProtoOf { dst }
         | ProtoValues { dst } => Some(dst),
         _ => None,

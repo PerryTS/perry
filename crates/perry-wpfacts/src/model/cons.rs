@@ -71,6 +71,12 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// The node holds the constructor a built-in makes its result with
+    /// (the `this` of `Array.from`/`Array.of`, an array's species): a
+    /// program constructor (a class or function of the program's code) is
+    /// constructed by `call`. The realm's own constructors, `%Array%` among
+    /// them, make the built-in's own array, which the built-in's rule makes.
+    NewProgram { call: CallId },
     /// The target of Reflect.construct; allocation is selected by new_target.
     ReflectNew { call: CallId, new_target: NodeId },
     /// New-target values paired with one target, rebuilt from ReflectNew.
@@ -300,6 +306,11 @@ pub enum Cons {
     PlainKey { origin: Tok, act: ChainAct },
     /// dst ⊇ the `next` method of each iterator in the node.
     IterNext { dst: NodeId },
+    /// The node holds the source of `Array.from`: a program object whose
+    /// `@@iterator` may be nullish is read as an array-like (ECMA-262
+    /// 23.1.2.1 step 5: `length`, then each index), its elements into
+    /// `dst`. Iteration is `Gen::iterate`'s.
+    FromArrayLike { dst: NodeId },
     /// The node holds `Reflect.construct` new-targets (E11).
     NewTargetHard { reason: u32 },
     /// The node is the evaluated `extends` value of class `tm`, linked by
@@ -511,6 +522,8 @@ impl Cons {
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::NewProgram { .. } => "newprogram",
+            Cons::FromArrayLike { .. } => "fromarraylike",
             Cons::ReflectNew { .. } => "reflectnew",
             Cons::ReflectNewTarget { .. } => "reflectnewtarget",
             Cons::NewNamed { .. } => "newnamed",

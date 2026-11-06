@@ -11,9 +11,11 @@
 //! form this interpreter does not run keeps today's path.
 //!
 //! What each verb does to the graph (a slot is a set of value nodes):
-//! - `reads(slot)`: nothing. A read of the program's getters and traps on
-//!   the slot is the solver's ordinary chain reach of the receiver, as the
-//!   hand models had it.
+//! - `reads(slot)`: [[Get]] of what the slot names. A slot under a field
+//!   step (`field(this, length)`) is a load of that key: the getter under
+//!   it, own or on the chain, runs with the slot's object as `this`. A bare
+//!   slot or its elements: the solver's ordinary chain reach of the
+//!   receiver, as the hand models had it.
 //! - `coerce(slot, P)`: `Cons::Implicit { proto: P }` on the slot's node.
 //! - `calls(callee, this, args)`: `cb_call` with the operands; its result
 //!   node is `returned(N)` for the N-th declared call. A callee argument the
@@ -22,8 +24,12 @@
 //!   (an edge; a spread argument's values are its elements, an
 //!   argument's `elems` a load of any key).
 //! - `stores(fresh)`: nothing beyond the fresh result.
-//! - `returns(v)`: a primitive, the receiver token, a slot's values, or a
-//!   fresh array born at the call site (`site_tmpl`) holding its `elems`.
+//! - `returns(v)`: a primitive, the receiver token, a slot's values, a
+//!   fresh array born at the call site (`site_tmpl`) holding its `elems`,
+//!   or the bound function `bound` makes (`bound_into_result`).
+//!
+//! A slot's field step is [[Get]] wherever the slot is used: its value is
+//! what the load reads.
 
 use super::collections::cb_call;
 use super::*;
@@ -66,13 +72,20 @@ fn by_proto() -> &'static ByProto {
 /// The declaration of `fam`'s prototype method `name`, when the runtime
 /// declares its effects, not `open`, in forms `run_native` runs.
 pub(super) fn declared(fam: Family, name: &str) -> Option<&'static RealmEntry> {
-    let e = *by_proto().get(realm_proto(fam)?)?.get(name)?;
+    declared_at(realm_proto(fam)?, name)
+}
+
+/// The declaration of the native `owner.name` (`Function.prototype.bind`),
+/// when the runtime declares its effects in forms `run_native` runs.
+pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry> {
+    let e = *by_proto().get(owner)?.get(name)?;
     interpretable(e.effects).then_some(e)
 }
 
 /// Every effect is one `run_native` runs: not `open`, no species
-/// construction, fresh objects only `Array.prototype` arrays, slots at most
-/// one `elems` step deep over the receiver or one argument (no field steps).
+/// construction, fresh objects only `Array.prototype` arrays, `bound` only
+/// as the result, slots at most one `elems` or `field` step deep over the
+/// receiver or one argument.
 pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
     fn slot(s: &RealmSlot) -> bool {
         matches!(
@@ -80,7 +93,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             (_, [])
                 | (
                     RealmSlotRoot::This | RealmSlotRoot::Arg(_),
-                    [RealmSlotStep::Elems]
+                    [RealmSlotStep::Elems | RealmSlotStep::Field(_)]
                 )
         )
     }
@@ -91,7 +104,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmOperand::Fresh { proto, elems } => {
                 proto == "Array.prototype" && elems.iter().all(slot)
             }
-            RealmOperand::Species { .. } => false,
+            RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(operand),
         }
     }
@@ -104,6 +117,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
+            RealmEffect::Returns(RealmOperand::Bound) => true,
             RealmEffect::Returns(o) => operand(o),
             RealmEffect::Open => false,
         })
@@ -205,6 +219,25 @@ impl Run {
                     ..Vals::default()
                 }
             }
+            // A field: [[Get]] of the key on each value (a spread list's
+            // elements included), which runs its getter with the value as
+            // `this`.
+            (r, [RealmSlotStep::Field(k)]) => {
+                let key = Key::Named(m.atom(k));
+                let dst = m.node_l("native-get");
+                let root = self.root(m, r);
+                let mut vals = root.nodes;
+                for s in root.spread {
+                    vals.push(spread_elems(m, s));
+                }
+                for n in vals {
+                    m.cons(n, Cons::Load { key, dst });
+                }
+                Vals {
+                    nodes: vec![dst],
+                    ..Vals::default()
+                }
+            }
             _ => unreachable!("interpretable() refused this slot"),
         }
     }
@@ -254,6 +287,7 @@ impl Run {
                 out
             }
             RealmOperand::Species { .. } => unreachable!("interpretable() refused species"),
+            RealmOperand::Bound => unreachable!("interpretable() takes bound as a result only"),
         }
     }
 
@@ -298,6 +332,7 @@ impl Run {
                     self.returns(m, u);
                 }
             }
+            RealmOperand::Bound => super::collections::bound_into_result(m, self.t, self.call),
             RealmOperand::Species { .. } => unreachable!("interpretable() refused species"),
         }
     }
@@ -353,7 +388,14 @@ pub(super) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call
     };
     for e in entry.effects.iter() {
         match e {
-            RealmEffect::Reads(_) | RealmEffect::StoresFresh => {}
+            RealmEffect::Reads(ss) => {
+                for s in ss.iter() {
+                    if matches!(s.steps[..], [RealmSlotStep::Field(_)]) {
+                        run.slot(m, s);
+                    }
+                }
+            }
+            RealmEffect::StoresFresh => {}
             RealmEffect::Coerce { slot, protocol: p } => {
                 let v = run.slot(m, slot);
                 let reason = m.reason(&format!("{} coerces its {}", entry.name, slot_text(slot)));
