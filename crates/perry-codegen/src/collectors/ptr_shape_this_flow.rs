@@ -346,25 +346,8 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 args.iter().all(|a| self.expr_this_safe(a, ctx))
             }
             Expr::PrivateBrandCheck { object, .. } if matches!(object.as_ref(), Expr::This) => true,
-            // `this instanceof C` against a static class only walks the
-            // prototype chain; it neither stores nor passes `this`. (The
-            // `this.F` hoist versions its loop on exactly this test.)
-            Expr::InstanceOf {
-                expr,
-                ty_expr: None,
-                ..
-            } if matches!(expr.as_ref(), Expr::This) => true,
-            // Reading one of the chain's own methods as a value: the hoist's
-            // `this.m === C.prototype.m` dispatch check. A method read hands
-            // back the function, not `this`.
-            Expr::PropertyGet {
-                object, property, ..
-            } if matches!(object.as_ref(), Expr::This)
-                && !self.fields.contains(property)
-                && self.methods.contains_key(property) =>
-            {
-                true
-            }
+            // The `this.F` hoist's compile-time version test: reads nothing.
+            Expr::ThisProvenClass(_) => true,
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => self.fields.contains(property),

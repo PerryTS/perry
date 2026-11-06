@@ -242,16 +242,17 @@ pub(crate) fn emit_string_addref_if_heap_string(ctx: &mut FnCtx<'_>, value: &str
     ctx.current_block = done_idx;
 }
 
-/// `"lit"`, or a conditional choosing between such: every pool literal lowers
-/// to the immortal image string of its handle global. `PERRY_UNBOXED_CLASS_FIELDS=0`
-/// answers false.
-pub(crate) fn expr_is_pool_string_literal(value: &Expr) -> bool {
+/// `"lit"` the string pool atomises (non-empty UTF-8 of at most
+/// `INTERN_MAX_BYTE_LEN` = 64 bytes, perry-runtime `string/intern.rs`), or a
+/// conditional choosing between such. `PERRY_UNBOXED_CLASS_FIELDS=0` answers
+/// false.
+pub(crate) fn expr_is_pool_atom_literal(value: &Expr) -> bool {
     if crate::stmt::this_field_fast_off() {
         return false;
     }
     fn walk(value: &Expr) -> bool {
         match value {
-            Expr::String(_) => true,
+            Expr::String(s) => !s.is_empty() && s.len() <= 64,
             Expr::Conditional {
                 then_expr,
                 else_expr,
