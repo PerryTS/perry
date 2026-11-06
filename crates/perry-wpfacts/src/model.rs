@@ -662,6 +662,8 @@ pub enum NativeMiss {
     Global(NodeId, NodeId),
     /// A method call on a primitive receiver of these kinds.
     PrimCall(u16, CallId),
+    /// `new Name(...)` of a declared global constructor.
+    New(CallId),
     /// Descriptor metadata, without reading or calling the property.
     Lookup(NodeId),
 }
