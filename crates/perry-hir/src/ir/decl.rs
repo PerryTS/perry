@@ -323,6 +323,20 @@ pub fn is_cjs_record_export(name: &str) -> bool {
 }
 
 impl Class {
+    /// The class has heritage and no constructor of its own: it runs the
+    /// default derived constructor `constructor(...a) { super(...a) }`, and
+    /// its field initializers are the registered `<class>_default_fields`
+    /// body. A `new` of such a class may be constructed through the class
+    /// value as written (`new` of a specialization constructs the class it
+    /// was specialized from; codegen `super_constructor::new`).
+    pub fn is_default_derived(&self) -> bool {
+        self.constructor.is_none()
+            && (self.extends_name.is_some()
+                || self.extends_expr.is_some()
+                || self.extends.is_some()
+                || self.native_extends.is_some())
+    }
+
     /// Some member's key is evaluated by ClassDefinitionEvaluation: the one
     /// question "does this class have keys the compiler cannot name". A member
     /// keyed by a known symbol is an ordinary member and does not count.

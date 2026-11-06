@@ -225,11 +225,7 @@ pub(super) fn class_declaration_globals(
             .map_or("null".to_owned(), |_| {
                 format!("@perry_family_variants_{cid}")
             });
-        let default_derived = class.constructor.is_none()
-            && (class.extends_name.is_some()
-                || class.extends_expr.is_some()
-                || class.extends.is_some()
-                || class.native_extends.is_some());
+        let default_derived = class.is_default_derived();
         let initializer = if default_derived {
             format!(
                 "@{}",
