@@ -38,7 +38,8 @@ fn active(main: &str) -> (Vec<String>, usize) {
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     let list = [("t.ts".to_string(), &hir)];
     let pf = crate::compute(&list, &FactsConfig::default());
-    let on = pf.active_bodies.as_ref().expect("activated");
+    assert!(pf.body_reach.complete, "activated");
+    let on = &pf.body_reach.bodies;
     let id_of = |e: &str| hir.functions.iter().find(|f| f.name == e).map(|f| f.id);
     let runs = |id: u32| on.iter().any(|(_, i, _)| *i == id);
     let exports: Vec<String> = EXPORTS

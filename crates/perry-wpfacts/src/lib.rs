@@ -153,6 +153,25 @@ pub struct Stats {
     pub builtin_fields: (usize, Vec<(String, usize)>, [u64; 4]),
 }
 
+/// Stable body identity at the canonical HIR boundary: canonical module
+/// path, HIR function/body id, and the existing synthetic-context name.
+/// Ordinary bodies use an empty name; synthetic holding contexts preserve
+/// their existing name identity. No model node, frame or instance id enters
+/// this identity. Module indices are remapped to paths when exporting it.
+pub type BodyIdentity = (String, u32, String);
+
+/// The single exported reach projection: admitted/walked bodies together
+/// with synthetic contexts holding sites, produced by existing activation.
+/// An interrupted solve (including any bound or early stop) is incomplete.
+/// Consumers must treat an incomplete projection as everything active.
+/// Absence is useful only for actual bodies of the same canonical HIR;
+/// unknown or newly minted identities never establish inactivity.
+#[derive(Clone, Debug, Default)]
+pub struct BodyReach {
+    pub bodies: std::collections::BTreeSet<BodyIdentity>,
+    pub complete: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ProgramFacts {
     /// Dump-only JSON records, scoped by emitting analysis-unit identity.
@@ -166,10 +185,9 @@ pub struct ProgramFacts {
     pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
-    /// DECISIONS 225: the bodies the whole program walked, the ones that
-    /// can run (module path, `SiteFacts::bodies` identity); `None`: every
-    /// body is walked.
-    pub active_bodies: Option<std::collections::BTreeSet<(String, u32, String)>>,
+    /// Completed whole-program reach, or an incomplete conservative view
+    /// when activation was unavailable or the solve stopped early.
+    pub body_reach: BodyReach,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
@@ -1933,15 +1951,25 @@ fn compute_act<'a>(
     };
     // Every body the analysis walked, and every body holding a site (a
     // context generation enters without a walk of its own).
-    let active_bodies = g.m.act.as_ref().map(|a| {
-        let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
-        a.walked
-            .iter()
-            .cloned()
-            .chain(holding)
-            .filter_map(|(mi, id, name)| Some((sorted.get(mi as usize)?.0.to_owned(), id, name)))
-            .collect()
-    });
+    let bodies =
+        g.m.act
+            .as_ref()
+            .map(|a| {
+                let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
+                a.walked
+                    .iter()
+                    .cloned()
+                    .chain(holding)
+                    .filter_map(|(mi, id, name)| {
+                        Some((sorted.get(mi as usize)?.0.to_owned(), id, name))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    let body_reach = BodyReach {
+        bodies,
+        complete: g.m.act.is_some() && !stats.aborted,
+    };
     let fnproto_borrow_written = if stats.aborted {
         Some("solve aborted".to_string())
     } else {
@@ -1953,7 +1981,7 @@ fn compute_act<'a>(
         diagnostics,
         diagnostic_sites,
         activation,
-        active_bodies,
+        body_reach,
         super_unrelinked,
         fnproto_bind_written,
         array_iteration_written,

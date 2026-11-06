@@ -123,7 +123,8 @@ fn a_default_every_caller_overrides_never_imports() {
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     let pf = crate::compute(&list, &FactsConfig::default());
-    let on = pf.active_bodies.as_ref().expect("activated");
+    assert!(pf.body_reach.complete, "activated");
+    let on = &pf.body_reach.bodies;
     for (path, id) in [("gen.ts", 0), ("gen.ts", 1), ("fmtlib.ts", 0)] {
         assert!(
             !on.iter().any(|(p, i, _)| p == path && *i == id),
@@ -162,9 +163,8 @@ fn oxmark_runs(src: &str) -> bool {
         .find(|f| f.name == "oxmark")
         .expect("oxmark")
         .id;
-    pf.active_bodies
-        .as_ref()
-        .expect("activated")
+    assert!(pf.body_reach.complete, "activated");
+    pf.body_reach.bodies
         .iter()
         .any(|(_, id, _)| *id == ox)
 }
@@ -258,7 +258,8 @@ fn a_module_only_an_uncalled_body_imports_never_runs() {
     let live = activation.live_dynamic_imports().expect("in bound");
         assert_eq!(live.contains(&("main.ts".to_string(), "./lazy.js".to_string())), loads, "{main}");
         let pf = crate::compute(&list, &FactsConfig::default());
-        let on = pf.active_bodies.as_ref().expect("activated");
+        assert!(pf.body_reach.complete, "activated");
+        let on = &pf.body_reach.bodies;
         let init = on.iter().any(|(p, id, name)| p == "lazy.ts" && *id == u32::MAX && name.ends_with(":<init>"));
         assert_eq!(init, loads, "{main}");
     }
@@ -294,7 +295,8 @@ fn a_root_runs_whatever_imports_it() {
             ..FactsConfig::default()
         };
         let pf = crate::compute(&list, &cfg);
-        let on = pf.active_bodies.as_ref().expect("activated");
+        assert!(pf.body_reach.complete, "activated");
+        let on = &pf.body_reach.bodies;
         let init = on
             .iter()
             .any(|(p, id, name)| p == "lazy.ts" && *id == u32::MAX && name.ends_with(":<init>"));

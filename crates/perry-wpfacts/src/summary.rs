@@ -9,13 +9,15 @@
 //! `D` nodes are marked `obs`, receive every call's arguments, and only
 //! run read rules (read-site facts), never effects.
 //!
-//! Whether a function is summarized follows from its body alone; nothing
-//! depends on a size, count or depth.
+//! The batch planner chooses slices, capture ownership and refusals over
+//! the whole model. The body encoder receives those choices through an
+//! adapter; moving encoding does not make the planner body-local.
 use crate::delta::Tokens;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 use std::rc::Rc;
 
+pub(crate) mod body;
 mod build;
 use build::build_summaries;
 
@@ -1310,5 +1312,5 @@ impl Model {
 
 #[path = "summary/compose.rs"]
 mod compose;
+pub use body::compress;
 use compose::compose;
-pub use compose::compress;

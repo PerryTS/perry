@@ -1933,7 +1933,7 @@ pub struct Act {
     pub fixed: bool,
     /// The bodies the analysis after the activation pass walked (by
     /// `Model::act_key`): what can run, module bodies and static
-    /// initializers included (`ProgramFacts::active_bodies`).
+    /// initializers included (`ProgramFacts::body_reach`).
     pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
     /// Every function the activation pass generated (by `Model::act_key`).
     /// A body outside it is one a later pass minted: it is walked (sound),
