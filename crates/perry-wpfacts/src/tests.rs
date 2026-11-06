@@ -1802,6 +1802,7 @@ mod constructor_values;
 mod date_methods;
 mod delegate_step;
 mod generator_results;
+mod generator_resume_arguments;
 mod helper_protocols;
 mod host_helpers;
 mod key_shape;
