@@ -173,6 +173,7 @@ pub fn map_cons(
             origin,
             act: act_map(act, &mut n, &mut k),
         },
+        UnnamedSet { target } => UnnamedSet { target },
         PlainKey { origin, act } => PlainKey {
             origin,
             act: act_map(act, &mut n, &mut k),

@@ -73,7 +73,7 @@ impl<'a> Gen<'a> {
             None => self.m.atom(crate::STAR_KEY),
         };
         if key.is_some() {
-            self.m.accessor_atoms.insert(ka);
+            self.m.add_accessor_atom(ka);
         }
         for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
             // A literal descriptor's own get/set (`accessor_literal`).

@@ -135,3 +135,66 @@ console.log(g(1));
 "#,
     );
 }
+
+/// A literal getter on an object given as a prototype by value runs when a
+/// read reaches it through the chain, whichever the analysis meets first:
+/// the read of the child or the literal that defines the getter.
+#[test]
+fn literal_getter_on_a_given_prototype_runs() {
+    runs(
+        "Object.create",
+        r#"
+function hit() { return 1; }
+const p = { get k() { return hit(); } };
+const c = Object.create(p);
+console.log(c.k);
+"#,
+    );
+    runs(
+        "setPrototypeOf",
+        r#"
+function hit() { return 1; }
+const p = { get k() { return hit(); } };
+const c: any = {};
+Object.setPrototypeOf(c, p);
+console.log(c.k);
+"#,
+    );
+    runs(
+        "method call through the getter",
+        r#"
+function hit() { return 1; }
+const p = { get m() { hit(); return function () { return 2; }; } };
+const c = Object.create(p);
+console.log(c.m());
+"#,
+    );
+    runs(
+        "inherited toJSON getter",
+        r#"
+function hit() { return 1; }
+const p = { get toJSON() { hit(); return function (this: any) { return this.answer; }; } };
+const c: any = Object.create(p);
+c.answer = 83;
+console.log(JSON.stringify(c));
+"#,
+    );
+    stays(
+        "another key of the prototype",
+        r#"
+function hit() { return 1; }
+const p = { get k() { return hit(); }, get j() { return 2; } };
+const c = Object.create(p);
+console.log(c.j);
+"#,
+    );
+    stays(
+        "a getter literal that is no prototype of the read",
+        r#"
+function hit() { return 1; }
+const p = { get k() { return hit(); } };
+const c = Object.create({ j: 1 });
+console.log(c.k, typeof p);
+"#,
+    );
+}
