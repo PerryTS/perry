@@ -134,9 +134,8 @@ impl Model {
             if fresh.is_empty() {
                 continue;
             }
-            self.work += fresh.len() as u64;
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
+            self.charge_work(fresh.len() as u64);
+            if self.past_work_bound() {
                 return;
             }
             self.arg_readers
@@ -219,7 +218,7 @@ impl Model {
             (Some(_), Some(_)) => return,
         };
         for &(key, src, site) in ss {
-            self.work += 1;
+            self.charge_work(1);
             self.store_into(y, key, src, site);
         }
     }
@@ -396,7 +395,7 @@ impl Model {
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
             (&self.toks[t as usize], key)
         {
-            if builtins::global_user_key(&self.atoms[a as usize])
+            if builtins::global_user_key(self, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
                 let f = builtins::global_field(self, t, a);
@@ -778,7 +777,12 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        if !builtins::builtin_function(self, t) {
+        // Callable namespaces still expose their declared static keys to
+        // the runtime. Their program-owned fields use the function graph.
+        let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
+            if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
+        let program_field = matches!(key, Key::Named(a) if builtins::undeclared(self, t, a));
+        if !builtins::builtin_function(self, t) || (namespace && !program_field) {
             self.with_b(|m| builtins::tok_store(m, t, key, src));
         }
     }

@@ -354,6 +354,10 @@ class Solver:
         elif op == "top":
             for t in toks:
                 self.escape(t)
+        elif op == "runtimestore":
+            for t in toks:
+                if t != c[1]:
+                    self.escape(t)
         elif op == "hard":
             for t in toks:
                 self.mark_hard(t, c[1])
@@ -1111,6 +1115,8 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("mcall", key_of(s, a[1]), int(a[2]))))
         elif rel == "top":
             deferred.append((int(a[0]), ("top",)))
+        elif rel == "runtimestore":
+            deferred.append((int(a[0]), ("runtimestore", int(a[1]))))
         elif rel == "hard":
             deferred.append((int(a[0]), ("hard", a[1])))
         elif rel == "addskeys":

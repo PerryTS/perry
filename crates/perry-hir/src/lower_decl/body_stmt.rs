@@ -2112,12 +2112,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         // module-init for-of arm. `use_lazy_iter` implies
                         // `!is_await`, so the await arm is always the index path.
                         let item_expr = if for_of_stmt.is_await {
-                            let raw_item_expr = Expr::IndexGet {
-                                byte_offset: 0,
-                                byte_end: 0,
-                                object: Box::new(Expr::LocalGet(arr_id)),
-                                index: Box::new(Expr::LocalGet(idx_id)),
-                            };
+                            let raw_item_expr = Expr::synthetic_index_get(
+                                Box::new(Expr::LocalGet(arr_id)),
+                                Box::new(Expr::LocalGet(idx_id)),
+                            );
                             Expr::Await(Box::new(raw_item_expr))
                         } else {
                             if let Some(id) = binding_value {
@@ -2389,12 +2387,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Lower the body and prepend the key binding/assignment
             let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
-            let key_source = Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(keys_id)),
-                index: Box::new(Expr::LocalGet(idx_id)),
-            };
+            let key_source = Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(keys_id)),
+                Box::new(Expr::LocalGet(idx_id)),
+            );
             let binding_stmts =
                 crate::lower::for_head_binding_stmts(ctx, &head_binding, key_source, Type::String)?;
             for (i, stmt) in binding_stmts.into_iter().enumerate() {

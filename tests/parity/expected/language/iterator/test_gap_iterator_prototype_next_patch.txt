@@ -1,0 +1,73 @@
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot delete built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+A-refused TypeError,TypeError,TypeError,TypeError,TypeError,TypeError true
+A-forof 1,2,3
+A-spread 4,5
+A-from 6
+A-from-array 11,12
+A-call-spread 13,14
+A-multi-spread 15,16
+A-manual 7 8 true
+DEC 250: Cannot replace built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+D-map-refused TypeError,TypeError,TypeError,TypeError,TypeError,TypeError true
+D-map a=1,b=2
+D-map-spread [["z",5]]
+D-map-from [["y",6]]
+D-map-manual ["m",1] true
+DEC 250: Cannot replace built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+D-set-refused TypeError,TypeError,TypeError,TypeError,TypeError,TypeError true
+D-set 1,2
+D-set-from 3,4
+D-set-forof 5,6
+D-set-call-spread 7,8
+DEC 250: Cannot replace built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+E-refused TypeError,TypeError,TypeError,TypeError,TypeError,TypeError true
+E-string a,b
+E-string-from c,d
+E-string-forof a|😀|b|
+E-manual x y true
+DEC 250: Cannot replace built-in member %RegExpStringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %RegExpStringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %RegExpStringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %RegExpStringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %RegExpStringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %RegExpStringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+R-refused TypeError,TypeError,TypeError,TypeError,TypeError,TypeError true
+R-spread 1,2
+R-manual 3 true
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program
+DEC 250: Cannot delete built-in member %ArrayIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program
+G-array TypeError,TypeError [object Array Iterator]
+DEC 250: Cannot replace built-in member %MapIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %MapIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+G-map TypeError,TypeError [object Map Iterator]
+DEC 250: Cannot replace built-in member %SetIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %SetIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+G-set TypeError,TypeError [object Set Iterator]
+DEC 250: Cannot replace built-in member %StringIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %StringIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+G-string TypeError,TypeError [object String Iterator]
+DEC 250: Cannot replace built-in member %RegExpStringIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot delete built-in member %RegExpStringIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+G-regexp TypeError,TypeError [object RegExp String Iterator]
+F-added 1 1,2
+F-deleted false

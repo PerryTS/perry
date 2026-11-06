@@ -999,6 +999,11 @@ pub unsafe extern "C" fn js_string_register_property_atom(key: *const StringHead
                     return;
                 }
                 if (*existing).flags & PROPERTY_ATOM != 0 {
+                    debug_assert!(
+                        !is_program_atom(existing),
+                        "a program atom already owns {:?} at a different address",
+                        std::str::from_utf8(bytes)
+                    );
                     // A live data atom already owns this spelling. Keep canonical
                     // equality until it dies; source-name membership is immutable.
                     if !is_image_string(existing) {
@@ -1164,3 +1169,7 @@ mod seed_probe_tests {
         assert_eq!(table.slots.len(), capacity);
     }
 }
+
+#[cfg(test)]
+#[path = "early_realm_atom_tests.rs"]
+mod early_realm_atom_tests;

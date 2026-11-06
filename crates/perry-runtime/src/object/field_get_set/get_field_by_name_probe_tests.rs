@@ -159,6 +159,7 @@ fn by_name_inherited_and_absent_reads_follow_live_prototypes() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn plain_object_miss_skips_set_and_symbol_registries() {
     leaked_symbol("perry-7867-arm-symbol");

@@ -668,20 +668,6 @@ pub static CLASS_STATIC_METHOD_BIND_LENGTHS: ImageTable<
     RwLock<Option<HashMap<(u32, Vec<u8>), u32>>>,
 > = ImageTable::new(|image| &image.static_method_bind_lengths);
 
-crate::perry_thread_local! {
-    pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool, usize)>>> =
-        RwLock::new(None);
-
-    pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
-        RwLock::new(None);
-
-    /// Source order for Symbol-keyed class methods/accessors. Symbol member
-    /// registries are thread-local because their keys are heap addresses, so
-    /// their ordering metadata follows the same ownership model.
-    pub static CLASS_SYMBOL_MEMBER_ORDERS: RwLock<Option<HashMap<(u32, u64, bool), u32>>> =
-        RwLock::new(None);
-}
-
 /// Set of all registered class ids. Populated at module init by codegen
 /// emitting `js_register_class_id(cid)` for every user class — even
 /// classes without any methods. Refs #618 / #420 followup.
@@ -1127,9 +1113,32 @@ fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
     // SAFETY: the header names an ordinary object at `ptr`; its first word
     // is the class id.
     let class_id = unsafe { (*(ptr as *const ObjectHeader)).class_id };
-    (class_id != 0
-        && crate::object::class_value::class_decl_prototype_link(class_id) as usize == ptr)
-        .then_some(class_id)
+    (class_id != 0 && decl_prototype_link_observed(class_id, ptr) == ptr).then_some(class_id)
+}
+
+/// `class_id`'s declared-prototype link, as `decl_prototype_class_id`
+/// compares it with `ptr`. The link of a class that is not `ptr`'s observes
+/// nothing: the compare fails whatever the link holds. In instrumented
+/// builds the SNAP census counts the read as the init's only on a match (it
+/// reads the link again outside the bookkeeping scope); a production build
+/// reads it once.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[inline(always)]
+fn decl_prototype_link_observed(class_id: u32, ptr: usize) -> usize {
+    let link = {
+        let _census = crate::snap_census::bookkeeping();
+        crate::object::class_value::class_decl_prototype_link(class_id) as usize
+    };
+    if link == ptr {
+        return crate::object::class_value::class_decl_prototype_link(class_id) as usize;
+    }
+    link
+}
+
+#[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+#[inline(always)]
+fn decl_prototype_link_observed(class_id: u32, _ptr: usize) -> usize {
+    crate::object::class_value::class_decl_prototype_link(class_id) as usize
 }
 
 /// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's
@@ -1334,130 +1343,6 @@ pub(super) fn install_class_decl_prototype_method_field_at(
             PropertyAttrs::new(true, false, true),
         )
     });
-}
-
-/// Install one computed Symbol ClassBody member on the materialized declared
-/// prototype. The class registries retain compiled dispatch metadata, while
-/// the prototype shape is the authoritative record that the property exists:
-/// deleting the shape entry therefore cannot be resurrected by a registry
-/// fallback.
-pub(super) fn install_class_decl_prototype_symbol_member(
-    proto: *mut ObjectHeader,
-    class_id: u32,
-    sym_key: usize,
-) {
-    if proto.is_null() || sym_key == 0 {
-        return;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto_h = scope.root_raw_mut_ptr(proto);
-    let sym = f64::from_bits(crate::JSValue::pointer(sym_key as *const u8).bits());
-    let sym_h = scope.root_nanbox_f64(sym);
-    // SAFETY: `sym_key` came from the registered ClassBody symbol table and
-    // remains rooted by that registry for the class lifetime.
-    let display_name = unsafe { crate::symbol::symbol_function_name(sym_key) };
-
-    if let Some((raw_get, raw_set)) =
-        super::class_own_symbol_accessor_ptrs(class_id, sym_key, false)
-    {
-        let get = scope.root_nanbox_f64(super::class_accessor_function_value(
-            raw_get,
-            false,
-            false,
-            &display_name,
-            None,
-        ));
-        let set = scope.root_nanbox_f64(super::class_accessor_function_value(
-            raw_set,
-            true,
-            false,
-            &display_name,
-            None,
-        ));
-        let proto_value =
-            proto_h.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
-        unsafe {
-            crate::symbol::set_symbol_accessor_property(
-                proto_value,
-                sym_h.get_nanbox_f64(),
-                if raw_get == 0 {
-                    0
-                } else {
-                    get.get_nanbox_u64()
-                },
-                if raw_set == 0 {
-                    0
-                } else {
-                    set.get_nanbox_u64()
-                },
-            );
-        }
-    } else if let Some((func_ptr, param_count, has_rest, entry)) =
-        super::lookup_class_symbol_method_in_chain(class_id, sym_key, false)
-    {
-        let generator = entry != 0
-            && unsafe {
-                crate::closure::info_has(
-                    &*(entry as *const crate::closure::JsFunctionInfo),
-                    crate::closure::FN_GENERATOR,
-                )
-            };
-        let value = scope.root_nanbox_f64(if generator {
-            crate::object::native_module::class_method_declaration_value(
-                crate::object::class_prototype_ref_value(class_id),
-                &display_name,
-                func_ptr,
-                param_count,
-                false,
-                has_rest,
-                entry,
-                true,
-            )
-        } else {
-            crate::object::build_symbol_bound_method_closure(
-                crate::object::class_prototype_ref_value(class_id),
-                func_ptr,
-                param_count,
-                has_rest,
-                false,
-                &display_name,
-            )
-        });
-        let proto_value =
-            proto_h.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
-        unsafe {
-            crate::symbol::define_symbol_data_property(
-                proto_value,
-                sym_h.get_nanbox_f64(),
-                value.get_nanbox_f64(),
-            );
-        }
-    } else {
-        return;
-    }
-
-    let owner = proto_h.with_mut_ptr::<ObjectHeader, _>(|p| p as usize);
-    crate::symbol::set_symbol_property_attrs(owner, sym_key, PropertyAttrs::new(true, false, true));
-}
-
-/// A class evaluation's own prototype (`ClassExprFresh`: a class declared in a
-/// function with private elements, computed fields or a dynamic parent) gets
-/// the same symbol-keyed instance members as the declaration prototype; the
-/// evaluation's generator methods are installed afterwards with their home.
-pub(crate) fn install_evaluation_prototype_symbol_members(proto: *mut ObjectHeader, class_id: u32) {
-    if !proto.is_null() {
-        install_class_decl_prototype_symbol_members(proto, class_id);
-    }
-}
-
-fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_id: u32) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto_h = scope.root_raw_mut_ptr(proto);
-    for sym_key in super::class_own_symbol_member_keys(class_id, false) {
-        proto_h.with_mut_ptr(|p: *mut ObjectHeader| {
-            install_class_decl_prototype_symbol_member(p, class_id, sym_key)
-        });
-    }
 }
 
 /// One own string-keyed prototype member of a class: its name, whether it is
@@ -1732,6 +1617,9 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
         return crate::value::js_nanbox_pointer(existing as i64);
     }
 
+    // Materializing the declared prototype is a first-use build of static
+    // declaration data: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::runtime_scope();
     // The [[Prototype]] it links to, resolved before the object exists (a
     // parent that cannot be one throws before anything is linked).
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1790,7 +1678,13 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
     // A computed member the definition has not named yet stops the
     // installation above; naming it resumes there.
     super::declarations::note_decl_prototype_born(class_id);
-    proto.with_mut_ptr(|p| install_class_decl_prototype_symbol_members(p, class_id));
+    proto.with_mut_ptr(|p| {
+        super::parent_static::install_prototype_symbol_members(
+            p,
+            class_id,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        )
+    });
 
     if parent_proto_bits.is_some() {
         proto.with_mut_ptr::<ObjectHeader, _>(|p| {

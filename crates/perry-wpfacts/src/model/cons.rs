@@ -71,6 +71,16 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// The node holds the constructor a built-in makes its result with
+    /// (the `this` of `Array.from`/`Array.of`, an array's species): a
+    /// program constructor (a class or function of the program's code) is
+    /// constructed by `call`. The realm's own constructors, `%Array%` among
+    /// them, make the built-in's own array, which the built-in's rule makes.
+    NewProgram { call: CallId },
+    /// The target of Reflect.construct; allocation is selected by new_target.
+    ReflectNew { call: CallId, new_target: NodeId },
+    /// New-target values paired with one target, rebuilt from ReflectNew.
+    ReflectNewTarget { call: CallId, target: Tok },
     /// `new Name(...)` of a builtin constructor named in the source: runs
     /// once per call (the holder holds one marker token), so an instance
     /// that renames the call constructs its own object.
@@ -85,6 +95,9 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// A realm field already retains its canonical value. Storing it again
+    /// exposes no new reach; every other alternative takes the usual sink.
+    RuntimeStore { reason: u32, retained: Tok },
     /// A parameter of a closed class's stand-in constructor (design §18.13,
     /// DECISIONS 109): an instance of another unit's contract (a stand-in)
     /// goes to the defining unit's constructor through the argument
@@ -271,8 +284,12 @@ pub enum Cons {
         setter: bool,
     },
     /// Internal: install accessor `f` on every token of the node.
-    /// `f`: the accessor's function token (its closure context included).
+    /// `f`: the accessor's callable token (a known body or opaque callback).
     AccessorInstall { key: Atom, f: Tok, setter: bool },
+    /// A direct Annex B runtime entry, dispatched per receiver token.
+    AnnexBDefine { call: CallId, setter: bool },
+    /// Reflect an accessor descriptor after ToPropertyKey.
+    AnnexBLookup { call: CallId, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
@@ -289,8 +306,24 @@ pub enum Cons {
     PlainKey { origin: Tok, act: ChainAct },
     /// dst ⊇ the `next` method of each iterator in the node.
     IterNext { dst: NodeId },
+    /// The node holds the source of `Array.from`: a program object whose
+    /// `@@iterator` may be nullish is read as an array-like (ECMA-262
+    /// 23.1.2.1 step 5: `length`, then each index), its elements into
+    /// `dst`. Iteration is `Gen::iterate`'s.
+    FromArrayLike { dst: NodeId },
     /// The node holds `Reflect.construct` new-targets (E11).
     NewTargetHard { reason: u32 },
+    /// The node is the evaluated `extends` value of class `tm`, linked by
+    /// name to a built-in parent whose summary `super()` runs: any value
+    /// other than `expected`, the global object's declared constructor
+    /// (⊤, a program-written global, `null`), runs as the parent
+    /// constructor with `this` = the instance: it escapes, and the instance
+    /// escapes with hard E11.
+    NativeParent {
+        tm: TmplId,
+        expected: Tok,
+        reason: u32,
+    },
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
@@ -489,10 +522,14 @@ impl Cons {
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::NewProgram { .. } => "newprogram",
+            Cons::FromArrayLike { .. } => "fromarraylike",
+            Cons::ReflectNew { .. } => "reflectnew",
+            Cons::ReflectNewTarget { .. } => "reflectnewtarget",
             Cons::NewNamed { .. } => "newnamed",
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
-            Cons::TopSink { .. } => "top",
+            Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",
@@ -528,12 +565,15 @@ impl Cons {
             Cons::BirthField { .. } => "birthfield",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
+            Cons::AnnexBDefine { .. } => "annexbdefine",
+            Cons::AnnexBLookup { .. } => "annexblookup",
             Cons::ProtoFrom { .. } => "protofrom",
             Cons::ProtoOf { .. } => "protoof",
             Cons::ProtoValues { .. } => "protovalues",
             Cons::PlainKey { .. } => "plainkey",
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
+            Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",

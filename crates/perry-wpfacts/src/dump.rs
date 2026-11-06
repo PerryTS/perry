@@ -236,7 +236,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         }
         // DECISIONS 225: the bodies the whole program can run, the
         // exemption of the per-unit <= whole residual (`dead_site`).
-        for (file, id, name) in pf.active_bodies.iter().flatten() {
+        for (file, id, name) in &pf.body_reach.bodies {
             out.push_str(&format!(
                 "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
                 crate::diagnostics::quote(unit),
@@ -485,4 +485,34 @@ pub fn apply_sabotage(ts: &mut [TemplateFacts], spec: &str) {
         }
         t.sabotaged = true;
     }
+}
+
+/// Complete bounded-test solver output, including primitive and activation state.
+#[cfg(test)]
+pub(crate) fn solver_state(m: &crate::model::Model) -> String {
+    use std::fmt::Write;
+    let mut out = format!("solve work={} aborted={}\n", m.work.get(), m.aborted);
+    for (i, n) in m.nodes.iter().enumerate() {
+        writeln!(
+            out,
+            "node {i} prim={} dropped={} pts={:?}",
+            n.prim,
+            n.dropped,
+            n.pts.to_sorted()
+        )
+        .unwrap();
+    }
+    if let Some(a) = &m.act {
+        let mut on: Vec<_> = a.on.iter().collect();
+        on.sort();
+        let mut walked: Vec<_> = a.walked.iter().collect();
+        walked.sort();
+        writeln!(
+            out,
+            "activation fixed={} on={on:?} walked={walked:?}",
+            a.fixed
+        )
+        .unwrap();
+    }
+    out
 }

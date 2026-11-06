@@ -41,7 +41,8 @@ pub unsafe extern "C" fn perry_component_frame_promise_poll(
                 1
             }
             crate::promise::PromiseState::Rejected => {
-                crate::exception::throw_program_value((*promise).reason);
+                // Promise rejection writers include program values, catches and native I/O errors.
+                crate::exception::throw_open((*promise).reason);
             }
         }
     });

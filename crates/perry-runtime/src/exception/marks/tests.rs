@@ -510,3 +510,102 @@ fn wasm_checkpoint_restores_nonempty_async_contexts() {
     }
     restore_context(original);
 }
+
+/// The checkpoint reads every frame-marked stack through the one per-thread
+/// record: each field is its own stack depth, and a push moves exactly that
+/// field.
+#[test]
+#[cfg(not(windows))]
+fn catch_stack_record_reads_each_stack_depth() {
+    type Field = fn(&super::CatchStackDepths) -> usize;
+    let stacks: [(&str, fn() -> usize, fn(u32, usize), Field); 11] = [
+        (
+            "async_context",
+            async_context::depth,
+            async_context::push,
+            |d| d.context_guards,
+        ),
+        ("call_method", call_method::depth, call_method::push, |d| {
+            d.call_method
+        }),
+        ("pump", pump::depth, pump::push, |d| d.pump),
+        ("set_foreach", set_foreach::depth, set_foreach::push, |d| {
+            d.set_foreach
+        }),
+        ("map_foreach", map_foreach::depth, map_foreach::push, |d| {
+            d.map_foreach
+        }),
+        (
+            "prototype_resolution",
+            prototype_resolution::depth,
+            prototype_resolution::push,
+            |d| d.prototype_resolution,
+        ),
+        (
+            "static_private_owner",
+            static_private_owner::depth,
+            static_private_owner::push,
+            |d| d.static_private_owner,
+        ),
+        (
+            "private_lexical_brand",
+            private_lexical_brand::depth,
+            private_lexical_brand::push,
+            |d| d.private_lexical_brand,
+        ),
+        (
+            "derived_super_binding",
+            derived_super_binding::depth,
+            derived_super_binding::push,
+            |d| d.derived_super_binding,
+        ),
+        (
+            "private_member_access_hints",
+            private_member_access_hints::depth,
+            private_member_access_hints::push,
+            |d| d.private_member_access_hints,
+        ),
+        (
+            "namespace_override",
+            namespace_override::depth,
+            namespace_override::push,
+            |d| d.namespace_override,
+        ),
+    ];
+    let _lock = crate::gc::global_side_table_test_lock();
+    let base = super::catch_stack_depths();
+    for (name, depth, _, field) in stacks {
+        assert_eq!(
+            field(&base),
+            depth(),
+            "{name}: record field is the stack depth"
+        );
+    }
+    for (index, (name, depth, push, field)) in stacks.into_iter().enumerate() {
+        let before = super::catch_stack_depths();
+        push(7, 1);
+        let after = super::catch_stack_depths();
+        assert_eq!(
+            field(&after),
+            depth(),
+            "{name}: record field follows the push"
+        );
+        assert_eq!(
+            field(&after),
+            field(&before) + 1,
+            "{name}: one entry pushed"
+        );
+        for (other_index, (other, _, _, other_field)) in stacks.into_iter().enumerate() {
+            if other_index != index {
+                assert_eq!(
+                    other_field(&after),
+                    other_field(&before),
+                    "{name} push moved {other}"
+                );
+            }
+        }
+    }
+    // Every entry pushed here carries mark 1: a pad at 2 pops them all.
+    super::unwind_managed_stacks(2, usize::MAX);
+    assert_eq!(super::catch_stack_depths(), base);
+}

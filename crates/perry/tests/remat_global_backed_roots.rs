@@ -3,7 +3,7 @@
 //! `perry-codegen`'s native root lowering no longer relocates a slot whose only
 //! heap value is a copy of a string-literal handle or a class-keys global; it
 //! re-reads the global at each use (`function/precise_roots/remat.rs`). This
-//! test compiles `test-parity/language/class/test_gap_remat_global_backed_roots.ts` once and
+//! test compiles `tests/parity/language/class/test_gap_remat_global_backed_roots.ts` once and
 //! runs it under several collector configurations, each of which must print the
 //! node oracle.
 //!
@@ -29,7 +29,7 @@ fn perry_bin() -> PathBuf {
 }
 
 const SOURCE: &str =
-    include_str!("../../../test-parity/language/class/test_gap_remat_global_backed_roots.ts");
+    include_str!("../../../tests/parity/language/class/test_gap_remat_global_backed_roots.ts");
 
 /// node 26.5.1 (`.node-version`) on the program above.
 const NODE_ORACLE: &str = "\

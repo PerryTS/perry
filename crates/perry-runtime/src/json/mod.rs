@@ -557,6 +557,10 @@ pub(crate) fn note_parse_shape_cache_carriers() {
 unsafe fn allocate_parse_shape_keys_array(
     keys: &[*const StringHeader],
 ) -> crate::object::canonical_keys::CanonicalKeys {
+    // A shape-keys cache fill on first use (the temporary source array): the
+    // first parser of a key list makes it, whichever init that is, so the SNAP
+    // census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     // Shape-cache entries and live receivers own this ordinary array. The
     // construction helper publishes its pointer layout and, for large arrays
     // born in old generation, remembers young key strings before return.
@@ -1610,31 +1614,17 @@ mod tests {
     }
 
     #[test]
-    fn stringify_int32_fields_emit_integers_not_null() {
-        // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN.
-        // Before the `write_number` int32 funnel, an int32 object field — e.g. a
-        // sqlite INTEGER column from the better-sqlite3 binding — fell into the
-        // `is_nan()` → "null" arm and serialized as `null`, silently corrupting
-        // integers crossing JSON/IPC. They must emit the integer value.
+    fn stringify_integer_fields_emit_integers_not_null() {
+        // Object fields use the canonical double encoding of Numbers, as
+        // SQLite INTEGER values do at ingress. Positive, negative and zero
+        // integers must keep their values when crossing JSON/IPC.
         let obj = crate::object::js_object_alloc(0, 3);
         let k_id = js_string_from_bytes(b"id".as_ptr(), 2);
         let k_neg = js_string_from_bytes(b"neg".as_ptr(), 3);
         let k_zero = js_string_from_bytes(b"zero".as_ptr(), 4);
-        crate::object::js_object_set_field_by_name(
-            obj,
-            k_id,
-            f64::from_bits(JSValue::int32(42).bits()),
-        );
-        crate::object::js_object_set_field_by_name(
-            obj,
-            k_neg,
-            f64::from_bits(JSValue::int32(-7).bits()),
-        );
-        crate::object::js_object_set_field_by_name(
-            obj,
-            k_zero,
-            f64::from_bits(JSValue::int32(0).bits()),
-        );
+        crate::object::js_object_set_field_by_name(obj, k_id, 42.0);
+        crate::object::js_object_set_field_by_name(obj, k_neg, -7.0);
+        crate::object::js_object_set_field_by_name(obj, k_zero, 0.0);
         let boxed = crate::value::js_nanbox_pointer(obj as i64);
         let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
         assert_eq!(

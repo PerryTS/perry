@@ -105,6 +105,10 @@ pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, owner: &str, cid: u32) -> boo
             .is_some_and(|class| class.fixed_layout)
         && crate::lower_call::direct_method_guard::births_match_clone_layout(ctx, owner, cid);
     if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::FixedLayout,
+            || serde_json::json!({"class":cid}),
+        );
         crate::facts_consumed::used();
     }
     proved
@@ -150,6 +154,9 @@ pub(super) fn emit_tower_pshape_call(
 ) -> String {
     // A facts-verification build keeps the recheck: its miss is the witness.
     let verify = layout_proven && crate::verify_facts::enabled();
+    if verify {
+        crate::verify_facts::tick(ctx);
+    }
     if layout_proven && !verify {
         return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
     }
@@ -198,18 +205,26 @@ pub(super) fn emit_tower_pshape_call(
 
     ctx.current_block = generic_idx;
     if verify {
+        crate::verify_facts::covered(
+            crate::verify_facts::Fact::FixedLayout,
+            || serde_json::json!({"class":cid}),
+        );
         let site = crate::verify_facts::site_arg(
             ctx,
             &format!(
                 "method {} layout proven: shape {expected_shape_id} ({})",
                 route.clone_fn, route.keys_global
             ),
+            crate::verify_facts::Fact::FixedLayout,
+            &[],
         );
         let recv_box = crate::expr::nanbox_pointer_inline(ctx.block(), recv_handle);
-        let _ = ctx.block().call(
+        let _ = crate::verify_facts::check(
+            ctx,
             crate::types::I32,
             "perry_wpfacts_check_miss",
-            &[(DOUBLE, &recv_box), (crate::types::I64, &site)],
+            &[(DOUBLE, &recv_box)],
+            &site,
         );
     }
     let v_generic = ctx.block().call(DOUBLE, &route.generic_fn, case_arg_slices);

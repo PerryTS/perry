@@ -755,6 +755,24 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);
     module.declare_function("perry_wpfacts_check_call_miss", I32, &[PTR, I64]);
     module.declare_function("perry_wpfacts_check_miss", I32, &[DOUBLE, I64]);
+    if crate::verify_facts::dce_enabled() {
+        module.declare_function("llvm.trap", crate::types::VOID, &[]);
+    }
+    if crate::verify_facts::enabled() {
+        module.declare_function("perry_verify_facts_tick", crate::types::VOID, &[]);
+        module.declare_function("perry_verify_facts_init", crate::types::VOID, &[]);
+        module.declare_function(
+            "perry_verify_facts_field",
+            I32,
+            &[
+                DOUBLE, DOUBLE, I64, I64, I64, I64, I32, I32, I32, I32, I64, I64,
+            ],
+        );
+        module.declare_function("perry_verify_facts_call", PTR, &[DOUBLE, I64, I64, I64]);
+        module.declare_function("perry_verify_facts_call_miss", I32, &[PTR, I64, I64]);
+        module.declare_function("perry_verify_facts_miss", I32, &[DOUBLE, I64, I64]);
+        module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
+    }
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
     // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`
@@ -944,6 +962,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_getenv_value", DOUBLE, &[I64]);
+    // SNAP census site hook (`expr/snap_env_site.rs`): instrumented compiles only.
+    if crate::expr::snap_env_site::census_compile() {
+        module.declare_function("js_snap_env_site", VOID, &[I32]);
+        module.declare_function("js_snap_require_edge", VOID, &[I32]);
+    }
     // #1344: process.env.X = v / delete process.env.X.
     module.declare_function("js_setenv", VOID, &[I64, DOUBLE]);
     module.declare_function("js_removeenv", VOID, &[I64]);

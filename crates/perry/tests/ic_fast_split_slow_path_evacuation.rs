@@ -6,7 +6,7 @@
 //! would skip the caller's frame, and the caller's values would still name
 //! from-space when it reads them afterwards.
 //!
-//! The fixture is `test-parity/language/object/test_gap_ic_fast_split_slow_path.ts` (also a gap
+//! The fixture is `tests/parity/language/object/test_gap_ic_fast_split_slow_path.ts` (also a gap
 //! test, against node). Here it is compiled with `PERRY_FULL_OUTLINE_IC=1`,
 //! where the IC splits apply (a class-field read or store takes the property
 //! read and static-key store splits, #12483), and run under a seeded evacuating schedule
@@ -26,7 +26,7 @@ fn perry_bin() -> PathBuf {
 }
 
 const SOURCE: &str =
-    include_str!("../../../test-parity/language/object/test_gap_ic_fast_split_slow_path.ts");
+    include_str!("../../../tests/parity/language/object/test_gap_ic_fast_split_slow_path.ts");
 
 /// node 26.5.1 (`.node-version`) on `SOURCE`.
 const NODE_ORACLE: &str = "keep-g:123:1\nkeep-g:123:1\nkeep-g:123:2\nkeep-g:123:3\nkeep-g:123:1\n\

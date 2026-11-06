@@ -21,7 +21,7 @@ use std::process::{Command, Stdio};
 
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-parity/node-suite/process/test_gap_10903_stdout_write_bytes.ts"
+    "/../../tests/parity/node-suite/process/test_gap_10903_stdout_write_bytes.ts"
 ));
 
 const CHUNKS_STDOUT: &str = "f7ff0f000af7ff440ac800800ab0b10afefd800afd800a91920aa1a2a30aa2a30a\

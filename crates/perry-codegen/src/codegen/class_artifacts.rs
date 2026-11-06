@@ -753,12 +753,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     false,
                 )
                 .with_context(|| format!("lowering constructor for '{}'", class.name))?;
-                if class.constructor.is_none()
-                    && (class.extends_name.is_some()
-                        || class.extends_expr.is_some()
-                        || class.extends.is_some()
-                        || class.native_extends.is_some())
-                {
+                if class.is_default_derived() {
                     let mut initializer = ctor_as_method.clone();
                     initializer.name = format!("{}_default_fields", class.name);
                     initializer.params.clear();

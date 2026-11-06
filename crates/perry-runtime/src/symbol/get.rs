@@ -4,62 +4,6 @@
 use super::*;
 use crate::string::js_string_from_bytes;
 
-/// #5128: map a well-known-symbol key to the synthetic class-method name used
-/// for a symbol-keyed instance *method* (`*[Symbol.iterator]()` →
-/// `@@iterator`, `[Symbol.asyncIterator]()` → `@@asyncIterator`). Returns
-/// `None` for any other symbol. Used by `js_object_get_symbol_property` to
-/// resolve a user class's iterator method off its prototype.
-fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
-    for (wk, method) in [
-        ("iterator", "@@iterator"),
-        ("asyncIterator", "@@asyncIterator"),
-    ] {
-        let s = well_known_symbol(wk);
-        if !s.is_null() {
-            let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
-            if sym_key == unsafe { sym_key_from_f64(f) } {
-                return Some(method);
-            }
-        }
-    }
-    None
-}
-
-/// An iterator dispatch alias is a fallback for the method declared in source.
-/// Check writes on the intervening prototypes first, but stop at the nearest
-/// declaration so a subclass method still shadows a replaced base method.
-unsafe fn class_iterator_prototype_override(
-    receiver: f64,
-    sym: f64,
-    mut class_id: u32,
-    method_owner: u32,
-) -> Option<f64> {
-    for _ in 0..32 {
-        let declared = crate::object::class_decl_prototype_object(class_id);
-        let dynamic = crate::object::class_prototype_object(class_id);
-        for proto in [declared, dynamic] {
-            if proto.is_null() {
-                continue;
-            }
-            let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-            if let Some(acc) = accessors::symbol_accessor_property(proto_value, sym) {
-                return Some(accessors::invoke_symbol_accessor_getter(acc.get, receiver));
-            }
-            if let Some(value) = own_symbol_property(proto_value, sym) {
-                return Some(value);
-            }
-        }
-        if class_id == method_owner {
-            break;
-        }
-        match crate::object::get_parent_class_id(class_id) {
-            Some(parent) if parent != 0 && parent != class_id => class_id = parent,
-            _ => break,
-        }
-    }
-    None
-}
-
 /// Does `obj` carry an OWN symbol-keyed property under `sym`, **without
 /// invoking** an accessor for it?
 ///
@@ -135,7 +79,6 @@ impl OwnSymbolSlot {
     }
 }
 
-mod generator;
 mod own;
 pub(crate) use own::own_symbol_slot;
 
@@ -520,13 +463,10 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             if let Some(value) = own_symbol_property_for_receiver(owner, sym_f64, receiver_f64) {
                 return value;
             }
-        }
-        let sym_key = sym_key_from_f64(sym_f64);
-        if sym_key != 0 {
-            if let Some(v) =
-                crate::object::class_symbol_getter_value(class_id, sym_key, receiver_f64, true)
+            if let Some(value) =
+                resolve_explicit_object_prototype_symbol(owner, sym_f64, receiver_f64)
             {
-                return v;
+                return value;
             }
         }
         let static_lookup = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
@@ -537,58 +477,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         if let Some(vb) = static_lookup {
             return f64::from_bits(vb);
         }
-        // #9101: statically-known well-known-symbol METHODS are registered
-        // under synthetic names (`@@toPrimitive`, etc.), rather than in the
-        // class-static-symbol data-property table above. Reify a static method
-        // value with the constructor ClassRef as its receiver. This also makes
-        // an explicit `C[Symbol.toPrimitive]` read agree with the ToPrimitive
-        // consumer instead of returning undefined.
-        if let Some(method_name) = well_known_symbol_method_key(sym_f64) {
-            if crate::object::lookup_static_method_in_chain(class_id, method_name).is_some() {
-                return crate::object::js_class_method_bind(
-                    obj_f64,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-        }
-        // #6173: a `static [S]() {}` (and, through a prototype ref, an
-        // instance `[S]() {}`) registers in CLASS_SYMBOL_METHODS, which this
-        // resolver never consulted — so reading `D[S]` as a VALUE returned
-        // undefined even though the direct call `D[S]()` dispatched fine via
-        // `js_native_call_method_value`'s independent lookup. Materialize a
-        // bound-method closure carrying the resolved target. Runs after the
-        // accessor branch (getter priority) and the static symbol-FIELD
-        // lookup (a `static [S] = v` initializer runs after method
-        // installation and shadows the method, matching class-init order).
-        // USER symbols only: well-known symbol methods (`[Symbol.iterator]`,
-        // `[Symbol.toPrimitive]`, …) are lowered to synthetic `@@name`
-        // members with dedicated consumers (GetIterator, `js_to_primitive`,
-        // the using-block desugar) and established name-based resolution —
-        // keep them on those paths rather than changing their behavior here.
-        //
-        // A STATIC well-known-symbol method with no synthetic `@@name` slot
-        // (`static *[Symbol.iterator]() {}` — the alias above is instance-only)
-        // lives only in this table; the `@@name` probe just above already
-        // missed, so consult it too (#11170). Prototype refs keep the
-        // user-symbol-only rule.
         let is_proto_ref_receiver = crate::object::class_prototype_ref_id(obj_f64).is_some();
-        if sym_key != 0 && (!crate::symbol::is_well_known_symbol(sym_key) || !is_proto_ref_receiver)
-        {
-            let is_proto_ref = is_proto_ref_receiver;
-            if let Some((func_ptr, param_count, has_rest, _entry)) =
-                crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, !is_proto_ref)
-            {
-                return crate::object::build_symbol_bound_method_closure(
-                    obj_f64,
-                    func_ptr,
-                    param_count,
-                    has_rest,
-                    !is_proto_ref,
-                    &crate::symbol::symbol_function_name(sym_key),
-                );
-            }
-        }
         // A constructor whose heritage was a runtime value inherits from that
         // exact value, the same edge `Object.getPrototypeOf(C)` reports. A
         // fresh class evaluation is not reachable through the template-id
@@ -808,108 +697,25 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
                 let class_id = crate::object::js_object_get_class_id(ptr);
                 if class_id != 0 && crate::object::shapes::receiver_has_class_identity(ptr) {
-                    // Computed Symbol ClassBody members are real properties of
-                    // the declared prototype shape. Materialize that shape and
-                    // resolve it before the compiled dispatch registries: an
-                    // absent entry can then mean the configurable property was
-                    // deleted, rather than being silently resurrected here.
-                    if crate::object::class_has_symbol_member_in_chain(class_id, sym_key, false) {
-                        if let Some(value) = generator::explicit_generator_method(
+                    // An evaluation's recorded prototype is its complete surface.
+                    if let Some(value) = resolve_explicit_object_prototype_symbol(
+                        obj_h.get_nanbox_f64(),
+                        sym_h.get_nanbox_f64(),
+                        receiver_h.get_nanbox_f64(),
+                    ) {
+                        return value;
+                    }
+                    if !crate::object::prototype_chain::object_prototype_is_foreign(
+                        crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize,
+                    ) {
+                        let _ = crate::object::class_decl_prototype_value(class_id);
+                        if let Some(value) = declared_prototype_chain_symbol(
+                            obj_h.get_nanbox_f64(),
+                            sym_h.get_nanbox_f64(),
                             class_id,
-                            sym_key,
-                            obj_f64,
-                            sym_f64,
-                            receiver_f64,
+                            receiver_h.get_nanbox_f64(),
                         ) {
                             return value;
-                        }
-                        let _ = crate::object::class_decl_prototype_value(class_id);
-                        if let Some(v) = declared_prototype_chain_symbol(
-                            obj_f64,
-                            sym_f64,
-                            class_id,
-                            receiver_f64,
-                        ) {
-                            return v;
-                        }
-                        if let Some(v) =
-                            resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64)
-                        {
-                            return v;
-                        }
-                        return f64::from_bits(TAG_UNDEFINED);
-                    }
-                    if let Some(v) = crate::object::class_symbol_getter_value(
-                        class_id,
-                        sym_key,
-                        receiver_f64,
-                        false,
-                    ) {
-                        return v;
-                    }
-                    // #5128: a symbol-keyed instance METHOD — `*[Symbol.iterator]()`
-                    // (and `[Symbol.asyncIterator]()`) are registered on the class
-                    // under the synthetic names `@@iterator` / `@@asyncIterator`.
-                    // Read the method off the class and return a bound method so
-                    // iteration-protocol consumers (`[...x]`, `for…of`,
-                    // `Math.max(...x)`, destructuring) can drive `.next()`. Guard
-                    // on `class_method_slot_owner` first: `js_class_method_bind`
-                    // otherwise mints a bound closure for a non-existent method.
-                    if let Some(method_name) = well_known_symbol_method_name(sym_key) {
-                        if let Some(owner) =
-                            crate::object::class_method_slot_owner(class_id, method_name)
-                        {
-                            if let Some(value) = class_iterator_prototype_override(
-                                receiver_f64,
-                                sym_f64,
-                                class_id,
-                                owner,
-                            ) {
-                                return value;
-                            }
-                            return crate::object::js_class_method_bind(
-                                obj_f64,
-                                method_name.as_ptr(),
-                                method_name.len(),
-                            );
-                        }
-                    }
-                    // #6173: a USER symbol-keyed instance method (`[S]() {}`)
-                    // lives in CLASS_SYMBOL_METHODS — the table the direct
-                    // call path resolves through — not in the accessor /
-                    // well-known tables checked above, so a bare `obj[S]`
-                    // read returned undefined while `obj[S]()` worked.
-                    // Materialize the resolved target as a bound method. Own
-                    // symbol props (checked earlier) still shadow it, and the
-                    // accessor branch above keeps getter priority. This also
-                    // fixes instance-side `S in obj`, whose presence check
-                    // (`js_object_has_property`) delegates to this resolver.
-                    // USER symbols only: a well-known computed method (e.g.
-                    // `[Symbol.toPrimitive]() {}`) is lowered to a synthetic
-                    // `@@name` vtable member and keeps resolving through the
-                    // name-based #1838 tail below, preserving the existing
-                    // behavior for every well-known symbol that HAS one.
-                    // A well-known symbol with no synthetic slot
-                    // (`[Symbol.hasInstance]() {}` on an instance,
-                    // `[Symbol.split]() {}`, …) lives only in this table, so
-                    // skipping it made `obj[Symbol.hasInstance]` undefined and
-                    // the call return undefined (#11170).
-                    if !crate::symbol::is_well_known_symbol(sym_key)
-                        || !well_known_symbol_has_instance_method_slot(sym_key)
-                    {
-                        if let Some((func_ptr, param_count, has_rest, _entry)) =
-                            crate::object::lookup_class_symbol_method_in_chain(
-                                class_id, sym_key, false,
-                            )
-                        {
-                            return crate::object::build_symbol_bound_method_closure(
-                                obj_f64,
-                                func_ptr,
-                                param_count,
-                                has_rest,
-                                false,
-                                &crate::symbol::symbol_function_name(sym_key),
-                            );
                         }
                     }
                 }
@@ -1195,26 +1001,6 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 {
                     return v;
                 }
-                // #1838: a class can define a computed well-known-symbol METHOD
-                // (`[Symbol.iterator]() {}`) — class lowering names it
-                // `@@iterator` in the vtable (class_members.rs), NOT as a symbol
-                // property, so the proto-chain symbol walk above misses it. Map
-                // the well-known symbol back to its `@@name`, and if the class
-                // (or an ancestor) has that method, return it bound to the
-                // instance. This is how effect's `EffectPrimitive` exposes
-                // `Symbol.iterator` (→ `SingleShotGen`), so `yield* effectValue`
-                // / `Symbol.iterator in effectValue` resolve.
-                if let Some(at_name) = well_known_symbol_method_key(sym_f64) {
-                    if crate::object::shapes::receiver_has_class_identity(obj_ptr)
-                        && class_chain_has_method(cid, at_name)
-                    {
-                        return crate::object::js_class_method_bind(
-                            obj_f64,
-                            at_name.as_ptr(),
-                            at_name.len(),
-                        );
-                    }
-                }
             }
         }
     }
@@ -1320,82 +1106,6 @@ pub(crate) unsafe fn has_declared_prototype_symbol_property(receiver: f64, sym: 
     }
     let class_id = (*ptr).class_id;
     class_id != 0 && declared_prototype_symbol_holder(receiver, sym, class_id).is_some()
-}
-
-/// #1838: map a well-known symbol value to the synthetic `@@<name>` vtable key
-/// that class lowering assigns to a computed `[Symbol.X]() {}` method (see
-/// `lower_decl/class_members.rs`). Returns `None` for symbols that don't name a
-/// class method (or non-symbol values). `dispose`/`asyncDispose` use distinct
-/// `__perry_*__` names and are dispatched via the using-block desugarer, so
-/// they're deliberately excluded here.
-unsafe fn well_known_symbol_method_key(sym_f64: f64) -> Option<&'static str> {
-    let sk = sym_key_from_f64(sym_f64);
-    if sk == 0 {
-        return None;
-    }
-    for (short, at_name) in [
-        ("iterator", "@@iterator"),
-        ("asyncIterator", "@@asyncIterator"),
-        ("hasInstance", "@@hasInstance"),
-        ("toPrimitive", "@@toPrimitive"),
-        ("toStringTag", "@@toStringTag"),
-    ] {
-        let wk = well_known_symbol(short);
-        if !wk.is_null() {
-            let wk_f64 = f64::from_bits(crate::value::JSValue::pointer(wk as *const u8).bits());
-            if sym_key_from_f64(wk_f64) == sk {
-                return Some(at_name);
-            }
-        }
-    }
-    None
-}
-
-/// Does a computed INSTANCE method keyed by this well-known symbol also get a
-/// synthetic vtable slot that the name-based resolvers read? Keep in sync with
-/// the alias list in `js_register_class_computed_method` (and the static
-/// lowering's renames): `iterator`, `asyncIterator`, `toPrimitive`, `dispose`,
-/// `asyncDispose`. Every other well-known symbol's instance method is
-/// reachable ONLY through `CLASS_SYMBOL_METHODS` (#11170).
-fn well_known_symbol_has_instance_method_slot(sym_key: usize) -> bool {
-    [
-        "iterator",
-        "asyncIterator",
-        "toPrimitive",
-        "dispose",
-        "asyncDispose",
-    ]
-    .iter()
-    .any(|wk| {
-        let s = well_known_symbol(wk);
-        // SAFETY: `s` is a live well-known symbol from the process-lifetime
-        // cache; `sym_key_from_f64` only decodes its NaN-boxed pointer.
-        !s.is_null()
-            && unsafe {
-                sym_key_from_f64(f64::from_bits(
-                    crate::value::JSValue::pointer(s as *const u8).bits(),
-                ))
-            } == sym_key
-    })
-}
-
-/// #1838: does `class_id` or any ancestor define a vtable method named `name`?
-fn class_chain_has_method(class_id: u32, name: &str) -> bool {
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while depth < 32 && cid != 0 {
-        if crate::object::class_has_own_method(cid, name) {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
 }
 
 #[cfg(test)]

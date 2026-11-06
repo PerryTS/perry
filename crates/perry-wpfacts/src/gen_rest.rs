@@ -183,7 +183,7 @@ impl<'a> Gen<'a> {
             } => match self.class_home_of(fx, home) {
                 Some(tm) => {
                     let _ = self.expr(fx, key);
-                    let k = self.key_of(key);
+                    let k = self.key_of(fx.module, key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
                     for start in self.super_starts_of(tm) {
@@ -208,7 +208,7 @@ impl<'a> Gen<'a> {
             } => match self.class_home_of(fx, home) {
                 Some(tm) => {
                     let _ = self.expr(fx, key);
-                    let k = self.key_of(key);
+                    let k = self.key_of(fx.module, key);
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
@@ -234,7 +234,7 @@ impl<'a> Gen<'a> {
             } => match self.class_home_of(fx, home) {
                 Some(tm) => {
                     let _ = self.expr(fx, key);
-                    let k = self.key_of(key);
+                    let k = self.key_of(fx.module, key);
                     let r = self.expr(fx, receiver);
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
@@ -464,15 +464,31 @@ impl<'a> Gen<'a> {
             | Expr::StringRaw { .. }
             | Expr::StringAt { .. }
             | Expr::StringCodePointAt { .. }
-            | Expr::MapHas { .. }
-            | Expr::MapDelete { .. }
             | Expr::MapSize(..)
-            | Expr::MapClear(..)
             | Expr::ArrayIterationPatched
             | Expr::ImportMetaUrl(..)
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::MapHas { map, key } | Expr::MapDelete { map, key } => {
+                // The native operation compares key identity without a JS
+                // operand protocol. A folded call can still find an own
+                // method or accessor, so use the ordinary method transfer.
+                let recv = self.expr(fx, map);
+                let arg = self.expr(fx, key);
+                let name = if matches!(e, Expr::MapHas { .. }) {
+                    "has"
+                } else {
+                    "delete"
+                };
+                let name = self.m.atom(name);
+                self.mcall(recv, Key::Named(name), vec![arg], Vec::new())
+            }
+            Expr::MapClear(map) => {
+                let recv = self.expr(fx, map);
+                let name = self.m.atom("clear");
+                self.mcall(recv, Key::Named(name), Vec::new(), Vec::new())
             }
             Expr::EncodeURI(..)
             | Expr::DecodeURI(..)

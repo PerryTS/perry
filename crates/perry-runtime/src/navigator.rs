@@ -81,6 +81,7 @@ fn normalize_navigator_locale(locale: &str) -> Option<String> {
 }
 
 fn navigator_language() -> String {
+    crate::effect!(host_read, locale);
     std::env::var("LC_ALL")
         .ok()
         .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")

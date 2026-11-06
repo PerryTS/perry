@@ -770,6 +770,15 @@ pub unsafe extern "C" fn perry_probe_get(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    // Census builds: a keyed read of a global property names its key
+    // (§2.10.13), like the binding read below.
+    #[cfg(perry_gc_instruments)]
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR),
+        || crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut scratch),
+    );
     probe_get::<true>(dir, obj_biased, key_bits, hash)
 }
 
@@ -786,6 +795,14 @@ pub unsafe extern "C" fn perry_probe_get_binding(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    // Census builds: a global binding's read names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR),
+        || crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut scratch),
+    );
     probe_get::<false>(dir, obj_biased, key_bits, hash)
 }
 
@@ -2115,9 +2132,9 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 #[path = "layout_probe/computed.rs"]
 mod computed;
 use computed::computed_key;
-#[cfg(test)]
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
+pub(crate) use computed::probe_set_keyed;
 
 #[path = "layout_probe/diagnostics.rs"]
 mod diagnostics;

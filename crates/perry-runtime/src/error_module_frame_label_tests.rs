@@ -13,6 +13,7 @@ const PC_CHARS: usize = 8;
 /// Frame budget `materialize_error_stack` passes to `render_frames`.
 const RENDER_LIMIT: usize = 10;
 
+#[cfg(target_pointer_width = "64")]
 /// A module body is registered as `Object.<anonymous> (<path>)`: the frame
 /// must print that location verbatim. Appending `(<anonymous>)` gave
 /// fastify-plugin's stack parser a line without a file name, and it threw

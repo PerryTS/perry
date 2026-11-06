@@ -47,6 +47,8 @@ fn post_remark_birth_survives(kind: u8, include_live_flags: bool) -> std::thread
                 length: slots as u32,
                 capacity: slots as u32,
                 named: std::ptr::null_mut(),
+                #[cfg(target_pointer_width = "32")]
+                _ek_pad: 0,
                 ek_prefix: 0,
                 ek_kind: 0,
             });
@@ -54,6 +56,8 @@ fn post_remark_birth_survives(kind: u8, include_live_flags: bool) -> std::thread
             (user as *mut crate::object::ObjectHeader).write(crate::object::ObjectHeader {
                 class_id: 0,
                 parent_class_id: 0,
+                #[cfg(target_pointer_width = "32")]
+                _slot_alignment_padding: 0,
                 meta: std::ptr::null_mut(),
             });
         }

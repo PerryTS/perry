@@ -1396,6 +1396,32 @@ impl std::fmt::Debug for CompilationContext {
 }
 
 impl CompilationContext {
+    /// Does a linked native addon reach `reach`? An addon reaches what its
+    /// Node-API imports reach; an open one (`World`) reaches everything.
+    pub fn native_addons_reach(&self, reach: perry_runtime_manifest::NodeApiReach) -> bool {
+        use perry_runtime_manifest::NodeApiReach;
+        self.native_addons
+            .values()
+            .any(|addon| addon.reach.contains(&NodeApiReach::World) || addon.reach.contains(&reach))
+    }
+
+    /// The Node-API symbols the host links and exports: what its addons
+    /// import. An open addon can look any export up at run time (`dlsym`, a
+    /// library of its own), so with one the host exports its whole inventory.
+    pub fn node_api_host_exports(&self) -> Vec<&'static str> {
+        let open = self.native_addons_reach(perry_runtime_manifest::NodeApiReach::World);
+        perry_runtime_manifest::node_api_host_symbols()
+            .filter(|symbol| {
+                !self.native_addons.is_empty()
+                    && (open
+                        || self
+                            .native_addons
+                            .values()
+                            .any(|addon| addon.node_api_imports.contains(*symbol)))
+            })
+            .collect()
+    }
+
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
@@ -1577,6 +1603,12 @@ pub struct NativeAddonModule {
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,
+    /// What the addon reaches beyond the values the program hands it: the
+    /// marks of its Node-API imports (`node_api_host_symbols.txt`).
+    /// `NodeApiReach::World` makes it open, a dynamic-code site.
+    pub reach: BTreeSet<perry_runtime_manifest::NodeApiReach>,
+    /// The Node-API symbols the addon imports (`napi_*`, `node_api_*`).
+    pub node_api_imports: BTreeSet<String>,
     /// WASI: the addon's wasm32 archives, linked into the program; empty for
     /// a loaded (sidecar) addon.
     #[cfg(feature = "target-wasi")]

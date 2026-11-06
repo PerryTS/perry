@@ -19,7 +19,7 @@ fn workspace_root() -> PathBuf {
 fn nested_object_map_receives_its_declared_arguments() {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry =
-        workspace_root().join("test-parity/language/object/test_issue_9701_nested_object_map.ts");
+        workspace_root().join("tests/parity/language/object/test_issue_9701_nested_object_map.ts");
     let output = dir.path().join("main_bin");
 
     let compile = Command::new(perry_bin())

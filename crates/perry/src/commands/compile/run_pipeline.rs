@@ -25,6 +25,9 @@ use std::time::Instant;
 
 use crate::OutputFormat;
 
+mod dylib_target;
+use dylib_target::{apple_dylib_cross_target, apple_sdk_sysroot, verify_dylib_target_linkable};
+
 /// #5916: how many `export { X } from "src"` hops to follow when resolving an
 /// imported name back to the module that actually declares it. Barrel chains in
 /// the wild are a handful of levels deep at most; the cap is a belt-and-braces
@@ -538,6 +541,10 @@ pub fn run_with_parse_cache(
     if args.target.as_deref() == Some("wasi") {
         perry_codegen::wasi_toolchain::check()?;
     }
+    if perry_codegen::verify_facts::enabled() {
+        std::env::set_var("PERRY_NO_CACHE", "1");
+        perry_codegen::verify_facts::reset();
+    }
     if perry_codegen::fallback_diag::enabled() {
         perry_codegen::fallback_diag::reset();
     }
@@ -960,6 +967,10 @@ pub fn run_with_parse_cache(
             Vec::new()
         };
 
+    // Declared addons can be reached by computed loaders, with no literal
+    // graph edge. Admit them before settling the lowering census as well.
+    collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+
     rerun_collect_with_class_field_types(
         &args,
         &mut ctx,
@@ -988,6 +999,12 @@ pub fn run_with_parse_cache(
     collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+    // The lowering and the closed-world bit above saw every open addon; one
+    // first admitted here would be linked against a census that missed it.
+    anyhow::ensure!(
+        !admit_open_native_addons(&mut ctx),
+        "an open Node-API addon was admitted after the program's dynamic-code census"
+    );
 
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
     // bundled PARTIAL well-known binding over a `node_modules/<pkg>` copy the
@@ -1266,10 +1283,9 @@ pub fn run_with_parse_cache(
         Vec::new()
     };
     // Object model step 3: prototype slots written once are constants.
-    if std::env::var_os("PERRY_PROTO_CENSUS_REPORT").is_some() {
-        eprintln!("{}", ctx.proto_census.summary());
-    }
-    perry_codegen::set_program_proto_census(Some(ctx.proto_census.clone()));
+    let proto_census = super::foreign_native_census::census(&ctx).into_owned();
+    super::foreign_native_census::report(&proto_census);
+    perry_codegen::set_program_proto_census(Some(proto_census));
     // Object model §3.6: the program's export facts (constant keys, literal
     // keys) that prototype images in importing modules read.
     {
@@ -8036,6 +8052,9 @@ pub fn run_with_parse_cache(
     asset_manifest::write(&ctx, &embedded_assets, format)?;
 
     if args.no_link {
+        if perry_codegen::verify_facts::enabled() {
+            perry_codegen::verify_facts::write_manifest(&exe_path)?;
+        }
         let codegen_cache_stats = if object_cache.is_enabled() {
             Some((
                 object_cache.hits(),
@@ -8086,6 +8105,30 @@ pub fn run_with_parse_cache(
                 embedded_assets.len(),
                 total
             );
+        }
+    }
+
+    // SNAP census compiles: the TLS anchors around the program objects (begin
+    // first, end after every other compiled object, before the pads and the
+    // runtime archive), so the program's TLS slots get pages of their own.
+    if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+        for end in [false, true] {
+            let bytes =
+                perry_codegen::stubs::generate_snap_tls_anchor_object(end, target.as_deref())?;
+            let path = object_output_dir.join(if end {
+                "_perry_snap_tls_end.o"
+            } else {
+                "_perry_snap_tls_begin.o"
+            });
+            fs::write(&path, &bytes)?;
+            obj_cleanup_paths.push(path.clone());
+            if end {
+                obj_paths.push(path);
+                obj_fingerprints.push(None);
+            } else {
+                obj_paths.insert(0, path);
+                obj_fingerprints.insert(0, None);
+            }
         }
     }
 
@@ -8930,73 +8973,4 @@ pub fn run_with_parse_cache(
         link_cache_stats: Some(link_cache_status.stats()),
         build_cache_stats: Some(build_cache_stats),
     })
-}
-
-/// (#6222) Apple SDK + clang triple for a cross-compiled **shared library** link.
-///
-/// The dylib path links with the host `cc` driver and does NOT link the runtime
-/// (symbols resolve from the host at `dlopen` time), so nothing else in that path
-/// consults `--target`. Without these flags the linker happily consumes a correctly
-/// cross-compiled iOS object and emits a **host-arch** dylib — the failure the user
-/// sees is a link error or a dylib that will never load on device.
-fn apple_dylib_cross_target(target: &str) -> Option<(&'static str, &'static str)> {
-    Some(match target {
-        "ios" => ("iphoneos", "arm64-apple-ios17.0"),
-        "ios-simulator" => ("iphonesimulator", "arm64-apple-ios17.0-simulator"),
-        "tvos" => ("appletvos", "arm64-apple-tvos17.0"),
-        "tvos-simulator" => ("appletvsimulator", "arm64-apple-tvos17.0-simulator"),
-        "watchos" => ("watchos", "arm64_32-apple-watchos10.0"),
-        "watchos-simulator" => ("watchsimulator", "arm64-apple-watchos10.0-simulator"),
-        "visionos" => ("xros", "arm64-apple-xros1.0"),
-        "visionos-simulator" => ("xrsimulator", "arm64-apple-xros1.0-simulator"),
-        _ => return None,
-    })
-}
-
-/// Resolve an Apple SDK sysroot via `xcrun`.
-fn apple_sdk_sysroot(sdk: &str) -> Result<PathBuf> {
-    let out = Command::new("xcrun")
-        .args(["--sdk", sdk, "--show-sdk-path"])
-        .output()
-        .with_context(|| {
-            format!("Failed to invoke `xcrun --sdk {sdk} --show-sdk-path` (is Xcode installed?)")
-        })?;
-    if !out.status.success() {
-        bail!(
-            "`xcrun --sdk {sdk} --show-sdk-path` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() {
-        bail!("`xcrun --sdk {sdk} --show-sdk-path` returned nothing");
-    }
-    Ok(PathBuf::from(path))
-}
-
-/// (#6222) Reject a `--target` the dylib link step cannot honour on this host,
-/// instead of silently linking the cross object into a host-arch shared library.
-/// The executable path already fails early and cleanly (it has to find a
-/// per-target `libperry_runtime.a`); the dylib path links no runtime, so it had
-/// no such check and produced a host binary in silence.
-fn verify_dylib_target_linkable(target: Option<&str>) -> Result<()> {
-    let Some(t) = target else { return Ok(()) };
-    let host_ok = match t {
-        "windows" | "windows-winui" | "windows-x86_64" | "windows-aarch64" | "windows-arm64" => {
-            true
-        }
-        t if t.starts_with("linux") => cfg!(target_os = "linux"),
-        t if apple_dylib_cross_target(t).is_some() => cfg!(target_os = "macos"),
-        _ => false,
-    };
-    if !host_ok {
-        bail!(
-            "--output-type dylib cannot link for target \"{t}\" on this host.\n\
-             The object is cross-compiled correctly, but the shared-library link step \
-             runs the host toolchain, so it would emit a host-architecture dylib.\n\
-             Apple targets (ios, ios-simulator, tvos, watchos, visionos and their \
-             simulators) require a macOS host with Xcode."
-        );
-    }
-    Ok(())
 }

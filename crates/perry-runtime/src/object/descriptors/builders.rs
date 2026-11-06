@@ -87,48 +87,6 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
             );
         }
     }
-    // Computed Symbol class members live in the class registries rather than
-    // the generic per-object Symbol table for class CONSTRUCTORS. Instance
-    // members above live in the materialized prototype's shape.
-    let class_owner = super::class_ref_id(obj_value).map(|cid| (cid, true));
-    if let Some((cid, is_static)) = class_owner {
-        let display_name = crate::symbol::symbol_function_name(sym_key);
-        if let Some((get, set)) =
-            super::class_registry::class_own_symbol_accessor_ptrs(cid, sym_key, is_static)
-        {
-            return build_accessor_descriptor(
-                super::class_registry::class_accessor_function_value(
-                    get,
-                    false,
-                    is_static,
-                    &display_name,
-                    None,
-                ),
-                super::class_registry::class_accessor_function_value(
-                    set,
-                    true,
-                    is_static,
-                    &display_name,
-                    None,
-                ),
-                false,
-                true,
-            );
-        }
-        if let Some((func_ptr, param_count, has_rest)) =
-            super::class_registry::class_own_symbol_method(cid, sym_key, is_static)
-        {
-            let value = super::build_symbol_bound_method_closure(
-                obj_value,
-                func_ptr,
-                param_count,
-                has_rest,
-                is_static,
-                &display_name,
-            );
-            return build_data_descriptor(value, true, false, true);
-        }
-    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 

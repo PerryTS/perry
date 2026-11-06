@@ -246,6 +246,7 @@ impl Plan {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                     },
@@ -261,6 +262,7 @@ impl Plan {
                     object: array.clone(),
                     index: index.clone(),
                     value: value.clone(),
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 },
@@ -479,6 +481,10 @@ fn numeric_function<'a>(
     };
     let f = ctx.wpfacts.numeric_functions.get(&id);
     if f.is_some() {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::NumericBody,
+            || serde_json::json!({"body":id}),
+        );
         crate::facts_consumed::used();
     }
     f
@@ -497,7 +503,25 @@ fn owner_proof<'a>(
         .indexed_owners
         .get(&id)
         .filter(|p| p.kind == kind);
-    if p.is_some() {
+    if let Some(p) = p {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::OwnerBrand,
+            || serde_json::json!({"local":id,"kind":p.kind}),
+        );
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::MinimumExtent,
+            || serde_json::json!({"local":id,"length":p.min_len}),
+        );
+        if let Some(n) = p.exact_len {
+            crate::verify_facts::consumed(
+                crate::verify_facts::Fact::ExactExtent,
+                || serde_json::json!({"local":id,"length":n}),
+            );
+        }
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Separation,
+            || serde_json::json!({"local":id,"allocations":p.allocations}),
+        );
         crate::facts_consumed::used();
     }
     p
@@ -626,16 +650,25 @@ fn boxed_binding(ctx: &mut FnCtx<'_>, id: u32) -> String {
 /// A facts-verification build (`verify_facts`): the input the facts prove a
 /// Number is one, or the witness reports the site.
 fn verify_number_input(ctx: &mut FnCtx<'_>, number: &str, value: &str, id: u32) {
+    crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("indexed.owner.verify_miss");
     let miss_l = ctx.block_label(miss);
     branch_guard(ctx, number, &miss_l);
     let ok = ctx.current_block;
     ctx.current_block = miss;
-    let site = crate::verify_facts::site_arg(ctx, &format!("number input local {id}"));
-    let _ = ctx.block().call(
+    crate::verify_facts::number_checked(id);
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("number input local {id}"),
+        crate::verify_facts::Fact::NumberInput,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
         crate::types::I32,
         "perry_wpfacts_check_miss",
-        &[(DOUBLE, value), (crate::types::I64, &site)],
+        &[(DOUBLE, value)],
+        &site,
     );
     ctx.block().unreachable();
     ctx.current_block = ok;
@@ -1180,6 +1213,7 @@ fn expression(
                 object: target.clone(),
                 index: key.clone(),
                 value: value.clone(),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -1197,6 +1231,7 @@ fn expression(
                 object: array.clone(),
                 index: index.clone(),
                 value: value.clone(),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -1551,6 +1586,10 @@ pub(super) fn lower(
         if !native_number && (ctx.wpfacts_off || !ctx.wpfacts.number_inputs.contains(id)) {
             branch_guard(ctx, &number, &slow_l);
         } else if !native_number {
+            crate::verify_facts::consumed(
+                crate::verify_facts::Fact::NumberInput,
+                || serde_json::json!({"local":id}),
+            );
             crate::facts_consumed::used();
             if crate::verify_facts::enabled() {
                 verify_number_input(ctx, &number, &v, *id);
@@ -1575,6 +1614,12 @@ pub(super) fn lower(
     // identities can prove separation before falling back to live spans.
     if !p.stores.is_empty() {
         disjoint_storage(ctx, &mut storage, &slow_l);
+    }
+    if ctx.wpfacts.indexed_metadata_pristine {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::IndexedMetadata,
+            || serde_json::json!({"local":length_receiver}),
+        );
     }
     if let Some(id) = length_receiver.filter(|id| {
         storage[id].kind != STRING_KIND

@@ -224,6 +224,47 @@ fn named_atom(name: *const c_char) -> Result<*const crate::StringHeader, NapiSta
     Ok(unsafe { crate::string::property_atom_from_bytes(bytes) })
 }
 
+/// A Node-API named access is a fixed-key site whose receiver no fact
+/// names, so it takes the one path an emitted `o.k` on an unknown receiver
+/// takes: the receiver's layout probe answers from the shape's own key index
+/// (own or inherited data, a proven absence, a plain writable own store or a
+/// plain add), and only a decline runs the complete operation (getters,
+/// setters, non-writable and frozen, proxies and other exotics, index-like
+/// names). The probes are GC leaves, so the unrooted key atom stays valid.
+fn named_get(object: f64, key: f64) -> f64 {
+    let v = unsafe {
+        crate::object::layout_probe::perry_probe_get_keyed(
+            crate::object::shapes::ordinary_dir_addr(),
+            object.to_bits(),
+            key.to_bits(),
+        )
+    };
+    if v.to_bits() != crate::value::TAG_HOLE {
+        return v;
+    }
+    unsafe { crate::object::js_object_get_property_key(object, key) }
+}
+
+/// [`named_get`]'s store: the store probe, else V8's `Object::Set` (the
+/// ordinary `[[Set]]` with the object as receiver; a primitive stores
+/// nothing). Returns the value stored.
+fn named_set(object: f64, key: f64, value: f64) -> f64 {
+    if unsafe {
+        crate::object::layout_probe::probe_set_keyed(
+            crate::object::shapes::ordinary_dir_addr(),
+            object.to_bits(),
+            key.to_bits(),
+            value,
+        )
+    } {
+        return value;
+    }
+    if !crate::object::property_ops::reflect_value_is_object(object) {
+        return value;
+    }
+    crate::object::property_ops::reflect::set_resolved(object, key, value, object)
+}
+
 /// Node-API's store is V8's `Object::Set`: the ordinary `[[Set]]` with the
 /// object as its receiver. A refused write (a frozen object, a non-writable
 /// or setter-less property, a new key on a non-extensible object) is not an
@@ -301,7 +342,10 @@ pub unsafe extern "C" fn napi_get_boolean(
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_object(env: NapiEnv, result: *mut NapiValue) -> NapiStatus {
-    let object = crate::object::js_object_alloc(0, 0);
+    // Node's `napi_create_object` is `{}`: an ordinary object with ordinary
+    // [[Set]] from birth, born through the literal's plain-ordinary funnel
+    // (its shape is `Ordinary`, the one kind the store probe admits).
+    let object = crate::object::object_alloc_plain(0);
     write_handle(env, pointer_bits(object.cast()), result)
 }
 
@@ -935,15 +979,7 @@ pub unsafe extern "C" fn napi_set_named_property(
     };
     let key_bits = string_bits(atom as *mut crate::StringHeader);
     match named_call(env, object, key_bits, |object, key| {
-        if !crate::object::property_ops::reflect_value_is_object(object) {
-            return f64::from_bits(value_bits);
-        }
-        crate::object::property_ops::reflect::set_resolved(
-            object,
-            key,
-            f64::from_bits(value_bits),
-            object,
-        )
+        named_set(object, key, f64::from_bits(value_bits))
     }) {
         Ok(_) => ok(env),
         Err(status) => set_status(env, status, "property assignment failed"),
@@ -962,9 +998,7 @@ pub unsafe extern "C" fn napi_get_named_property(
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
     let key_bits = string_bits(atom as *mut crate::StringHeader);
-    match named_call(env, object, key_bits, |object, key| unsafe {
-        crate::object::js_object_get_property_key(object, key)
-    }) {
+    match named_call(env, object, key_bits, named_get) {
         Ok(value) => write_handle(env, value.to_bits(), result),
         Err(status) => set_status(env, status, "property lookup failed"),
     }

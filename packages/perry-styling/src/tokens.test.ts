@@ -1,7 +1,7 @@
 // tokens.test.ts — regression test for the `borderWidth` design token.
 //
 // Perry's compiler doesn't (yet) ship a test runner for this package, so this
-// follows the same pattern used across the repo's test-files/*.ts gap tests:
+// follows the same pattern used across the repo's tests/fixtures/programs/*.ts gap tests:
 // a plain .ts program that throws (non-zero exit) on failure and prints a
 // PASS line + exits 0 on success.
 //

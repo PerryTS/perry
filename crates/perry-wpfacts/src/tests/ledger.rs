@@ -235,6 +235,10 @@ fn every_verdict_reason_has_a_cause() {
 }
 
 macro_rules! cause_test {
+    (unseen $name:ident, $cause:literal, $kind:literal, $key:literal, $src:expr) => {
+        // The program loads an unseen module: `hostFn` is its function.
+        cause_test!($name, $cause, $kind, $key, &unseen($src));
+    };
     ($name:ident, $cause:literal, $kind:literal, $key:literal, $src:expr) => {
         #[test]
         fn $name() {
@@ -274,21 +278,21 @@ macro_rules! verdict_test {
 }
 
 cause_test!(
-    escaped_parameter,
+    unseen escaped_parameter,
     "escaped-parameter",
     "property",
     "x",
     r#"const g: any = (globalThis as any).hostFn; g(function (o: any) { return o.x; });"#
 );
 cause_test!(
-    escaped_this,
+    unseen escaped_this,
     "escaped-this",
     "property",
     "y",
     r#"const g: any = (globalThis as any).hostFn; g({ m() { return (this as any).y; } });"#
 );
 cause_test!(
-    intrinsic_prototype_top_store,
+    unseen intrinsic_prototype_top_store,
     "intrinsic-prototype-top-store",
     "property",
     "q",
@@ -302,9 +306,9 @@ fn top_receiver_read_keeps_the_receivers_root() {
     // r is top (an unknown call) or a string; r.q is read after a key was
     // written onto String.prototype through top, and its result is the
     // receiver of .z.
-    let pf = whole(
+    let pf = whole(&unseen(
         r#"const g: any = (globalThis as any).hostFn; (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
-    );
+    ));
     let got = causes(&pf, "property", "z");
     assert!(
         got.iter().any(|c| c == "external-input"),
@@ -328,10 +332,10 @@ cause_test!(
     "computed-key",
     "property",
     "w",
-    r#"const g: any = (globalThis as any).hostFn; console.log((globalThis as any)[g()].w);"#
+    r#"const g: any = (globalThis as any)[process.argv[2]]; console.log((globalThis as any)[g()].w);"#
 );
 cause_test!(
-    escaped_object_field,
+    unseen escaped_object_field,
     "escaped-object-field",
     "property",
     "b",
@@ -359,8 +363,8 @@ cause_test!(
     r#"const g: any = JSON.parse("0"); const r = g(); console.log(r.z);"#
 );
 cause_test!(
-    function_without_identity,
-    "function-without-identity",
+    unseen unknown_accessor_function,
+    "unknown-accessor-function",
     "property",
     "x",
     r#"const g: any = (globalThis as any).hostFn; const o: any = {}; Object.defineProperty(o, "p", { get: g }); console.log(o.p.x);"#

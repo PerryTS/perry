@@ -277,10 +277,43 @@ impl<'a> Gen<'a> {
         }
     }
 
-    pub(crate) fn key_of(&mut self, index: &Expr) -> Key {
+    pub(crate) fn element_site(
+        &mut self,
+        fx: &Fx,
+        expr: &Expr,
+        recv: NodeId,
+        idx: NodeId,
+        key: Key,
+        op: crate::derive::ElementOp,
+    ) {
+        let byte_offset = match expr {
+            Expr::IndexGet { element_offset, .. }
+            | Expr::IndexSet { element_offset, .. }
+            | Expr::IndexUpdate { element_offset, .. }
+            | Expr::PutValueSet { element_offset, .. } => *element_offset,
+            _ => 0,
+        };
+        self.element_sites.push(crate::gen::ElementSite {
+            module: fx.module,
+            byte_offset,
+            op,
+            recv,
+            idx,
+            key,
+        });
+    }
+
+    /// The key a computed access names: a string literal, or a binding that
+    /// always holds one (`const k = "name"; o[k]`: `Gen::const_key`, the
+    /// resolver constant stores and definitions use). A binding read before
+    /// its initialization throws (TDZ) and names no key at all.
+    pub(crate) fn key_of(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
-            _ => Key::any(),
+            _ => match self.const_key(mi, index) {
+                Some(s) => Key::Named(self.m.atom(&s)),
+                None => Key::any(),
+            },
         }
     }
 
@@ -289,7 +322,7 @@ impl<'a> Gen<'a> {
     /// sentinel, one symbol per name, so the read names it. Stores keep
     /// `Key::Any`, which every named read sees; as an atom it can only
     /// merge with a string key of the same spelling (more flow, never less).
-    pub(crate) fn read_key(&mut self, index: &Expr) -> Key {
+    pub(crate) fn read_key(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::SymbolFor(name) => match name.as_ref() {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
@@ -297,7 +330,7 @@ impl<'a> Gen<'a> {
                 }
                 _ => Key::any(),
             },
-            _ => self.key_of(index),
+            _ => self.key_of(mi, index),
         }
     }
 
@@ -491,19 +524,31 @@ impl<'a> Gen<'a> {
         let out = self.tmp("iterated");
         let ik = self.m.iter_key();
         self.m.cons(v, Cons::Load { key: ik, dst: out });
-        let (pc, it) = self.new_call(ThisArg::Node(v), vec![], vec![]);
-        let wk = Key::Named(self.m.atom(crate::builtins::WK_ITERATOR));
-        self.m.protocol_calls.insert(pc);
-        self.m.rel(|| format!("protocolcall {pc}"));
-        self.m.cons(v, Cons::MCall { key: wk, call: pc });
+        let it = self.iterator_of(v);
         let na = self.m.atom("next");
         let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
-        let r2 = self.mcall(v, Key::Named(na), vec![], vec![]);
+        // The step of `v` itself: the runtime's (`js_get_iterator` returns a
+        // value it finds no iterator for unchanged), a protocol call as in
+        // `builtins::iterate`.
+        let (sc, r2) = self.new_call(ThisArg::Node(v), vec![], vec![]);
+        self.m.protocol_calls.insert(sc);
+        self.m.cons(v, Cons::MCall { key: Key::Named(na), call: sc });
         // Only results seen not done: `Model::yield_key`.
         let va = self.m.yield_key();
         self.m.cons(r1, Cons::Load { key: va, dst: out });
         self.m.cons(r2, Cons::Load { key: va, dst: out });
         out
+    }
+
+    /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):
+    /// a protocol call.
+    pub(crate) fn iterator_of(&mut self, v: NodeId) -> NodeId {
+        let (pc, it) = self.new_call(ThisArg::Node(v), vec![], vec![]);
+        let wk = Key::Named(self.m.atom(crate::builtins::WK_ITERATOR));
+        self.m.protocol_calls.insert(pc);
+        self.m.rel(|| format!("protocolcall {pc}"));
+        self.m.cons(v, Cons::MCall { key: wk, call: pc });
+        it
     }
 
     /// Every node an expression makes belongs to the function walking it.
@@ -991,7 +1036,7 @@ impl<'a> Gen<'a> {
                 } else {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
-                    let key = match self.key_of(key) {
+                    let key = match self.key_of(fx.module, key) {
                         Key::Any(_) => Key::Any(self.m.key_shape(key)),
                         k => k,
                     };
@@ -1016,6 +1061,20 @@ impl<'a> Gen<'a> {
                         }
                     }
                 }
+                // Observing a key must not intern atoms or add solver work.
+                let atom = match key.as_ref() {
+                    Expr::String(s) => self.m.atom_index.get(s).copied(),
+                    Expr::SymbolFor(name) => match name.as_ref() {
+                        Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
+                            self.m.atom_index.get(s).copied()
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let element_key = atom.map_or(Key::any(), Key::Named);
+                let idx = self.for_in_key_of(fx.module, key).unwrap_or(k);
+                self.element_site(fx, e, rv, idx, element_key, crate::derive::ElementOp::Write);
                 v
             }
             Expr::PropertyUpdate {
@@ -1072,7 +1131,10 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                match self.read_key(index) {
+                let key = self.read_key(fx.module, index);
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                match key {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any(_) => {
                         let dst = self.tmp("idxload");
@@ -1141,12 +1203,18 @@ impl<'a> Gen<'a> {
                 } else {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
-                    let key = match self.key_of(index) {
+                    let key = match self.key_of(fx.module, index) {
                         Key::Any(_) => Key::Any(self.m.key_shape(index)),
                         k => k,
                     };
                     self.store_elem(fx, e, o, key, i, v, "[]=");
                 }
+                let key = match index.as_ref() {
+                    Expr::String(s) => Key::Named(self.m.atom_index[s]),
+                    _ => Key::any(),
+                };
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Write);
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {
@@ -1160,7 +1228,9 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = self.key_of(index);
+                let key = self.key_of(fx.module, index);
+                self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Read);
+                self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Write);
                 let cur = self.load(o, key);
                 let r2 = self.m.reason("ToNumeric");
                 self.m.cons(
@@ -1811,7 +1881,7 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertySet { key, value, .. } => {
                 let _ = self.expr(fx, key);
                 let v = self.expr(fx, value);
-                let k = self.key_of(key);
+                let k = self.key_of(fx.module, key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
                 for start in self.super_starts(fx) {
                     self.m.cons(

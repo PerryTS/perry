@@ -632,6 +632,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             {
                 ctx.typed_element_locals.insert(*id);
             }
+            crate::expr::snap_env_site::note_let(ctx, *id, init.as_ref());
             lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
             // Object model step 1: a family prototype's birth.
             crate::layout_desc::create_families::lower_binding(ctx, *id)?;

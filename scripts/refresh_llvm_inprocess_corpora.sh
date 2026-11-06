@@ -79,7 +79,7 @@ declare -a NAMES=(spike_text batch_kernel eh_text)
 declare -a SRCS=(
   "experiments/llvm-inprocess-spike/spike.ts"
   "benchmarks/app-patterns/kernels/batch.ts"
-  "test-parity/language/error/test_gap_7302_invoke_eh_paths.ts"
+  "tests/parity/language/error/test_gap_7302_invoke_eh_paths.ts"
 )
 
 rc=0

@@ -50,6 +50,7 @@ fn candidate_method() -> Function {
             },
             // Nominates the existing nonnegative-index family.
             Stmt::Expr(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(ROWS)),

@@ -329,6 +329,7 @@ fn pushes_of(ir: &str, literal: &str) -> usize {
 fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
     let mut module = module_with_tail(synthetic_arguments_param());
     module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(TAIL_ID)),

@@ -520,16 +520,17 @@ pub(crate) mod stdlib_pump {
     /// the count is non-zero, other threads may join the same logical tick.
     static OUTER_PUMP_ENTRY: Mutex<()> = Mutex::new(());
 
-    crate::perry_thread_local! {
-        /// `await` inside a pump callback can synchronously re-enter the host
-        /// pump. Lifecycle hooks belong to the outer tick only.
-        /// One entry per pump level in flight, with the frame mark of the
-        /// level's owner (`crate::exception::marks`): a throw that abandons
-        /// a level skips its guard's drop, and the catching landing pad pops
-        /// the level instead.
-        static PUMP_DEPTH: std::cell::RefCell<crate::exception::CatchStack<()>> =
-            const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
-    }
+    /// `await` inside a pump callback can synchronously re-enter the host
+    /// pump. Lifecycle hooks belong to the outer tick only.
+    /// One entry per pump level in flight, with the frame mark of the
+    /// level's owner (`crate::exception::marks`): a throw that abandons
+    /// a level skips its guard's drop, and the catching landing pad pops
+    /// the level instead.
+    ///
+    /// A field of the per-thread record of frame-marked stacks
+    /// ([`crate::exception::marks::CatchStacks`]).
+    static PUMP_DEPTH: crate::exception::marks::CatchStackKey<()> =
+        crate::exception::marks::CatchStackKey::new(|stacks| &stacks.pump);
 
     struct PumpDepthGuard {
         depth_before: usize,
@@ -591,7 +592,7 @@ pub(crate) mod stdlib_pump {
     }
 
     /// The re-entrant stdlib-pump depth.
-    #[cfg(any(test, target_os = "wasi"))]
+    #[cfg(test)]
     pub(crate) fn pump_depth() -> u32 {
         PUMP_DEPTH.with(|depth| depth.borrow().len() as u32)
     }
@@ -1457,3 +1458,5 @@ mod diagnostic_report_roots;
 
 mod dyn_eval_hook_roots;
 mod interp_proto_guard;
+
+pub mod snap_census;

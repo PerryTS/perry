@@ -17,6 +17,7 @@ mod once;
 mod own_guard;
 pub(crate) use own_guard::Region;
 mod primitives;
+mod private_methods;
 mod shared_closures;
 mod view;
 mod walk;
@@ -35,6 +36,17 @@ pub struct ReadSite {
     /// the atom `()`.
     pub value_call: bool,
     pub func: FnIdx,
+}
+
+/// A computed member operation over nodes already generated for the solve.
+#[derive(Clone, Debug)]
+pub(crate) struct ElementSite {
+    pub module: u32,
+    pub byte_offset: u32,
+    pub op: crate::derive::ElementOp,
+    pub recv: NodeId,
+    pub idx: NodeId,
+    pub key: Key,
 }
 
 /// Another unit's module namespace object as this unit holds it (§18.2,
@@ -132,6 +144,7 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    pub(crate) element_sites: Vec<ElementSite>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -485,6 +498,7 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            element_sites: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -684,6 +698,18 @@ impl<'a> Gen<'a> {
                     .resolved_path
                     .as_ref()
                     .and_then(|p| self.path_index.get(p).copied());
+                // A module outside the program that is no builtin is unseen
+                // code run at load: it may write any key of the global
+                // object (rule G reads an unresolved global as `native_written`
+                // then). In per-unit mode a missing target is another unit.
+                if target.is_none()
+                    && !self.m.unit_mode
+                    && !crate::builtins::is_builtin_module(&imp.source)
+                {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    let what = format!("module {} runs unseen", imp.source);
+                    crate::builtins::note_native_write(&mut self.m, t, None, &what);
+                }
                 for spec in &imp.specifiers {
                     let (local, node) = match (spec, target) {
                         (ImportSpecifier::Named { imported, local }, Some(t)) => {
@@ -1121,7 +1147,10 @@ impl<'a> Gen<'a> {
         let mut mapped = None;
         for p in params {
             let n = self.local(mi, p.id);
-            if p.is_rest {
+            // `arguments` beside a user rest parameter is no rest itself
+            // (the HIR appends it after `...r`), but the same object: every
+            // argument, never a positional one.
+            if p.is_rest || p.arguments_object.is_some() {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = match &p.arguments_object {
@@ -1152,7 +1181,9 @@ impl<'a> Gen<'a> {
                         mapped = Some((fa, self.m.all_fields(at)));
                     }
                 }
-                rest = Some(n);
+                if p.is_rest {
+                    rest = Some(n);
+                }
             } else if rest.is_some() && params.iter().all(|q| q.arguments_object.is_none()) {
                 // A parameter after a rest parameter is a capture slot the
                 // HIR appends to a class constructor (`...a, cap`): the rest
@@ -1207,7 +1238,8 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this,
             no_summary: false,
-            gen_step: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
             proto,
@@ -1310,16 +1342,25 @@ impl<'a> Gen<'a> {
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
-            // Its hidden capture parameters (DECISIONS 117): slot `i` of the
-            // class environment, in the order the HIR appends them.
+            // Only an environment-publishing constructor takes its hidden
+            // arguments from that environment. Instance captures forward the
+            // actual argument, which their ClassCaptureValue rebind prefers
+            // over the declaration snapshot (including an unseeded snapshot).
+            let publishes_environment = ctor.body.iter().any(|s| {
+                matches!(s, perry_hir::Stmt::Expr(perry_hir::Expr::ClassEnvSet {
+                    class_name, publish: true, ..
+                }) if class_name == &c.name)
+            });
             let caps = ctor
                 .params
                 .iter()
                 .rev()
                 .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
-            self.m.funcs[f as usize].captures =
-                (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            if publishes_environment {
+                self.m.funcs[f as usize].captures =
+                    (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            }
         }
         let proto = self.m.tok(TokKind::Proto(tm));
         let cobj = self.m.tok(TokKind::ClassObj(tm));
@@ -1386,13 +1427,20 @@ impl<'a> Gen<'a> {
                 false,
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, g)),
             );
-            let this = self.m.funcs[f as usize].this;
-            self.m.this_class.insert(this, tm);
+            // A static accessor is an own property of the class object;
+            // its `this` is whatever reads it (a subclass, `Object.create`).
+            let holder = if c.is_static_accessor(g) {
+                cobj
+            } else {
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                proto
+            };
             let a = self.m.atom(name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.accessors.entry((proto, a)).or_default().0.push(ft);
-            push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+            self.m.accessors.entry((holder, a)).or_default().0.push(ft);
+            push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
         for (name, s) in &c.setters {
             let fname = format!("{}::set {name}", c.name);
@@ -1405,13 +1453,20 @@ impl<'a> Gen<'a> {
                 false,
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, s)),
             );
-            let this = self.m.funcs[f as usize].this;
-            self.m.this_class.insert(this, tm);
+            // A static accessor is an own property of the class object;
+            // its `this` is whatever reads it (a subclass, `Object.create`).
+            let holder = if c.is_static_accessor(s) {
+                cobj
+            } else {
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                proto
+            };
             let a = self.m.atom(name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.accessors.entry((proto, a)).or_default().1.push(ft);
-            push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+            self.m.accessors.entry((holder, a)).or_default().1.push(ft);
+            push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
         for (cm, named) in c.computed_members.iter().zip(named) {
             let f = self.register_fn(
@@ -1427,14 +1482,20 @@ impl<'a> Gen<'a> {
                 )),
             );
             if let Some((a, setter)) = named {
-                // Under a constant key: that key's accessor.
-                let this = self.m.funcs[f as usize].this;
-                self.m.this_class.insert(this, tm);
+                // Under a constant key: that key's accessor, on the class
+                // object when it is static.
+                let holder = if cm.is_static {
+                    cobj
+                } else {
+                    let this = self.m.funcs[f as usize].this;
+                    self.m.this_class.insert(this, tm);
+                    proto
+                };
                 self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
-                let e = self.m.accessors.entry((proto, a)).or_default();
+                let e = self.m.accessors.entry((holder, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
-                push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+                push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
                 continue;
             }
             let holder = if cm.is_static { cobj } else { proto };
@@ -1489,7 +1550,8 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
-            gen_step: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
             proto: None,
@@ -1572,6 +1634,7 @@ impl<'a> Gen<'a> {
     /// no parent value (its `extends` resolved statically, or none) cannot
     /// take one: its instances escape and `v` is sunk, as before.
     pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
+        let native = tm.and_then(|tm| self.native_parent_value(tm));
         match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
             Some((tm, (pv, _))) => {
                 self.m.edge(v, pv);
@@ -1587,6 +1650,28 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, chk);
                 self.m.parent_checks.push((tm, chk));
             }
+            // A class linked by name to a built-in parent (`extends Error`):
+            // `super()` runs the evaluated `extends` value with `this` = the
+            // instance. The native summary (`native_parent_ctor`) is that run
+            // only when the value is the constructor the global object
+            // declares under the name; whether it is depends on what the
+            // solve finds (a program or an unseen module may write the
+            // global, rule G), and anything else runs before the solve ends,
+            // so the value is checked during the solve (`Cons::NativeParent`).
+            None if native.is_some() => {
+                let tm = tm.unwrap();
+                let chk = self.m.node_l("native-parent-check");
+                self.m.edge(v, chk);
+                let reason = self.m.reason(why);
+                self.m.cons(
+                    chk,
+                    Cons::NativeParent {
+                        tm,
+                        expected: native.unwrap(),
+                        reason,
+                    },
+                );
+            }
             None => {
                 self.to_sink(v, why);
                 if let Some(tm) = tm {
@@ -1597,6 +1682,19 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    /// The value of the global object's declared constructor that class `tm`'s
+    /// built-in parent names (`extends Error`: the realm's `Error`); `None`
+    /// when the class has no built-in parent or the global declares none
+    /// under that name (`EventEmitter` is a module export).
+    fn native_parent_value(&mut self, tm: TmplId) -> Option<Tok> {
+        let (_, name) = self.m.tmpls[tm as usize].native_parent.clone()?;
+        let identity = self
+            .m
+            .namespace_property(BuiltinNs::GlobalThis, &name)?
+            .native?;
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity })))
     }
 
     /// After the bodies: a parent value no evaluated parent fed takes the

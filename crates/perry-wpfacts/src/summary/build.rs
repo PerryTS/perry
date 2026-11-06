@@ -1,5 +1,6 @@
 //! Summarization: indexing, slicing, planning and building the summaries.
 
+use super::body::{encode_body, BodyCall, BodyCons, BodyInput, CallOperand, Operand};
 use super::*;
 
 /// Index of the constraints and calls that mention owned nodes.
@@ -366,39 +367,6 @@ fn disposition(
         }
     }
     Ok(true)
-}
-
-/// Rule C: the result of `s` is a closure it creates over its own frame
-/// (`CAP_OWN`), the closure value itself or a copy of it.
-fn returns_own_closure(s: &Summary) -> bool {
-    if !is_slot(s.ret) {
-        return false;
-    }
-    let mut seen: FxHashSet<NodeId> = s
-        .closures
-        .iter()
-        .filter(|c| c.3 == CAP_OWN)
-        .map(|c| SLOT | c.0)
-        .collect();
-    if seen.is_empty() {
-        return false;
-    }
-    let mut succ: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
-    for &(a, b) in &s.edges {
-        succ.entry(a).or_default().push(b);
-    }
-    let mut work: Vec<NodeId> = seen.iter().copied().collect();
-    while let Some(x) = work.pop() {
-        if x == s.ret {
-            return true;
-        }
-        for &y in succ.get(&x).map(|v| v.as_slice()).unwrap_or(&[]) {
-            if seen.insert(y) {
-                work.push(y);
-            }
-        }
-    }
-    false
 }
 
 /// `f`'s result is a closure it creates over its own frame, through
@@ -849,145 +817,25 @@ pub(super) fn build_summaries(m: &mut Model) {
         if refused.contains(&f) {
             continue;
         }
-        let d = &slices[&f];
-        let of = &outer[&f];
-        let oset: FxHashSet<NodeId> = of.iter().copied().collect();
+        let (input, observations) = batch_body_input(
+            m,
+            f,
+            BodyPlan {
+                slices: &slices,
+                outer: &outer,
+                entries: &entries,
+                births: &births,
+                lex: &lex,
+                ix: &ix,
+                dof: &dof,
+                cvs: &cvs,
+                refused: &refused,
+            },
+        );
+        let s = encode_body(input);
+        obs_toks.extend(observations);
         let e = &entries[&f];
-        let mut slot: FxHashMap<NodeId, u32> = FxHashMap::default();
-        for (i, &x) in d.iter().chain(of.iter()).enumerate() {
-            slot.insert(x, i as u32);
-        }
-        let enc = |x: NodeId| match slot.get(&x) {
-            Some(&i) => SLOT | i,
-            None => x,
-        };
-        let mut callix: FxHashMap<CallId, u32> = FxHashMap::default();
-        let mut s = Summary {
-            nslots: (d.len() + of.len()) as u32,
-            orig: d.iter().chain(of.iter()).copied().collect(),
-            outer: (d.len() as u32..(d.len() + of.len()) as u32).collect(),
-            ..Default::default()
-        };
-        for (i, &k) in e.calls.iter().enumerate() {
-            callix.insert(k, i as u32);
-            s.calls.push((k, map_call(&m.calls[k as usize], enc)));
-        }
-        let kenc = |k: CallId| match callix.get(&k) {
-            Some(&i) => CALL | i,
-            None => k,
-        };
-        // Closures born in this body with outer terms, and its literals:
-        // per instance. Their generation tokens stay on the observation
-        // nodes (seeds never copy them: they reached slots by
-        // generation's online copies).
-        let mut strip: FxHashSet<Tok> = FxHashSet::default();
-        // The template token's own nodes: observation, never an instance's.
-        let mut lit_own: FxHashSet<NodeId> = FxHashSet::default();
-        let dset: FxHashSet<NodeId> = d.iter().copied().collect();
-        for b in births.get(&f).map(|v| v.as_slice()).unwrap_or(&[]) {
-            if !b.holders.iter().all(|x| dset.contains(x)) {
-                continue;
-            }
-            strip.insert(b.tok);
-            lit_own.extend(b.own.iter().copied());
-            obs_toks.push((b.tok, b.own.clone()));
-            let roots: Vec<NodeId> = b
-                .holders
-                .iter()
-                .copied()
-                .filter(|&h| {
-                    !ix.preds
-                        .get(&h)
-                        .is_some_and(|ps| ps.iter().any(|p| b.holders.contains(p)))
-                })
-                .collect();
-            for &h in &roots {
-                s.births.push((slot[&h], b.tm));
-            }
-            for (k, _, ws, prim) in &b.fields {
-                let mut srcs: Vec<NodeId> = ws.iter().map(|&w| enc(w)).collect();
-                if *prim != 0 {
-                    let sl = s.nslots;
-                    s.nslots += 1;
-                    s.orig.push(NO_NODE);
-                    s.seeds.push((sl, Vec::new(), *prim, false));
-                    srcs.push(SLOT | sl);
-                }
-                for &h in &roots {
-                    for &src in &srcs {
-                        s.cons.push((enc(h), Cons::BirthField { key: *k, src }));
-                    }
-                }
-            }
-        }
-        for &g in &lex.children[f as usize] {
-            let Some(og) = outer.get(&g) else { continue };
-            if og.is_empty() || refused.contains(&g) || !slices.contains_key(&g) {
-                continue;
-            }
-            // What the closure captures, by where its terms live here
-            // (design §14.2): a slot of this frame, only outer terms, or
-            // neither (shared or module nodes).
-            let terms: Vec<NodeId> = og.iter().map(|&x| enc(x)).collect();
-            let own = terms
-                .iter()
-                .any(|&x| is_slot(x) && (x & !SLOT) < d.len() as u32);
-            let cap = if own {
-                CAP_OWN
-            } else if terms.iter().any(|&x| is_slot(x)) {
-                CAP_OUTER
-            } else {
-                CAP_NONE
-            };
-            for &cv in cvs.get(&g).map(|v| v.as_slice()).unwrap_or(&[]) {
-                if let Some(&sl) = slot.get(&cv) {
-                    s.closures.push((sl, g, terms.clone(), cap));
-                    strip.insert(m.funcs[g as usize].token);
-                }
-            }
-        }
-        for &x in d {
-            let node = &m.nodes[x as usize];
-            let toks: Vec<Tok> = node
-                .pts
-                .to_sorted()
-                .into_iter()
-                .filter(|t| !strip.contains(t))
-                .collect();
-            if !toks.is_empty() || node.prim != 0 || node.own_refuted {
-                s.seeds.push((slot[&x], toks, node.prim, node.own_refuted));
-            }
-            for &y in node.succ.iter() {
-                if !lit_own.contains(&y) && role(&lex, &dof, &oset, f, y) != Role::Inner {
-                    s.edges.push((enc(x), enc(y)));
-                }
-            }
-            if let Some(ps) = ix.preds.get(&x) {
-                for &p in ps.iter().filter(|p| !lit_own.contains(p)) {
-                    match role(&lex, &dof, &oset, f, p) {
-                        Role::Own | Role::Inner | Role::Other(_) => {}
-                        Role::Outer => s.edges.push((enc(p), enc(x))),
-                        Role::Abs => s.edges.push((p, enc(x))),
-                    }
-                }
-            }
-        }
-        for &(h, i) in &e.cons {
-            let c = &m.nodes[h as usize].cons[i as usize];
-            s.cons.push((enc(h), map_cons(c, enc, kenc)));
-        }
-        s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
-        s.ret = enc(m.funcs[f as usize].ret);
-        s.this = if m.funcs[f as usize].lexical_this {
-            NO_NODE
-        } else {
-            enc(m.funcs[f as usize].this)
-        };
-        if !is_slot(s.this) {
-            s.this = NO_NODE;
-        }
-        compress(&mut s);
-        s.maker = returns_own_closure(&s);
+        let of = &outer[&f];
         size += s.edges.len() + s.cons.len() + s.calls.len() + s.seeds.len();
         nsum += 1;
         nouter += s.outer.len();
@@ -1047,13 +895,7 @@ pub(super) fn build_summaries(m: &mut Model) {
                 let node = &m.nodes[x as usize];
                 node.succ.iter().map(|&y| m.nodes[y as usize].obs).collect()
             };
-            let node = &mut m.nodes[x as usize];
-            let mut it = keep.iter();
-            node.succ.retain(|_| *it.next().unwrap());
-            if node.succ_set.is_some() {
-                let set: crate::pts::FxHashSet<NodeId> = node.succ.iter().copied().collect();
-                node.succ_set = Some(Rc::new(set));
-            }
+            m.prune_successors(x, &keep);
         }
     }
     if m.explain {
@@ -1137,4 +979,166 @@ fn written_slots(s: &Summary) -> FxHashSet<NodeId> {
         }
     }
     written
+}
+
+/// Compatibility view of the existing whole-program plan. This is not a
+/// body-local planner: refusals, capture ownership and solved seed snapshots
+/// remain batch decisions until owned body generation replaces this adapter.
+struct BodyPlan<'a> {
+    slices: &'a FxHashMap<FnIdx, Vec<NodeId>>,
+    outer: &'a FxHashMap<FnIdx, Vec<NodeId>>,
+    entries: &'a FxHashMap<FnIdx, Entries>,
+    births: &'a FxHashMap<FnIdx, Vec<Birth>>,
+    lex: &'a Lex,
+    ix: &'a Index,
+    dof: &'a FxHashMap<NodeId, FnIdx>,
+    cvs: &'a FxHashMap<FnIdx, Vec<NodeId>>,
+    refused: &'a FxHashSet<FnIdx>,
+}
+
+fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(Tok, Vec<NodeId>)>) {
+    let BodyPlan {
+        slices,
+        outer,
+        entries,
+        births,
+        lex,
+        ix,
+        dof,
+        cvs,
+        refused,
+    } = p;
+    let mut obs_toks = Vec::new();
+    let d = &slices[&f];
+    let of = &outer[&f];
+    let oset: FxHashSet<NodeId> = of.iter().copied().collect();
+    let e = &entries[&f];
+    let mut slot: FxHashMap<NodeId, u32> = FxHashMap::default();
+    for (i, &x) in d.iter().chain(of.iter()).enumerate() {
+        slot.insert(x, i as u32);
+    }
+    let enc = |x: NodeId| match slot.get(&x) {
+        Some(&i) if i < d.len() as u32 => Operand::Slot(i),
+        Some(&i) => Operand::Environment(i - d.len() as u32),
+        None => Operand::Absolute(x),
+    };
+    let mut callix: FxHashMap<CallId, u32> = FxHashMap::default();
+    let mut s = BodyInput::new(d, of);
+    for (i, &k) in e.calls.iter().enumerate() {
+        callix.insert(k, i as u32);
+        s.calls
+            .push((k, BodyCall::capture(&m.calls[k as usize], enc)));
+    }
+    let kenc = |k: CallId| match callix.get(&k) {
+        Some(&i) => CallOperand::Template(i),
+        None => CallOperand::Absolute(k),
+    };
+    // Closures born in this body with outer terms, and its literals:
+    // per instance. Their generation tokens stay on the observation
+    // nodes (seeds never copy them: they reached slots by
+    // generation's online copies).
+    let mut strip: FxHashSet<Tok> = FxHashSet::default();
+    // The template token's own nodes: observation, never an instance's.
+    let mut lit_own: FxHashSet<NodeId> = FxHashSet::default();
+    let dset: FxHashSet<NodeId> = d.iter().copied().collect();
+    for b in births.get(&f).map(|v| v.as_slice()).unwrap_or(&[]) {
+        if !b.holders.iter().all(|x| dset.contains(x)) {
+            continue;
+        }
+        strip.insert(b.tok);
+        lit_own.extend(b.own.iter().copied());
+        obs_toks.push((b.tok, b.own.clone()));
+        let roots: Vec<NodeId> = b
+            .holders
+            .iter()
+            .copied()
+            .filter(|&h| {
+                !ix.preds
+                    .get(&h)
+                    .is_some_and(|ps| ps.iter().any(|p| b.holders.contains(p)))
+            })
+            .collect();
+        for &h in &roots {
+            s.births.push((slot[&h], b.tm));
+        }
+        for (k, _, ws, prim) in &b.fields {
+            let mut srcs: Vec<Operand> = ws.iter().map(|&w| enc(w)).collect();
+            if *prim != 0 {
+                let sl = s.orig.len() as u32;
+                s.orig.push(NO_NODE);
+                s.seeds.push((sl, Vec::new(), *prim, false));
+                srcs.push(Operand::Slot(sl));
+            }
+            for &h in &roots {
+                for &src in &srcs {
+                    s.cons.push((enc(h), BodyCons::birth_field(*k, src)));
+                }
+            }
+        }
+    }
+    for &g in &lex.children[f as usize] {
+        let Some(og) = outer.get(&g) else { continue };
+        if og.is_empty() || refused.contains(&g) || !slices.contains_key(&g) {
+            continue;
+        }
+        // What the closure captures, by where its terms live here
+        // (design §14.2): a slot of this frame, only outer terms, or
+        // neither (shared or module nodes).
+        let terms: Vec<Operand> = og.iter().map(|&x| enc(x)).collect();
+        let own = terms.iter().any(|&x| matches!(x, Operand::Slot(_)));
+        let cap = if own {
+            CAP_OWN
+        } else if terms.iter().any(|&x| matches!(x, Operand::Environment(_))) {
+            CAP_OUTER
+        } else {
+            CAP_NONE
+        };
+        for &cv in cvs.get(&g).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if let Some(&sl) = slot.get(&cv) {
+                s.closures.push((sl, g, terms.clone(), cap));
+                strip.insert(m.funcs[g as usize].token);
+            }
+        }
+    }
+    for &x in d {
+        let node = &m.nodes[x as usize];
+        let toks: Vec<Tok> = node
+            .pts
+            .to_sorted()
+            .into_iter()
+            .filter(|t| !strip.contains(t))
+            .collect();
+        if !toks.is_empty() || node.prim != 0 || node.own_refuted {
+            s.seeds.push((slot[&x], toks, node.prim, node.own_refuted));
+        }
+        for &y in node.succ.iter() {
+            if !lit_own.contains(&y) && role(&lex, &dof, &oset, f, y) != Role::Inner {
+                s.edges.push((enc(x), enc(y)));
+            }
+        }
+        if let Some(ps) = ix.preds.get(&x) {
+            for &p in ps.iter().filter(|p| !lit_own.contains(p)) {
+                match role(&lex, &dof, &oset, f, p) {
+                    Role::Own | Role::Inner | Role::Other(_) => {}
+                    Role::Outer => s.edges.push((enc(p), enc(x))),
+                    Role::Abs => s.edges.push((Operand::Absolute(p), enc(x))),
+                }
+            }
+        }
+    }
+    for &(h, i) in &e.cons {
+        let c = &m.nodes[h as usize].cons[i as usize];
+        s.cons.push((enc(h), BodyCons::capture(c, enc, kenc)));
+    }
+    s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
+    s.ret = enc(m.funcs[f as usize].ret);
+    s.this = if m.funcs[f as usize].lexical_this {
+        Operand::Absolute(NO_NODE)
+    } else {
+        enc(m.funcs[f as usize].this)
+    };
+    if matches!(s.this, Operand::Absolute(_)) {
+        s.this = Operand::Absolute(NO_NODE);
+    }
+    (s, obs_toks)
 }

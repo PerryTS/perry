@@ -141,8 +141,21 @@ fn opt_index(v: Option<f64>, default: i32) -> Option<i32> {
 unsafe fn string_by_name(recv: f64, name: &[u8], args: &[f64]) -> f64 {
     // SAFETY: every name below is an ASCII literal.
     let name_str = std::str::from_utf8_unchecked(name);
-    if let Some(value) = super::string_native_method(recv, name_str, args) {
-        return value;
+    // Only a primitive string reads `String.prototype` by kind. A `String`
+    // wrapper object is an ordinary object: its own `[[Prototype]]` (which
+    // the program may have replaced) decides. `Get` first; the ordinary
+    // dispatch only answers while the method found is still the builtin.
+    if is_string(recv) {
+        if let Some(value) = super::string_native_method(recv, name_str, args) {
+            return value;
+        }
+    }
+    let mut recv = recv;
+    let mut args = args.to_vec();
+    if !is_string(recv) {
+        if let Some(value) = redirect_or_refresh(&mut recv, name, &mut args) {
+            return value;
+        }
     }
     super::js_native_call_method(
         recv,

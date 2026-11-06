@@ -384,7 +384,12 @@ pub(crate) fn send_impl(socket: f64, args: &[f64]) -> f64 {
     let source_port = hidden_port(socket, KEY_PORT);
     if let Some(target) = lookup_bound_socket(&address, port, socket) {
         if !is_truthy_hidden(target, KEY_CLOSED) {
-            let rinfo = build_rinfo(&source_address, &source_family, source_port, size);
+            let rinfo = build_rinfo(
+                source_address.as_bytes(),
+                source_family == "IPv6",
+                source_port,
+                size,
+            );
             emit_event(target, "message", &[message, rinfo]);
         }
     }
@@ -523,6 +528,7 @@ fn invoke_lookup(socket: f64, lookup: f64, address: &str) {
 }
 
 pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    health_check(socket);
     let multicast_address = args.first().copied().unwrap_or_else(undefined_value);
     if is_missing_membership_arg(multicast_address) {
         throw_missing_arg("multicastAddress");
@@ -569,6 +575,7 @@ pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) 
 }
 
 pub(crate) fn source_membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    health_check(socket);
     let source_address = validate_string_arg(
         args.first().copied().unwrap_or_else(undefined_value),
         "sourceAddress",
@@ -742,7 +749,7 @@ fn validate_option_buffer_size(value: f64, name: &'static str) -> f64 {
 pub(crate) fn set_buffer_size_impl(
     socket: f64,
     args: &[f64],
-    key: &[u8],
+    key: Slot,
     syscall: &'static str,
 ) -> f64 {
     let size = validate_buffer_size(args.first().copied().unwrap_or_else(undefined_value));
@@ -751,7 +758,7 @@ pub(crate) fn set_buffer_size_impl(
     undefined_value()
 }
 
-pub(crate) fn get_buffer_size_impl(socket: f64, key: &[u8], syscall: &'static str) -> f64 {
+pub(crate) fn get_buffer_size_impl(socket: f64, key: Slot, syscall: &'static str) -> f64 {
     ensure_buffer_running(socket, syscall);
     get_hidden_value(socket, key).unwrap_or(65536.0)
 }

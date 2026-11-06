@@ -370,6 +370,7 @@ mod malloc_backed_string_arg_tests {
         assert_eq!(base_str, "c.txt");
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Forged pointers (not in the malloc registry, not in an arena) must
     /// still be rejected without dereferencing the candidate header.
     #[test]
@@ -519,7 +520,7 @@ fn win32_parse_preserves_input_components() {
     use super::*;
     // All five fields were captured from the repository's pinned Node oracle.
     let cases: Vec<(String, [String; 5])> = serde_json::from_str(include_str!(
-        "../../../../test-files/fixtures/path_win32_parse.json"
+        "../../../../tests/fixtures/programs/fixtures/path_win32_parse.json"
     ))
     .unwrap();
     let _suppress = crate::gc::GcSuppressScope::new();

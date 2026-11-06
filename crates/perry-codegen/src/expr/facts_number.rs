@@ -280,6 +280,10 @@ fn this_kinds(ctx: &FnCtx<'_>, cids: &[u32], key: &str) -> Option<u16> {
     let mut mask = 0u16;
     for &cid in cids {
         let f = ctx.wpfacts.field(cid, key)?;
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::NumericResult,
+            || serde_json::json!({"class":cid,"key":key,"mask":f.kind_mask}),
+        );
         crate::facts_consumed::used();
         if f.declared || f.reserved {
             return None;

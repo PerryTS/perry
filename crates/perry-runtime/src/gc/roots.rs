@@ -57,7 +57,7 @@ pub(crate) use stack_roots::with_stack_roots;
 pub(crate) use scan_mode::ConservativeScanEffectiveTestGuard;
 #[allow(unused_imports)]
 pub(crate) use scan_mode::{
-    conservative_scan_is_effective, conservative_stack_scan_decision,
+    collection_point_is_precise, conservative_scan_is_effective, conservative_stack_scan_decision,
     conservative_stack_scan_decision_for, conservative_stack_scan_mode,
     conservative_stack_scan_mode_from_value, resolve_conservative_stack_scan_mode,
     set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,
@@ -559,6 +559,7 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 /// failure unwinds from here; across the C ABI it aborts the process.
 pub(super) fn register_global_root(root: *mut u64) {
     if !root.is_null() {
+        let _bookkeeping = crate::snap_census::bookkeeping();
         unsafe {
             super::root_words::verify_jsvalue_root_word(*root, "global");
             runtime_write_barrier_root_nanbox(*root);
@@ -566,6 +567,19 @@ pub(super) fn register_global_root(root: *mut u64) {
     }
     GLOBAL_ROOTS.with(|roots| {
         roots.borrow_mut().push(root);
+    });
+    crate::snap_census::global_root(root as usize);
+}
+
+/// Every registered module-global root slot (the SNAP census tracks them).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn for_each_global_root_slot(mut f: impl FnMut(usize)) {
+    GLOBAL_ROOTS.with(|roots| {
+        for &root in roots.borrow().iter() {
+            if !root.is_null() {
+                f(root as usize);
+            }
+        }
     });
 }
 

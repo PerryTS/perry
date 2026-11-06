@@ -42,9 +42,8 @@ unsafe fn source_record(value: f64) -> Option<(*const ObjectHeader, u32, shapes:
 }
 
 #[inline]
-fn spread_key(source: u32) -> usize {
-    // The full process-stable id fits both ILP32 and LP64.
-    source as usize
+fn spread_key(source: u32) -> u64 {
+    u64::from(source)
 }
 
 #[inline]
@@ -58,7 +57,7 @@ fn lookup(prefix: LayoutWord, source: u32) -> Option<TransitionEntry> {
     let entry = with_transition_cache(|t| unsafe { (*t)[cache_slot(prefix, source)] });
     (entry.next_keys != 0
         && entry.prev_shape_id == prefix
-        && entry.key_ptr == kid
+        && entry.key_id == kid
         && entry.slot_idx >> 24 == SPREAD_TRANSITION_NAMESPACE)
         .then_some(entry)
 }
@@ -67,7 +66,8 @@ fn lookup(prefix: LayoutWord, source: u32) -> Option<TransitionEntry> {
 /// never a string address to be rewritten by the collector.
 pub(super) fn source_shape(entry: &TransitionEntry) -> Option<LayoutWord> {
     (entry.slot_idx >> 24 == SPREAD_TRANSITION_NAMESPACE)
-        .then_some(LayoutWord(entry.key_ptr as u32))
+        .then(|| u32::try_from(entry.key_id).ok().map(LayoutWord))
+        .flatten()
 }
 
 fn learn(
@@ -87,7 +87,7 @@ fn learn(
     with_transition_cache(|table| unsafe {
         // GC_STORE_AUDIT(ROOT): existing weak transition edge and young log.
         (*table)[slot] = TransitionEntry {
-            key_ptr: kid,
+            key_id: kid,
             next_keys: keys.arr() as usize,
             prev_shape_id: prefix,
             target_shape_id: shape,
@@ -591,6 +591,11 @@ unsafe fn birth_slow(
     } else {
         field_rep::REP_ANY
     };
+    // The pair's first use, the same whichever init takes it first: the
+    // scratch key list, its canonical list, the shape and (below) the learned
+    // edge. The SNAP census counts them as the runtime's; the result object
+    // stays the caller's.
+    let census = crate::snap_census::first_use();
     let proof = canonical_keys::SharedLayout::of_receiver(source.cast_mut()).unwrap();
     let keys = if prefix_count == 0 && record.summary() == 0 {
         record.keys_view_of(count)
@@ -631,6 +636,7 @@ unsafe fn birth_slow(
         canonical_keys::canonicalize(&proof, list, words.len() as u32).view()
     };
     let shape = intern_result(keys, rep);
+    drop(census);
     let object = allocate_fields(keys.count());
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
@@ -638,6 +644,7 @@ unsafe fn birth_slow(
     let source_keys = positional_source(record, keys.arr());
     copy_slots(object, prefix, source, record, Some(result), source_keys);
     if keys.count() != 0 && source_keys.is_null() {
+        let _census = crate::snap_census::first_use();
         learn(
             prefix_id,
             source_id,

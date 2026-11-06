@@ -211,6 +211,12 @@ pub(crate) fn died_of_abort(status: std::process::ExitStatus) -> bool {
         // `process::abort` is `__fastfail(FAST_FAIL_FATAL_APP_EXIT)`.
         status.code() == Some(0xC000_0409_u32 as i32)
     }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // No child processes to inspect (wasm32): nothing died of an abort.
+        let _ = status;
+        false
+    }
 }
 
 /// The panic message the default hook wrote to `stderr` (the text after the

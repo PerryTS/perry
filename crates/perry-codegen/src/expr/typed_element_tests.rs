@@ -115,6 +115,7 @@ fn get(object: u32, property: &str) -> Expr {
 
 fn element(object: u32, property: &str, index: u32) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(get(object, property)),
@@ -129,6 +130,7 @@ fn store(object: u32, property: &str, index: u32, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(get(object, property)),
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

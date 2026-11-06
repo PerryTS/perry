@@ -900,8 +900,9 @@ mod property_key_tests {
             crate::object::class_registry::test_clear_class_side_table_roots();
 
             let class_id = 0x3581;
+            crate::object::js_register_class_id(class_id);
             let sym = crate::symbol::js_symbol_new_empty();
-            let sym_key = crate::symbol::sym_key_from_f64(sym);
+            let _ = crate::object::class_registry::class_decl_prototype_value(class_id);
 
             crate::object::class_registry::js_register_class_computed_method(
                 class_id as i64,
@@ -914,12 +915,8 @@ mod property_key_tests {
                 0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
-            let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
-                class_id, sym_key, false,
-            )
-            .expect("computed symbol method should be registered");
-            assert_eq!(method.1, 0);
-            assert!(!method.2);
+            let prototype = crate::object::class_registry::class_decl_prototype_value(class_id);
+            assert!(crate::symbol::js_object_has_own_symbol(prototype, sym));
 
             crate::object::class_registry::js_register_class_computed_accessor(
                 class_id as i64,
@@ -930,13 +927,7 @@ mod property_key_tests {
                 2,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
-            let value = crate::object::class_registry::class_symbol_getter_value(
-                class_id,
-                sym_key,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-                false,
-            )
-            .expect("computed symbol getter should be registered");
+            let value = crate::symbol::js_object_get_symbol_property(prototype, sym);
             assert_eq!(value, 88.0);
 
             crate::object::class_registry::test_clear_class_side_table_roots();

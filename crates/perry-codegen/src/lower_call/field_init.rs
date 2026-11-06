@@ -64,7 +64,7 @@ fn private_element_class_id(ctx: &FnCtx<'_>, class_name: &str) -> u32 {
 /// assignment is reached before anything that could read the field.
 ///
 /// **What the elided write is NOT** (the obvious objection, and it is
-/// measurably wrong — `test-parity/language/class/test_class_field_init_proto_setter.ts`): it
+/// measurably wrong — `tests/parity/language/class/test_class_field_init_proto_setter.ts`): it
 /// is not an observable `[[Set]]`, so eliding it cannot change how many times
 /// an accessor runs. A class field declaration is a `CreateDataProperty` — a
 /// DEFINE — per `ClassFieldDefinitionRecord` evaluation, so it never consults
@@ -788,6 +788,13 @@ pub(crate) fn apply_field_initializers_recursive(
     };
 
     for class_name_in_chain in chain {
+        if crate::verify_facts::enabled() {
+            crate::verify_facts::body_entry(
+                ctx,
+                u32::MAX,
+                &format!("{class_name_in_chain}::<fields>"),
+            );
+        }
         // Issue #26: prefer the authoritative chain's resolved fields for this
         // class (correct cross-module parent layout); fall back to the
         // name-keyed `ctx.classes` only when no authoritative entry exists.

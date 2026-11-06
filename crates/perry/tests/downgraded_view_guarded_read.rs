@@ -13,7 +13,7 @@
 //!
 //! The behavioural half (in-bounds, out-of-bounds, callee writes, `.buffer`,
 //! detach and reassignment, against node) is
-//! `test-parity/language/typed-array/test_gap_downgraded_view_guarded_read.ts`.
+//! `tests/parity/language/typed-array/test_gap_downgraded_view_guarded_read.ts`.
 
 use std::path::PathBuf;
 use std::process::Command;

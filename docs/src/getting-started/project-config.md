@@ -157,7 +157,7 @@ import validate from "./generated/validator.cjs";
 if (!validate(input)) throw new Error("invalid config");
 ```
 
-`perry compile` runs the `codegen` step, ajv emits `generated/validator.cjs` (no `new Function`), and Perry compiles it natively. See `test-parity/npm/ajv/test_ajv_standalone.ts` for a runnable, byte-parity-tested sample.
+`perry compile` runs the `codegen` step, ajv emits `generated/validator.cjs` (no `new Function`), and Perry compiles it natively. See `tests/parity/npm/ajv/test_ajv_standalone.ts` for a runnable, byte-parity-tested sample.
 
 ##### Same convention, other tools
 

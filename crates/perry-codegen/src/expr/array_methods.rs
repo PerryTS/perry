@@ -436,7 +436,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // js_getenv_value returns `undefined` (nullish) for an unset
             // var, not a STRING_TAG'd null pointer — so `?? default`
             // applies and typeof/JSON.stringify agree (#1312).
-            Ok(blk.call(DOUBLE, "js_getenv_value", &[(I64, &key_handle)]))
+            super::snap_env_site::emit(ctx, expr);
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_getenv_value", &[(I64, &key_handle)]))
         }
         Expr::EnvGetDynamic(name_expr) => {
             let key_box = lower_expr(ctx, name_expr)?;
@@ -445,8 +448,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `process.env[shortName]`); `js_getenv` dereferences it as
             // `*StringHeader`. #214 SSO bug class.
             let key_handle = unbox_str_handle(blk, &key_box);
+            super::snap_env_site::emit(ctx, expr);
             // `undefined` for unset vars — see EnvGet above (#1312).
-            Ok(blk.call(DOUBLE, "js_getenv_value", &[(I64, &key_handle)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_getenv_value", &[(I64, &key_handle)]))
         }
         Expr::ProcessEnv => {
             // `process.env` (or `globalThis.process.env`) as a value.

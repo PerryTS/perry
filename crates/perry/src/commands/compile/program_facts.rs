@@ -125,8 +125,11 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        verify_facts: perry_codegen::verify_facts::enabled(),
+        dce_bodies: perry_codegen::verify_facts::dce_enabled(),
         roots,
         diagnostics: dump.is_some(),
+        birth_census: std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
@@ -191,6 +194,9 @@ pub(crate) fn run(
         perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check))
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+    if perry_codegen::verify_facts::enabled() {
+        perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));
+    }
     if let Some(path) = &dump {
         let synthetic = synthetic_module_dirs(cache_dir);
         let mut text = pf.dump_text();
@@ -270,8 +276,12 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted {
+            if s.widened_stop {
+                ", widened past the work bound, then OVER 1000 times it: no facts"
+            } else if s.aborted {
                 ", OVER the work/time bound: no facts"
+            } else if s.widened {
+                ", past the work bound: widened"
             } else {
                 ""
             },
@@ -316,10 +326,23 @@ pub(crate) fn view_for(
         Vec::new()
     };
     let elision = elision_for(pf, &key);
+    // The bodies this module's code is removed for: its object depends on
+    // them, so they join the digest (only with removal on and some inactive).
+    let inactive: Vec<(u32, &str)> = if perry_codegen::verify_facts::dce_enabled() {
+        pf.verification_bodies
+            .iter()
+            .flatten()
+            .filter(|((path, _, _), active)| path == &key && !**active)
+            .map(|((_, id, name), _)| (*id, name.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let digest = if elision.is_empty()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()
         && !elision.fnproto_borrow_unwritten
+        && inactive.is_empty()
     {
         pf.digest_for(&key)
     } else {
@@ -327,10 +350,30 @@ pub(crate) fn view_for(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         pf.digest_for(&key).hash(&mut h);
         elision.hash(&mut h);
+        inactive.hash(&mut h);
         h.finish()
     };
     perry_codegen::ProgramFactsView {
         fallback: super::fallback_diag::facts_for(pf, &key),
+        verification_bodies: if perry_codegen::verify_facts::enabled()
+            || perry_codegen::verify_facts::dce_enabled()
+        {
+            pf.verification_bodies.as_ref().map(|b| {
+                Arc::new(
+                    b.iter()
+                        .filter(|((path, _, _), _)| path == &key)
+                        .map(|((_, id, name), active)| ((*id, name.clone()), *active))
+                        .collect(),
+                )
+            })
+        } else {
+            None
+        },
+        verification_module: (perry_codegen::verify_facts::enabled()
+            || perry_codegen::verify_facts::dce_enabled())
+        .then(|| key.clone()),
+        verification_sites: perry_codegen::verify_facts::enabled()
+            .then(|| Arc::new(verification_sites(pf, Some(&key)))),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
         // Set on the entry module by the driver, once R is closed.
@@ -761,3 +804,45 @@ fn facts_inputs(
 #[cfg(test)]
 #[path = "program_facts/worker_roots_tests.rs"]
 mod worker_roots_tests;
+
+#[cfg(test)]
+#[path = "program_facts/native_addon_tests.rs"]
+mod native_addon_tests;
+
+#[cfg(test)]
+#[path = "program_facts/element_tests.rs"]
+mod element_tests;
+
+fn verification_sites(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: Option<&str>,
+) -> Vec<perry_codegen::verify_facts::SiteClaim> {
+    use perry_codegen::verify_facts::{SiteClaim, SiteVerdict};
+    pf.sites
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, site)| {
+            let module = pf.module_paths.get(site.module as usize)?;
+            if path.is_some_and(|path| path != module) {
+                return None;
+            }
+            let verdict = match site.verdict {
+                perry_wpfacts::Verdict::OwnLength => SiteVerdict::OwnLength,
+                perry_wpfacts::Verdict::NativeMember => SiteVerdict::NativeMember,
+                perry_wpfacts::Verdict::T0Mono => SiteVerdict::T0Mono,
+                perry_wpfacts::Verdict::T0Set => SiteVerdict::T0Set,
+                perry_wpfacts::Verdict::E0 => SiteVerdict::E0,
+                perry_wpfacts::Verdict::No(_) => return None,
+            };
+            Some(SiteClaim {
+                ordinal,
+                module: module.clone(),
+                byte_offset: site.byte_offset.checked_sub(1),
+                key: site.key.clone(),
+                is_call: site.is_call,
+                bodies: site.bodies.clone(),
+                verdict,
+            })
+        })
+        .collect()
+}

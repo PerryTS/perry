@@ -77,7 +77,7 @@ all value kinds, prototype mutation, shadow/delete/freeze, own and inherited
 getters, setter-only descriptors, proxies, class statics, private-looking keys,
 arrays, Buffer, mapped arguments, RegExp expandos/accessors, long keys, and
 spilled/deleted shape slots. Getter counts assert one invocation per Get.
-`test-files/test_gap_native_property_get.ts` adds 42 lines of checked parity output,
+`tests/fixtures/programs/test_gap_native_property_get.ts` adds 42 lines of checked parity output,
 including distinct receivers, proxy traps/revocation, key-conversion order,
 symbols, class/private syntax, Date, typed arrays, and RegExp.
 

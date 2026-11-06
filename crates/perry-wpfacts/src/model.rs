@@ -30,13 +30,14 @@ pub const YIELD_VALUE: &str = "#yield";
 
 /// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
 /// prototype read as a value, a number key's chain (read, call), a
-/// computed call's full lookup, and (plus the primitive bit) a call under
+/// computed call's full lookup and numeric own fields, and (plus the primitive bit) a call under
 /// ToPropertyKey of `true`/`null`/`undefined`.
 pub const IDX_PROTO_VALUE: u8 = 32;
 pub const IDX_PLAIN_LOAD: u8 = 33;
 pub const IDX_PLAIN_CALL: u8 = 34;
 pub const IDX_NUM_OWN: u8 = 35;
 pub const IDX_CALL_ANY: u8 = 36;
+pub const IDX_CALL_NUM_OWN: u8 = 37;
 pub const IDX_CALL_NAMED: u8 = 64;
 /// `idx_done` tags of the own-only read (`Cons::IdxOwnLoad`): its key rule
 /// attached, a token key's full lookup, a string/symbol key, a number key,
@@ -529,10 +530,18 @@ pub struct FuncInfo {
     /// Something outside the call protocol writes the parameters (an object
     /// literal IIFE, a computed accessor): never summarized.
     pub no_summary: bool,
-    /// The step closure of a transformed generator: the generator object
+    /// The step closure of a transformed generator is the generator object
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
-    /// iteration protocol on it run the closure.
-    pub gen_step: bool,
+    /// iteration protocol on it run the closure. Its [[Prototype]] is what
+    /// this node holds: the generator function's `prototype` field (its
+    /// original object, what the program stored there instead, ⊤ once the
+    /// function escaped), read by `proto_node`; the program's members sit
+    /// there before the protocol.
+    pub gen_proto: Option<NodeId>,
+    /// A generator function: the node of every `prototype` value of its
+    /// tokens (each closure context's own field, `Model::closure_tok`),
+    /// which its generator objects inherit from (`gen_proto`).
+    pub gen_fn_protos: Option<NodeId>,
     /// An async generator's step closure (its `next` settles a Promise).
     pub gen_async: bool,
     /// A sync step closure with a `yield*`: a step may hand back its
@@ -550,9 +559,9 @@ pub struct FuncInfo {
     /// (DECISIONS 49). Its body is not walked: `run_ctor_chain` runs the
     /// parent with the `new` call itself.
     pub forwards_super: bool,
-    /// A class constructor's hidden trailing parameters, one per value the
-    /// class captures (`__perry_cap_*`, perry-hir `synthesize_class_captures`):
-    /// the class environment slot each one is filled from. A construction
+    /// An environment-publishing constructor's hidden trailing parameters:
+    /// the class environment slot each one is filled from. Instance-capture
+    /// constructors keep their forwarded arguments instead. A construction
     /// from another module passes the class's own snapshot there, whatever
     /// arguments it was given (`construct_registered_class_resolved` fills
     /// only the user slots from them), so another unit never chooses these
@@ -651,10 +660,17 @@ pub enum NativeMiss {
     Global(NodeId, NodeId),
     /// A method call on a primitive receiver of these kinds.
     PrimCall(u16, CallId),
+    /// Descriptor metadata, without reading or calling the property.
+    Lookup(NodeId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
+    /// Return the installed accessor function, without invoking its body.
+    Lookup {
+        dst: NodeId,
+        setter: bool,
+    },
     Load(NodeId),
     Call(CallId),
     Store(NodeId),
@@ -871,7 +887,7 @@ pub struct Node {
     /// Refuted own-test evidence, outside the value lattice. Only
     /// OwnTest(Refuted) propagates it; value-copy edges do not.
     pub own_refuted: bool,
-    pub delta: crate::delta::Delta,
+    pub delta: crate::delta::Pending,
     pub dprim: u16,
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
@@ -997,8 +1013,9 @@ pub struct FnJoined {
 #[derive(Default)]
 pub struct Model {
     pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
-    pub toks: Vec<TokKind>,
-    pub tok_index: FxHashMap<TokKind, Tok>,
+    pub toks: token_values::TokenValues,
+    pub(crate) declarations: crate::builtins::realm_shapes::Declarations,
+    pub tok_index: token_values::TokenIndex,
     /// Template -> its birth-site tokens (`Obj(tm, ctx)`, ctx != NO_CTX).
     pub site_toks: FxHashMap<TmplId, Vec<Tok>>,
     pub tmpls: Vec<Template>,
@@ -1010,7 +1027,7 @@ pub struct Model {
     pub pts_entries: u64,
     pub max_pts: u64,
     /// Solve work so far and its bound (0 = none); see `FactsConfig::max_work`.
-    pub work: u64,
+    pub work: std::cell::Cell<u64>,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -1091,6 +1108,7 @@ pub struct Model {
     pub all_prim_node: NodeId,
     pub top_tok_node: NodeId,
     pub wl: std::collections::VecDeque<NodeId>,
+    pub(crate) pending: crate::delta::EventQueue,
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
@@ -1194,9 +1212,9 @@ pub struct Model {
     pub reshaped_any: bool,
     /// DECISIONS 234: lookups of an own definite data key that skipped the
     /// builtin members of the chain (`Model::shadows`), by receiver: (key,
-    /// the read (`ChainAct::Load`, its destination) or the method call
-    /// (`ChainAct::Call`) that looked it up, whether the receiver's own
-    /// builtin members were skipped too). Once the key no longer shadows,
+    /// the read, method call or passive descriptor query that looked it up,
+    /// whether the receiver's own builtin members were skipped too).
+    /// Once the key no longer shadows,
     /// the lookup takes them.
     pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
     /// The receivers of `shadowed` by the key they skipped and by each class
@@ -1419,8 +1437,8 @@ pub struct Model {
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
-    /// A call's constant first argument (a string), for callees whose
-    /// result depends on it (`BuiltinNs::Require`). Compiler data.
+    /// A call's constant first argument as a property-key spelling. Value
+    /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
     /// The CommonJS registry: every published record (`CJSREG`), the
     /// records under an unknown path (`CJSUNKNOWNPATH`), and the records
@@ -1494,6 +1512,16 @@ pub struct Model {
     /// sound fallback).
     pub budget: Option<(std::time::Instant, std::time::Duration)>,
     pub aborted: bool,
+    /// Past the work bound (`Model::past_work_bound`): a call that would
+    /// make a new calling context runs the function's shared instance
+    /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
+    pub widened: bool,
+    /// The bound widens instead of aborting (whole program only: a unit
+    /// past its bound publishes nothing, `compute_act`).
+    pub widen: bool,
+    /// The widened solve passed `WIDENED_WORK` times the bound: it
+    /// stopped and claims nothing (`Model::past_work_bound`).
+    pub widened_stop: bool,
     pub pops: u64,
     /// Calls/`new` of a ⊤ callee: with the interpreter linked, one could be
     /// the Function constructor or `vm` (E14).
@@ -1915,14 +1943,17 @@ pub struct Act {
     pub fixed: bool,
     /// The bodies the analysis after the activation pass walked (by
     /// `Model::act_key`): what can run, module bodies and static
-    /// initializers included (`ProgramFacts::active_bodies`).
+    /// initializers included (`ProgramFacts::body_reach`).
     pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
     /// Every function the activation pass generated (by `Model::act_key`).
     /// A body outside it is one a later pass minted: it is walked (sound),
     /// the pass never asked whether it can run.
     pub seen: crate::pts::FxHashSet<(u32, u32, String)>,
-    /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
-    /// one activation path left out, so its refusal fixture proves wrongly.
+    /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>[+<path>..]`):
+    /// the named activation paths left out, so a refusal fixture reached
+    /// only through them proves wrongly (two paths that both carry one
+    /// transfer, such as a call into a summarized callee and its instance,
+    /// are left out together).
     pub sabotage: Option<String>,
 }
 
@@ -2015,3 +2046,18 @@ pub const MARK_TOUCHES: u8 = MARK_TOUCH
     | MARK_TOUCH_ITER_NEXT
     | MARK_TOUCH_ITER_RESULT
     | MARK_TOUCH_HAS_INSTANCE;
+
+mod token_values;
+
+impl Model {
+    pub(crate) fn charge_work(&self, amount: u64) {
+        self.work.set(self.work.get() + amount);
+    }
+}
+
+impl FuncInfo {
+    /// The step closure of a transformed generator (`gen_proto`).
+    pub fn gen_step(&self) -> bool {
+        self.gen_proto.is_some()
+    }
+}

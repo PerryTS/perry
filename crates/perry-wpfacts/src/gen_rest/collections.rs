@@ -169,7 +169,7 @@ impl<'a> Gen<'a> {
                 let a = self.expr(fx, array);
                 let ek = self.m.elem_key();
                 let el = self.load(a, ek);
-                self.new_iter_from(mi, &[el])
+                self.new_iter_from(mi, crate::builtins::ITERATOR_KIND, &[el])
             }
             Expr::ArrayToSpliced {
                 array,
@@ -254,12 +254,12 @@ impl<'a> Gen<'a> {
                 let el = self.load(a, ek);
                 let num = self.prim_node(prim::NUM);
                 let pair = self.new_arr_from(mi, "entry", &[el, num]);
-                self.new_iter_from(mi, &[pair])
+                self.new_iter_from(mi, crate::builtins::ITERATOR_KIND, &[pair])
             }
             Expr::ArrayKeys(array) => {
                 let _ = self.expr(fx, array);
                 let num = self.prim_node(prim::NUM);
-                self.new_iter_from(mi, &[num])
+                self.new_iter_from(mi, crate::builtins::ITERATOR_KIND, &[num])
             }
             Expr::ArrayLikeMethod { receiver, args, .. } => {
                 let r = self.expr(fx, receiver);
@@ -396,7 +396,13 @@ impl<'a> Gen<'a> {
                 self.m.edge(k, fa);
                 n
             }
-            Expr::ArrayFrom(x, _) | Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
+            Expr::ArrayFrom(x, _) => {
+                let v = self.expr(fx, x);
+                let it = self.iterate(v);
+                self.m.cons(v, Cons::FromArrayLike { dst: it });
+                self.new_arr_from(mi, "from", &[it])
+            }
+            Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
                 self.new_arr_from(mi, "from", &[it])
@@ -421,6 +427,7 @@ impl<'a> Gen<'a> {
             } => {
                 let v = self.expr(fx, iterable);
                 let it = self.iterate(v);
+                self.m.cons(v, Cons::FromArrayLike { dst: it });
                 let f = self.expr(fx, map_fn);
                 let this = match this_arg {
                     Some(t) => ThisArg::Node(self.expr(fx, t)),

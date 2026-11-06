@@ -32,7 +32,7 @@ How did you verify this works? A paste of the commands you ran is perfect.
 
 - [ ] `cargo build --release` clean
 - [ ] `cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos --exclude perry-ui-watchos --exclude perry-ui-gtk4 --exclude perry-ui-android --exclude perry-ui-windows` passes
-- [ ] (if user-facing) Added or updated a test under `test-files/` or a `#[test]` in the affected crate
+- [ ] (if user-facing) Added or updated a test under `tests/fixtures/programs/` or a `#[test]` in the affected crate
 - [ ] (if CLI / stdlib / runtime API changed) Updated `docs/src/`
 - [ ] (if touching a platform UI backend) Built `-p perry-ui-<backend>` locally on that platform
 

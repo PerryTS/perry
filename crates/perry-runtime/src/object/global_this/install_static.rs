@@ -405,19 +405,16 @@ const NUMBER_STATIC_DATA: [(&str, f64); 8] = [
     ("MIN_SAFE_INTEGER", -9007199254740991.0),
 ];
 
-/// #2889: install the common static methods on the `Object` / `Array`
-/// constructor closures so rebound usage (`const O = Object; O.keys(x)`)
-/// dispatches through the real runtime helpers. Only the high-traffic
-/// statics with simple f64-in / f64-out shapes are reified here; the long
-/// tail (`Object.defineProperty`, `Object.getOwnPropertyDescriptor`, …)
-/// stays unreified on the rebound value and is a known scope gap.
+/// Install a builtin constructor's intrinsics and statics in one attributed
+/// bag. Member keys stay ordinary spellings until program atoms register:
+/// providers can create the realm before module literal initialization.
 // Only intrinsic construction calls this; the installed functions keep the
 // runtime's speed optimization and ordinary inlining policy (#13662).
 #[optimize(size)]
 pub(crate) fn install_builtin_constructor_statics(
     name: &str,
     ctor: *mut crate::closure::ClosureHeader,
-    prototype: Option<f64>,
+    mut prototype: Option<f64>,
 ) {
     if ctor.is_null() {
         return;
@@ -440,6 +437,35 @@ pub(crate) fn install_builtin_constructor_statics(
     );
     let s = &mut statics;
     match name {
+        "Error" => {
+            if let Some(prototype) = prototype.take() {
+                s.data(
+                    "prototype",
+                    prototype,
+                    super::super::PropertyAttrs::new(false, false, false),
+                );
+            }
+            s.method(
+                "captureStackTrace",
+                crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
+                2,
+            );
+            s.method(
+                "isError",
+                crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
+                1,
+            );
+            s.method(
+                "prepareStackTrace",
+                crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
+                2,
+            );
+            s.data(
+                "stackTraceLimit",
+                10.0,
+                super::super::PropertyAttrs::new(true, true, true),
+            );
+        }
         "Object" => {
             s.method(
                 "keys",
@@ -1124,7 +1150,7 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true; "ArrayBuffer[\"@@species\"].<get>", constructible = true; "Array[\"@@species\"].<get>", constructible = true; "Map[\"@@species\"].<get>", constructible = true; "Promise[\"@@species\"].<get>", constructible = true; "RegExp[\"@@species\"].<get>", constructible = true; "Set[\"@@species\"].<get>", constructible = true; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "ArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Array[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Map[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Promise[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "RegExp[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Set[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
         0,
     );
     if getter.is_null() {

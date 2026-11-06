@@ -14,14 +14,17 @@ fn typed_root_reload_fits_the_budget_and_preserves_moving_roots() {
     let dir = tempfile::tempdir().unwrap();
     for (fixture, budget) in [
         (
-            "test-parity/language/string/test_gap_rs4gc_root_launder_budget.ts",
+            "tests/parity/language/string/test_gap_rs4gc_root_launder_budget.ts",
             Some("4890"),
         ),
         (
-            "test-parity/language/function/test_gap_rs4gc_capture_reload_budget.ts",
+            "tests/parity/language/function/test_gap_rs4gc_capture_reload_budget.ts",
             Some("6290"),
         ),
-        ("test-files/test_gap_gc_byte_view_binding_identity.ts", None),
+        (
+            "tests/fixtures/programs/test_gap_gc_byte_view_binding_identity.ts",
+            None,
+        ),
     ] {
         let source = workspace.join(fixture);
         let binary = dir.path().join("normalized");

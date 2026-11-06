@@ -95,8 +95,9 @@ fn an_enumerable_key_on_object_prototype_runs_the_body_with_every_key() {
 /// `native_writes` on ⊤ under `isDefinition`, and E7 on ⊤ (tsc's
 /// `updateIsDefinitionOfReferencedSymbols` and its deletes, the two writes
 /// that refused every `__export` literal its runs per key).
+/// `u` is a value an unseen module's code supplies (the import loads it).
 const TOP_WRITES: &str =
-    "const u: any = (globalThis as any).unknownThing; u.isDefinition = true; delete u.stale;";
+    "import \"unseen-host\"; const u: any = (globalThis as any).unknownThing; u.isDefinition = true; delete u.stale;";
 
 #[test]
 fn a_write_into_an_unknown_value_elsewhere_keeps_the_runs_per_key() {

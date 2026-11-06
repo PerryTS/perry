@@ -203,7 +203,15 @@ pub(crate) fn try_lower_proven_field_call(
         lowered.push(group.reread(ctx, r)?);
     }
     let this_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-    let v = emit_proven_call(ctx, &bodies, &symbols, &callee_box, &this_bits, &lowered, args);
+    let v = emit_proven_call(
+        ctx,
+        &bodies,
+        &symbols,
+        &callee_box,
+        &this_bits,
+        &lowered,
+        args,
+    );
     group.release(ctx);
     Ok(Some(v))
 }
@@ -238,6 +246,10 @@ pub(crate) fn try_lower_proven_static_call(
     let Some(&cid) = ctx.wpfacts.local_classes.get(id) else {
         return Ok(None);
     };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ClassAlias,
+        || serde_json::json!({"local":id,"class":cid}),
+    );
     crate::facts_consumed::used();
     let Some(class_name) = crate::expr::wpfacts_access::class_name_of(ctx, cid) else {
         return Ok(None);
@@ -319,6 +331,7 @@ fn emit_proven_call(
             .max(args.len()),
     };
     if crate::verify_facts::witnesses() {
+        crate::verify_facts::bodies_checked(bodies, width);
         emit_call_witness(ctx, symbols, callee_box, width);
     }
     let handle = unbox_to_i64(ctx.block(), callee_box);
@@ -332,7 +345,13 @@ fn emit_proven_call(
                 ctx, b.func_id, sym, &handle, this_bits, &call_args, hir_args,
             )
         } else {
-            emit_js_body_call(ctx.block(), JsBody::Symbol(sym), &handle, this_bits, &call_args)
+            emit_js_body_call(
+                ctx.block(),
+                JsBody::Symbol(sym),
+                &handle,
+                this_bits,
+                &call_args,
+            )
         }
     };
     if let ([b], [sym]) = (bodies, symbols) {
@@ -387,11 +406,18 @@ fn emit_proven_call(
 /// callee and its call form and returns its info, which must be one of the
 /// proven bodies' infos.
 fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, argc: usize) {
-    let site = crate::verify_facts::site_arg(ctx, &format!("proven call bodies={symbols:?}"));
-    let info = ctx.block().call(
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("proven call bodies={symbols:?}"),
+        crate::verify_facts::Fact::Bodies,
+        &[],
+    );
+    let info = crate::verify_facts::check(
+        ctx,
         PTR,
         "perry_wpfacts_check_call",
-        &[(DOUBLE, callee_box), (I64, &argc.to_string()), (I64, &site)],
+        &[(DOUBLE, callee_box), (I64, &argc.to_string())],
+        &site,
     );
     let mut hit: Option<String> = None;
     for sym in symbols {
@@ -410,10 +436,12 @@ fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, 
     let ok_label = ctx.block_label(ok_idx);
     ctx.block().cond_br(&hit, &ok_label, &miss_label);
     ctx.current_block = miss_idx;
-    let _ = ctx.block().call(
+    let _ = crate::verify_facts::check(
+        ctx,
         crate::types::I32,
         "perry_wpfacts_check_call_miss",
-        &[(PTR, &info), (I64, &site)],
+        &[(PTR, &info)],
+        &site,
     );
     ctx.block().br(&ok_label);
     ctx.current_block = ok_idx;

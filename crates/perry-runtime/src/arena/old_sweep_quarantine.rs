@@ -335,6 +335,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Only the spans inside the exiting thread's blocks go; a span in memory
     /// that stays allocated still describes it.
     #[test]

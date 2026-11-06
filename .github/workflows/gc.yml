@@ -112,7 +112,7 @@ jobs:
           fi
       - name: Harness unit tests and artifact validation
         run: |
-          python3 -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
+          python3 -m unittest discover -s tests/tooling/infrastructure -p 'test*gc_ratchet.py' -v
           python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
       - name: Decide whether this change can affect the collector
         id: relevance
@@ -370,7 +370,7 @@ jobs:
           # The filter exists only to spare docs-only PRs a compiler build. If
           # the listing is empty or the API failed, `set -e` already aborted, so
           # the job cannot silently fall through to "not relevant".
-          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-moving-witnesses|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|tests/fixtures/programs/test_gap_gc_|tests/parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-moving-witnesses|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; running the witnesses."
           else
@@ -456,7 +456,7 @@ jobs:
           for name in unregistered:
               problems.append(
                   "%s exists but was not run: register it in "
-                  "test-parity/gc_repsel_corpus.txt. The matrix only "
+                  "tests/parity/gc_repsel_corpus.txt. The matrix only "
                   "auto-detects the test_gap_repsel_*/test_gap_specabi_* "
                   "prefixes, so a test_gap_gc_* witness that is not registered "
                   "is silently dark (#6925 is the precedent)." % name)
@@ -467,7 +467,7 @@ jobs:
               if result == "PASS":
                   continue
               if result == "XFAIL":
-                  # Triaged in test-parity/gc_repsel_triage.txt, which requires
+                  # Triaged in tests/parity/gc_repsel_triage.txt, which requires
                   # an issue number and a written reason. Loud, but not fatal.
                   print("::warning::%s is a triaged expected-red on this arm: %s"
                         % (name, ev))
@@ -1606,7 +1606,7 @@ jobs:
           # anything under crates/ can move the collector or change how JSON
           # parses, and the filter exists only to spare docs-only PRs a
           # compiler build.
-          if grep -qE '^(crates/|scripts/gc_parse_churn_layout_(gate\.sh|check\.py)$|scripts/fixtures/gc_parse_churn_layout_state\.ts$|Cargo\.(toml|lock)$|\.github/workflows/(gc-parse-churn-gate|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_parse_churn_layout_(gate\.sh|check\.py)$|tests/fixtures/scripts/gc_parse_churn_layout_state\.ts$|Cargo\.(toml|lock)$|\.github/workflows/(gc-parse-churn-gate|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches a collector- or JSON-parse-relevant path; running the gate."
           else
@@ -1732,7 +1732,7 @@ jobs:
           # method-call lowering resolves to, not just the Ptr<Shape>
           # collectors themselves — #6984's defect lived in
           # lower_call/scalar_method.rs, three files away from ptr_shape.rs.
-          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|test-files/test_gap_repsel_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-ptr-shape-off-witness|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|tests/fixtures/programs/test_gap_repsel_|tests/parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-ptr-shape-off-witness|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches representation-selection-relevant paths; running the witness."
           else

@@ -2,7 +2,7 @@
 //! formatter calls (`Protocol::Inspect`: the `[util.inspect.custom]` hook,
 //! ToPrimitive for `%s`/`%d`/`%i`/`%f`, `toJSON` for `%j`) and shows every
 //! value it reaches in turn. It calls no other key: an array or instance it
-//! prints does not escape (test-parity/node-suite/console/test_console_protocol_ops.ts runs the
+//! prints does not escape (tests/parity/node-suite/console/test_console_protocol_ops.ts runs the
 //! same operations against the runtime).
 
 use super::*;

@@ -73,7 +73,7 @@ on:
         default: full
       update_gap_snapshot:
         description: >-
-          Re-baseline test-parity/snapshots/linux-fast/: run the
+          Re-baseline tests/parity/snapshots/linux-fast/: run the
           whole gap suite as ONE shard with --update and upload the resulting snapshots as
           an artifact (`gap-snapshot-update`) for you to commit. Nothing else
           about the run changes.
@@ -258,7 +258,7 @@ jobs:
       - name: Prove the ban catches regressions
         run: python3 scripts/tokio_inventory.py --self-test
       - name: Prove offline rejection and mandatory CI results
-        run: python3 scripts/test_tokio_gate.py
+        run: python3 tests/tooling/infrastructure/test_tokio_gate.py
       - name: Reject Tokio across repository dependencies and sources
         run: python3 scripts/tokio_inventory.py --offline
 
@@ -313,7 +313,7 @@ jobs:
           python3 scripts/check_mbx_policy.py
 
       - name: Agent build storage policy tests
-        run: python3 -m unittest discover -s tests -p test_zfs_build_storage.py -v
+        run: python3 -m unittest discover -s tests/tooling/infrastructure -p test_zfs_build_storage.py -v
 
       - name: Changeset gate self-test
         if: ${{ !cancelled() }}
@@ -341,13 +341,19 @@ jobs:
         # unless individually allowlisted, and a discover pass over a file that
         # is not in the checkout reports "Ran 0 tests" and exits 0 — a gate
         # whose subject never ran.
-        run: python3 tests/test_changelog_archive.py -v
+        run: python3 tests/tooling/infrastructure/test_changelog_archive.py -v
 
       - name: Cargo test scope regression tests
-        run: python3 -m unittest discover -s tests -p 'test_ci_test_scope.py' -v
+        run: python3 -m unittest discover -s tests/tooling/infrastructure -p 'test_ci_test_scope.py' -v
+
+      - name: External test layout regression tests
+        run: |
+          python3 tests/tooling/coverage/test_coverage_layout.py -v
+          python3 tests/tooling/features/test_feature_layout.py -v
+          python3 -B tests/tooling/compat/test_compat_layout.py -v
 
       - name: Docs catalog toolchain tests
-        run: python3 docs/scripts/test_i18n_toolchain.py
+        run: python3 tests/tooling/docs/test_i18n_toolchain.py
 
       - name: Require a changelog.d/ fragment for crates/ changes
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
@@ -365,23 +371,23 @@ jobs:
 
       - name: Validate benchmark artifact and fallback gates
         run: |
-          python3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v
-          ./tests/test_benchmark_peer_fallback.sh
-          ./tests/test_benchmark_output_verifier.sh
+          python3 -m unittest discover -s tests/tooling/infrastructure -p 'test_benchmark_*.py' -v
+          ./tests/integration/test_benchmark_peer_fallback.sh
+          ./tests/integration/test_benchmark_output_verifier.sh
           bash -n benchmarks/compare.sh benchmarks/quick.sh \
             benchmarks/suite/run_benchmarks.sh benchmarks/honest_bench/run.sh \
             benchmarks/honest_bench/harness/run_http_bench.sh \
-            tests/test_benchmark_peer_fallback.sh
+            tests/integration/test_benchmark_peer_fallback.sh
 
       - name: Validate Windows LLVM runtime npm staging
-        run: ./tests/test_stage_npm_windows_llvm.sh
+        run: ./tests/integration/test_stage_npm_windows_llvm.sh
 
       - name: Release pipeline failure-path regressions
         run: |
-          python3 tests/test_release_pipeline.py
-          python3 scripts/test_strip_archive_members.py
-          python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
-          node --test scripts/publish/platform-visibility.test.mjs
+          python3 tests/tooling/infrastructure/test_release_pipeline.py
+          python3 tests/tooling/infrastructure/test_strip_archive_members.py
+          python3 -m unittest discover -s tests/tooling/infrastructure -p 'test_runtime_test_batches.py'
+          node --test tests/tooling/publish/platform-visibility.test.mjs
 
       # The parity normalizer is the ONE definition of "Perry printed what Node
       # printed" that scripts/parity.py applies.
@@ -391,10 +397,10 @@ jobs:
       # full-tier only: a normalizer regression would otherwise reach `main` and
       # only surface in the nightly run whose verdict it decides.
       - name: Parity output normalizer golden fixtures
-        run: python3 -m unittest tests.test_parity_normalize
+        run: python3 -m unittest tests.tooling.parity.test_parity_normalize
 
       - name: Parity runner unit tests
-        run: python3 -m unittest tests.test_parity_runner
+        run: python3 -m unittest tests.tooling.parity.test_parity_runner
 
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
@@ -492,12 +498,12 @@ jobs:
         run: |
           python3 scripts/ci_plan.py --self-test
           python3 scripts/ci_pr_files.py --self-test
-          python3 scripts/test_actions_plan.py
-          python3 scripts/test_wasi_host_qualification.py
-          python3 scripts/test_component_network_peer.py
-          python3 scripts/test_delete_retired_workflow_runs.py
+          python3 tests/tooling/infrastructure/test_actions_plan.py
+          python3 tests/tooling/infrastructure/test_wasi_host_qualification.py
+          python3 tests/tooling/infrastructure/test_component_network_peer.py
+          python3 tests/tooling/infrastructure/test_delete_retired_workflow_runs.py
           python3 scripts/check_actions_topology.py
-          python3 scripts/test_release_gate_runs.py
+          python3 tests/tooling/infrastructure/test_release_gate_runs.py
           python3 scripts/ci_cargo_test_shard.py --self-test
           python3 scripts/ci_compile_smoke_shard.py --self-test
           python3 scripts/ci_cargo_test_shard.py --package perry \
@@ -536,11 +542,11 @@ jobs:
 
       - name: Linux incident collector fixtures
         if: ${{ !cancelled() }}
-        run: python3 scripts/test_capture_linux_incident.py
+        run: python3 tests/tooling/infrastructure/test_capture_linux_incident.py
 
       - name: Public benchmark harness tests
         if: ${{ !cancelled() }}
-        run: PYTHONPATH=. python3 tests/test_public_baseline.py
+        run: PYTHONPATH=. python3 tests/tooling/infrastructure/test_public_baseline.py
 
       # Public benchmark evidence freshness is temporarily paused at
       # maintainer request while compiler changes land. After a complete
@@ -811,7 +817,7 @@ jobs:
       # toward green.
       - name: GC macro export scanner regression
         if: ${{ !cancelled() }}
-        run: python3 scripts/gc_macro_exports_test.py
+        run: python3 tests/tooling/infrastructure/gc/gc_macro_exports_test.py
 
       - name: Native export collision inventory
         if: ${{ !cancelled() }}
@@ -891,8 +897,8 @@ jobs:
       - name: Realm source declarations
         if: ${{ !cancelled() }}
         run: |
-          python3 -m unittest discover -s scripts -p 'realm_*_tests.py'
-          python3 -m unittest discover -s scripts -p 'check_no_realm_companions_tests.py'
+          python3 -m unittest discover -s tests/tooling/infrastructure/realm -p 'realm_*_tests.py'
+          python3 -m unittest discover -s tests/tooling/infrastructure/realm -p 'check_no_realm_companions_tests.py'
           python3 scripts/check_no_realm_companions.py
 
       # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
@@ -1143,7 +1149,7 @@ jobs:
       # Dark-test gate. Four of this repo's suites are driven by an explicit
       # registry rather than a glob, and a test file added without its registry
       # line runs NOWHERE while its PR stays green — #7192, #7216, #7252 and
-      # #7270/#7271 all shipped that way against test-parity/gc_repsel_corpus.txt.
+      # #7270/#7271 all shipped that way against tests/parity/gc_repsel_corpus.txt.
       #
       # Registration checks already existed for two of those prefixes, but both
       # live behind a 90-minute compiler build, behind a changed-paths relevance
@@ -1180,8 +1186,8 @@ jobs:
       - name: Coverage classifier regression tests
         if: ${{ !cancelled() }}
         run: |
-          python3 -m unittest discover -s tests -p 'test_node_core_subset.py' -v
-          python3 -m unittest discover -s tests -p 'test_visual_test_check.py' -v
+          python3 -m unittest discover -s tests/tooling/compat -p 'test_node_core_subset.py' -v
+          python3 -m unittest discover -s tests/tooling/infrastructure -p 'test_visual_test_check.py' -v
 
       # #7672: the GC test guards CLEAR ~20 process-global side tables from
       # whatever libtest thread constructs a guard, and nothing requires a
@@ -1864,7 +1870,7 @@ jobs:
           shard_heartbeat_pid=$!
           trap 'kill "$shard_heartbeat_pid" 2>/dev/null || true' EXIT
 
-          node --test scripts/test-require-runtime.test.mjs
+          node --test tests/tooling/infrastructure/test-require-runtime.test.mjs
           mapfile -t test_targets < <(
             python3 scripts/ci_cargo_test_shard.py --package perry \
               --shard "$SHARD" --total-shards "$TOTAL_SHARDS"
@@ -2075,7 +2081,7 @@ jobs:
           node-version-file: .node-version
 
       - name: Verify integration runtime setup protocol
-        run: node --test scripts/test-require-runtime.test.mjs
+        run: node --test tests/tooling/infrastructure/test-require-runtime.test.mjs
 
       - name: Run scoped integration suites
         if: steps.scope.outputs.suites != ''
@@ -2274,7 +2280,7 @@ jobs:
           python scripts/check_gc_doc_claims.py
           python scripts/check_thread_locals.py --self-test
           python scripts/check_thread_locals.py
-          python -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
+          python -m unittest discover -s tests/tooling/infrastructure -p 'test*gc_ratchet.py' -v
           python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Install Rust toolchain
@@ -2331,7 +2337,7 @@ jobs:
           # Relative paths: native Python does not read Git Bash's /d/... form.
           PERRY_BIN=target/debug/perry.exe \
           PERRY_RUNTIME_DIR=target/debug \
-          python scripts/parity.py run test-parity/node-suite/process/env/access.ts --mode fast
+          python scripts/parity.py run tests/parity/node-suite/process/env/access.ts --mode fast
 
       - name: Verify perry.exe VERSIONINFO resource
         shell: pwsh
@@ -2471,7 +2477,7 @@ jobs:
           Copy-Item 'target/debug/perry_runtime.lib' 'target/windows-arm64-smoke-libs/'
           Copy-Item 'target/debug/perry_runtime.lib.gc-effects' 'target/windows-arm64-smoke-libs/'
           $env:PERRY_RUNTIME_DIR = (Resolve-Path 'target/windows-arm64-smoke-libs').Path
-          target/debug/perry.exe compile tests/release/link_smoke/fixture.ts `
+          target/debug/perry.exe compile tests/integration/release/link_smoke/fixture.ts `
             --target windows-aarch64 `
             --no-auto-optimize `
             -o target/windows-arm64-smoke.exe
@@ -2579,7 +2585,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Stable round-robin slices of test-parity/gc_repsel_corpus.txt. Full/sweep
+  # Stable round-robin slices of tests/parity/gc_repsel_corpus.txt. Full/sweep
   # tiers use four shards; the PR subset uses one (scripts/ci_plan.py). Every
   # shard still runs every selected arm, so the complete cross-product remains
   # covered. fail-fast:false preserves evidence from all shards after a red.
@@ -2908,11 +2914,11 @@ jobs:
       # that consume the compiler from running when their prerequisite failed.
       - name: Run harness unit tests
         if: ${{ !cancelled() }}
-        run: python3 -m unittest tests.test_compiler_output_regression
+        run: python3 -m unittest tests.tooling.infrastructure.test_compiler_output_regression
 
       - name: Run native ABI evidence report unit tests
         if: ${{ !cancelled() }}
-        run: python3 -m unittest tests.test_native_abi_evidence_report
+        run: python3 -m unittest tests.tooling.infrastructure.test_native_abi_evidence_report
 
       # Runtime archives are prebuilt; the compiler no longer starts nested
       # Cargo builds. Exercise both selectors before the subject gates, without
@@ -2970,7 +2976,7 @@ jobs:
         if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         env:
           PERRY_BIN: ${{ github.workspace }}/target/debug/perry
-        run: python3 -m unittest tests.test_typed_feedback_runtime_evidence
+        run: python3 -m unittest tests.tooling.infrastructure.test_typed_feedback_runtime_evidence
 
       - name: Gate positive vectorization compiler output
         if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
@@ -3156,7 +3162,7 @@ jobs:
           python3 scripts/compiler_output_regression.py census-knob-isolation-self-test
           python3 scripts/compiler_output_regression.py census-determinism-self-test
           python3 scripts/compiler_output_regression.py census-temp-hygiene-self-test
-          python3 -m unittest tests.test_repsel_census
+          python3 -m unittest tests.tooling.infrastructure.test_repsel_census
 
       - name: Build compiler
         run: cargo build -p perry
@@ -3364,7 +3370,7 @@ jobs:
           RUSTC_WRAPPER: ""
           RUSTFLAGS: -Awarnings
         run: |
-          PYTHON=python3 bash tests/test_native_abi_evidence_packet_smoke.sh \
+          PYTHON=python3 bash tests/integration/test_native_abi_evidence_packet_smoke.sh \
             target/native-abi-evidence-packet
 
       - name: Upload native ABI evidence packet
@@ -3470,10 +3476,10 @@ jobs:
     # behavioral regressions landed silently between tags (the 2026-06-23
     # 851-case test262 regression and the #5763 setPrototypeOf boot breakage
     # both shipped through green required checks). This job runs the gap
-    # suite — every test_gap_* case in test-files/ and the subject trees,
+    # suite — every test_gap_* case in tests/fixtures/programs/ and the subject trees,
     # compiled and diffed byte-for-byte against `node --experimental-strip-types` — and fails on
     # any divergence, in either direction, from
-    # test-parity/snapshots/linux-fast/ subject snapshots (scripts/parity.py).
+    # tests/parity/snapshots/linux-fast/ subject snapshots (scripts/parity.py).
     #
     # THE ORACLE VERSION IS LOAD-BEARING. Node is what we diff against, so a
     # test whose feature the pinned Node lacks makes *node* exit non-zero, the
@@ -3550,7 +3556,7 @@ jobs:
       # gap-suite-build compiled once. Only ext-routed tests (http/net/ws/zlib/
       # events) still take the per-test auto-optimize path, because no single
       # prebuilt stdlib can serve them (#7629). Judged by
-      # test-parity/snapshots/linux-fast/ subject snapshots.
+      # tests/parity/snapshots/linux-fast/ subject snapshots.
       - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
@@ -3583,14 +3589,14 @@ jobs:
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-snapshot-update
-          path: test-parity/snapshots/linux-fast/**/*.json
+          path: tests/parity/snapshots/linux-fast/**/*.json
 
       - name: Upload gap report
         if: always()
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-suite-report-${{ fromJSON(needs.plan.outputs.plan).gap.mode }}-shard-${{ matrix.shard }}
-          path: test-parity/reports/
+          path: tests/parity/reports/
 
   # RFC deferred collection S1, GC effects design §5. Nothing is checked in:
   # perry reads the `.gc-effects` sidecar of the runtime archive it links,
@@ -3773,7 +3779,7 @@ jobs:
           scripts/check_std_symbolizer.sh "$libdir/$runtime" "$libdir/${runtime/runtime/stdlib}"
 
   # parity-scoped: the program cases this PR's diff owns (scripts/test_owners.py),
-  # in auto mode against test-parity/snapshots/linux-auto/. PR tier only.
+  # in auto mode against tests/parity/snapshots/linux-auto/. PR tier only.
   parity-scoped:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.parity_scoped
@@ -3852,18 +3858,18 @@ jobs:
           set -euo pipefail
           mapfile -t selected <<< "$SELECTORS"
           exec python3 scripts/parity.py run "${selected[@]}" --mode auto \
-            --report test-parity/reports/latest.json
+            --report tests/parity/reports/latest.json
       - name: Upload report
         if: always() && steps.scope.outputs.selectors != ''
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: parity-scoped-report
-          path: test-parity/reports/latest.json
+          path: tests/parity/reports/latest.json
 
   # ---------------------------------------------------------------------------
   # parity: every program case (test-files and node-suite) in auto-optimize
   # mode through scripts/parity.py, judged per shard against
-  # test-parity/snapshots/linux-auto/. Full tier only. The shard's exit code is
+  # tests/parity/snapshots/linux-auto/. Full tier only. The shard's exit code is
   # its verdict; parity.py exits 2 on a shard that ran no case.
   # ---------------------------------------------------------------------------
   parity:
@@ -3934,21 +3940,21 @@ jobs:
         run: >-
           python3 scripts/parity.py run --suite all --mode auto
           --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }}
-          --report test-parity/reports/latest.json
+          --report tests/parity/reports/latest.json
       # `parity.py accept` seeds or re-baselines linux-auto from these reports.
       - name: Upload shard report
         if: always()
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: parity-shard-${{ matrix.shard }}
-          path: test-parity/reports/latest.json
+          path: tests/parity/reports/latest.json
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # test262: every Test262 case, judged by Perry alone like other engines'
-  # published figures (test-compat/test262/README.md), sharded.
+  # published figures (tests/compat/test262/README.md), sharded.
   # `test262-aggregate` merges the shards into one pass rate and ratchets it
-  # against test-compat/test262/baseline.json.
+  # against tests/compat/test262/baseline.json.
   # ---------------------------------------------------------------------------
   test262:
     needs: [plan, check]
@@ -3998,7 +4004,7 @@ jobs:
         run: |
           set -euo pipefail
           git init -q vendor/test262
-          git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat test-compat/test262/pinned-sha.txt)"
+          git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat tests/compat/test262/pinned-sha.txt)"
           git -C vendor/test262 checkout -q FETCH_HEAD
       # The workspace compiler refuses to link archives that have no matching
       # `.gc-effects` sidecar ("the runtime GC effects sidecar cannot speak for
@@ -4062,8 +4068,8 @@ jobs:
           EXPECT: ${{ fromJSON(needs.plan.outputs.plan).test262.total }}
         run: |
           set -euo pipefail
-          python3 tests/test_test262_ratchet.py
-          python3 tests/test_test262_subset_full_corpus.py
+          python3 tests/tooling/compat/test_test262_ratchet.py
+          python3 tests/tooling/compat/test_test262_subset_full_corpus.py
           python3 scripts/test262_ratchet.py --expect "$EXPECT" test262-shards/*/test262-shard.json
 
   # ---------------------------------------------------------------------------
@@ -4087,7 +4093,7 @@ jobs:
     # Release-publish decoupling (see `parity` above): aspirational extended
     # suite, informational only — does not block package publishing.
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. The smoke
-    # compiles every `test-files/*.ts` with the bare `perry foo.ts -o
+    # compiles every `tests/fixtures/programs/*.ts` with the bare `perry foo.ts -o
     # out` path; the auto-optimize cache + clang link steps work
     # identically on Linux. The v0.5.385 sha256 sidecar is portable
     # via `command -v sha256sum || shasum -a 256`. `xargs -P` is
@@ -4539,7 +4545,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # drizzle-mysql smoke: runs the tier-3 release fixture
-  # `tests/release/packages/drizzle-mysql/` against a real MySQL — the CI
+  # `tests/integration/release/packages/drizzle-mysql/` against a real MySQL — the CI
   # counterpart of #489's local acceptance, closing #804.
   #
   # The fixture itself stays Docker-free (per the tier-3 "no Docker"
@@ -4656,12 +4662,12 @@ jobs:
 
       - name: Run drizzle-mysql fixture
         run: |
-          cd tests/release/packages/drizzle-mysql
+          cd tests/integration/release/packages/drizzle-mysql
           PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
 
   # ---------------------------------------------------------------------------
   # ink-link-smoke: runs the tier-3 release fixture
-  # `tests/release/packages/ink-link-smoke/` as the CI counterpart to #803.
+  # `tests/integration/release/packages/ink-link-smoke/` as the CI counterpart to #803.
   #
   # This is intentionally compile/link-only. #348 tracks broader Ink runtime
   # and rendering compatibility; this job guards the package-graph +
@@ -4728,7 +4734,7 @@ jobs:
 
       - name: Run Ink link fixture
         run: |
-          cd tests/release/packages/ink-link-smoke
+          cd tests/integration/release/packages/ink-link-smoke
           PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
 
       - name: Upload Ink fixture logs
@@ -4737,13 +4743,13 @@ jobs:
         with:
           name: ink-link-smoke-logs
           path: |
-            tests/release/packages/ink-link-smoke/install.log
-            tests/release/packages/ink-link-smoke/perry-compile.log
+            tests/integration/release/packages/ink-link-smoke/install.log
+            tests/integration/release/packages/ink-link-smoke/perry-compile.log
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # effect-basic-smoke: runs the tier-3 release fixture
-  # `tests/release/packages/effect-basic/` as the CI counterpart to #802.
+  # `tests/integration/release/packages/effect-basic/` as the CI counterpart to #802.
   #
   # This is intentionally advisory: #802 asks for a live Effect compile/run
   # signal even while broader Effect end-to-end compatibility remains in
@@ -4804,7 +4810,7 @@ jobs:
 
       - name: Run Effect fixture
         run: |
-          cd tests/release/packages/effect-basic
+          cd tests/integration/release/packages/effect-basic
           PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
 
       - name: Upload Effect fixture logs
@@ -4813,11 +4819,11 @@ jobs:
         with:
           name: effect-basic-smoke-logs
           path: |
-            tests/release/packages/effect-basic/install.log
-            tests/release/packages/effect-basic/perry-compile.log
-            tests/release/packages/effect-basic/perry-run.log
-            tests/release/packages/effect-basic/perry-out.txt
-            tests/release/packages/effect-basic/diff.log
+            tests/integration/release/packages/effect-basic/install.log
+            tests/integration/release/packages/effect-basic/perry-compile.log
+            tests/integration/release/packages/effect-basic/perry-run.log
+            tests/integration/release/packages/effect-basic/perry-out.txt
+            tests/integration/release/packages/effect-basic/diff.log
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
@@ -5352,7 +5358,7 @@ jobs:
     - name: Build the runtime for wasm32-wasip2
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
-      run: python scripts/wasi_image_selftest.py target/perry-dev/perry
+      run: python tests/integration/harnesses/wasi_image_selftest.py target/perry-dev/perry
     - name: Build the bundled runtime for wasm32-wasip1 and check its imports
       shell: bash
       run: |
@@ -5363,7 +5369,7 @@ jobs:
         # PERRY_WASM_NET=1 or PERRY_WASM_DISCARD=1.
         python scripts/wasi_imports_check.py "$archive" --allow-perry-net --allow-perry-host
     - name: Image classifier checks as a wasip1 program
-      run: python scripts/wasi_image_selftest.py target/perry-dev/perry --flavour p1
+      run: python tests/integration/harnesses/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: WASI smoke and complete issue 11375 acceptance
       shell: bash
       run: |
@@ -5388,13 +5394,13 @@ jobs:
     - name: wasip1 programs under the reference preview 1 host
       shell: bash
       run: |
-        manifest=test-wasi/p1-host/Cargo.toml
+        manifest=tests/integration/wasi/p1-host/Cargo.toml
         cargo build --locked --manifest-path "$manifest"
         cargo test --locked --manifest-path "$manifest" 2>&1 | tee target/wasi-validation/p1-host-unit.log
         ran=$(awk '/^test result: ok\./ { n += $4 } END { print n + 0 }' target/wasi-validation/p1-host-unit.log)
         test "$ran" -ge 22 || { echo "the host crate ran $ran tests, expected at least 22"; exit 1; }
-        python test-wasi/p1-host/suite.py target/perry-dev/perry \
-          --host test-wasi/p1-host/target/debug/perry-p1-host \
+        python tests/integration/wasi/p1-host/suite.py target/perry-dev/perry \
+          --host tests/integration/wasi/p1-host/target/debug/perry-p1-host \
           --output target/wasi-validation/p1-host --min-cases 26
     - name: Typed components, resources, moving GC and cross-language composition
       run: ./scripts/component_check.sh

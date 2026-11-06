@@ -231,3 +231,7 @@ pub(crate) use region::new_test_block_backing;
 pub(crate) use region::release_test_block_backing;
 
 pub(crate) use inline::refresh_inline_allocation_limit;
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use region::reservation::{
+    for_each_mapped as snap_reservation_regions, payload_bounds as snap_reservation_bounds,
+};

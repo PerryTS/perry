@@ -1,15 +1,31 @@
 use super::*;
 
 impl ProgramFacts {
+    /// A member's solved receiver and key. Includes every PutValueSet (also
+    /// named writes); constant computed calls folded to named calls have no
+    /// element record. Updates publish both Read and Write.
+    /// Offsets use the HIR's
+    /// SWC 1-based coordinates; zero is an unlocated/synthetic site. A missing
+    /// site (including an aborted or per-unit solve) gives no receiver proof.
+    pub fn element(&self, module: u32, byte_offset: u32, op: ElementOp) -> Option<&ElementFacts> {
+        if byte_offset == 0 {
+            return None;
+        }
+        self.elements
+            .iter()
+            .find(|s| s.module == module && s.byte_offset == byte_offset && s.op == op)
+    }
+
     /// DECISIONS 225: `s`, a site of another run (`path` its module), is
     /// dead in this whole-program run: no view of it here, and activation
     /// proved that no body holding it can run. Any fact about it is
     /// vacuously true, so the other run proving it is not stronger. `false`
-    /// when every body was walked.
+    /// when every body was walked or reach is incomplete.
     pub fn dead_site(&self, path: &str, s: &SiteFacts) -> bool {
-        let Some(on) = &self.active_bodies else {
+        if !self.body_reach.complete {
             return false;
-        };
+        }
+        let on = &self.body_reach.bodies;
         !self.sites.iter().any(|w| {
             self.module_paths[w.module as usize] == path
                 && w.byte_offset == s.byte_offset

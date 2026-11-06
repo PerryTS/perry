@@ -68,6 +68,8 @@ pub(crate) struct BirthCensus {
     pub sinks: BTreeSet<(NodeId, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
     pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok)>,
     pub reads: BTreeSet<(Tok, Atom, bool, u32)>,
+    /// The receiver a missed intrinsic method call was looked up on, by call.
+    pub read_origins: BTreeMap<u32, Tok>,
     pub pending_gate: Option<(Tok, Atom, bool, u32)>,
     pub active_gate: Option<(Tok, Atom)>,
     pub injecting: bool,
@@ -139,9 +141,12 @@ impl Model {
         let written = crate::builtins::census_native_written(self, t, a);
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
-            NativeMiss::Load(n) | NativeMiss::Global(n, _) => (false, n),
+            NativeMiss::Load(n) | NativeMiss::Lookup(n) | NativeMiss::Global(n, _) => (false, n),
             NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
         };
+        if let NativeMiss::Call(origin, n) = miss {
+            c.read_origins.insert(n, origin);
+        }
         c.reads.insert((t, a, call, id));
         c.pending_gate = written.then_some((t, a, call, id));
     }
@@ -405,16 +410,31 @@ impl Model {
         }
     }
 
-    /// A summary instance keeps its template call identity. `CallSite::site`
-    /// is an allocation context, and synthetic protocol calls may use zero:
-    /// it must never be used to attribute their callees to source call zero.
+    /// A summary instance keeps its template call identity; a call the
+    /// solver makes for a program call (a builtin calling a callback, a
+    /// bound target) reports that program call (`Model::solver_call`).
+    /// `CallSite::site` is an allocation context, and synthetic protocol
+    /// calls may use zero: it must never be used to attribute their callees
+    /// to source call zero.
     pub(crate) fn diagnostic_source_call(&self, call: CallId) -> Option<CallId> {
         let d = self.diagnostic.as_ref()?;
-        if d.source_calls.contains(&call) {
-            return Some(call);
+        let mut c = call;
+        loop {
+            if d.source_calls.contains(&c) {
+                return Some(c);
+            }
+            // Each step goes to an earlier call: the template's, or the one
+            // the solver made this call for.
+            let next = *self
+                .sum
+                .tmpl_of
+                .get(&c)
+                .or_else(|| self.sum.origin.get(&c))?;
+            if next >= c {
+                return None;
+            }
+            c = next;
         }
-        let source = *self.sum.tmpl_of.get(&call)?;
-        d.source_calls.contains(&source).then_some(source)
     }
     /// The function a node's rules run for: its body's owner, or the
     /// function of the run (instance or shared run) it belongs to.
@@ -638,6 +658,7 @@ impl Gen<'_> {
             Expr::IndexGet {
                 object,
                 index,
+                element_offset: _,
                 byte_offset,
                 byte_end,
             } => (
@@ -956,7 +977,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let mut out = vec![format!(
         "{{\"record\":\"analysis\",\"aborted\":{},\"work\":{},\"maxWork\":{}}}",
-        m.aborted, m.work, m.max_work
+        m.aborted,
+        m.work.get(),
+        m.max_work
     )];
     let mut nodes = BTreeSet::new();
     let locations: BTreeMap<CallId, &Site> = d
@@ -1266,7 +1289,14 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 opt((o.cause != NO_NODE).then_some(o.cause)), opt((o.call != u32::MAX).then_some(o.call)), o.parent, quote(&fname(o.func))));
         }
         for (t, k, call, id) in &c.reads {
-            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
+            let origin = if *call {
+                c.read_origins.get(id).map_or(String::from("null"), |o| {
+                    format!("{o},\"originName\":{}", quote(&m.tok_name(*o)))
+                })
+            } else {
+                String::from("null")
+            };
+            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"origin\":{origin},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
         }
     }
     let roots: Vec<_> = nodes.iter().map(|&n| m.diagnostic_root(n).0).collect();

@@ -66,6 +66,9 @@ pub(crate) fn emit_bind_call(
         blk.and(I1, &is_closure, &base)
     };
     let ok = if ctx.wpfacts.fnproto_bind_unwritten {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::FunctionBind, || {
+            serde_json::json!({})
+        });
         if ctx.wpfacts.interp_guard {
             let blk = ctx.block();
             let w = blk.load(I32, "@PERRY_INTERP_PROTO_WRITTEN");

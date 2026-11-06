@@ -23,6 +23,7 @@ impl<'a> Gen<'a> {
     /// a constant key the definition is an accessor key on every layout that
     /// does not hold the key as data, and either descriptor a key of a
     /// prototype (`Cons::DefineKey`), not E5 HARD.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn define_property(
         &mut self,
         fx: &Fx,
@@ -31,6 +32,7 @@ impl<'a> Gen<'a> {
         desc: NodeId,
         r: u32,
         accessor: bool,
+        own: [Option<NodeId>; 2],
     ) {
         // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
         // a given prototype holds (`settle_native_given`).
@@ -73,9 +75,15 @@ impl<'a> Gen<'a> {
         if key.is_some() {
             self.m.accessor_atoms.insert(ka);
         }
-        for (name, setter) in [("get", false), ("set", true)] {
-            let a = self.m.atom(name);
-            let f = self.load(desc, Key::Named(a));
+        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
+            // A literal descriptor's own get/set (`accessor_literal`).
+            let f = match own {
+                Some(f) => f,
+                None => {
+                    let a = self.m.atom(name);
+                    self.load(desc, Key::Named(a))
+                }
+            };
             self.m.cons(
                 f,
                 Cons::Accessor {
@@ -342,10 +350,30 @@ impl<'a> Gen<'a> {
                 out
             }
             "iteratorCloseOnThrow" | "iteratorCloseIfNotDone" | "arrayRecordClose" => {
-                if let Some(it) = arg(0) {
-                    // `iterator.return()` runs.
+                if let Some(a) = arg(0) {
+                    // `iterator.return()` runs. An array record's is a
+                    // fresh array iterator over its array, at its index
+                    // (`js_array_record_close`), not the array.
+                    let it = if method == "arrayRecordClose" {
+                        let ek = self.m.elem_key();
+                        let el = self.load(a, ek);
+                        self.new_iter_from(fx.module, crate::builtins::ARRAY_ITERATOR_KIND, &[el])
+                    } else {
+                        // The record's iterator is what GetIterator's
+                        // `v[Symbol.iterator]()` returned; the payload holds
+                        // `v` in its place (`Cons::IterNext` steps it), so a
+                        // returned iterator distinct from `v` is closed too.
+                        let returned = self.iterator_of(a);
+                        let it = self.tmp("close-iterator");
+                        self.m.edge(a, it);
+                        self.m.edge(returned, it);
+                        it
+                    };
+                    // The runtime's IteratorClose: a protocol call.
                     let ra = self.m.atom("return");
-                    let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);
+                    let (rc, _) = self.new_call(ThisArg::Node(it), vec![], vec![]);
+                    self.m.protocol_calls.insert(rc);
+                    self.m.cons(it, Cons::MCall { key: Key::Named(ra), call: rc });
                 }
                 let out = self.tmp("close");
                 self.m.edge(self.thrown, out);

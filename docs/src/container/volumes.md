@@ -53,7 +53,7 @@ volumes: [
 
 Permissions are governed by the host filesystem and the container's
 running UID. If the container runs as a non-root user (as it should —
-see [Security](./security.md)), make sure the host directory is owned
+see [Security](security.md)), make sure the host directory is owned
 by a matching UID, **or** explicitly set the container UID via
 `USER_UID` / `USER_GID` env vars in the image (the Forgejo image does
 this).
@@ -93,7 +93,7 @@ This matches `docker compose down` semantics:
 
 After a `down(handle)`, you can `up(spec)` again with the same volume
 declarations and the database / file state from before is still there.
-That's how the [Forgejo example](./production-patterns.md) supports
+That's how the [Forgejo example](production-patterns.md) supports
 "deploy → tear-down → redeploy" cycles without data loss.
 
 > ⚠️ **Forgejo / Postgres redeploy gotcha:** if you used randomly
@@ -183,7 +183,7 @@ await run({
 
 ## See also
 
-- [Compose orchestration](./compose.md) — `down(handle, opts)` reference.
-- [Production patterns](./production-patterns.md) — Forgejo example
+- [Compose orchestration](compose.md) — `down(handle, opts)` reference.
+- [Production patterns](production-patterns.md) — Forgejo example
   uses three named volumes (pgdata, data, config).
-- [Security](./security.md) — read-only mounts and ownership patterns.
+- [Security](security.md) — read-only mounts and ownership patterns.

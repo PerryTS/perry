@@ -19,6 +19,11 @@ use crate::model::{
 };
 
 impl Model {
+    /// Markers expose reach fields rather than value fields. Other token
+    /// kinds use a general view; concrete object tokens use key ranges.
+    pub(super) fn index_needs_all_own_fields(&self, t: Tok) -> bool {
+        self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..))
+    }
     /// `Cons::IdxLoad` for one object token `t`.
     pub(super) fn idx_load_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
@@ -34,7 +39,7 @@ impl Model {
         // key names only its numeric fields). A marker's fields are its
         // reach markers under any key; another value (the global object, a
         // namespace) keeps every field.
-        if self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
+        if self.index_needs_all_own_fields(t) {
             let all = self.all_fields(t);
             self.edge(all, dst);
         }
@@ -101,7 +106,7 @@ impl Model {
             self.load_from(obj, obj, Key::Any(shape), dst);
         }
         let key = Key::Any(shape);
-        if prim & (prim::STR | prim::SYMBOL) != 0
+        if index_needs_general_key(Tokens::Slice(&[]), prim)
             && self.idx_done.insert((n, obj, dst, IDX_OWN_STR))
         {
             let f = self.key_fields(obj, key);
@@ -110,9 +115,7 @@ impl Model {
         }
         // ToPropertyKey of a Number or BigInt is a numeric string: the own
         // numeric fields, and an accessor under a numeric name.
-        if prim & (prim::NUM | prim::BIGINT) != 0
-            && self.idx_done.insert((n, obj, dst, IDX_OWN_NUM))
-        {
+        if index_has_numeric_key(prim) && self.idx_done.insert((n, obj, dst, IDX_OWN_NUM)) {
             let f = self.num_fields(obj);
             self.edge(f, dst);
             if self.numeric_accessor {

@@ -296,55 +296,13 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
         pf.round_work
     );
     let w = |p: &str| module_work(&pf, p);
-    // Merged head (main's write effects and ResolveExport): round 2 solves
-    // fewer units than `a`, `m`, `b` and `c` together; the rounds are pinned.
-    // Rewritten for DECISIONS 196 (each reader an argument marker gains is
-    // solve work): [699, 725, 908, 406, 334] -> [709, 731, 914, 410, 334];
-    // for #13294 (decision 151: every unit replays the shared objects'
-    // writes) -> [709, 779, 956, 443, 392]; for DECISIONS 209 (a broken
-    // function read through a value contract is its stand-in, not ⊤: the
-    // units of `a` holding `util.get`, #u1 145 -> 181 and #u3 37 -> 62,
-    // solve its contract and its escaped object; `b`, `c`, `m` and round 2
-    // unchanged) -> [709, 779, 956, 504, 428]; for DECISIONS 210 (a
-    // published function's properties leave with it but its `prototype`,
-    // whose template no longer escapes) -> [695, 772, 949, 497, 428]; for
-    // the intrinsic member descriptions and the static rule (a store into ⊤
-    // writes its key on every builtin prototype, the builtin namespaces'
-    // lookups reach `Object.prototype`; the unit boundary's stand-in store
-    // writes none, a stand-in class's prototype defines its contract's
-    // methods) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    // DEC221: unknown construction sinks its fresh result, without the
-    // extra template-wide escape: the same five rounds do less work
-    // ([754, 879, 986, 543, 467]). SEH: a join of two descriptions keeps what
-    // each says of a field (`ClassContract::join`) where it made the field ⊤:
-    // round 2 builds what the readers held as ⊤, and the fixpoint ends one
-    // round earlier. A method called on a marker with values beside it
-    // reads its key's reach (`method_on`): [754, 1090, 948, 42] -> the pin
-    // below. DCE: a read of a key the object surely holds takes its chain
-    // through a relay that drops the chain end's `undefined`
-    // (`Cons::Defined`): a relay node for the read's own builtin members
-    // and a rule on the chain node, [758, 1094, 952, 42] -> [762, 1104,
-    // 960, 42]. DECISIONS 234: a read of an own definite key takes the
-    // chain's program values only (a chain node of its own) -> [763, 1103,
-    // 960, 42]. DECISIONS 231(c): a store of `a`'s code into an instance of
-    // a class a receiver marker stands for goes to the class's `virt-stored`
-    // node for that key (`virt_store`), which the marker's reads take as its
-    // own field: two such nodes (two keys) in each of the three rounds that
-    // solve `a` -> [765, 1105, 962, 42]. Helper protocols (builtin helper arms
-    // read their operands by protocol instead of escaping them) -> [767,
-    // 1102, 959, 42]. A load from a closed receiver marker adds no absence
-    // `undefined` (+2 in each round) and takes what the marker gives through
-    // a `Cons::Defined` rule (+4) -> [773, 1108, 969, 42]. DECISIONS 242
-    // (contract half G2): the callers replay the callee's reads of its
-    // parameter as miss sites on their arguments (`Cons::Miss`, +5 and +4;
-    // exactly these: with the replay off the old pin holds) -> [773, 1113,
-    // 973, 42]. CHESS4-A: `process.argv` is one array of strings the runtime
-    // makes, born with the model (its template, token and element nodes are
-    // solved in every round) -> [782, 1120, 980, 43]. Equal sets are stored
-    // once (`SetTable`): a delivery into a node that already holds the
-    // source's set is one pointer test (-2 in rounds 2 and 3) -> the pin.
-    assert_eq!(pf.round_work, [782, 1128, 978, 200], "{:?}", pf.units);
+    // The rounds include declaration-shape comparisons and native holder
+    // walks; unrelated units must still stay out of the later rounds.
+    // Rule G: a global key's ownership is the realm's declaration lookup
+    // (charged per search step) and `%Global%` declares its own keys, so the
+    // same solve is charged more (was [885, 1237, 1039, 258]).
+    assert_eq!(pf.round_work, [889, 1241, 1079, 260], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.
@@ -480,7 +438,7 @@ pub(super) fn what_a_method_does_to_its_receiver_happens_to_the_instance() {
         ("a", b),
         (
             "m",
-            "import { D } from './a'; declare const ext: any; ext(new D().me());",
+            "import \"unseen-host\"; import { D } from './a'; declare const ext: any; ext(new D().me());",
         ),
     ];
     let pf = units_of(&mods);
@@ -575,7 +533,7 @@ pub(super) fn a_given_out_instance_receives_what_other_units_methods_do() {
     // proves `warm`; per-unit facts are whole-program facts, owner
     // 2026-10-23). `set` runs on published receivers (DECISIONS 107) and on
     // the instances given out (DECISIONS 125).
-    let m = "import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
+    let m = "import \"unseen-host\"; import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
     let pf = units_of(&[("t", t), ("m", m)]);
     assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
     assert!(!proven(&whole_of(&[("t", t), ("m", m)]), "warm"));

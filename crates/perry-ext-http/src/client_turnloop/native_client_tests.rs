@@ -10,9 +10,9 @@ use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 const CERT: &[u8] =
-    include_bytes!("../../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
+    include_bytes!("../../../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem");
 const KEY: &[u8] =
-    include_bytes!("../../../../test-parity/node-suite/tls/fixtures/localhost-key.pem");
+    include_bytes!("../../../../tests/parity/node-suite/tls/fixtures/localhost-key.pem");
 thread_local! {
     static RESPONSE: Cell<bool> = const { Cell::new(false) };
     static INCOMING: Cell<i64> = const { Cell::new(0) };

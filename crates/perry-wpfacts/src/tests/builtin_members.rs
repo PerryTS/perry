@@ -174,7 +174,7 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     let body = |hand: &str, w: &str, other: &str| {
         format!(
             "{CLASSES}{M}
-            declare const unknown: any;
+            const unknown: any = (globalThis as any)[process.argv[2]];
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             const t: any = unknown.reach({hand});
             {w}
@@ -186,7 +186,8 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     };
     let named = "t.inner = function () { return 1; };";
     let elsewhere = "t.unrelated = function () { return 1; };";
-    let computed = "declare const kk: string; t[kk] = function () { return 1; };";
+    let computed =
+        "const kk: string = process.argv[3]; t[kk] = function () { return 1; };";
     for hand in [
         "0",
         "Map",
@@ -209,7 +210,12 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
             // DEC 250 Q2: a class instance's or a literal's chain past the
             // program is `Object.prototype`, which takes no new key.
             let fin = other == "new A()" || other == "{ q: 1 }";
-            for (w, want) in [(named, fin), (computed, fin), (elsewhere, true)] {
+            // Unknown code handed the global object may replace the global
+            // `Object` or `Map` itself (`declared_global_write`): `inner` is
+            // unknown under any store. (Was: proven, the realm's value
+            // trusted.)
+            let held = hand == "globalThis" && (other == "Object" || other == "new Map()");
+            for (w, want) in [(named, fin), (computed, fin), (elsewhere, !held)] {
                 let src = body(hand, w, other);
                 let pf = facts(&src);
                 assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -322,7 +328,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
     let body = |before: &str, after: &str| {
         format!(
             "{CLASSES}{M}
-            declare const unknown: any;
+            const unknown: any = (globalThis as any)[process.argv[2]];
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             {before}
             const v: any = k > 1 ? new N() : Object;
@@ -413,7 +419,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
     let body = |w: &str| {
         format!(
             "{CLASSES}
-            declare const unknown: any;
+            const unknown: any = (globalThis as any)[process.argv[2]];
             class Q {{ x = 5; b = 1; }}
             const t: any = unknown.reach(Map);
             {w}
@@ -434,7 +440,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
     assert!(site_b(&pf), "{}", pf.dump_text());
     for w in [
         "t.get = function () { return new Q(); };",
-        "declare const kk: string; t[kk] = function () { return new Q(); };",
+        "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };",
     ] {
         let pf = facts(&body(w));
         // DEC 250: replacing `Map.prototype.get` is a TypeError, the read is
@@ -446,31 +452,56 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
 
 /// DEC 250 refuses a new key on Object.prototype. That prototype hit is
 /// not an own write on the global object; an actual own unknown write is.
+/// Under rule G a whole program holds an unknown value only beside unseen
+/// code, whose code ran at load and may own an accessor under any global
+/// key: the global field is then open whatever the program writes. Without
+/// unseen code and with no write the field holds the program's `M` only.
 #[test]
-fn a_refused_prototype_write_does_not_change_a_global_field() {
-    let body = |write: &str| {
-        format!(
-            "{CLASSES}{M}
+fn a_global_field_is_open_only_to_unseen_code() {
+    let src = held_global("");
+    let pf = facts(&src);
+    assert!(proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    for write in [
+        "",
+        "(Object.prototype as any).__perry_t_held = unknown.f;",
+        "g.__perry_t_held = unknown.f;",
+    ] {
+        let src = unseen(&held_global(write));
+        let pf = facts(&src);
+        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    }
+}
+
+/// DEC 250 contrast in a whole program without unseen code (CWN 11-06): the
+/// program holds unknown values from imprecision too, here a key and a value
+/// taken from parsed input. An own store into the escaped global object
+/// under that unknown key may replace the held field: the field stays open.
+/// Replacing `Object.prototype.toString` is refused (a locked built-in
+/// member) and is no own write on the global object: the field keeps `M`.
+#[test]
+fn an_unknown_key_store_opens_a_global_field_a_refused_prototype_write_does_not() {
+    let unknown_key = "const k: string = Object.keys(JSON.parse(process.argv[2] ?? \"{}\"))[0];
+                       g[k] = JSON.parse(process.argv[3] ?? \"0\");";
+    let refused = "Object.prototype.toString = function () { return \"\"; };";
+    for (write, open) in [("", false), (refused, false), (unknown_key, true)] {
+        let src = held_global(write);
+        assert!(!src.contains("unseen"), "{src}");
+        let pf = facts(&src);
+        assert_eq!(proven(&pf, "m"), !open, "{src}\n{}", pf.dump_text());
+    }
+}
+
+/// `M` held in a global field, `write` run before the held method is called.
+fn held_global(write: &str) -> String {
+    format!(
+        "{CLASSES}{M}
          declare const unknown: any;
          const g: any = globalThis;
          g.__perry_t_held = new M();
          try {{ {write} }} catch (e) {{}}
          console.log(g.__perry_t_held.m(new A()));
          console.log(new A().a);"
-        )
-    };
-    for (write, want) in [
-        ("", true),
-        (
-            "(Object.prototype as any).__perry_t_held = unknown.f;",
-            true,
-        ),
-        ("g.__perry_t_held = unknown.f;", false),
-    ] {
-        let src = body(write);
-        let pf = facts(&src);
-        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
-    }
+    )
 }
 
 #[test]

@@ -2,7 +2,7 @@
 """Map a pull request's changed paths to the program cases it should run.
 
     test_owners.py [--base REF]      print one scripts/parity.py selector per line
-    test_owners.py --no-new-gap-vs REF   fail when HEAD adds test-files/test_gap_* over REF
+    test_owners.py --no-new-gap-vs REF   fail when HEAD adds tests/fixtures/programs/test_gap_* over REF
     test_owners.py --self-test
 
 A changed case, or its expected output, selects that case; a changed snapshot
@@ -167,23 +167,25 @@ def selectors(root: Path, changed: list[str]) -> list[str]:
         path = root / rel
         if path.is_file() and parity.is_case(root, path):
             picked.add(rel)
-        elif rel.startswith(("test-parity/expected/", "test-parity/expected-exit/")):
+        elif rel.startswith(("tests/parity/expected/", "tests/parity/expected-exit/")):
             # parity.expected_for looks an expectation up by case id, then by basename.
-            key = rel.split("/", 2)[-1].rsplit(".", 1)[0]
+            key = (rel.removeprefix("tests/parity/expected/")
+                   .removeprefix("tests/parity/expected-exit/").rsplit(".", 1)[0])
             cases = cases or parity.select(root)
             picked.update(path.relative_to(root).as_posix() for cid, path in cases
                           if key in (cid, cid.rsplit("/", 1)[-1]))
-        elif rel.startswith("test-parity/snapshots/") and rel.endswith(".json"):
-            subject = rel.split("/", 3)[-1][:-len(".json")]
-            if subject != "test-files" and (root / "test-parity" / subject).is_dir():
+        elif rel.startswith("tests/parity/snapshots/") and rel.endswith(".json"):
+            _, _, subject = rel.removeprefix("tests/parity/snapshots/").partition("/")
+            subject = subject.removesuffix(".json")
+            if subject != "test-files" and (root / "tests/parity" / subject).is_dir():
                 picked.add(subject)
         else:
             picked.update(f"node-suite/{m}" for m in owners(rel)
-                          if (root / "test-parity" / "node-suite" / m).is_dir())
+                          if (root / "tests/parity" / "node-suite" / m).is_dir())
     # A whole subject covers any of its cases also named on their own.
     subjects = {p for p in picked if not p.endswith((".ts", ".cts", ".mts", ".cjs"))}
     return sorted(p for p in picked if p in subjects
-                  or not any(p.startswith(f"test-parity/{s}/") for s in subjects))
+                  or not any(p.startswith(f"tests/parity/{s}/") for s in subjects))
 
 
 def changed_paths(base: str) -> list[str]:
@@ -194,7 +196,7 @@ def changed_paths(base: str) -> list[str]:
 
 def new_gap_files(base: str) -> list[str]:
     out = subprocess.run(["git", "diff", "--name-only", "--diff-filter=A", base, "HEAD", "--",
-                          "test-files/test_gap_*"], cwd=ROOT, check=True,
+                          "tests/fixtures/programs/test_gap_*"], cwd=ROOT, check=True,
                          capture_output=True, text=True).stdout
     return out.split()
 
@@ -207,8 +209,8 @@ def self_test() -> int:
         if not any(fnmatch.fnmatchcase(f, pattern) for f in tracked):
             problems.append(f"row {pattern!r} matches no tracked file")
         problems += [f"row {pattern!r} names missing subject node-suite/{m}" for m in modules
-                     if not (ROOT / "test-parity" / "node-suite" / m).is_dir()]
-    case = "test-parity/node-suite/path/apply-call/basic.ts"
+                     if not (ROOT / "tests/parity" / "node-suite" / m).is_dir()]
+    case = "tests/parity/node-suite/path/apply-call/basic.ts"
     examples = {
         (RT + "fs/mod.rs",): ["node-suite/fs", "node-suite/fs-promises"],
         ("crates/perry-runtime/src/gc/mod.rs",): [],
@@ -216,8 +218,8 @@ def self_test() -> int:
         (case, RT + "path/mod.rs"): ["node-suite/path"],
     }
     examples[(case,)] = [case]
-    examples[("test-parity/expected/array-generic-copywithin.txt",)] = [
-        "test-parity/node-suite/globals/array-generic-copywithin.ts"]
+    examples[("tests/parity/expected/array-generic-copywithin.txt",)] = [
+        "tests/parity/node-suite/globals/array-generic-copywithin.ts"]
     for changed, want in examples.items():
         got = selectors(ROOT, list(changed))
         if got != want:
@@ -241,7 +243,7 @@ def main(argv=None) -> int:
         added = new_gap_files(args.no_new_gap_vs)
         for path in added:
             print(f"{path}: test_gap_* takes no new files. Put a new program case under "
-                  "test-parity/<root>/<subject>/: node-suite/<module>, language/<area>, "
+                  "tests/parity/<root>/<subject>/: node-suite/<module>, language/<area>, "
                   "typescript/<feature>, perry/<api> or npm/<package> "
                   "(docs/src/testing/test-structure.md, \"Where a test goes\").", file=sys.stderr)
         return 1 if added else 0

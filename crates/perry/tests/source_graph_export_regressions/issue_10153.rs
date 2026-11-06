@@ -6,12 +6,12 @@ fn fixtures(dir: &std::path::Path) {
     write(
         dir,
         "index.cjs",
-        include_str!("../../../../test-files/cjs_getter_reexport/index.cjs"),
+        include_str!("../../../../tests/fixtures/programs/cjs_getter_reexport/index.cjs"),
     );
     write(
         dir,
         "transform.cjs",
-        include_str!("../../../../test-files/cjs_getter_reexport/transform.cjs"),
+        include_str!("../../../../tests/fixtures/programs/cjs_getter_reexport/transform.cjs"),
     );
 }
 
@@ -22,9 +22,9 @@ fn named_cjs_getter_reexport_is_a_live_value() {
     write(
         dir.path(),
         "main.mjs",
-        include_str!("../../../../test-parity/language/module/test_cjs_getter_reexport.ts")
+        include_str!("../../../../tests/parity/language/module/test_cjs_getter_reexport.ts")
             .replace(
-                "../../../test-files/cjs_getter_reexport/index.cjs",
+                "../../../fixtures/programs/cjs_getter_reexport/index.cjs",
                 "./index.cjs",
             )
             .as_str(),

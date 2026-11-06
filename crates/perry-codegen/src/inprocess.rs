@@ -29,6 +29,7 @@ mod native_homes;
 mod optimize_emit;
 #[cfg(test)]
 mod parse_ir_text_tests;
+mod verify_facts_copies;
 use optimize_emit::optimize_and_emit;
 
 use std::ffi::CString;

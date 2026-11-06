@@ -192,6 +192,16 @@ pub(super) fn compile_module_entry(
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
             llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
         }
+        if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+            llmod.declare_function("js_snap_entry_body", VOID, &[]);
+            llmod.declare_function("js_snap_tls_program", VOID, &[PTR, PTR, PTR, PTR]);
+            for anchor in crate::stubs::SNAP_TLS_ANCHORS {
+                llmod.add_external_tls_global(anchor, "i8", "localexec");
+            }
+            if entry_in_init {
+                llmod.declare_function("js_snap_entry_module", VOID, &[]);
+            }
+        }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
         // dispatch site in some other module that does `await
         // import("./entry.ts")` resolves at link time. The entry
@@ -466,8 +476,23 @@ pub(super) fn compile_module_entry(
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
+        if crate::verify_facts::enabled() {
+            main.block_mut(0)
+                .unwrap()
+                .call_void("perry_verify_facts_init", &[]);
+        }
         {
             let blk = main.block_mut(0).unwrap();
+            // SNAP census: the program's TLS slots lie between the anchors the
+            // driver links before and after the program objects; the runner
+            // protects those pages only (never runtime thread-locals).
+            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
+                blk.call_void(
+                    "js_snap_tls_program",
+                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
+                );
+            }
             if let Some((const_name, byte_len)) = process_entry_path.as_ref() {
                 let path_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();
@@ -712,6 +737,11 @@ pub(super) fn compile_module_entry(
                     blk.call_void("puts", &[(PTR, &format!("@{}", const_name))]);
                 }
                 blk.call_void(&format!("{}__init", prefix), &[]);
+            }
+            // SNAP census (`PERRY_SNAP_CENSUS` set while compiling, with
+            // `PERRY_GC_INSTRUMENTS=1`): the entry's own body starts here.
+            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                blk.call_void("js_snap_entry_body", &[]);
             }
         }
         // Mark the boundary between init prelude and user code so
@@ -1131,6 +1161,10 @@ pub(super) fn compile_module_entry(
             buffer_alias_scopes,
         };
         if entry_in_init {
+            // SNAP census: the entry module's evaluation is the entry body.
+            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                ctx.block().call_void("js_snap_entry_module", &[]);
+            }
             ctx.block()
                 .call_void(&format!("{}__init", module_prefix), &[]);
         } else {

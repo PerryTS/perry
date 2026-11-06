@@ -1,0 +1,149 @@
+typed all 123 1 2|3
+typed assign 1 2|3
+typed saved-override 4 123
+array all 123 1 2|3
+array assign 1 2|3
+array saved-override 4 123
+map all 123 1 2|3
+map assign 1 2|3
+map saved-override 4 123
+set all 123 1 2|3
+set assign 1 2|3
+set saved-override 4 123
+string all a😀b a 😀|b
+string assign a 😀|b
+string saved-override 4 a😀b
+segments all a😀b a 😀|b
+segments assign a 😀|b
+segments saved-override 4 a😀b
+generator all 123 1 2|3
+generator assign 1 2|3
+generator saved-override 4 123
+custom all 123 1 2|3
+custom assign 1 2|3
+custom saved-override 4 123
+typed 0 next accessor 1 1 1
+typed 0 return accessor 1 1 1
+typed 0 return-mid-loop 1
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+typed 1 next accessor 0 0 1
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+typed 1 return accessor 0 0 1
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+typed 1 return-mid-loop 0
+DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
+typed 2 next accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+typed 2 return accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+typed 2 return-mid-loop 0
+array 0 next accessor 1 1 1
+array 0 return accessor 1 1 1
+array 0 return-mid-loop 1
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+array 1 next accessor 0 0 1
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+array 1 return accessor 0 0 1
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+array 1 return-mid-loop 0
+DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
+array 2 next accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+array 2 return accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+array 2 return-mid-loop 0
+map 0 next accessor 1 1 1
+map 0 return accessor 1 1 1
+map 0 return-mid-loop 1
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map 1 next accessor 0 0 1
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map 1 return accessor 1 1 1
+map 1 return-mid-loop 1
+DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
+map 2 next accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+map 2 return accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+map 2 return-mid-loop 0
+set 0 next accessor 1 1 1
+set 0 return accessor 1 1 1
+set 0 return-mid-loop 1
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+set 1 next accessor 0 0 1
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+set 1 return accessor 1 1 1
+set 1 return-mid-loop 1
+DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
+set 2 next accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+set 2 return accessor 0 0 1
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+set 2 return-mid-loop 0
+string 0 next accessor 1 1 a
+string 0 return accessor 1 1 a
+string 0 return-mid-loop 1
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+string 1 next accessor 0 0 a
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+string 1 return accessor 1 1 a
+string 1 return-mid-loop 1
+DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
+string 2 next accessor 0 0 a
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+string 2 return accessor 0 0 a
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+string 2 return-mid-loop 0
+segments 0 next accessor 1 1 a
+segments 0 return accessor 1 1 a
+segments 0 return-mid-loop 1
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+segments 1 next accessor 0 0 a
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+segments 1 return accessor 0 0 a
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+segments 1 return-mid-loop 0
+DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
+segments 2 next accessor 0 0 a
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+segments 2 return accessor 0 0 a
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+segments 2 return-mid-loop 0
+holes-binding 2 ndndvr
+holes-assignment 2 ndndvr
+holes-rest 2|3 ndndvndvnd
+default-patches-next 9 2 3 0
+typed manual-retained true kept 17 1
+array manual-retained true kept 17 1
+map manual-retained true kept 17 1
+set manual-retained true kept 17 1
+string manual-retained true kept 17 1
+segments manual-retained true kept 17 1
+map-delete-append 10|20|30|40|
+set-delete-append 1|2|3|4|
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+array direct-close 0
+map direct-close 1
+set direct-close 1
+string direct-close 1
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+segments direct-close 0
+DEC 250: Cannot delete built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+unreachable 1
+unreachable 2
+renamed-next 
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot delete built-in member %ArrayIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+replaced-tag-with-return 0
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program
+noncallable-next TypeError
+noncallable-next TypeError
+noncallable-next TypeError
+noncallable-next TypeError
+callable-proxy-next 12 3
+saved-bound-next 789

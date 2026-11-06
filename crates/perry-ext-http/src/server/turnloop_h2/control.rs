@@ -7,7 +7,7 @@
 //! whose `session_type` was the opposite of the caller's, and pushed a
 //! synthetic event into their queues; `queue_session_ping` fired its own
 //! callback back without asking anyone. That is a **loopback simulation**, and
-//! it is why `test-parity/node-suite/http2/` passes: every case in it is a
+//! it is why `tests/parity/node-suite/http2/` passes: every case in it is a
 //! Perry client talking to a Perry server in one process. So these three are
 //! not being ported here — they are being implemented, and the existing tests
 //! constrain nothing because both ends were Perry.

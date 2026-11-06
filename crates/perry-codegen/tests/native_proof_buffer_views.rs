@@ -470,6 +470,7 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(local(object_id)),
@@ -540,6 +541,7 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

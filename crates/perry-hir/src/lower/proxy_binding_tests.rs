@@ -5,7 +5,7 @@
 //! non-proxy answers `undefined` instead of throwing, so the pre-#7775 bug was
 //! silent: a program could keep printing plausible numbers while every read
 //! through a mis-keyed receiver returned nothing. Byte-comparing output against
-//! node covers the behaviour (`test-parity/language/object/test_gap_proxy_local_name_collision_7775.ts`);
+//! node covers the behaviour (`tests/parity/language/object/test_gap_proxy_local_name_collision_7775.ts`);
 //! this file pins the *routing*, so a future change that quietly stops keying on
 //! the resolved binding fails here even if some other path happens to paper over
 //! the result.
@@ -62,7 +62,7 @@ fn body_of(module: &Module, name: &str) -> String {
 /// The write side is deliberately absent: proxy assignment lowers to
 /// `Expr::PutValueSet`, which the generic assignment path also emits, so it is
 /// not a proxy tell. Writes are covered byte-for-byte against node in
-/// `test-parity/language/object/test_gap_proxy_local_name_collision_7775.ts` instead
+/// `tests/parity/language/object/test_gap_proxy_local_name_collision_7775.ts` instead
 /// (`writesProperty`, which read back `undefined` pre-fix).
 fn routes_to_proxy(body: &str) -> bool {
     body.contains("ProxyGet") || body.contains("ProxyHas")

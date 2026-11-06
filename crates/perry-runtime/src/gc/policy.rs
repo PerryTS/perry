@@ -1761,6 +1761,12 @@ pub fn gc_suppress() {
 /// every `gc_suppress` caller accounts for the window's growth itself right
 /// after this call (see [`GC_FLAG_TRIGGER_OWED`]).
 pub fn gc_unsuppress() {
+    // The SNAP census holds collection off until its boundary (an address
+    // names one object for the whole run); a parse window's unsuppress must
+    // not end that hold.
+    if crate::snap_census::holds_collection() {
+        return;
+    }
     GC_FLAGS.with(|f| f.set(f.get() & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED)));
 }
 
@@ -3462,7 +3468,7 @@ fn gc_check_trigger_evaluate() {
     // constructor body relocates the instance that helper is holding in a plain
     // `let`, and no safepoint's root set covers it. That was measured, not
     // argued — four reproducers in
-    // `test-parity/language/class/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
+    // `tests/parity/language/class/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
     // iterations wrong per route before the `RuntimeHandleScope` routing in
     // `object/class_registry/construct.rs`. The correct statement is: the
     // loop-polls route makes the COLLECTION POINT precise; keeping runtime
@@ -3664,12 +3670,10 @@ pub(super) fn gc_mutator_assist_scaled_work_units() -> usize {
         .saturating_add(arena_units)
         .saturating_add(malloc_units)
 }
-
 pub const JS_GC_STEP_STATUS_IDLE: u32 = 0;
 pub const JS_GC_STEP_STATUS_ACTIVE: u32 = 1;
 pub const JS_GC_STEP_STATUS_COMPLETED: u32 = 2;
 pub const JS_GC_STEP_STATUS_SKIPPED: u32 = 3;
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct JsGcStepResult {
@@ -3683,14 +3687,12 @@ pub struct JsGcStepResult {
     pub malloc_debt_objects: u64,
     pub old_reclaim_debt_bytes: u64,
 }
-
 #[derive(Clone, Copy)]
 enum BudgetedGcRebaseline {
     ArenaBytes { pre_in_use: usize },
     MallocCount { pre_count: usize, pre_in_use: usize },
     OldReclaim,
 }
-
 struct BudgetedGcCycle {
     state: GcCycleState,
     trigger_kind: GcTriggerKind,
@@ -3699,7 +3701,6 @@ struct BudgetedGcCycle {
     /// Next automatic slice. Caller-requested budgets do not advance it.
     automatic_work_units: usize,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BudgetedGcTrigger {
     OldReclaim,
@@ -3716,7 +3717,6 @@ pub(super) enum BudgetedGcTrigger {
     YoungScavengeCap,
     MallocCount,
 }
-
 crate::perry_thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
     static GC_BUDGETED_CYCLE_ACTIVE: TriggerInput<bool> = const { TriggerInput::new(false) };
@@ -4417,17 +4417,15 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
     let low_pause_non_moving = progress_kind.is_budgeted();
-    // #7611: `low_pause_non_moving` is now the ONLY controller of this flag —
-    // the `PERRY_GEN_GC_EVACUATE` conjunct that used to be here was deleted as
-    // an untested configuration, and this arm is the one with a behavioural
-    // test (`budgeted_low_pause_minor_does_not_evacuate`).
-    let evacuation_policy_allowed = !low_pause_non_moving;
-    let force_evacuation = !low_pause_non_moving && gc_force_evacuate_enabled();
-    let evacuation_policy_disabled_reason = if low_pause_non_moving {
-        EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON
-    } else {
-        EVACUATION_POLICY_DISABLED_REASON
-    };
+    // #7611: the `PERRY_GEN_GC_EVACUATE` conjunct that used to be here was
+    // deleted as an untested configuration. The flag's controllers are
+    // `low_pause_non_moving` (behavioural test
+    // `budgeted_low_pause_minor_does_not_evacuate`) and the imprecise-point
+    // veto (`an_imprecise_point_moves_no_object`), both in `evacuation_veto`.
+    let move_veto = evacuation_veto(low_pause_non_moving);
+    let evacuation_policy_allowed = move_veto.is_none();
+    let force_evacuation = evacuation_policy_allowed && gc_force_evacuate_enabled();
+    let evacuation_policy_disabled_reason = move_veto.unwrap_or(EVACUATION_POLICY_DISABLED_REASON);
     let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
@@ -5223,6 +5221,9 @@ extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
 }
 
 fn js_gc_collect_body() {
+    if crate::snap_census::explicit_gc() {
+        return;
+    }
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
@@ -5235,6 +5236,7 @@ fn js_gc_collect_body() {
     let start = std::time::Instant::now();
     manual_gc_collect_now();
     super::instruments::note_full_collect_us(start.elapsed().as_micros() as u64);
+    crate::snap_census::explicit_gc_done();
 }
 
 /// Run an explicit (`gc()`) full collection, with **precise roots** — the same
@@ -5262,7 +5264,7 @@ fn js_gc_collect_body() {
 /// the invariant that a root store must dominate every collection point — with
 /// an **empty** allowlist. `js_gc_collect` is a collection point by that
 /// invariant like any other; nothing about it is special. #4977's own repro
-/// (`test-parity/language/class/test_issue_4977_gc_toplevel_locals.ts`) prints the right answer
+/// (`tests/parity/language/class/test_issue_4977_gc_toplevel_locals.ts`) prints the right answer
 /// with the scan disabled.
 ///
 /// **What it cost.** A conservative scan retains whatever the native stack
@@ -5535,10 +5537,9 @@ pub(crate) fn byte_store_test_external_live_bytes() -> usize {
 
 #[cold]
 fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
+    // The caller's occupancy reading already excludes the leaf-free case;
+    // leaf_window_due also answers zero leaves through its batching floor.
     let leaf_bytes = crate::arena::young_large_in_use_bytes();
-    if leaf_bytes == 0 {
-        return (false, usize::MAX);
-    }
     leaf_window_due(
         cap,
         small_bytes,
@@ -5552,7 +5553,9 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
 /// false. `small_bytes` is the from-space occupancy (Eden plus the active
 /// survivor space); the window already credits the survivor space against the
 /// cap (`eden_allocation_window_bytes`, the budget the copying minor reads),
-/// so the survivor bytes come out of the reading before the comparison.
+/// so the survivor bytes come out of the reading before the comparison. Leaves
+/// must also fill a quarter of that window to amortize the small-cell census;
+/// below that floor only the unchanged small-copying cap can make young due.
 /// Counting them on both sides made the arm due up to one survivor credit
 /// before the copying cap with no leaf to retire, and every young leaf born
 /// in that band ran a leaf service that could not make the arm false.
@@ -5563,6 +5566,22 @@ pub(super) fn leaf_window_due(
     leaf_bytes: usize,
 ) -> (bool, usize) {
     let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    // A leaf service censuses all young small cells. Near a full Eden, pricing
+    // even one tiny leaf against the remaining window repeats that census for
+    // almost no recovery, including at correctly recovered owed checks. Batch
+    // leaves until they occupy a quarter-window; small occupancy still reaches
+    // the unchanged copying cap and forces a tracing minor there.
+    //
+    // When this arm is quiet, either Eden + leaves is below the window, or
+    // leaves are below a quarter-window. With small < cap the quiet bound is
+    // max(survivor + window, cap + ceil(window / 4)): the first term is the
+    // existing survivor-credit bound, the second is the new batching slack.
+    // Quiet occupancy is therefore below 2 * cap for survivor <= small < cap,
+    // before the existing allocation-point/safepoint slack. No prior service
+    // decision is retained.
+    if leaf_bytes < window.div_ceil(4) {
+        return (false, usize::MAX);
+    }
     let eden = small_bytes.saturating_sub(survivor_bytes);
     (
         eden.saturating_add(leaf_bytes) >= window,

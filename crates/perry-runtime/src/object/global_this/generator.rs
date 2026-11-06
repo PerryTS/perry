@@ -109,6 +109,8 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
     );
     // Realm intrinsics, built once: born old and never-move (O3).
     let proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; [Symbol.toStringTag] = "AsyncFunction"; }; } };
+    // SAFETY: the keyless newborn, unexposed, in this no-move window.
+    unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     if ctor.is_null() || proto.is_null() {
         return;
     }
@@ -877,8 +879,12 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     // holders need. Old allocations cannot return spare capacity at fit time;
     // the installed keys and final shape still own the live inline bound.
     let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(3); realm { "%AsyncGeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%AsyncGeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "AsyncGeneratorFunction"; }; "%GeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%GeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "GeneratorFunction"; }; } };
+    // SAFETY: the keyless newborn, unexposed, in this no-move window.
+    unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     let gen_proto =
         crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(5); realm { "%AsyncGeneratorPrototype%", extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", extends = "%IteratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "Generator"; }; } };
+    // SAFETY: the keyless newborn, unexposed, in this no-move window.
+    unsafe { crate::object::shapes::stamp_born_prototype_root(gen_proto) };
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -962,6 +968,8 @@ pub extern "C" fn js_generator_attach_closure_prototype(
         // Reflection reaches this parent with two `Object.getPrototypeOf`
         // calls from an async generator function's `.prototype`.
         let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
+        // SAFETY: the keyless newborn, unexposed, in this no-move window.
+        unsafe { crate::object::shapes::stamp_born_prototype_root(async_iterator_proto) };
         install_proto_symbol_self_method(
             async_iterator_proto,
             "asyncIterator",
@@ -1000,6 +1008,11 @@ pub extern "C" fn js_generator_attach_closure_prototype(
             },
         );
     }
+    // DEC 250: from here on the program cannot replace, delete or redefine
+    // `next`/`return`/`throw`/`@@toStringTag` here (`constructor` stays
+    // patchable; adds stay open).
+    // SAFETY: the live, fully built prototype, unexposed until the stores below.
+    unsafe { crate::object::builtin_proto::seal_generator_prototype(gen_proto, is_async) };
     ctor_slot.store(ctor as i64, Ordering::Release);
     proto_slot.store(proto as i64, Ordering::Release);
     gen_proto_slot.store(gen_proto as i64, Ordering::Release);
@@ -1009,9 +1022,13 @@ pub extern "C" fn js_generator_attach_closure_prototype(
 /// agent; called during its global bootstrap or by the lazy accessors. (#3664)
 pub(crate) fn ensure_generator_intrinsics() {
     if crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_async_function_tower();
     }
     if crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_generator_tower(
             false,
             &crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR,
@@ -1020,6 +1037,8 @@ pub(crate) fn ensure_generator_intrinsics() {
         );
     }
     if crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_generator_tower(
             true,
             &crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,

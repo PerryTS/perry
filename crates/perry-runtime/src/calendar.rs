@@ -5,6 +5,7 @@
 /// UTC timestamp to get the local-time representation (i.e. local - UTC).
 #[cfg(unix)]
 pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    crate::effect!(host_read, tz);
     unsafe {
         let t: libc::time_t = secs as libc::time_t;
         let mut tm: libc::tm = std::mem::zeroed();
@@ -28,12 +29,14 @@ pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u
 /// so local time is UTC with a zero offset.
 #[cfg(target_os = "wasi")]
 pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    crate::effect!(host_read, tz);
     let (y, m, d, h, mi, s) = timestamp_to_components(secs);
     (y, m, d, h, mi, s, 0)
 }
 
 #[cfg(windows)]
 pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    crate::effect!(host_read, tz);
     unsafe {
         let t: libc::time_t = secs as libc::time_t;
         let mut tm: libc::tm = std::mem::zeroed();

@@ -1,0 +1,1 @@
+Facts dump: the birth census (`PERRY_FACTS_BIRTH_CENSUS`, now the `birth_census` setting of the facts config) names the receiver of a missed built-in method call in its `birth-read` records (`origin`, `originName`). Facts and output do not change.

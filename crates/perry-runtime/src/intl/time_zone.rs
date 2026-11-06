@@ -14,6 +14,7 @@ use super::*;
 /// option given — must ALWAYS yield a valid zone: an unrecognized host zone (a
 /// broken `TZ`) falls back to `"UTC"`, never throws.
 pub(crate) fn resolved_date_time_zone(options: f64) -> String {
+    crate::effect!(host_read, tz);
     let explicit = get_option_string(options, "timeZone");
     let tz = explicit
         .clone()

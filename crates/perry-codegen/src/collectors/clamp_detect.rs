@@ -153,7 +153,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
 // `is_integer_specializable` / `i64s_stmts` / `i64s_expr` used to live here.
 // They were the admission rule for the whole-function i64 specialization pass
 // (`codegen/i64_spec.rs`), removed in #7238 — see that issue and the module
-// header of `test-parity/language/operators/test_gap_7238_i64_specialization_exactness.ts` for why
+// header of `tests/parity/language/operators/test_gap_7238_i64_specialization_exactness.ts` for why
 // the rule could not be repaired: it admitted `number` parameters as integers
 // without proof and bounded no intermediate, and neither is statically
 // provable for the self-recursive bodies the pass existed to serve.

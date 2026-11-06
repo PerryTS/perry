@@ -562,16 +562,11 @@ const T9: [(&str, &str); 3] = [
 
 #[test]
 fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
-    // The getters hand `isId`, `filter` and `user` to unknown code, so the
-    // census breaks their contracts and their owners run them on ⊤
-    // arguments. A call by name still calls that function: whole-program
-    // proves the callees of `user`'s calls (other units of `t.js`). Before,
-    // a broken function read through a value contract was ⊤ ("broken
-    // function of another unit"): no target, and typescript.js's top-level
-    // helpers (`isIdentifier`, `visitNode`, `some`, ...) lost 22,115 call
-    // sites per unit. The arguments still escape and the result is unknown
-    // (the escaped function's contract, `fn_named`).
-    let (w, u) = both(&T9);
+    // Explicitly hand the functions to unknown code: descriptor installs
+    // alone do not break their contracts. Calls by name must retain targets.
+    let module = format!("{}\n(globalThis as any).host(isId, filter);", T9[1].1);
+    let sources = [T9[0], (T9[1].0, module.as_str()), T9[2]];
+    let (w, u) = both(&sources);
     for f in ["isId", "filter"] {
         assert!(
             u.broken
@@ -658,13 +653,18 @@ fn a_property_of_a_broken_function_holds_anything() {
 
 /// CJL3 (fastify `new Reply`): whole program, `new Reply` escapes (its
 /// prototype comes from unknown code: `Reply` escaped through
-/// `Module._cache`). Per unit `m.js` holds `Reply` as an unknown value
+/// `Module._cache`, which `poke` hands to an unseen module). Per unit `m.js` holds `Reply` as an unknown value
 /// (`new` of it is ⊤) and the unit writing `Reply.prototype.f` holds the
 /// layout with no instance of its own: unknown code constructs the escaped
 /// function there, so its copy is escaped too, never a clean layout.
 #[test]
 fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
-    let (w, u) = both(&T7);
+    // `globalThis.keep` (which holds `poke`, and through it `Module`) is
+    // where an unseen module's code reads it: m.js loads one.
+    let m = super::unseen(T7[0].1);
+    let mut mods = T7;
+    mods[0].1 = &m;
+    let (w, u) = both(&mods);
     let wt = super::escaped_constructor::fn_inst(&w, "Reply#9");
     assert!(
         !wt.is_empty() && wt.iter().all(|t| t.escape.is_some() && !t.prefix_stable),

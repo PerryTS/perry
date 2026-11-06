@@ -1,6 +1,37 @@
 // The compiler realm table is generated once, by the build script of the
 // leaf crate perry-realm-table (`perry_realm_table::REALM`), and read from there.
 fn main() {
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+    {
+        if output.status.success() {
+            println!(
+                "cargo:rustc-env=PERRY_BUILD_GIT_SHA={}",
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+        }
+    }
+    let branch = std::process::Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    for path in std::iter::once("HEAD").chain(branch.as_deref()) {
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "--git-path", path])
+            .output()
+        {
+            if output.status.success() {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    String::from_utf8_lossy(&output.stdout).trim()
+                );
+            }
+        }
+    }
+
     println!("cargo:rerun-if-env-changed=LLVM_SYS_221_PREFIX");
     println!("cargo:rerun-if-changed=src/wasm32/target_options.cpp");
     println!("cargo:rerun-if-changed=src/inprocess/unique_sections.cpp");
