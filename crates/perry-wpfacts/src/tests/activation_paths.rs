@@ -7,6 +7,9 @@
 //! summarized callee (`call` and its `this` binding), a getter under a
 //! constant computed key (`computed` at registration and `accessor` at the
 //! read). Leaving out either alone keeps the body active (a control).
+//! A private method called from the constructor of a class a mixin extends
+//! is the first kind: its call selects the declaring member (CXCHK0 found
+//!  excluded while Node ran it, before private calls were followed).
 //! `instance`, `composed` and `for-in` fire only inside a transfer that
 //! `call`, `accessor`, `this` or `for-in`'s caller already activates (an
 //! instance is made by a call binding; a composed callee's calls are
@@ -59,6 +62,23 @@ console.log((new C() as any).dyn);
 "#,
         "computed+accessor",
         &["computed", "accessor", "call"],
+    ),
+    (
+        "private-method-of-a-mixin-base",
+        r#"
+function hit() { return 1; }
+class Client {
+  opts: any;
+  constructor(o: any) { this.opts = this.#init(o); }
+  #init(o: any) { return { ...o, ok: hit() > 0 }; }
+}
+function attach(Base: any) { return class extends Base {}; }
+const Sub = attach(Client);
+console.log(new Sub({ a: 1 }).opts.ok);
+console.log(new Client({}).opts.ok);
+"#,
+        "call+this",
+        &["call", "this", "escape", "accessor"],
     ),
 ];
 
