@@ -171,8 +171,18 @@ fn a_named_miss_meets_no_any_key_accessor_under_the_lock() {
 }"#;
     for (how, a, main) in HOW {
         let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
-        assert!(birth_safe(&w), "{how} whole {:?}\n{}", lit(&w), w.dump_text());
-        assert!(birth_safe(&u), "{how} per unit {:?}\n{}", lit(&u), u.dump_text());
+        assert!(
+            birth_safe(&w),
+            "{how} whole {:?}\n{}",
+            lit(&w),
+            w.dump_text()
+        );
+        assert!(
+            birth_safe(&u),
+            "{how} per unit {:?}\n{}",
+            lit(&u),
+            u.dump_text()
+        );
         assert_eq!(lit(&w), lit(&u), "{how}: whole = per unit");
     }
 }
@@ -236,7 +246,11 @@ export function mk(n: number, _k: string) { const o = new C(n); const d = new D(
                     .collect()
             };
             let (c, d) = (of(":C"), of(":D"));
-            assert!(!c.is_empty() && !d.is_empty(), "{how} classes\n{}", pf.dump_text());
+            assert!(
+                !c.is_empty() && !d.is_empty(),
+                "{how} classes\n{}",
+                pf.dump_text()
+            );
             assert!(c.iter().all(|t| t.0), "{how} C {c:?}");
             assert!(d.iter().all(|t| !t.0), "{how} D {d:?}");
         }

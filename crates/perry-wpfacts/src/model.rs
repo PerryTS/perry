@@ -505,6 +505,8 @@ pub enum OwnTestBody {
 
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
+    #[cfg(test)]
+    pub(crate) body_packet: std::rc::Rc<crate::summary::packet::BodyPacket>,
     pub module: u32,
     pub func_id: u32,
     pub name: String,
@@ -892,6 +894,19 @@ pub struct StoreFlow {
 
 #[derive(Default, Clone, Debug)]
 pub struct Node {
+    #[cfg(test)]
+    pub(crate) packet_owner: Option<crate::summary::packet::Identity>,
+    #[cfg(test)]
+    pub(crate) packet_interface: Option<(
+        crate::summary::packet::Identity,
+        crate::summary::packet::Binding,
+    )>,
+    #[cfg(test)]
+    pub(crate) intrinsic_top: Option<String>,
+    #[cfg(test)]
+    pub(crate) field_origin: Option<crate::summary::packet::FieldOrigin>,
+    #[cfg(test)]
+    pub(crate) lexical_cell: Option<crate::summary::packet::Cell>,
     pub pts: Pts,
     pub prim: u16,
     /// Refuted own-test evidence, outside the value lattice. Only
@@ -1022,6 +1037,14 @@ pub struct FnJoined {
 
 #[derive(Default)]
 pub struct Model {
+    #[cfg(test)]
+    pub(crate) packet_protocol_depth: usize,
+    #[cfg(test)]
+    pub(crate) packets_enabled: bool,
+    #[cfg(test)]
+    pub(crate) packets_inert: bool,
+    #[cfg(test)]
+    pub(crate) packet_scope: Option<crate::summary::packet::Builder>,
     pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
     pub toks: token_values::TokenValues,
     pub(crate) declarations: crate::builtins::realm_shapes::Declarations,

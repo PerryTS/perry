@@ -229,7 +229,8 @@ pub(super) fn expand(
             } else {
                 if undef == NO_NODE {
                     undef = fresh(s);
-                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
+                    s.seeds
+                        .push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
                 }
                 s.edges.push((undef, d));
             }

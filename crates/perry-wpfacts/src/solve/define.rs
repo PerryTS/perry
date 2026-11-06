@@ -146,7 +146,14 @@ impl Model {
         // DECISIONS 242(2): ToPropertyDescriptor reads all six descriptor
         // keys, which no descriptor owns at once (get and value exclude
         // each other): some read reaches its chain.
-        for name in ["value", "writable", "get", "set", "enumerable", "configurable"] {
+        for name in [
+            "value",
+            "writable",
+            "get",
+            "set",
+            "enumerable",
+            "configurable",
+        ] {
             let a = self.atom(name);
             self.note_chain_miss(d, Key::Named(a));
         }
