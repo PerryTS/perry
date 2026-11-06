@@ -95,9 +95,13 @@ fn emit_window_load_f64(
     fact: &MaskedWindowArrayFact,
 ) -> String {
     match &fact.elem {
-        MaskedWindowElem::PlainF64 => {
-            emit_raw_window_load(ctx, Some(fact.array_local_id), arr_box, idx_i32, fact.elements_slot.as_deref())
-        }
+        MaskedWindowElem::PlainF64 => emit_raw_window_load(
+            ctx,
+            Some(fact.array_local_id),
+            arr_box,
+            idx_i32,
+            fact.elements_slot.as_deref(),
+        ),
         MaskedWindowElem::TaI32 { data_ptr } => {
             let data_ptr = data_ptr.clone();
             let raw = emit_ta_window_load(ctx, &data_ptr, idx_i32, "2", I32);
@@ -404,7 +408,13 @@ pub(crate) fn lower_masked_window_index_get_i32(
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
     let (value, materialization_note) = match &fact.elem {
         MaskedWindowElem::PlainF64 => {
-            let raw_f64 = emit_raw_window_load(ctx, Some(fact.array_local_id), &arr_box, &idx_i32, fact.elements_slot.as_deref());
+            let raw_f64 = emit_raw_window_load(
+                ctx,
+                Some(fact.array_local_id),
+                &arr_box,
+                &idx_i32,
+                fact.elements_slot.as_deref(),
+            );
             (
                 ctx.block().fptosi(DOUBLE, &raw_f64, I32),
                 "integer_materialization=fptosi_guarded_dense_i32",

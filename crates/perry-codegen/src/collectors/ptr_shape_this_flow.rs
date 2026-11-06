@@ -350,7 +350,9 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             // prototype chain; it neither stores nor passes `this`. (The
             // `this.F` hoist versions its loop on exactly this test.)
             Expr::InstanceOf {
-                expr, ty_expr: None, ..
+                expr,
+                ty_expr: None,
+                ..
             } if matches!(expr.as_ref(), Expr::This) => true,
             // Reading one of the chain's own methods as a value: the hoist's
             // `this.m === C.prototype.m` dispatch check. A method read hands

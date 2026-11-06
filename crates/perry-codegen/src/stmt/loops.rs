@@ -3047,8 +3047,12 @@ pub(super) fn this_raw_f64_field(ctx: &FnCtx<'_>, property: &str) -> bool {
         range_loop_reject("this_field_no_index");
         return false;
     };
-    let raw =
-        crate::expr::class_field_inline_guard::class_field_site_raw_f64(ctx, &class_name, property, index);
+    let raw = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+        ctx,
+        &class_name,
+        property,
+        index,
+    );
     if !raw {
         range_loop_reject("this_field_lane_not_raw_f64");
     }
@@ -3655,7 +3659,11 @@ fn push_packed_f64_range_facts(
             // handle cache is a validated plain array, so its element base
             // can be derived once here (and again after every fired poll).
             let elements_slot = (!crate::stmt::loops::this_field_fast_off())
-                .then(|| ctx.receiver_descriptors.base_handle_slot(access.array_id).map(str::to_owned))
+                .then(|| {
+                    ctx.receiver_descriptors
+                        .base_handle_slot(access.array_id)
+                        .map(str::to_owned)
+                })
                 .flatten()
                 .map(|handle_slot| {
                     let slot = ctx.func.alloca_entry(I64);

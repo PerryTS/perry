@@ -245,9 +245,8 @@ fn line_may_collect(line: &str) -> bool {
 /// if it reaches `to` dirty (or never reaches it).
 fn no_dirty_path(fn_ir: &str, slot: &str, from: usize, to: usize) -> bool {
     let lines: Vec<&str> = fn_ir.lines().collect();
-    let is_label = |l: &str| {
-        !l.starts_with(' ') && l.trim_end().ends_with(':') && !l.trim().is_empty()
-    };
+    let is_label =
+        |l: &str| !l.starts_with(' ') && l.trim_end().ends_with(':') && !l.trim().is_empty();
     // Block start lines, and label name -> start.
     let mut starts = vec![0usize];
     let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
@@ -259,7 +258,8 @@ fn no_dirty_path(fn_ir: &str, slot: &str, from: usize, to: usize) -> bool {
     }
     let dirty_line = |l: &str| {
         line_may_collect(l)
-            || (l.trim_start().starts_with("store ") && l.trim_end().ends_with(&format!(", ptr {slot}")))
+            || (l.trim_start().starts_with("store ")
+                && l.trim_end().ends_with(&format!(", ptr {slot}")))
     };
     let mut seen: std::collections::BTreeSet<(usize, bool)> = Default::default();
     let mut work = vec![(from + 1, false)];
