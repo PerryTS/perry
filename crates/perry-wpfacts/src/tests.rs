@@ -43,6 +43,7 @@ mod closure_context;
 mod const_key_set_store;
 mod ctor_observed;
 mod ctor_return;
+mod dce_reach;
 mod dead_dynamic_import;
 mod declared_effects;
 mod default_params;

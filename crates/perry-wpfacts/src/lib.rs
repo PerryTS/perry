@@ -55,6 +55,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 pub struct FactsConfig {
     /// Export body classifications for the compiler diagnostic mode only.
     pub verify_facts: bool,
+    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`).
+    pub dce_bodies: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.
     pub roots: Vec<String>,
@@ -177,7 +179,21 @@ pub type BodyIdentity = (String, u32, String);
 #[derive(Clone, Debug, Default)]
 pub struct BodyReach {
     pub bodies: std::collections::BTreeSet<BodyIdentity>,
+    /// Every body the activation pass classified (active or not). Only an
+    /// identity in this set can be called inactive; a missing or new
+    /// identity is active.
+    pub seen: std::collections::BTreeSet<BodyIdentity>,
     pub complete: bool,
+}
+
+impl BodyReach {
+    /// The one inactive predicate (the complement of the activate
+    /// predicate): the solve completed, the pass classified this body and
+    /// no path reaches it. Dead-body removal and the claim check read
+    /// only this.
+    pub fn inactive(&self, id: &BodyIdentity) -> bool {
+        self.complete && self.seen.contains(id) && !self.bodies.contains(id)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1969,9 +1985,12 @@ fn compute_act<'a>(
             .as_ref()
             .map(|a| {
                 let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
+                // `on` is the activate predicate itself; a body it admits is
+                // reached even when generation walked it under no pending entry.
                 a.walked
                     .iter()
                     .cloned()
+                    .chain(a.on.iter().cloned())
                     .chain(holding)
                     .filter_map(|(mi, id, name)| {
                         Some((sorted.get(mi as usize)?.0.to_owned(), id, name))
@@ -1979,8 +1998,21 @@ fn compute_act<'a>(
                     .collect()
             })
             .unwrap_or_default();
+    let seen: std::collections::BTreeSet<BodyIdentity> =
+        g.m.act
+            .as_ref()
+            .map(|a| {
+                a.seen
+                    .iter()
+                    .filter_map(|(mi, id, name)| {
+                        Some((sorted.get(*mi as usize)?.0.to_owned(), *id, name.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     let body_reach = BodyReach {
         bodies,
+        seen,
         complete: g.m.act.is_some() && !stats.aborted,
     };
     let fnproto_borrow_written = if stats.aborted {
@@ -1989,19 +2021,14 @@ fn compute_act<'a>(
         g.m.fnproto_borrow_write
             .map(|r| g.m.reasons[r as usize].clone())
     };
-    let verification_bodies = if cfg.verify_facts && !stats.aborted {
-        g.m.act.as_ref().map(|a| {
-            a.seen
+    let verification_bodies = if (cfg.verify_facts || cfg.dce_bodies) && body_reach.complete {
+        Some(
+            body_reach
+                .seen
                 .iter()
-                .filter_map(|(mi, id, name)| {
-                    let path = sorted.get(*mi as usize)?.0.to_owned();
-                    Some((
-                        (path, *id, name.clone()),
-                        a.on.contains(&(*mi, *id, name.clone())),
-                    ))
-                })
-                .collect()
-        })
+                .map(|k| (k.clone(), !body_reach.inactive(k)))
+                .collect(),
+        )
     } else {
         None
     };
