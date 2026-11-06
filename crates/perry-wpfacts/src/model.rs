@@ -1933,8 +1933,11 @@ pub struct Act {
     /// A body outside it is one a later pass minted: it is walked (sound),
     /// the pass never asked whether it can run.
     pub seen: crate::pts::FxHashSet<(u32, u32, String)>,
-    /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
-    /// one activation path left out, so its refusal fixture proves wrongly.
+    /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>[+<path>..]`):
+    /// the named activation paths left out, so a refusal fixture reached
+    /// only through them proves wrongly (two paths that both carry one
+    /// transfer, such as a call into a summarized callee and its instance,
+    /// are left out together).
     pub sabotage: Option<String>,
 }
 

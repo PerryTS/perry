@@ -4,6 +4,7 @@ mod absent_key;
 mod accessor_keys;
 mod accessor_reach;
 mod accessor_receiver;
+mod activation_paths;
 mod annexb_accessors;
 mod arguments_object;
 mod array_ctor;
