@@ -75,6 +75,13 @@ pub fn enabled() -> bool {
     *ON.get_or_init(|| std::env::var("PERRY_VERIFY_FACTS").as_deref() == Ok("1"))
 }
 
+/// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a
+/// body the whole-program reach calls inactive is emitted as a trap.
+pub fn dce_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DCE").as_deref() == Ok("1"))
+}
+
 /// The facts-consumed lowerings carry their witnesses: this build, or a
 /// contract build.
 pub(crate) fn witnesses() -> bool {
@@ -89,11 +96,18 @@ struct Module {
     ordinal: u64,
     site_ordinal: u64,
     copy: String,
-    bodies: Option<std::sync::Arc<std::collections::BTreeMap<(u32, String), bool>>>,
 }
+
+/// The module's body classifications: its name and `(id, synthetic name)`
+/// to active. Both the claim check and the removal read this one map.
+type Bodies = (
+    String,
+    std::sync::Arc<std::collections::BTreeMap<(u32, String), bool>>,
+);
 
 thread_local! {
     static MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
+    static BODIES: RefCell<Option<Bodies>> = const { RefCell::new(None) };
     /// The innermost source site being lowered: SWC 1-based start, kind.
     static SITE: Cell<Option<(u32, &'static str)>> = const { Cell::new(None) };
     static COPY_SITE: Cell<u64> = const { Cell::new(0) };
@@ -125,7 +139,6 @@ pub(crate) fn begin_module(name: &str, source: Option<&str>, prefix_lines: u32) 
             raw: Vec::new(),
             ordinal: 0,
             site_ordinal: 0,
-            bodies: None,
             copy: "<layout planning>".to_owned(),
         })
     });
@@ -406,34 +419,53 @@ pub(crate) fn finish(llmod: &mut LlModule) {
 }
 
 pub(crate) fn bodies(view: &crate::codegen::ProgramFactsView) {
-    if !enabled() {
+    if enabled() {
+        MODULE.with(|m| {
+            let mut m = m.borrow_mut();
+            let m = m.as_mut().expect("verification module initialized");
+            if let Some(path) = &view.verification_module {
+                m.name = path.clone();
+            }
+        });
+    }
+    if !enabled() && !dce_enabled() {
         return;
     }
-    MODULE.with(|m| {
-        let mut m = m.borrow_mut();
-        let m = m.as_mut().expect("verification module initialized");
-        m.bodies = view.verification_bodies.clone();
-        if let Some(path) = &view.verification_module {
-            m.name = path.clone();
-        }
+    let name = view.verification_module.clone().unwrap_or_default();
+    BODIES.with(|b| {
+        *b.borrow_mut() = view.verification_bodies.clone().map(|map| (name, map));
     });
 }
 
+/// The body is classified and no path reaches it. An absent map (give-up,
+/// incomplete reach) or an unknown identity is active.
 fn inactive(id: u32, name: &str) -> bool {
-    MODULE.with(|m| {
-        let m = m.borrow();
-        let Some(m) = m.as_ref() else { return false };
+    BODIES.with(|b| {
+        let b = b.borrow();
+        let Some((module, bodies)) = b.as_ref() else {
+            return false;
+        };
         let name = if id == u32::MAX {
-            format!("{}:{name}", m.name)
+            format!("{module}:{name}")
         } else {
             String::new()
         };
-        m.bodies.as_ref().and_then(|b| b.get(&(id, name))) == Some(&false)
+        bodies.get(&(id, name)) == Some(&false)
     })
 }
 
+/// Removal: an inactive body's entry traps. `llvm.trap` is noreturn, so the
+/// optimizer drops the statements lowered after it.
+fn trap(block: &mut crate::block::LlBlock) {
+    block.call_void("llvm.trap", &[]);
+}
+
 pub(crate) fn body_entry(ctx: &mut FnCtx<'_>, id: u32, name: &str) {
-    if !enabled() || !inactive(id, name) {
+    if (!enabled() && !dce_enabled()) || !inactive(id, name) {
+        return;
+    }
+    if !enabled() {
+        trap(ctx.block());
         return;
     }
     MODULE.with(|m| {
@@ -453,10 +485,16 @@ pub(crate) fn body_entry(ctx: &mut FnCtx<'_>, id: u32, name: &str) {
         "perry_verify_facts_entry",
         &[(I64, &site.pointer), (I64, site.len.as_deref().unwrap())],
     );
+    if dce_enabled() {
+        trap(ctx.block());
+    }
 }
 
 pub(crate) fn raw_body_entry(lf: &mut crate::function::LlFunction, id: u32) {
     if !enabled() {
+        if dce_enabled() && inactive(id, "") {
+            trap(lf.block_mut(0).unwrap());
+        }
         return;
     }
     MODULE.with(|m| {
@@ -482,6 +520,9 @@ pub(crate) fn raw_body_entry(lf: &mut crate::function::LlFunction, id: u32) {
     lf.block_mut(0)
         .unwrap()
         .call_void("perry_verify_facts_entry", &[(I64, &ptr), (I64, &len)]);
+    if dce_enabled() {
+        trap(lf.block_mut(0).unwrap());
+    }
 }
 
 pub(crate) fn field_consumed(p: &crate::expr::wpfacts_access::FieldProof, key: &str) {
