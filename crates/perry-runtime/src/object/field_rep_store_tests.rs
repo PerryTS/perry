@@ -371,20 +371,28 @@ fn a_cached_f64_edge_refuses_a_non_number() {
 }
 
 #[test]
-fn an_int32_key_add_is_stored_as_its_double_on_both_paths() {
+fn numeric_key_adds_and_legacy_int32_slot_stores_use_doubles_on_both_paths() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let boxed = f64::from_bits(crate::value::INT32_TAG | 5);
         for _ in 0..2 {
             let obj = crate::object::js_object_alloc(0, 4);
             add(obj, "p2b_i_a", 1.0);
-            let id = add(obj, "p2b_i_b", boxed);
+            // Public setters receive canonical Numbers on both the cold
+            // key-add path and its cached transition.
+            let id = add(obj, "p2b_i_b", 5.0);
             assert_eq!(slot_rep(rep_of(LayoutWord(id)), 1), REP_F64);
+            assert_eq!(slot_bits(obj, 1), 5.0f64.to_bits());
+
+            // The shape slot funnel also admits legacy INT32 words: its
+            // representation check must canonicalize them before publication.
+            crate::object::store_object_field_slot(obj, 1, boxed.to_bits());
             assert_eq!(
                 slot_bits(obj, 1),
                 5.0f64.to_bits(),
                 "canonical double in an F64 lane"
             );
+            assert_eq!(object_shape_stamp(obj), LayoutWord(id));
         }
     }
 }
