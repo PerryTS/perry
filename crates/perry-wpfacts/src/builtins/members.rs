@@ -312,6 +312,15 @@ pub(super) fn own(fam: Family, name: &str) -> Option<Mem> {
 
 /// The member `name` on the family's chain: its own intrinsic prototype,
 /// then `Object.prototype`. `None`: no intrinsic of the chain defines it.
+/// The methods `Object.prototype` holds (`OBJECT`'s functions): what a
+/// computed key may read there when its shape can spell one of them.
+pub(super) fn object_proto_methods() -> impl Iterator<Item = &'static str> {
+    OBJECT
+        .iter()
+        .filter(|(_, mem)| matches!(mem, Mem::Fn))
+        .map(|(key, _)| *key)
+}
+
 pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
 }
