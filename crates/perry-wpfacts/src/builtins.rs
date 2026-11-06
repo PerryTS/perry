@@ -6,6 +6,7 @@
 //! and the result is ⊤. A missing summary costs precision, never soundness.
 
 use crate::model::*;
+use perry_abi::lock::LockHolder;
 
 mod collections;
 mod constructors;
@@ -38,9 +39,9 @@ pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
-    global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
-    note_native_write, require_parts, settle_native_given,
+    global_field, global_user_key, global_value_written, is_builtin_module, native_parent_ctor,
+    native_parent_keys, native_parent_summarized, native_proto, native_written, native_written_by,
+    note_global_in_top, note_native_write, require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -611,7 +612,12 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     if let TokKind::Func(f, _) = m.toks[t as usize] {
         let fi = &m.funcs[f as usize];
         if fi.gen_step() {
-            return generator_image_member(m, fi.gen_async, &m.atoms[a as usize]);
+            let holder = if fi.gen_async {
+                ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
+            } else {
+                ("%GeneratorPrototype%", LockHolder::Generator)
+            };
+            return image_member(m, holder, &m.atoms[a as usize]);
         }
     }
     let what = match &m.toks[t as usize] {
@@ -630,19 +636,24 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         }
         _ => None,
     };
+    // A Map or Set iterator: past its own keys the chain reaches
+    // `%MapIteratorPrototype%` / `%SetIteratorPrototype%`, whose declared
+    // image members are locked (DEC 250); every other key may be added
+    // there: not final.
+    if let Some(holder) = what.and_then(members::iterator_prototype) {
+        return image_member(m, holder, &m.atoms[a as usize]);
+    }
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
 }
 
-/// Is `name` an image member of the declared generator prototype (the
-/// realm table's `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`, the
-/// same declaration the runtime seals)? `constructor` stays writable.
-fn generator_image_member(m: &Model, is_async: bool, name: &str) -> bool {
-    use perry_abi::lock::{final_on, LockHolder, LockKey};
-    let (holder, lock) = if is_async {
-        ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
-    } else {
-        ("%GeneratorPrototype%", LockHolder::Generator)
-    };
+/// Is a read of `name` on the declared intrinsic prototype `holder` final?
+/// `holder` is its realm-table name (`%GeneratorPrototype%`,
+/// `%MapIteratorPrototype%` …, the same declaration the runtime seals) and
+/// its lock holder; the lock's one decision (`perry_abi::lock::final_on`)
+/// classes the key: `constructor` stays writable, an image member is locked,
+/// an absent key may be added.
+fn image_member(m: &Model, (holder, lock): (&str, LockHolder), name: &str) -> bool {
+    use perry_abi::lock::{final_on, LockKey};
     let key = if name == "constructor" {
         LockKey::Constructor
     } else if m
@@ -1075,16 +1086,31 @@ pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> 
 }
 
 /// The function value carries its canonical namespace call coordinates.
-pub(crate) fn native_namespace_call(m: &mut Model, t: Tok, call: CallId) -> bool {
+/// It runs on the receiver token `this_tok` the call is made for (a method
+/// call binds one per receiver value), else on the call's own `this`: what
+/// the namespace's model does to its receiver is decided per token, as for
+/// a call by name on that token (`own_method`). A bare `fetch(u)` is made
+/// on the unresolved-global sentinel, the namespace's own object, which
+/// the native gives to no one (`unknown_method_proto`'s `own`).
+pub(crate) fn native_namespace_call(
+    m: &mut Model,
+    t: Tok,
+    call: CallId,
+    this_tok: Option<Tok>,
+) -> bool {
     if m.unit_mode {
         return false;
     }
     let Some((ns, name)) = m.native_coordinates(t).and_then(|c| c.namespace) else {
         return false;
     };
-    if m.bind_done.insert((call, t, u32::MAX - 6)) {
+    if m.bind_done
+        .insert((call, t, this_tok.unwrap_or(u32::MAX - 6)))
+    {
         m.diagnostic_callee(call, t);
+        let prev = std::mem::replace(&mut m.cur_this, this_tok);
         m.with_b(|m| ns_method_inner(m, ns, Some(name), call, true));
+        m.cur_this = prev;
     }
     true
 }

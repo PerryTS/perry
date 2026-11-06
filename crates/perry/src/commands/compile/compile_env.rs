@@ -236,6 +236,7 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_BUILD_GIT_SHA", "Baked into diagnostic rodata by build.rs; verification bypasses caches, and OFF does not read it."),
     ("PERRY_TEST_RUN_ONCE_PROOF_CHILD", "Test-only marker that tells a perry-codegen unit test it is the re-executed child; the compiler never reads it."),
     ("PERRY_PARSE_IR_TEXT_LEAK_PROBE", "Set only by the IR-text leak probe test to mark its own child process; the compile path never reads it."),
     ("PERRY_DYNAMIC_REACH_REPORT", "Writes the dynamic-reach report file only; no pruning decision or emitted code depends on it."),

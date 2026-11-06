@@ -1,37 +1,85 @@
-//! `PERRY_VERIFY_FACTS=1` while compiling: the facts-verification build.
+//! Compile-time `PERRY_VERIFY_FACTS=1` diagnostic instrumentation.
 //!
-//! Every lowering that codegen takes from a whole-program fact (a field
-//! access elided to its birth slot, a call of the proven bodies, a method
-//! call switched over the proven receiver classes, a static call without its
-//! guard, a dispatch-tower case without its layout recheck) first checks at
-//! run time what the fact claimed of the live value: the receiver's class id
-//! is one of the proven classes and the key sits at the proven slot, the
-//! callee is one of the proven bodies, the receiver still has its birth
-//! layout. A value the fact did not admit calls one runtime witness
-//! (`perry-runtime` `wpfacts_check.rs`), which prints the site
-//! (`file:line:col`, the lowering, what was expected) and what it found, and
-//! aborts. It is a soundness oracle for wpfacts: a run that aborts found a
-//! false proof.
-//!
-//! The witnesses are the contract build's (`PERRY_CHECK_CONTRACTS=1` emits
-//! them too); this switch emits only them, links the ordinary runtime and
-//! keeps every other lowering. The variable is read while compiling, never
-//! by the program, and is part of the build and object cache keys. Unset,
-//! codegen emits exactly what it emits without this module: nothing here
-//! adds code, a string or a declaration.
+//! Existing witnesses use borrowed static metadata, while known-inactive
+//! emitted bodies trap at entry. The compile-time coverage manifest names
+//! consumed predicates whose checks belong to later slices. Passing checks
+//! preserve evaluated operands; failure writes one JSON line and exits 86.
+//! Without the mode (including `=0`), metadata, body annotations and coverage
+//! recording remain behind the existing gate. Contract builds retain their
+//! legacy witness ABI.
 use std::cell::{Cell, RefCell};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+mod coverage;
+pub use coverage::take_manifest;
+pub(crate) use coverage::{consumed, Fact};
+#[cfg(feature = "llvm-inprocess")]
+pub(crate) use coverage::{emitted, optimized};
+
+/// A solver site identity, without a second derivation or display-string parsing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteClaim {
+    pub ordinal: usize,
+    pub module: String,
+    pub byte_offset: Option<u32>,
+    pub key: String,
+    pub is_call: bool,
+    pub bodies: Vec<(u32, String)>,
+    pub verdict: SiteVerdict,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SiteVerdict {
+    OwnLength,
+    NativeMember,
+    T0Mono,
+    T0Set,
+    E0,
+}
+impl SiteVerdict {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::OwnLength => "OwnLength",
+            Self::NativeMember => "NativeMember",
+            Self::T0Mono => "T0Mono",
+            Self::T0Set => "T0Set",
+            Self::E0 => "E0",
+        }
+    }
+    pub(crate) fn slice(self) -> u8 {
+        match self {
+            Self::OwnLength => 1,
+            Self::NativeMember => 2,
+            Self::T0Mono => 3,
+            Self::T0Set => 4,
+            Self::E0 => 5,
+        }
+    }
+}
+
+pub fn register_site_claims(claims: impl IntoIterator<Item = SiteClaim>) {
+    if enabled() {
+        coverage::sites(claims);
+    }
+}
 
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
+use crate::module::LlModule;
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE, I64};
 
 /// The facts-verification build was asked for.
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("PERRY_VERIFY_FACTS").as_deref() == Ok("1"))
+}
+
+/// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a
+/// body the whole-program reach calls inactive is emitted as a trap.
+pub fn dce_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DCE").as_deref() == Ok("1"))
 }
 
 /// The facts-consumed lowerings carry their witnesses: this build, or a
@@ -44,12 +92,26 @@ struct Module {
     name: String,
     line_starts: Vec<usize>,
     prefix_lines: u32,
+    raw: Vec<String>,
+    ordinal: u64,
+    site_ordinal: u64,
+    copy: String,
 }
+
+/// The module's body classifications: its name and `(id, synthetic name)`
+/// to active. Both the claim check and the removal read this one map.
+type Bodies = (
+    String,
+    std::sync::Arc<std::collections::BTreeMap<(u32, String), bool>>,
+);
 
 thread_local! {
     static MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
+    static BODIES: RefCell<Option<Bodies>> = const { RefCell::new(None) };
     /// The innermost source site being lowered: SWC 1-based start, kind.
     static SITE: Cell<Option<(u32, &'static str)>> = const { Cell::new(None) };
+    static COPY_SITE: Cell<u64> = const { Cell::new(0) };
+    static KEY: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// The module being lowered: its name and source, to name a site
@@ -74,32 +136,122 @@ pub(crate) fn begin_module(name: &str, source: Option<&str>, prefix_lines: u32) 
             name: name.to_owned(),
             line_starts,
             prefix_lines,
+            raw: Vec::new(),
+            ordinal: 0,
+            site_ordinal: 0,
+            copy: "<layout planning>".to_owned(),
         })
     });
     SITE.with(|s| s.set(None));
 }
 
+pub(crate) struct BodyGuard {
+    copy: String,
+    site: Option<(u32, &'static str)>,
+    site_copy: u64,
+    key: String,
+}
+
+pub(crate) fn body_scope(copy: &str) -> Option<BodyGuard> {
+    if !enabled() {
+        return None;
+    }
+    let outer = MODULE.with(|m| {
+        let mut m = m.borrow_mut();
+        let m = m.as_mut().expect("verification module initialized");
+        std::mem::replace(&mut m.copy, copy.to_owned())
+    });
+    Some(BodyGuard {
+        copy: outer,
+        site: SITE.with(|s| s.replace(None)),
+        site_copy: COPY_SITE.with(|s| s.replace(0)),
+        key: KEY.with(|k| k.replace(String::new())),
+    })
+}
+
+impl Drop for BodyGuard {
+    fn drop(&mut self) {
+        MODULE.with(|m| {
+            if let Some(m) = m.borrow_mut().as_mut() {
+                m.copy = std::mem::take(&mut self.copy);
+            }
+        });
+        SITE.with(|s| s.set(self.site));
+        COPY_SITE.with(|s| s.set(self.site_copy));
+        KEY.with(|k| *k.borrow_mut() = std::mem::take(&mut self.key));
+    }
+}
+
 pub(crate) struct SiteGuard {
     outer: Option<(u32, &'static str)>,
+    outer_copy: Option<u64>,
+    outer_key: Option<String>,
+    outer_body: Option<String>,
 }
 
 /// Lowering `e` starts: a source site (a call, read, write) becomes the
 /// innermost site until the guard drops.
-pub(crate) fn enter(e: &Expr) -> Option<SiteGuard> {
+pub(crate) fn enter(e: &Expr, copy: &str) -> Option<SiteGuard> {
     if !witnesses() {
         return None;
     }
+    let outer_body = if enabled() {
+        MODULE.with(|m| {
+            if let Some(m) = m.borrow_mut().as_mut() {
+                let outer = m.copy.clone();
+                if m.copy != copy {
+                    m.copy = copy.to_owned();
+                }
+                return Some(outer);
+            }
+            None
+        })
+    } else {
+        None
+    };
     let here = crate::facts_consumed::site_of(e).map(|(s, _, k)| (s, k));
     let outer = SITE.with(|s| s.get());
     if here.is_some() {
         SITE.with(|s| s.set(here));
     }
-    Some(SiteGuard { outer })
+    let (outer_copy, outer_key) = if enabled() {
+        let ordinal = MODULE.with(|m| {
+            let mut m = m.borrow_mut();
+            let m = m.as_mut().unwrap();
+            m.site_ordinal += 1;
+            m.site_ordinal
+        });
+        (
+            Some(COPY_SITE.with(|s| s.replace(ordinal))),
+            Some(KEY.with(|k| k.replace(source_key(e)))),
+        )
+    } else {
+        (None, None)
+    };
+    Some(SiteGuard {
+        outer,
+        outer_copy,
+        outer_key,
+        outer_body,
+    })
 }
 
 impl Drop for SiteGuard {
     fn drop(&mut self) {
         SITE.with(|s| s.set(self.outer));
+        if let Some(outer) = self.outer_copy {
+            COPY_SITE.with(|s| s.set(outer));
+        }
+        if let Some(outer) = self.outer_key.take() {
+            KEY.with(|s| *s.borrow_mut() = outer);
+        }
+        if let Some(outer) = self.outer_body.take() {
+            MODULE.with(|m| {
+                if let Some(m) = m.borrow_mut().as_mut() {
+                    m.copy = outer;
+                }
+            });
+        }
     }
 }
 
@@ -128,12 +280,306 @@ pub(crate) fn here() -> String {
 
 /// The site argument of a witness call: the handle of an interned string
 /// naming the site and what its lowering assumes (`here()` + `what`).
-pub(crate) fn site_arg(ctx: &mut FnCtx<'_>, what: &str) -> String {
+pub(crate) fn site_arg(ctx: &mut FnCtx<'_>, what: &str, fact: Fact, receivers: &[u32]) -> SiteArg {
+    if enabled() {
+        let predicate = if matches!(fact, Fact::Bodies) {
+            None
+        } else {
+            Some(fact.name())
+        };
+        return raw_site_inner(ctx, fact.name(), None, receivers, what, predicate);
+    }
     let text = format!("{} {what}", here());
     let idx = ctx.strings.intern(&text);
     let global = format!("@{}", ctx.strings.entry(idx).handle_global);
     let blk = ctx.block();
     let boxed = blk.load(DOUBLE, &global);
     let bits = blk.bitcast_double_to_i64(&boxed);
-    blk.and(I64, &bits, POINTER_MASK_I64)
+    SiteArg {
+        pointer: blk.and(I64, &bits, POINTER_MASK_I64),
+        len: None,
+    }
+}
+
+/// Raw metadata operands remain paired through every witness emitter.
+pub(crate) struct SiteArg {
+    pub pointer: String,
+    pub len: Option<String>,
+}
+impl std::ops::Deref for SiteArg {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.pointer
+    }
+}
+
+pub(crate) fn raw_bytes(prefix: &str, bytes: &[u8]) -> (String, String) {
+    MODULE.with(|m| {
+        let mut m = m.borrow_mut();
+        let m = m.as_mut().expect("verification module initialized");
+        let ordinal = m.ordinal;
+        m.ordinal += 1;
+        let symbol = format!("{prefix}__verify_{ordinal}");
+        let escaped: String = bytes.iter().map(|b| format!("\\{b:02X}")).collect();
+        m.raw.push(format!(
+            "@{symbol} = private constant [{} x i8] c\"{escaped}\", align 1",
+            bytes.len()
+        ));
+        (
+            format!("ptrtoint (ptr @{symbol} to i64)"),
+            bytes.len().to_string(),
+        )
+    })
+}
+
+pub(crate) fn raw_site(
+    ctx: &mut FnCtx<'_>,
+    verdict: &str,
+    key: Option<&str>,
+    receivers: &[u32],
+    expectation: &str,
+) -> SiteArg {
+    raw_site_inner(ctx, verdict, key, receivers, expectation, None)
+}
+
+fn raw_site_inner(
+    ctx: &mut FnCtx<'_>,
+    verdict: &str,
+    key: Option<&str>,
+    receivers: &[u32],
+    expectation: &str,
+    predicate: Option<&str>,
+) -> SiteArg {
+    let (name, offset, ordinal) = MODULE.with(|m| {
+        let m = m.borrow();
+        let m = m.as_ref().expect("verification module initialized");
+        (
+            m.name.clone(),
+            SITE.with(|s| s.get().map(|s| s.0.saturating_sub(1))),
+            m.ordinal,
+        )
+    });
+    let key = key
+        .map(str::to_owned)
+        .unwrap_or_else(|| KEY.with(|k| k.borrow().clone()));
+    let mut metadata = serde_json::json!({
+        "marker": "PERRY_FALSE_PROOF", "module": name, "byte_offset": offset,
+        "key": key, "verdict": verdict,
+        "proven_receivers": receivers,
+        "copy": {"body": ctx.func.name, "site":COPY_SITE.with(|s| s.get()), "emission": ordinal},
+        "compile_sha": option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown"),
+        "expectation": expectation,
+    });
+    if let Some(predicate) = predicate {
+        metadata["predicate"] = serde_json::json!(predicate);
+    }
+    let mut bytes = serde_json::to_vec(&metadata).expect("static verification metadata");
+    assert_eq!(bytes.pop(), Some(b'}'));
+    let (pointer, len) = raw_bytes(ctx.strings.module_prefix(), &bytes);
+    SiteArg {
+        pointer,
+        len: Some(len),
+    }
+}
+
+pub(crate) fn check(
+    ctx: &mut FnCtx<'_>,
+    result: LlvmType,
+    legacy: &str,
+    args: &[(LlvmType, &str)],
+    site: &SiteArg,
+) -> String {
+    let mut operands = args.to_vec();
+    operands.push((I64, &site.pointer));
+    let name = if let Some(len) = &site.len {
+        operands.push((I64, len));
+        match legacy {
+            "perry_wpfacts_check_call" => "perry_verify_facts_call",
+            "perry_wpfacts_check_call_miss" => "perry_verify_facts_call_miss",
+            "perry_wpfacts_check_miss" => "perry_verify_facts_miss",
+            _ => unreachable!("verification ABI"),
+        }
+    } else {
+        legacy
+    };
+    ctx.block().call(result, name, &operands)
+}
+
+pub(crate) fn finish(llmod: &mut LlModule) {
+    if !enabled() {
+        return;
+    }
+    MODULE.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            for line in std::mem::take(&mut m.raw) {
+                llmod.add_raw_global(line);
+            }
+        }
+    });
+}
+
+pub(crate) fn bodies(view: &crate::codegen::ProgramFactsView) {
+    if enabled() {
+        MODULE.with(|m| {
+            let mut m = m.borrow_mut();
+            let m = m.as_mut().expect("verification module initialized");
+            if let Some(path) = &view.verification_module {
+                m.name = path.clone();
+            }
+        });
+    }
+    if !enabled() && !dce_enabled() {
+        return;
+    }
+    let name = view.verification_module.clone().unwrap_or_default();
+    BODIES.with(|b| {
+        *b.borrow_mut() = view.verification_bodies.clone().map(|map| (name, map));
+    });
+}
+
+/// The body is classified and no path reaches it. An absent map (give-up,
+/// incomplete reach) or an unknown identity is active.
+fn inactive(id: u32, name: &str) -> bool {
+    BODIES.with(|b| {
+        let b = b.borrow();
+        let Some((module, bodies)) = b.as_ref() else {
+            return false;
+        };
+        let name = if id == u32::MAX {
+            format!("{module}:{name}")
+        } else {
+            String::new()
+        };
+        bodies.get(&(id, name)) == Some(&false)
+    })
+}
+
+/// Removal: an inactive body's entry traps. `llvm.trap` is noreturn, so the
+/// optimizer drops the statements lowered after it.
+fn trap(block: &mut crate::block::LlBlock) {
+    block.call_void("llvm.trap", &[]);
+}
+
+pub(crate) fn body_entry(ctx: &mut FnCtx<'_>, id: u32, name: &str) {
+    if (!enabled() && !dce_enabled()) || !inactive(id, name) {
+        return;
+    }
+    if !enabled() {
+        trap(ctx.block());
+        return;
+    }
+    MODULE.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.copy = ctx.func.name.clone();
+        }
+    });
+    coverage::entry(id, name, &ctx.func.name);
+    let site = raw_site(
+        ctx,
+        "Activation",
+        Some("<entry>"),
+        &[],
+        "known inactive body",
+    );
+    ctx.block().call_void(
+        "perry_verify_facts_entry",
+        &[(I64, &site.pointer), (I64, site.len.as_deref().unwrap())],
+    );
+    if dce_enabled() {
+        trap(ctx.block());
+    }
+}
+
+pub(crate) fn raw_body_entry(lf: &mut crate::function::LlFunction, id: u32) {
+    if !enabled() {
+        if dce_enabled() && inactive(id, "") {
+            trap(lf.block_mut(0).unwrap());
+        }
+        return;
+    }
+    MODULE.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.copy = lf.name.clone();
+        }
+    });
+    if !inactive(id, "") {
+        return;
+    }
+    coverage::entry(id, "", &lf.name);
+    let (module, ordinal) = MODULE.with(|m| {
+        let m = m.borrow();
+        let m = m.as_ref().unwrap();
+        (m.name.clone(), m.ordinal)
+    });
+    let meta = serde_json::json!({"marker":"PERRY_FALSE_PROOF", "module":module,
+        "byte_offset":null, "key":"<entry>", "verdict":"Activation", "proven_receivers":[],
+        "copy":{"body":lf.name,"emission":ordinal}, "compile_sha":option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown")});
+    let mut bytes = serde_json::to_vec(&meta).unwrap();
+    bytes.pop();
+    let (ptr, len) = raw_bytes("__perry_body", &bytes);
+    lf.block_mut(0)
+        .unwrap()
+        .call_void("perry_verify_facts_entry", &[(I64, &ptr), (I64, &len)]);
+    if dce_enabled() {
+        trap(lf.block_mut(0).unwrap());
+    }
+}
+
+pub(crate) fn field_consumed(p: &crate::expr::wpfacts_access::FieldProof, key: &str) {
+    coverage::field(p, key, false);
+}
+pub(crate) fn field_checked(p: &crate::expr::wpfacts_access::FieldProof, key: &str) {
+    coverage::field(p, key, true);
+}
+
+fn source_key(e: &Expr) -> String {
+    match e {
+        Expr::PropertyGet { property, .. }
+        | Expr::PropertySet { property, .. }
+        | Expr::PropertyUpdate { property, .. } => property.clone(),
+        Expr::Call { callee, .. } => source_key(callee),
+        Expr::New { .. } => "<new>".into(),
+        _ => "<value>".into(),
+    }
+}
+
+pub(crate) fn number_checked(id: u32) {
+    coverage::number(id);
+}
+
+pub(crate) fn covered(fact: Fact, operands: impl FnOnce() -> serde_json::Value) {
+    if enabled() {
+        coverage::checked(fact, operands());
+    }
+}
+
+pub(crate) fn bodies_checked(bodies: &[crate::codegen::FactsBody], width: usize) {
+    covered(
+        Fact::Bodies,
+        || serde_json::json!({"bodies":bodies.iter().map(|b| (b.func_id,b.params,b.closure)).collect::<Vec<_>>(),"call_width":width}),
+    );
+}
+
+pub(crate) fn normal_call_miss(class: &str, key: &str) {
+    coverage::normal_call_miss(class, key);
+}
+
+pub fn reset() {
+    if enabled() {
+        coverage::reset();
+    }
+}
+
+pub fn write_manifest(path: &std::path::Path) -> std::io::Result<()> {
+    if !enabled() {
+        return Ok(());
+    }
+    let path = std::path::PathBuf::from(format!("{}.facts.jsonl", path.display()));
+    std::fs::write(path, take_manifest().join("\n") + "\n")
+}
+
+pub(crate) fn tick(ctx: &mut FnCtx<'_>) {
+    if enabled() {
+        ctx.block().call_void("perry_verify_facts_tick", &[]);
+    }
 }

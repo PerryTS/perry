@@ -350,6 +350,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let throwing = matches!(args[6], Expr::Bool(true));
             let mut skip = None;
             if elide {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose, || {
+                    serde_json::json!({})
+                });
                 let skipped = if throwing {
                     lower_expr(ctx, &args[5])?
                 } else {

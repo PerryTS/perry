@@ -502,16 +502,21 @@ impl Model {
                 self.edge(all, dst);
                 let h = self.hole(t);
                 self.edge(h, dst);
+                self.index_accessors(origin, t, ChainAct::Load(dst));
                 return;
             }
             let ek = self.elem_key();
             return self.load_from(origin, t, ek, dst);
         }
         if self.is_elem_key(key) {
+            // An element read is [[Get]] of an index: an accessor under a
+            // numeric name runs (an HIR array operation's read, as the
+            // native's in `native_index_access`).
             if t != TOP && self.is_array_like(t) {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
                 self.add_prim(dst, prim::UNDEF);
+                self.index_accessors(origin, t, ChainAct::Load(dst));
                 return;
             }
             if builtins::builtin_function(self, t) {
@@ -778,6 +783,38 @@ impl Model {
                     .or_default()
                     .insert((t, Key::Named(num), act));
             }
+        }
+    }
+
+    /// A native's [[Get]] and [[Set]] of `t`'s indices (an Array.prototype
+    /// method on its receiver) are the program's element read and write: an
+    /// accessor under a numeric name on `t` or its chain runs with `t` as
+    /// `this`. A getter's result is an element the native reads and a setter
+    /// takes the elements it writes, so both go through `elems`, the
+    /// receiver's element node. Registered before the first numeric
+    /// accessor, the visit waits for it (`add_accessor_atom`), as
+    /// `plain_key`'s does.
+    pub(crate) fn native_index_access(&mut self, t: Tok, elems: NodeId) {
+        if t == TOP || (self.is_marker(t) && !self.virt_protos.contains_key(&t)) {
+            return;
+        }
+        for act in [ChainAct::Load(elems), ChainAct::Store(elems)] {
+            self.index_accessors(t, t, act);
+        }
+    }
+
+    /// An index read or write of `t` with `origin` as `this`: an accessor
+    /// under a numeric name runs, once one exists (until then the visit
+    /// waits for it).
+    pub(crate) fn index_accessors(&mut self, origin: Tok, t: Tok, act: ChainAct) {
+        if self.numeric_accessor {
+            self.accessor_walk(origin, t, Key::any(), act);
+        } else {
+            let num = self.atom(NUM_KEY);
+            self.visits
+                .entry(t)
+                .or_default()
+                .insert((origin, Key::Named(num), act));
         }
     }
 

@@ -756,6 +756,17 @@ pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, valu
     store_object_symbol_property_root(owner, sym_key, value_bits);
 }
 
+/// Is the raw word `addr` a cell of the process immortal symbol space
+/// ([`space::holds`]: range and cell stride, no read)? For the snapshot
+/// census key-name rule, which names a persistent symbol by what it is
+/// (kind and description), never by its cell address: cells are bump
+/// allocated in creation order, so an address is a creation ordinal.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[inline(always)]
+pub(crate) fn in_symbol_space(addr: usize) -> bool {
+    space::holds(addr)
+}
+
 #[cfg(test)]
 mod wellknown_desc_tests {
     use super::*;

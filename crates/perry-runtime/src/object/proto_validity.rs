@@ -52,6 +52,11 @@ pub(crate) fn any_prototype_marked() -> bool {
 /// re-reading through a pointer the allocation may have moved.
 #[inline]
 pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
+    // SNAP census: the whole prototype mark (the record, its flag, the
+    // serial, the private lineage, never-move) is representation (design
+    // §2.10.11); the image re-applies it lazily on first use.
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     if let Some(meta) = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE) {
         ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit in the meta
@@ -172,6 +177,11 @@ pub(crate) fn next_prototype_serial() -> u64 {
 /// As [`mark_object_as_prototype`]: allocates, and may move the owner.
 pub(crate) unsafe fn mark_object_as_prototype_with_serial(obj: usize, serial: u64) -> Option<u64> {
     debug_assert!(serial >= FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+    // SNAP census: the whole prototype mark (the record, its flag, the
+    // serial, the private lineage, never-move) is representation (design
+    // §2.10.11); the image re-applies it lazily on first use.
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     let meta = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE)?;
     ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
     // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
@@ -298,6 +308,11 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
+    // SNAP census: the mark (an empty record, its flag, the private shape
+    // lineage) classifies an object the program already holds; no program
+    // operation observes it (design §2.10.11).
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
     let (meta, object) = handle
@@ -330,8 +345,17 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         // the meta record is reached through the owner again afterwards.
         // A prototype mark changes no slot and no descriptor, so the new
         // shape keeps the ConstFn lanes the object still satisfies.
+        //
+        // A runtime intrinsic prototype holder born on the born-prototype
+        // lineage (`shapes::stamp_born_prototype_root`) already carries a
+        // shape no ordinary object carries, and nothing has seen it yet: the
+        // private lineage the transition would mint is the one it has.
+        let born = flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+            && crate::object::shapes::object_on_born_prototype_lineage(object);
         let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-            if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+            if born {
+                crate::object::shapes::object_shape_stamp(object)
+            } else if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
                 crate::object::shapes::transition_object_shape_semantics_keeping_constfn(object)
             } else {
                 crate::object::shapes::transition_object_shape_semantics(object)

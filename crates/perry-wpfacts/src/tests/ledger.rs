@@ -328,11 +328,11 @@ cause_test!(
     r#"const c: any = structuredClone({ a: 1 }); console.log(c.a);"#
 );
 cause_test!(
-    unseen computed_key,
+    computed_key,
     "computed-key",
     "property",
     "w",
-    r#"const g: any = (globalThis as any).hostFn; console.log((globalThis as any)[g()].w);"#
+    r#"const g: any = (globalThis as any)[process.argv[2]]; console.log((globalThis as any)[g()].w);"#
 );
 cause_test!(
     unseen escaped_object_field,

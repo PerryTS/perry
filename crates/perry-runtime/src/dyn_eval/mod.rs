@@ -456,6 +456,7 @@ pub(crate) fn function_from_strings_in_with_codegen(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    crate::snap_census::dyn_code(0);
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
     let base = roots_len();
@@ -509,6 +510,7 @@ pub(crate) fn eval_script_in_with_codegen(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    crate::snap_census::dyn_code(1);
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
     interp_entry(|| {

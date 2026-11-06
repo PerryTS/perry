@@ -250,7 +250,7 @@ pub fn arena_start_fresh_general_block() {
 /// extent and the existing coloring/seeding path.
 #[inline(always)]
 pub(crate) fn allocation_limit(offset: usize, block_size: usize) -> usize {
-    if crate::gc::gc_birth_extra_flags() != 0 {
+    if crate::gc::gc_birth_extra_flags() != 0 || crate::snap_census::inline_bump_closed() {
         0
     } else {
         super::alloc_sample::inline_limit(offset, block_size)

@@ -88,6 +88,7 @@ pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
+    crate::effect!(host_write, exit);
     // #3041 — match Node's `parseAndValidateExitCode`:
     //   * `undefined` / `null`  → exit with the stored `process.exitCode`
     //     (0 when it was never set / was reset to nullish — #6666).
@@ -854,6 +855,8 @@ pub extern "C" fn js_process_constrained_memory() -> f64 {
 /// Returns a string pointer, or null (0) if not found
 #[no_mangle]
 pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader {
+    // Reads the env: the census records a cell or a guard member
+    // (`snap_census::env_var`, design §2.10), not a host read.
     unsafe {
         let name = match env_name_from_header(name_ptr) {
             Some(name) => name,
@@ -864,9 +867,14 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
             Ok(value) => {
                 // Create a JS string from the value
                 let bytes = value.as_bytes();
-                js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+                let s = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                crate::snap_census::env_var(&name, Some(&value), s as usize);
+                s
             }
-            Err(_) => std::ptr::null_mut(), // Not found, return null
+            Err(_) => {
+                crate::snap_census::env_var(&name, None, 0);
+                std::ptr::null_mut() // Not found, return null
+            }
         }
     }
 }
@@ -887,6 +895,7 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
 /// Node, so `??` won't clobber a legitimately empty value.
 #[no_mangle]
 pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
+    // The env read is `js_getenv`'s (`snap_census::env_var`).
     let ptr = js_getenv(name_ptr);
     let val = if ptr.is_null() {
         JSValue::undefined()
@@ -990,6 +999,7 @@ static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pendi
 /// `js_removeenv` below, which the delete path can call directly).
 #[no_mangle]
 pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
+    crate::effect!(host_write, env);
     use crate::value::js_jsvalue_to_string;
     unsafe {
         let name = match env_name_from_header(name_ptr) {
@@ -1131,6 +1141,7 @@ static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
 pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
+    crate::effect!(host_write, env);
     unsafe {
         let name = match env_name_from_header(name_ptr) {
             Some(name) => name,
@@ -1167,6 +1178,19 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
 /// it straight to subsequent PropertyGet dispatch.
 #[no_mangle]
 pub extern "C" fn js_process_env() -> f64 {
+    // SNAP census: the env object and the IPC probe are the runtime's own
+    // population (init 0); the program taking the object is
+    // `snap_census::env_object`, not a host read (design §2.10.3).
+    #[cfg(perry_gc_instruments)]
+    {
+        let boxed = {
+            let _census = crate::snap_census::runtime_scope();
+            js_process_env_impl()
+        };
+        crate::snap_census::env_object(boxed);
+        return boxed;
+    }
+    #[cfg(not(perry_gc_instruments))]
     js_process_env_impl()
 }
 
@@ -1410,6 +1434,10 @@ pub(crate) fn process_env_has_field(
         return None;
     }
     let name = unsafe { env_name_from_header(key) };
+    #[cfg(perry_gc_instruments)]
+    if let Some(name) = &name {
+        crate::snap_census::env_has(name, std::env::var_os(name).is_some());
+    }
     Some(name.is_some_and(|name| std::env::var_os(name).is_some()))
 }
 
@@ -1424,6 +1452,8 @@ fn env_name_is_settable(name: &str) -> bool {
 }
 
 fn js_process_env_impl() -> f64 {
+    // Not a host read for the census: `js_process_env` runs this as the
+    // runtime's population and records the object (`snap_census::env_object`).
     super::ipc_hooks::ensure_initialized();
     let cached = CACHED_ENV.with(|c| c.get());
     if cached != 0.0 {
@@ -1434,6 +1464,7 @@ fn js_process_env_impl() -> f64 {
     // Pad alloc_limit so small env sets still have headroom; large
     // environments (CI runners) spill to the overflow Vec path.
     let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
+    let census_mark = crate::snap_census::env_storage_begin();
     let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, alloc_limit); realm { process.env, kind = exotic, members = { }; } };
     for (k, v) in &vars {
         #[cfg(windows)]
@@ -1448,6 +1479,7 @@ fn js_process_env_impl() -> f64 {
         let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
         crate::object::js_object_set_field_by_name(obj, key, val_f64);
     }
+    crate::snap_census::env_storage_end(census_mark, obj as usize);
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     // The per-OBJECT half of `ANY_PROCESS_ENV_OBJECT`, for the same reason the
     // arguments registry sets it beside its insert.

@@ -175,6 +175,7 @@ pub extern "C" fn perry_i18n_init(
 
 /// Detect the system locale from environment or platform APIs.
 fn detect_system_locale() -> Option<String> {
+    crate::effect!(host_read, locale);
     // 1. Explicit POSIX env overrides first: LANGUAGE (GNU extension,
     //    colon-separated list), then LC_ALL > LC_MESSAGES > LANG. A user who
     //    runs `LANG=de_DE.UTF-8 ./app` has stated a preference; platform

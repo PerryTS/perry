@@ -105,6 +105,7 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
+pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
 pub(crate) fn literal_descriptor_worker_ir() -> String {
@@ -2648,6 +2649,9 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
     inline_cache_global_name_for_prefix(ctx.strings.module_prefix(), site_id)
 }
 
+mod array_iteration;
+pub(crate) use array_iteration::{array_iteration_facts, array_program_facts};
+
 /// The definition emitted for every name in `FnCtx::ic_globals`.
 ///
 /// #9708: an inline-cache site owns an 8-byte pointer **slot**, not its cache
@@ -2660,47 +2664,6 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// inline hit path loads the slot through [`emit_inline_cache_slot`] and
 /// proves it non-null before reading a cache word; every runtime miss entry
 /// takes the slot's address.
-/// The program's array-iteration facts (object model step 7), from the
-/// whole-program write census fixed before module codegen starts: bit 0, a
-/// write may reach a `Symbol.iterator` member (or re-parent an array), so
-/// iteration reads `%Array.prototype%`'s fixed slot (and an array's own
-/// member); bit 1, `%ArrayIteratorPrototype%` may be named, so iteration also
-/// checks its `next`. Zero: iteration is the builtin element walk, unchecked.
-/// The whole-program facts (#13645) clear a bit the census sets when compiled
-/// code provably never writes what it guards.
-pub(crate) fn array_iteration_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
-    let names = crate::program_patched_proto_methods();
-    let mut facts = 0;
-    if !wpfacts.array_iteration_unwritten
-        && names
-            .iter()
-            .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_WRITABLE)
-    {
-        facts |= 1;
-    }
-    if !wpfacts.array_iterator_close_unwritten
-        && names
-            .iter()
-            .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_PROTO_REACHABLE)
-    {
-        facts |= 2;
-    }
-    facts
-}
-
-/// Immutable whole-program array facts handed to the runtime at startup.
-pub(crate) fn array_program_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
-    array_iteration_facts(wpfacts)
-        | if crate::program_patched_proto_methods()
-            .iter()
-            .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
-        {
-            4
-        } else {
-            0
-        }
-}
-
 pub(crate) fn inline_cache_global_definition(name: &str) -> String {
     format!("@{name} = private global ptr null")
 }
@@ -4460,7 +4423,7 @@ fn lower_compare_value(
 /// when an existing caller still expects the generic JSValue/`double` ABI.
 pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<LoweredValue>> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
-    let _consumed = crate::facts_consumed::enter(expr);
+    let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
     match expr {
         Expr::Bool(value) => {
             let lowered = LoweredValue::i1(if *value { "true" } else { "false" });

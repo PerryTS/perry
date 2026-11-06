@@ -149,9 +149,7 @@ fn a_private_field_value_reaches_a_public_copy() {
 
 #[test]
 fn a_private_map_handed_to_unknown_code_keeps_its_calls() {
-    let src = r#"import "unseen-host";
-
-        declare const ext: any;
+    let src = r#"const ext: any = (globalThis as any)[process.argv[2]];
         class E {
           #t: Map<string, any> = new Map<string, any>();
           leak(): void { ext(this.#t); }

@@ -589,6 +589,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
+    // Every method here reads or writes the receiver's indices through its
+    // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
+    // program's accessors under those keys run.
+    m.native_index_access(t, elems);
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
@@ -657,12 +661,6 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             m.edge(elems, ofa);
             species_from(m, out, t);
             ret_tok(m, call, out);
-        }
-        Some("fill") => {
-            if let Some(&a) = c.args.first() {
-                m.edge(a, elems);
-            }
-            ret_tok(m, call, t);
         }
         // In place: the receiver itself.
         Some("copyWithin") => ret_tok(m, call, t),
@@ -786,7 +784,41 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         Some("lastIndexOf" | "findIndexOf") => {
             ret_prim(m, call, prim::NUM | prim::BOOL);
         }
-        Some("toString" | "toLocaleString") => {
+        // Each element's own `toLocaleString(locales, options)` is invoked
+        // (ECMA-402 19.5.1), its result made a string; a hole or a nullish
+        // element is skipped.
+        Some("toLocaleString") => {
+            let a = m.atom("toLocaleString");
+            let nested = m.calls.len() as CallId;
+            let r = m.node_l("array-locale-result");
+            m.solver_call(
+                call,
+                CallSite {
+                    this: ThisArg::Node(elems),
+                    args: c.args.iter().take(2).copied().collect(),
+                    spread: vec![],
+                    ret: r,
+                    site: nested,
+                },
+            );
+            m.cons(
+                elems,
+                Cons::MCall {
+                    key: Key::Named(a),
+                    call: nested,
+                },
+            );
+            let why = m.reason("array join (locale element ToString)");
+            m.cons(
+                r,
+                Cons::Implicit {
+                    reason: why,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
+            ret_prim(m, call, prim::STR);
+        }
+        Some("toString") => {
             let why = m.reason("array join (element ToString)");
             m.cons(
                 elems,

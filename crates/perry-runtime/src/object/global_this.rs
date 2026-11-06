@@ -113,6 +113,8 @@ pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 pub(crate) use fetch_globals::init_fetch_backed_receiver;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
+#[cfg(perry_gc_instruments)]
+pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
@@ -133,8 +135,8 @@ pub(crate) use generator::{
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub(crate) use generator_state::{
-    call_generator_symbol_method, fixed_generator_state, install_class_symbol_method,
-    install_evaluation_generator_symbols, STEP_DONE, STEP_INNER_RESULT,
+    fixed_generator_state, install_class_symbol_method,
+    STEP_DONE, STEP_INNER_RESULT,
 };
 pub(crate) use generator_state::{
     generator_observe_record_prototype, generator_original_prototype_key,

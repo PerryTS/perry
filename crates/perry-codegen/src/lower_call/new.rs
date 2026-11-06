@@ -1222,6 +1222,7 @@ fn lower_new_impl_inner<'a>(
             // active and still receives every throwing invoke.
             let caller_try_depth = ctx.try_depth;
             ctx.try_depth = 0;
+            crate::verify_facts::body_entry(ctx, class.constructor.as_ref().unwrap().id, "");
             let lower_result =
                 crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body);
             ctx.try_depth = caller_try_depth;
@@ -1316,6 +1317,7 @@ fn lower_new_impl_inner<'a>(
                     }
                     let caller_try_depth = ctx.try_depth;
                     ctx.try_depth = 0;
+                    crate::verify_facts::body_entry(ctx, parent_ctor.id, "");
                     let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
                     ctx.try_depth = caller_try_depth;
                     lower_result?;

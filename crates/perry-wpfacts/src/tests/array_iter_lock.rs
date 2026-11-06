@@ -3,9 +3,9 @@
 //! `Object.prototype`), so no write the program makes changes what an array
 //! iterator's chain answers under any key but `constructor`. A store into an
 //! unknown value never replaces the `next` that `for … of` over an array
-//! calls. The Map/Set iterator prototypes and the iterator helpers take
-//! adds and are not locked here; what the program writes on the iterator
-//! object itself, or a prototype it gives it, is not final either.
+//! calls. The Map/Set iterator prototypes lock their image members and take
+//! adds; the iterator helpers' take adds; what the program writes on the
+//! iterator object itself, or a prototype it gives it, is not final.
 
 use super::*;
 
@@ -70,13 +70,38 @@ fn a_store_of_next_leaves_an_explicit_array_iterator_final() {
     assert!(proven(&v), "{r:?} {v:?}");
 }
 
-/// Control: `%MapIteratorPrototype%` is not locked: a store of `next`
-/// into an unknown value may replace it.
+/// node: prints `3`. `%MapIteratorPrototype%` locks its image members
+/// (`next`, `@@toStringTag`; adds stay open): a store of `next` into an
+/// unknown value never replaces the `next` for-of over a Map iterator calls.
 #[test]
-fn a_store_of_next_leaves_for_of_over_a_map_open() {
+fn a_store_of_next_leaves_for_of_over_a_map_final() {
     let (r, v) = receivers(
         NEXT,
         "const m = new Map([[\"a\", new Svc()]]); for (const s of m.values()) console.log(g(s));",
+    );
+    assert!(proven(&v), "{r:?} {v:?}");
+}
+
+/// Control: `next` written on a Map iterator itself is an own key, read
+/// before the chain.
+#[test]
+fn next_written_on_a_map_iterator_itself_is_not_final() {
+    let (r, v) = receivers(
+        "\"z\"",
+        "const m = new Map([[\"a\", new Svc()]]); const it: any = m.values(); \
+         it.next = () => ({ value: u, done: false }); console.log(g(it.next().value));",
+    );
+    assert!(!proven(&v), "{r:?} {v:?}");
+}
+
+/// Control: a Set iterator whose prototype the program replaces reads that
+/// prototype's `next`.
+#[test]
+fn a_replaced_set_iterator_prototype_is_not_final() {
+    let (r, v) = receivers(
+        "\"z\"",
+        "const t = new Set([new Svc()]); const it: any = t.values(); \
+         Object.setPrototypeOf(it, u); console.log(g(it.next().value));",
     );
     assert!(!proven(&v), "{r:?} {v:?}");
 }

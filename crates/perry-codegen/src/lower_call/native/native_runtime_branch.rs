@@ -145,6 +145,8 @@
                 // array arm's IteratorClose is unobservable: only the
                 // protocol arm reaches the runtime.
                 let result = if ctx.wpfacts.array_iterator_close_unwritten {
+                    crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                        || serde_json::json!({}));
                     let skipped = if throwing { values[5].1.to_owned() } else {
                         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     };
@@ -169,10 +171,14 @@
                 return Ok(result);
             }
             "arrayRecordCloseAbsent" if ctx.wpfacts.array_iterator_close_unwritten => {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                    || serde_json::json!({}));
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
             }
             // The array arm of IteratorClose: nothing to observe (#13645).
             "arrayRecordClose" if ctx.wpfacts.array_iterator_close_unwritten => {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                    || serde_json::json!({}));
                 if matches!(args.get(4), Some(Expr::Bool(true))) {
                     return lower_expr(ctx, &args[3]);
                 }
@@ -374,7 +380,16 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 let init_fn = format!("{prefix}__init");
                 ctx.pending_declares
                     .push((init_fn.clone(), crate::types::VOID, vec![]));
+                // SNAP census: the evaluation this guard starts was reached
+                // by `require`, not by `import()` (instrumented compiles only).
+                let census = crate::expr::snap_env_site::census_compile();
+                if census {
+                    ctx.block().call_void("js_snap_require_edge", &[(crate::types::I32, "1")]);
+                }
                 ctx.block().call_void(&init_fn, &[]);
+                if census {
+                    ctx.block().call_void("js_snap_require_edge", &[(crate::types::I32, "0")]);
+                }
                 return lower_expr(ctx, &args[0]);
             }
             "isBuiltin" => {

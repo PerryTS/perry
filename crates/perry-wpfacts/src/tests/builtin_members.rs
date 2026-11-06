@@ -173,8 +173,8 @@ fn a_key_written_onto_a_builtin_prototype_is_a_member_again() {
 fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     let body = |hand: &str, w: &str, other: &str| {
         format!(
-            "import \"unseen-host\"; {CLASSES}{M}
-            declare const unknown: any;
+            "{CLASSES}{M}
+            const unknown: any = (globalThis as any)[process.argv[2]];
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             const t: any = unknown.reach({hand});
             {w}
@@ -187,7 +187,7 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     let named = "t.inner = function () { return 1; };";
     let elsewhere = "t.unrelated = function () { return 1; };";
     let computed =
-        "import \"unseen-host\"; declare const kk: string; t[kk] = function () { return 1; };";
+        "const kk: string = process.argv[3]; t[kk] = function () { return 1; };";
     for hand in [
         "0",
         "Map",
@@ -210,7 +210,12 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
             // DEC 250 Q2: a class instance's or a literal's chain past the
             // program is `Object.prototype`, which takes no new key.
             let fin = other == "new A()" || other == "{ q: 1 }";
-            for (w, want) in [(named, fin), (computed, fin), (elsewhere, true)] {
+            // Unknown code handed the global object may replace the global
+            // `Object` or `Map` itself (`declared_global_write`): `inner` is
+            // unknown under any store. (Was: proven, the realm's value
+            // trusted.)
+            let held = hand == "globalThis" && (other == "Object" || other == "new Map()");
+            for (w, want) in [(named, fin), (computed, fin), (elsewhere, !held)] {
                 let src = body(hand, w, other);
                 let pf = facts(&src);
                 assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -322,8 +327,8 @@ fn a_class_key_read_on_a_namespace_is_absent() {
 fn a_key_written_onto_a_namespace_is_a_member() {
     let body = |before: &str, after: &str| {
         format!(
-            "import \"unseen-host\"; {CLASSES}{M}
-            declare const unknown: any;
+            "{CLASSES}{M}
+            const unknown: any = (globalThis as any)[process.argv[2]];
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             {before}
             const v: any = k > 1 ? new N() : Object;
@@ -413,8 +418,8 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
 fn a_store_into_top_replaces_a_described_member_under_its_key() {
     let body = |w: &str| {
         format!(
-            "import \"unseen-host\"; {CLASSES}
-            declare const unknown: any;
+            "{CLASSES}
+            const unknown: any = (globalThis as any)[process.argv[2]];
             class Q {{ x = 5; b = 1; }}
             const t: any = unknown.reach(Map);
             {w}
@@ -435,7 +440,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
     assert!(site_b(&pf), "{}", pf.dump_text());
     for w in [
         "t.get = function () { return new Q(); };",
-        "import \"unseen-host\"; declare const kk: string; t[kk] = function () { return new Q(); };",
+        "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };",
     ] {
         let pf = facts(&body(w));
         // DEC 250: replacing `Map.prototype.get` is a TypeError, the read is

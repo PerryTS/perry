@@ -526,11 +526,7 @@ impl<'a> Gen<'a> {
         let out = self.tmp("iterated");
         let ik = self.m.iter_key();
         self.m.cons(v, Cons::Load { key: ik, dst: out });
-        let (pc, it) = self.new_call(ThisArg::Node(v), vec![], vec![]);
-        let wk = Key::Named(self.m.atom(crate::builtins::WK_ITERATOR));
-        self.m.protocol_calls.insert(pc);
-        self.m.rel(|| format!("protocolcall {pc}"));
-        self.m.cons(v, Cons::MCall { key: wk, call: pc });
+        let it = self.iterator_of(v);
         let na = self.m.atom("next");
         let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
         // The step of `v` itself: the runtime's (`js_get_iterator` returns a
@@ -550,6 +546,17 @@ impl<'a> Gen<'a> {
         self.m.cons(r1, Cons::Load { key: va, dst: out });
         self.m.cons(r2, Cons::Load { key: va, dst: out });
         out
+    }
+
+    /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):
+    /// a protocol call.
+    pub(crate) fn iterator_of(&mut self, v: NodeId) -> NodeId {
+        let (pc, it) = self.new_call(ThisArg::Node(v), vec![], vec![]);
+        let wk = Key::Named(self.m.atom(crate::builtins::WK_ITERATOR));
+        self.m.protocol_calls.insert(pc);
+        self.m.rel(|| format!("protocolcall {pc}"));
+        self.m.cons(v, Cons::MCall { key: wk, call: pc });
+        it
     }
 
     /// Every node an expression makes belongs to the function walking it.

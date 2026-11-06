@@ -11,6 +11,7 @@
 //! (`native_skips`).
 
 use crate::model::*;
+use perry_abi::lock::LockHolder;
 
 /// A member of an intrinsic prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -458,7 +459,7 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
-    use perry_abi::lock::{final_on, LockHolder, LockKey};
+    use perry_abi::lock::{final_on, LockKey};
     use perry_abi::BuiltinProto as P;
     // The locked prototypes the lookup passes before `Object.prototype`
     // (which follows on every chain), each with whether `name` is one of its
@@ -554,6 +555,18 @@ pub(crate) const ANY_ITERATOR: &str = "Iterator";
 pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
 pub(crate) const MAP_ITERATOR: &str = "MapIterator";
 pub(crate) const SET_ITERATOR: &str = "SetIterator";
+
+/// The intrinsic prototype of iterator kind `what` whose image members the
+/// runtime locks while it takes adds (`builtin_proto.rs`
+/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`): its realm-table name and
+/// its lock holder (`perry_abi::lock`), for `builtins::locked_chain_read`.
+pub(crate) fn iterator_prototype(what: &str) -> Option<(&'static str, LockHolder)> {
+    match what {
+        MAP_ITERATOR => Some(("%MapIteratorPrototype%", LockHolder::MapIterator)),
+        SET_ITERATOR => Some(("%SetIteratorPrototype%", LockHolder::SetIterator)),
+        _ => None,
+    }
+}
 
 /// The iterator kind a collection of kind `what` (`Map`/`Set`) gives.
 pub(super) fn collection_iterator(what: &str) -> &'static str {
