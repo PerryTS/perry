@@ -1439,7 +1439,7 @@ pub(crate) unsafe fn packed_f64_loop_admits_live_array(
     }
     let len = (*arr).length;
     let cap = (*arr).capacity;
-    if cap > 16_000_000 || len > cap || len > i32::MAX as u32 {
+    if cap > perry_abi::PACKED_F64_LOOP_MAX_CAPACITY || len > cap || len > i32::MAX as u32 {
         return false;
     }
     crate::array::js_array_is_numeric_f64_layout_resolved(arr) != 0

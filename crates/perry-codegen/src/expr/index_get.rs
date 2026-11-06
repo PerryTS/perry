@@ -362,7 +362,7 @@ fn lower_guard_proven_packed_read(
         packed_f64_loop_offset_read(ctx, *arr_id, index)
     {
         if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
-            let arr_box = lower_expr(ctx, object)?;
+            let arr_box = packed_read_receiver_box(ctx, object, *arr_id, needs_bounds_check)?;
             let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
             return Ok(Some(lower_packed_f64_loop_index_get(
                 ctx,
@@ -455,7 +455,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
             packed_f64_loop_offset_read(ctx, *arr_id, index.as_ref())
         {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
-                let arr_box = lower_expr(ctx, object)?;
+                let arr_box = packed_read_receiver_box(ctx, object, *arr_id, needs_bounds_check)?;
                 let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                 return Ok(Some(lower_packed_f64_loop_index_get(
                     ctx,
@@ -1445,7 +1445,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         packed_f64_loop_offset_read(ctx, *arr_id, index.as_ref())
                     {
                         if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
-                            let arr_box = lower_expr(ctx, object)?;
+                            let arr_box =
+                                packed_read_receiver_box(ctx, object, *arr_id, needs_bounds_check)?;
                             let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                             return Ok(lower_packed_f64_loop_index_get(
                                 ctx,
@@ -1819,4 +1820,25 @@ pub(crate) fn lower_record_next(
     value_slot: &str,
 ) -> Result<(String, String)> {
     guarded_array::lower_record_next(ctx, array, index, protocol, record, index_slot, value_slot)
+}
+
+/// The receiver box a packed fast read consumes: only its foreign-index
+/// bounds check and a clone with no hoisted handle read it
+/// (`lower_packed_f64_loop_index_get`). Otherwise the read takes the hoisted
+/// handle and the box is never used, and not lowering it matters: the box
+/// comes out of its root slot through the root-reload launder, an opaque
+/// `asm` that LLVM keeps in the loop and that pins the element-base loads
+/// (capacity, offset) the hoisted handle exists to make loop-invariant.
+fn packed_read_receiver_box(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    arr_id: u32,
+    bounds_check: bool,
+) -> Result<String> {
+    if !bounds_check && ctx.receiver_descriptors.base_handle_slot(arr_id).is_some() {
+        return Ok(crate::nanbox::double_literal(f64::from_bits(
+            crate::nanbox::TAG_UNDEFINED,
+        )));
+    }
+    lower_expr(ctx, object)
 }
