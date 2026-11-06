@@ -114,19 +114,10 @@ fn falsy_left_primitives_stay() {
     for (what, left) in [
         ("0", "const z: any = [0][0];"),
         ("NaN", "const z: any = 0 / [0][0];"),
-        (
-            "an empty string or a number",
-            "const z: any = [0][0] > 1 ? \"\" : [0][0];",
-        ),
+        ("an empty string or a number", "const z: any = [0][0] > 1 ? \"\" : [0][0];"),
         ("⊤", "const z: any = (globalThis as any).u;"),
-        (
-            "an object or null",
-            "const z: any = [0][0] > 1 ? { a: 1 } : null;",
-        ),
-        (
-            "an object or 0",
-            "const z: any = [0][0] > 1 ? { a: 1 } : 0;",
-        ),
+        ("an object or null", "const z: any = [0][0] > 1 ? { a: 1 } : null;"),
+        ("an object or 0", "const z: any = [0][0] > 1 ? { a: 1 } : 0;"),
     ] {
         let pf = facts(&format!(
             "{left}
@@ -189,15 +180,7 @@ fn falsy_cons_passes_markers_and_falsy_kinds_only() {
     assert!(!has(&m, d, o), "no object");
     assert_eq!(m.nodes[d as usize].prim, 0, "symbol is never falsy");
     assert!(!has(&m, u, TOP), "no ⊤");
-    assert_eq!(
-        m.nodes[u as usize].prim,
-        guard::prims(guard::FALSY),
-        "the falsy kinds of ⊤"
-    );
+    assert_eq!(m.nodes[u as usize].prim, guard::prims(guard::FALSY), "the falsy kinds of ⊤");
     assert!(!has(&m, e, o), "no object");
-    assert_eq!(
-        m.nodes[e as usize].prim,
-        prim::NUM,
-        "a number stays; symbol goes"
-    );
+    assert_eq!(m.nodes[e as usize].prim, prim::NUM, "a number stays; symbol goes");
 }

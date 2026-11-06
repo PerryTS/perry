@@ -212,9 +212,7 @@ fn a_static_method_shadows_the_builtin_chain_past_a_top_store() {
 
 #[test]
 fn a_static_method_stays_unproven_when_it_can_be_deleted_or_the_class_escapes() {
-    let pf = facts(&tracker(
-        "if (g) g[k] = 1; if (Date.now() < 0) delete (Tracker as any).with;",
-    ));
+    let pf = facts(&tracker("if (g) g[k] = 1; if (Date.now() < 0) delete (Tracker as any).with;"));
     assert!(!proven(&pf, "with"), "{}", pf.dump_text());
     let pf = facts(&tracker("if (g) { g[k] = 1; g.cb = Tracker; }"));
     assert!(!proven(&pf, "with"), "{}", pf.dump_text());

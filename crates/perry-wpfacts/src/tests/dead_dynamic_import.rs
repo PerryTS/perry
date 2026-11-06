@@ -169,7 +169,9 @@ fn oxmark_runs(src: &str) -> bool {
         .expect("oxmark")
         .id;
     assert!(pf.body_reach.complete, "activated");
-    pf.body_reach.bodies.iter().any(|(_, id, _)| *id == ox)
+    pf.body_reach.bodies
+        .iter()
+        .any(|(_, id, _)| *id == ox)
 }
 
 #[test]

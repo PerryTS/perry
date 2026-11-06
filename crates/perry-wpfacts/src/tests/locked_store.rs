@@ -36,11 +36,7 @@ fn run(src: &str, interp: bool) -> ProgramFacts {
 }
 
 fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<Verdict> {
-    let mut s: Vec<_> = pf
-        .sites
-        .iter()
-        .filter(|s| s.key == key && !s.is_call)
-        .collect();
+    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
     s.sort_by_key(|s| s.byte_offset);
     s.iter().map(|s| s.verdict.clone()).collect()
 }
@@ -75,11 +71,7 @@ const MISS: &str = "const q: any = { x: 1 }; const f: any = (Object as any).zz; 
 #[test]
 fn a_store_on_object_prototype_is_not_a_chain_member_of_object() {
     let control = run(&program("C", MISS), false);
-    assert!(
-        proven(&verdicts(&control, "x")),
-        "control: {}",
-        control.dump_text()
-    );
+    assert!(proven(&verdicts(&control, "x")), "control: {}", control.dump_text());
     let pf = run(&program("Object", MISS), false);
     let v = verdicts(&pf, "x");
     assert!(proven(&v), "{v:?}\n{}", pf.dump_text());
@@ -131,31 +123,18 @@ fn a_computed_store_on_an_add_open_prototype_reaches_its_reads() {
 /// one that deletes q.x; the inherited intrinsic is not called instead.
 #[test]
 fn an_unknown_own_static_shadows_a_locked_global_chain_member() {
-    let src = |holder: &str, store: &str| {
-        format!(
-            "declare const unknown: any;\nconst receiver: any = {holder};\n{store}\n\
+    let src = |holder: &str, store: &str| format!(
+        "declare const unknown: any;\nconst receiver: any = {holder};\n{store}\n\
          function main() {{\n\
            const q: any = {{ x: 1 }};\n\
            const f: any = receiver.__defineGetter__;\n\
            try {{ if (typeof f === 'function') f(q); }} catch (e) {{}}\n\
            return q.x;\n\
          }}\nconsole.log(main());"
-        )
-    };
+    );
     let control = one(&src("({ __defineGetter__(_q: any) { return 1; } })", ""));
-    assert!(
-        proven(&verdicts(&control, "x")),
-        "control: {}",
-        control.dump_text()
-    );
+    assert!(proven(&verdicts(&control, "x")), "control: {}", control.dump_text());
     let subject = one(&src("globalThis", "receiver.__defineGetter__ = unknown.f;"));
-    assert!(
-        unproven(&verdicts(&subject, "__defineGetter__")),
-        "the own read is not a final native member"
-    );
-    assert!(
-        unproven(&verdicts(&subject, "x")),
-        "own static: {}",
-        subject.dump_text()
-    );
+    assert!(unproven(&verdicts(&subject, "__defineGetter__")), "the own read is not a final native member");
+    assert!(unproven(&verdicts(&subject, "x")), "own static: {}", subject.dump_text());
 }

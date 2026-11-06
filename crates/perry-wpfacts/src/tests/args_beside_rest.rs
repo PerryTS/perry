@@ -14,11 +14,7 @@ fn run(src: &str) -> ProgramFacts {
 
 /// The last read of `x` (`console.log(a.x)`).
 fn last_x(pf: &ProgramFacts) -> Verdict {
-    let mut s: Vec<_> = pf
-        .sites
-        .iter()
-        .filter(|s| s.key == "x" && !s.is_call)
-        .collect();
+    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "x" && !s.is_call).collect();
     s.sort_by_key(|s| s.byte_offset);
     s.last().expect("an x site").verdict.clone()
 }

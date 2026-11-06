@@ -74,10 +74,7 @@ fn concat_of_unknown_or_inherited_elements_stays_unproven() {
             Err(e) => failures.push(format!("{make}: {}", e.lines().next().unwrap())),
         }
     }
-    assert!(
-        failures.is_empty(),
-        "proven although the callee may be unknown: {failures:?}"
-    );
+    assert!(failures.is_empty(), "proven although the callee may be unknown: {failures:?}");
 }
 
 /// Control: an array operand whose `Symbol.isConcatSpreadable` is false (set
@@ -110,8 +107,5 @@ console.log(payload.n); // PAYLOAD_N
             Err(e) => failures.push(format!("{flag}: {}", e.lines().next().unwrap())),
         }
     }
-    assert!(
-        failures.is_empty(),
-        "whole-appended operand lost: {failures:?}"
-    );
+    assert!(failures.is_empty(), "whole-appended operand lost: {failures:?}");
 }

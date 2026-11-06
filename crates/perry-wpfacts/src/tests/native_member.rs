@@ -459,7 +459,11 @@ fn a_regexp_method_call_is_a_native_member() {
         let pf = one(src, units);
         for key in ["test", "exec"] {
             let v = verdicts_in(&pf, 0, key, true);
-            assert!(native(&v), "units={units} {key}: {v:?}\n{}", pf.dump_text());
+            assert!(
+                native(&v),
+                "units={units} {key}: {v:?}\n{}",
+                pf.dump_text()
+            );
         }
     }
 }
