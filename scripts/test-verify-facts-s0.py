@@ -95,10 +95,25 @@ def main():
 
     for source in sorted(fixtures.glob("existing-*.ts")):
         exe, e = compile_(source, source.stem)
-        value = report(observe(exe, e))
-        if value["key"] == "<entry>":
-            assert value["predicate"] == "inactive body" and value["observed_receiver"] is None, value
-        save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value.get("expectation", "<entry>"))
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        save(source.stem, status=0, fixed_on_main=True)
+
+    for name, wrong_claim, predicate in [
+        ("receiver-negative", "unchecked", "F4 receiver set"),
+        ("kind-negative", "kind:Box.v=num", "F2 kind"),
+    ]:
+        source = fixtures / (name + ".ts")
+        for claim in ["", wrong_claim]:
+            arm = name + ("-false" if claim else "-correct")
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim)
+            observed = observe(exe, e)
+            if claim:
+                value = report(observed)
+                assert value["predicate"] == predicate, value
+            else:
+                assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+            save(arm, status=observed.returncode)
 
     source = fixtures / "parallel-bodies.ts"
     exe, e = compile_(source, "parallel-bodies")
