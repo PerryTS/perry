@@ -86,7 +86,16 @@ pub(crate) fn consumed(fact: Fact, operands: impl FnOnce() -> Value) {
 }
 
 pub(crate) fn checked(fact: Fact, operands: Value) {
-    record(fact.name(), operands, true);
+    let identity = record(fact.name(), operands, true);
+    if matches!(fact, Fact::Bodies | Fact::StaticGuard | Fact::NumberInput) {
+        let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+        unit_report_validation(inventory.claims.get_mut(&identity).unwrap());
+    }
+}
+
+fn unit_report_validation(row: &mut Value) {
+    row["reporting_validation"] =
+        json!("Runtime unit subprocess controls; no false-claim program witness on main at S0");
 }
 
 fn record(predicate: &str, operands: Value, checked: bool) -> String {
@@ -240,6 +249,7 @@ pub(crate) fn normal_call_miss(class: &str, key: &str) {
     let row = inventory.claims.get_mut(&identity).unwrap();
     row["category"] = json!("normal-build site");
     row["consumed"] = json!(false);
+    unit_report_validation(row);
 }
 
 pub(crate) fn reset() {

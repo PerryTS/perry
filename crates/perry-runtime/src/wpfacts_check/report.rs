@@ -121,7 +121,9 @@ impl<const RAW: bool> Witness<RAW> {
         unsafe {
             let mut rest = line.as_bytes();
             while !rest.is_empty() {
-                let n = libc::write(2, rest.as_ptr().cast(), rest.len());
+                // The Windows CRT takes a 32-bit write count.
+                let count = rest.len().min(i32::MAX as usize);
+                let n = libc::write(2, rest.as_ptr().cast(), count as _);
                 if n > 0 {
                     // write(2) returns at most the supplied byte count.
                     rest = rest.get_unchecked(n as usize..);

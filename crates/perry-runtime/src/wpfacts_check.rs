@@ -575,3 +575,6 @@ fn key_matches(bits: u64, expected: &[u8]) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod reporting_tests;

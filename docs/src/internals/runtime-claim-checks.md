@@ -11,3 +11,5 @@ Copy identities include both the original lowering and the final LLVM body and c
 This infrastructure checks the existing predicates and known-inactive body entries. It does not implement the uncovered predicates in the manifest. A run observes only the paths it executes and stops at the first disagreement.
 
 With the mode unset or equal to `0`, the compiler performs no diagnostic inventory or metadata construction. Normal compilation retains its existing static-call miss helper and its existing behaviour. Diagnostic mode uses separate runtime entry points; normal binaries must not link them.
+
+Field-kind, receiver and slot checks have reduced runnable program witnesses. No program on main reaches the call, call-miss or inline-miss reporters with a false claim at S0; direct runtime unit subprocess controls cover those reporting paths. Their manifest records state this validation scope explicitly.
