@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture: zod 4.6.5 compile/run smoke (export-star private-name collision).",
   "dependencies": {
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "perry": {
     "compilePackages": ["zod"],
