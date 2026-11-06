@@ -71,6 +71,10 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// The target of Reflect.construct; allocation is selected by new_target.
+    ReflectNew { call: CallId, new_target: NodeId },
+    /// New-target values paired with one target, rebuilt from ReflectNew.
+    ReflectNewTarget { call: CallId, target: Tok },
     /// `new Name(...)` of a builtin constructor named in the source: runs
     /// once per call (the holder holds one marker token), so an instance
     /// that renames the call constructs its own object.
@@ -496,6 +500,8 @@ impl Cons {
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::ReflectNew { .. } => "reflectnew",
+            Cons::ReflectNewTarget { .. } => "reflectnewtarget",
             Cons::NewNamed { .. } => "newnamed",
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",

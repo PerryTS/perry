@@ -46,6 +46,14 @@ pub fn map_cons(
             this,
         },
         New { call } => New { call: k(call) },
+        ReflectNew { call, new_target } => ReflectNew {
+            call: k(call),
+            new_target: n(new_target),
+        },
+        ReflectNewTarget { call, target } => ReflectNewTarget {
+            call: k(call),
+            target,
+        },
         NewNamed { name, call } => NewNamed {
             name,
             call: k(call),
@@ -392,6 +400,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Store { .. }
             | Call { .. }
             | New { .. }
+            | ReflectNew { .. }
             | NewNamed { .. }
             | SuperCtor { .. }
             | MCall { .. }

@@ -1000,6 +1000,7 @@ impl Model {
                     site: 0,
                 });
                 self.construct(call, t);
+                self.reflect_escaped_target(t);
                 self.sink_node(ret, reason);
                 // DEC221: only what unknown construction returns escapes.
                 // NO_CTX is a template-wide mark, which would also expose

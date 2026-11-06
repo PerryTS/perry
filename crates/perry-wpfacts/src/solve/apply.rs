@@ -71,6 +71,21 @@ impl Model {
                     self.construct(call, t);
                 }
             }
+            Cons::ReflectNew { call, new_target } => {
+                for &target in toks {
+                    self.cons(new_target, Cons::ReflectNewTarget { call, target });
+                }
+            }
+            Cons::ReflectNewTarget { call, target } => {
+                // HIR uses undefined for the omitted third argument, as the
+                // runtime does: the target then also selects the allocation.
+                if prim & prim::UNDEF != 0 {
+                    self.construct(call, target);
+                }
+                for &new_target in toks {
+                    self.reflect_construct(call, target, new_target);
+                }
+            }
             Cons::NewNamed { name, call } => {
                 if !toks.is_empty() {
                     self.new_named(name, call);

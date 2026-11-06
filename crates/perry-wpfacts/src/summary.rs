@@ -77,6 +77,7 @@ pub enum Deferred {
     /// Births wait for summaries so a summary's call is born per instance,
     /// never once into the shared body (whose nodes seed every instance).
     Construct(CallId, Tok),
+    ReflectConstruct(CallId, Tok, Tok),
     NewNamed(Atom, CallId),
     /// A for-in body token run over an object token (`Model::for_in_tok`).
     ForIn(CallId, Tok, Tok),
@@ -270,6 +271,8 @@ impl Model {
             | Cons::CallThis { call, .. }
             | Cons::NativeThis { call, .. }
             | Cons::New { call }
+            | Cons::ReflectNew { call, .. }
+            | Cons::ReflectNewTarget { call, .. }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
             | Cons::IdxMCall { call, .. }
@@ -1266,9 +1269,14 @@ impl Model {
                 Deferred::ThisTo(f, origin) => self.this_lookup(f, origin),
                 Deferred::EscapeThis(f, reason) => self.escape_this(f, reason),
                 // A summary's call: its instances construct.
-                Deferred::Construct(call, _) | Deferred::NewNamed(_, call)
+                Deferred::Construct(call, _)
+                | Deferred::ReflectConstruct(call, _, _)
+                | Deferred::NewNamed(_, call)
                     if self.sum.templates.contains(&call) => {}
                 Deferred::Construct(call, t) => self.construct(call, t),
+                Deferred::ReflectConstruct(call, target, new_target) => {
+                    self.reflect_construct(call, target, new_target)
+                }
                 Deferred::NewNamed(name, call) => self.new_named(name, call),
                 Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
             }
