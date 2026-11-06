@@ -589,6 +589,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
+    // Every method here reads or writes the receiver's indices through its
+    // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
+    // program's accessors under those keys run.
+    m.native_index_access(t, elems);
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");

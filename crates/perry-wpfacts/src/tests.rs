@@ -85,6 +85,7 @@ mod native_fs;
 mod native_given_proto;
 mod native_member;
 mod native_proto;
+mod native_user_code;
 mod num_key;
 mod objproto_protocol;
 mod own_guarded_read;
