@@ -140,7 +140,7 @@ impl Model {
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
             NativeMiss::Load(n) | NativeMiss::Lookup(n) | NativeMiss::Global(n, _) => (false, n),
-            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
+            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) | NativeMiss::New(n) => (true, n),
         };
         c.reads.insert((t, a, call, id));
         c.pending_gate = written.then_some((t, a, call, id));
