@@ -109,6 +109,10 @@ ee.emit("data", "hello");
 
 ## worker_threads
 
+Omitted or falsy Worker `name` options use `WorkerThread` for both the parent
+Worker object and the worker namespace `threadName`. Explicit non-empty string
+names remain unchanged.
+
 BroadcastChannel uses the shared EventTarget listener and handler machinery,
 including borrowed listener methods, capture matching, `once`, AbortSignal and
 listener objects and callable proxies. Closing releases the provider transport
