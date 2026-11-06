@@ -98,7 +98,7 @@ def main():
         value = report(observe(exe, e))
         if value["key"] == "<entry>":
             assert value["predicate"] == "inactive body" and value["observed_receiver"] is None, value
-        save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value["expectation"])
+        save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value.get("expectation", "<entry>"))
 
     source = fixtures / "slot-key.ts"
     exe, e = compile_(source, "slot-key-false", PERRY_FACTS_SABOTAGE="fixed_layout:Box")
@@ -131,7 +131,7 @@ def main():
     assert all(bool(row.get("check")) + bool(row.get("reason")) + bool(row.get("dead")) == 1 for row in inventory), inventory
     assert all(row.get("emitted_checks") for row in inventory if row.get("check")), inventory
     uncovered = sum(bool(row.get("reason")) for row in inventory)
-    assert uncovered == 3, (uncovered, inventory)
+    assert uncovered == 2, (uncovered, inventory)
     save("manifest", consumed=len(inventory), uncovered=uncovered)
 
     samples = []

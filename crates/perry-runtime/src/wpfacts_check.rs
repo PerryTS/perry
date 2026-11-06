@@ -155,6 +155,15 @@ fn describe(bits: u64) -> String {
     }
 }
 
+macro_rules! field_failure {
+    ($site:ident, $key:ident, $name:ident, $predicate:literal, $detail:expr $(,)?) => {{
+        if !$site.is_legacy() {
+            $name = String::from_utf8_lossy($key).into_owned();
+        }
+        $site.fail($predicate, $detail)
+    }};
+}
+
 macro_rules! check_field {
     ($obj:expr, $value:expr, $key:expr, $cids01:expr, $cids23:expr, $slot:expr, $off:expr, $kind_mask:expr, $flags:expr, $site:expr $(,)?) => {{
         let obj = $obj;
@@ -185,14 +194,18 @@ macro_rules! check_field {
     }
     let bits = obj.to_bits();
     let site = site.receiver(bits);
-    let key_name = String::from_utf8_lossy(key);
+    let mut key_name = if site.is_legacy() {
+        String::from_utf8_lossy(key).into_owned()
+    } else {
+        String::new()
+    };
     if bits & TAG_MASK != POINTER_TAG {
         let k = kind_of(bits);
         if flags & WPF_NULLABLE != 0 && (k == K_NULL || k == K_UNDEF) {
             // The site kept its receiver test; nothing was elided here.
             return 0;
         }
-        site.fail(
+        field_failure!(site, key, key_name,
             "F4 receiver set",
             format!(".{key_name}: receiver bits {bits:#018x} are not an object"),
         );
@@ -206,7 +219,7 @@ macro_rules! check_field {
             )
             .is_none()
         {
-            site.fail(
+            field_failure!(site, key, key_name,
                 "F4 receiver set",
                 format!(".{key_name}: receiver {addr:#x} is not an ordinary object"),
             );
@@ -228,7 +241,7 @@ macro_rules! check_field {
             && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
     });
     if !admitted {
-        site.fail(
+        field_failure!(site, key, key_name,
             "F4 receiver set",
             format!(".{key_name}: receiver class_id {cid} not in {ids:?}"),
         );
@@ -236,7 +249,7 @@ macro_rules! check_field {
     // F3: the key lives at the claimed slot of the object's real layout.
     let (keys, live) = unsafe { crate::object::object_keys_and_live_slot_count(addr as *const _) };
     if slot >= live || slot >= keys.count() {
-        site.fail(
+        field_failure!(site, key, key_name,
             "F3 slot",
             format!(
                 ".{key_name}: slot {slot} beyond the layout (live {live}, keys {}) of class_id {cid}",
@@ -246,7 +259,7 @@ macro_rules! check_field {
     }
     let at = unsafe { keys.get(slot) }.bits();
     if !key_matches(at, key) {
-        site.fail(
+        field_failure!(site, key, key_name,
             "F3 slot",
             format!(
                 ".{key_name}: slot {slot} of class_id {cid} holds key {:?}",
@@ -261,21 +274,21 @@ macro_rules! check_field {
     if flags & WPF_RAW_F64 != 0 {
         // A raw-f64 read: the slot must hold a plain double.
         if !is_plain_f64(vbits) {
-            site.fail(
+            field_failure!(site, key, key_name,
                 "F2 kind (raw f64)",
                 format!(".{key_name}: slot holds tagged bits {vbits:#018x}"),
             );
         }
     }
     if in_slot != vbits && flags & WPF_STORE == 0 {
-        site.fail(
+        field_failure!(site, key, key_name,
             "F3 slot",
             format!(".{key_name}: loaded {vbits:#018x}, slot now {in_slot:#018x}"),
         );
     }
     let k = kind_of(in_slot);
     if k & kind_mask == 0 {
-        site.fail(
+        field_failure!(site, key, key_name,
             "F2 kind",
             format!(".{key_name}: value {in_slot:#018x} (kind {k:#x}) outside mask {kind_mask:#x}"),
         );
