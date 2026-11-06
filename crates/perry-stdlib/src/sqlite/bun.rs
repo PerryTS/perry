@@ -231,7 +231,7 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
         }
     });
 
-    match perry_runtime::exception::js_call_catching(|| {
+    match perry_runtime::exception::catch_thrown(|| {
         js_closure_call_array(
             callback as i64,
             perry_runtime::closure::plain_call_receiver(),
@@ -265,7 +265,7 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
             with_open_bun_connection(db_handle, |conn| {
                 let _ = node_sqlite_exec_batch(conn, rollback);
             });
-            perry_runtime::exception::js_throw(error)
+            perry_runtime::exception::rethrow_caught(error)
         }
     }
 }

@@ -418,6 +418,7 @@ fn element_read_push_module() -> Module {
     body[0] = Stmt::Expr(Expr::ArrayPush {
         array_id: ARRAY_ID,
         value: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(ARRAY_ID)),

@@ -33,6 +33,7 @@ pub(crate) fn class(
     rep: u64,
     leaf: bool,
 ) -> String {
+    let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
     publish(
         ctx,
         CLASS,
@@ -53,7 +54,7 @@ slow:
   br label %init
 init:
   %base = phi ptr [ %raw, %entry ], [ %allocated, %slow ]
-  %flag_field = getelementptr i8, ptr %state, i64 24
+  %flag_field = getelementptr i8, ptr %state, i64 {flags_at}
   %flag_address = load ptr, ptr %flag_field
   %flags = load volatile i8, ptr %flag_address
   %wide_flags = zext i8 %flags to i64
@@ -98,7 +99,7 @@ ready:
   %active = icmp ne i8 %flags, 0
   br i1 %active, label %seed, label %done
 seed:
-  %seed_field = getelementptr i8, ptr %state, i64 32
+  %seed_field = getelementptr i8, ptr %state, i64 {seeds_at}
   %seeds = load ptr, ptr %seed_field
   call void @js_gc_note_black_birth(ptr %base, ptr %seeds)
   br label %done
@@ -107,7 +108,9 @@ done:
   %handle = ptrtoint ptr %user to i64
   ret i64 %handle
 "#,
-            undefined = crate::nanbox::TAG_UNDEFINED_I64
+            undefined = crate::nanbox::TAG_UNDEFINED_I64,
+            flags_at = arena.flags,
+            seeds_at = arena.seeds,
         ),
     );
     let rep = rep.to_string();
@@ -135,15 +138,14 @@ fn empty_array_with(ctx: &mut FnCtx<'_>, helper: &str, slots: u64) -> String {
     // The element-kind word is the ArrayHeader's last 8 bytes; slots follow.
     const SLOT0: u64 = GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES;
     const EK_OFFSET: u64 = SLOT0 - 8;
+    let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
     let state = crate::expr::load_inline_arena_state(ctx);
     let blk = ctx.block();
-    let offset_field = blk.gep(I8, &state, &[(I64, "8")]);
-    let offset = blk.load(I64, &offset_field);
+    let (offset_field, offset) = super::arena_load(blk, &arena, &state, arena.offset);
     let total = crate::target_layout::inline_array_birth_total_bytes(slots).to_string();
     let born = crate::target_layout::inline_array_birth_gc_packed(slots).to_string();
     let next = blk.add(I64, &offset, &total);
-    let limit_field = blk.gep(I8, &state, &[(I64, "16")]);
-    let limit = blk.load(I64, &limit_field);
+    let (_, limit) = super::arena_load(blk, &arena, &state, arena.limit);
     let fits = blk.icmp_ule(I64, &next, &limit);
     let fast = ctx.new_block("arrlit.fast");
     let slow = ctx.new_block("arrlit.slow");
@@ -154,8 +156,7 @@ fn empty_array_with(ctx: &mut FnCtx<'_>, helper: &str, slots: u64) -> String {
     ctx.block().cond_br(&fits, &fast_label, &slow_label);
     ctx.current_block = fast;
     let blk = ctx.block();
-    // GC_STORE_AUDIT(INIT): arena offset is allocator metadata.
-    blk.store(I64, &next, &offset_field);
+    super::arena_store(blk, &arena, &next, &offset_field);
     let data = blk.load(PTR, &state);
     let raw = blk.gep(I8, &data, &[(I64, &offset)]);
     // GC_STORE_AUDIT(INIT): base header of unpublished empty array.
@@ -182,7 +183,7 @@ slow:
   br label %init
 init:
   %base = phi ptr [ %raw, %entry ], [ %allocated, %slow ]
-  %flag_field = getelementptr i8, ptr %state, i64 24
+  %flag_field = getelementptr i8, ptr %state, i64 {flags_at}
   %flag_address = load ptr, ptr %flag_field
   %flags = load volatile i8, ptr %flag_address
   %wide_flags = zext i8 %flags to i64
@@ -199,7 +200,7 @@ init:
 {holes}  %active = icmp ne i8 %flags, 0
   br i1 %active, label %seed, label %done
 seed:
-  %seed_field = getelementptr i8, ptr %state, i64 32
+  %seed_field = getelementptr i8, ptr %state, i64 {seeds_at}
   %seeds = load ptr, ptr %seed_field
   call void @js_gc_note_black_birth(ptr %base, ptr %seeds)
   br label %done
@@ -210,6 +211,8 @@ done:
             ek = EK_OFFSET,
             // Length 0 in the low word, capacity in the high word.
             capacity_word = slots << 32,
+            flags_at = arena.flags,
+            seeds_at = arena.seeds,
         ),
     );
     let fast_handle = ctx

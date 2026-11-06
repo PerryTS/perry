@@ -12,25 +12,33 @@
 #[cfg(feature = "analyzer")]
 mod archive;
 #[cfg(feature = "analyzer")]
+pub mod census;
+#[cfg(feature = "analyzer")]
 pub mod effects;
 #[cfg(feature = "analyzer")]
 mod graph;
 #[cfg(feature = "analyzer")]
 mod instructions;
 #[cfg(feature = "analyzer")]
+mod record_census;
+#[cfg(feature = "analyzer")]
 mod rules;
 pub mod sidecar;
 mod table;
+#[cfg(feature = "analyzer")]
+pub mod throw_class;
 
 #[cfg(feature = "analyzer")]
 pub use archive::build_graph;
 #[cfg(feature = "analyzer")]
-pub use graph::{classify, Classification, Graph, Mode, Node, Stats};
+pub use graph::{classify, without_indirect_seeds, Classification, Graph, Mode, Node, Stats};
 #[cfg(feature = "analyzer")]
 pub use rules::{load_rules, Rule, SEEDS};
 #[cfg(feature = "analyzer")]
 pub use table::shadowed_symbols;
-pub use table::{parse_table, read_table, write_table, Class, Entry, Table};
+pub use table::{
+    parse_table, read_table, write_table, Class, Entry, PassSource, Table, ThrowClass,
+};
 
 #[cfg(feature = "analyzer")]
 use anyhow::{bail, Result};
@@ -43,7 +51,7 @@ pub fn workspace_root() -> PathBuf {
 }
 
 #[cfg(feature = "analyzer")]
-/// Analyze with all three hard checks enabled. A failure never writes a table.
+/// Analyze with the GC, unwind, raw-entry and throw-declaration checks enabled. A failure never writes a table.
 pub fn analyze(
     archives: &[PathBuf],
     rules: &[Rule],
@@ -59,6 +67,8 @@ pub fn analyze(
             }
             row.class = Class::Reenters;
             row.throws = true;
+            row.throw_class = ThrowClass::Open;
+            row.passes.clear();
         }
     }
     res.validate()?;

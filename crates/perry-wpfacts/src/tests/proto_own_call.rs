@@ -75,8 +75,9 @@ fn a_replaced_has_own_property_is_not_the_builtin() {
 /// node: prints `3`. A key with its own `toString` is converted (it runs).
 #[test]
 fn the_key_is_converted() {
+    // The conversion stores `map.s` where an unseen module's code may read it.
     let v = verdict(
-        HOP,
+        &unseen(HOP),
         r#"hasOwnProperty.call(map, { toString() { (globalThis as any).kept = map.s; return "s"; } })"#,
     );
     assert!(!proven(&v), "{v:?}");

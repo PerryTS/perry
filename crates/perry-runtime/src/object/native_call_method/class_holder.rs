@@ -819,42 +819,5 @@ pub(crate) unsafe fn call_class_instance_member(
     )
 }
 
-/// The tower's arm for a registered class id used as a receiver: the method
-/// `C.prototype` holds for the name, called with an undefined `this`.
-/// `None` when the prototype has no such user method.
-///
-/// # Safety
-/// `arg_handles` roots the call's arguments.
-#[inline(never)]
-pub(crate) unsafe fn call_class_ref_method(
-    class_id: u32,
-    method_name: &str,
-    arg_handles: &[crate::gc::RuntimeHandle],
-) -> Option<f64> {
-    if name_is_not_a_prototype_method(method_name.as_bytes()) {
-        return None;
-    }
-    let proto = crate::object::class_registry::class_decl_prototype_value(class_id);
-    let proto = crate::JSValue::from_bits(proto.to_bits());
-    if !proto.is_pointer() {
-        return None;
-    }
-    let key = MethodKey::bytes(method_name.as_bytes());
-    let ChainMethod::Data { value, .. } = chain_method(proto.as_pointer::<ObjectHeader>(), &key)
-    else {
-        return None;
-    };
-    if !crate::array::value_is_own_user_method(f64::from_bits(value), method_name) {
-        return None;
-    }
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
-    Some(crate::closure::native_call_value_this(
-        f64::from_bits(value),
-        crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
-        args.as_ptr(),
-        args.len(),
-    ))
-}
-
 #[cfg(test)]
 mod selection_tests;

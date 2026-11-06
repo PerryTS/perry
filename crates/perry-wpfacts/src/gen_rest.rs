@@ -424,10 +424,6 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
             | Expr::Btoa(..)
-            | Expr::EncodeURI(..)
-            | Expr::DecodeURI(..)
-            | Expr::EncodeURIComponent(..)
-            | Expr::DecodeURIComponent(..)
             | Expr::IterResultGetDone
             | Expr::CryptoRandomUUID
             | Expr::CryptoRandomUUIDv7
@@ -468,15 +464,45 @@ impl<'a> Gen<'a> {
             | Expr::StringRaw { .. }
             | Expr::StringAt { .. }
             | Expr::StringCodePointAt { .. }
-            | Expr::MapHas { .. }
-            | Expr::MapDelete { .. }
             | Expr::MapSize(..)
-            | Expr::MapClear(..)
             | Expr::ArrayIterationPatched
             | Expr::ImportMetaUrl(..)
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::MapHas { map, key } | Expr::MapDelete { map, key } => {
+                // The native operation compares key identity without a JS
+                // operand protocol. A folded call can still find an own
+                // method or accessor, so use the ordinary method transfer.
+                let recv = self.expr(fx, map);
+                let arg = self.expr(fx, key);
+                let name = if matches!(e, Expr::MapHas { .. }) {
+                    "has"
+                } else {
+                    "delete"
+                };
+                let name = self.m.atom(name);
+                self.mcall(recv, Key::Named(name), vec![arg], Vec::new())
+            }
+            Expr::MapClear(map) => {
+                let recv = self.expr(fx, map);
+                let name = self.m.atom("clear");
+                self.mcall(recv, Key::Named(name), Vec::new(), Vec::new())
+            }
+            Expr::EncodeURI(..)
+            | Expr::DecodeURI(..)
+            | Expr::EncodeURIComponent(..)
+            | Expr::DecodeURIComponent(..) => {
+                // URI helpers only coerce their operand to a string; unrelated
+                // members are neither read nor called (builtins/globals.rs).
+                self.prim_kids(
+                    fx,
+                    e,
+                    prim::ALL,
+                    "URI operand ToString",
+                    Protocol::ToPrimitive,
+                )
             }
             Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
             Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),

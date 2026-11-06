@@ -215,7 +215,7 @@ env \
   "$perry" compile \
     --no-codegen --no-auto-optimize --march generic \
     --output-type dylib -o "$response_app" \
-    "$repo_root/test-files/test_issue_8038_cross_module_response_stream.ts"
+    "$repo_root/tests/parity/node-suite/fetch/test_issue_8038_cross_module_response_stream.ts"
 
 if [[ "$host_os" == Darwin ]]; then
   response_symbols=$(nm -gU "$response_app" | awk 'NF >= 3 { symbol=$3; sub(/^_/, "", symbol); print symbol }')
@@ -252,7 +252,7 @@ run_response_fixture() {
     fi
   fi
   diff -u \
-    "$repo_root/test-parity/expected/test_issue_8038_cross_module_response_stream.txt" \
+    "$repo_root/tests/parity/expected/test_issue_8038_cross_module_response_stream.txt" \
     "$output"
   if [[ "$mode" == forced ]]; then
     python3 "$repo_root/scripts/gc_evacuation_liveness_assert.py" \

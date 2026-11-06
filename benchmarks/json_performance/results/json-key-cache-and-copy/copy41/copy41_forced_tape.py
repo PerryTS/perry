@@ -6,7 +6,7 @@ obj=art/(name+'.o');binary=art/('copy41-'+name)
 with (art/'copy41-lazy-fixture-link.log').open('w') as log:
  subprocess.run(['cc',str(obj),str(art/'copy41-runtime/libperry_runtime.a'),'-lc','-Wl,-dead_strip','-Wl,-no_exported_symbols','-o',str(binary)],stdout=log,stderr=subprocess.STDOUT,check=True)
 env={k:v for k,v in os.environ.items() if not k.startswith('PERRY_')}
-node=subprocess.run(['/opt/homebrew/bin/node','--experimental-strip-types',str(root/'test-files'/(name+'.ts'))],env=env,capture_output=True,text=True,timeout=120)
+node=subprocess.run(['/opt/homebrew/bin/node','--experimental-strip-types',str(root/'tests/fixtures/programs'/(name+'.ts'))],env=env,capture_output=True,text=True,timeout=120)
 assert node.returncode==0
 rows=[]
 for seed in [None,17,9013]:

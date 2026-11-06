@@ -148,6 +148,8 @@ pub extern "C" fn js_object_set_field_by_property_id(
     property_id: i64,
     value: f64,
 ) {
+    #[cfg(debug_assertions)]
+    super::field_ops::debug_assert_one_number_encoding(value.to_bits());
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(key_ref) = crate::string::perry_string_ref_from_dispatch_id(property_id, &mut scratch)
     else {
@@ -483,14 +485,15 @@ mod sso_tests_1781 {
     }
 }
 
-crate::perry_thread_local! {
-    /// The ClassDefinitionEvaluation captured by the currently executing
-    /// method function. Each vtable call pushes one entry, including an
-    /// `undefined` delimiter for ordinary classes, so a nested call never
-    /// inherits its caller's private-name environment by accident.
-    static PRIVATE_LEXICAL_BRAND_STACK: std::cell::RefCell<crate::exception::CatchStack<u64>> =
-        const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// The ClassDefinitionEvaluation captured by the currently executing
+/// method function. Each vtable call pushes one entry, including an
+/// `undefined` delimiter for ordinary classes, so a nested call never
+/// inherits its caller's private-name environment by accident.
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static PRIVATE_LEXICAL_BRAND_STACK: crate::exception::marks::CatchStackKey<u64> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.private_lexical_brand);
 
 /// Push the lexical brand for the calling frame's dispatch.
 #[inline(always)]

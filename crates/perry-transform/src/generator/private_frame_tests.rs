@@ -100,6 +100,7 @@ fn private_frame_unknown_effect_and_target_keep_standalone_record() {
             byte_end: 0,
         },
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::FuncRef(0)),
@@ -207,6 +208,7 @@ fn private_frame_terminal_logging_cannot_hide_observable_getters() {
             op: BinaryOp::Add,
             left: Box::new(Expr::String("caller ".into())),
             right: Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::FuncRef(0)),

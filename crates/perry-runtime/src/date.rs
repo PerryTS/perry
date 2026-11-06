@@ -91,9 +91,7 @@ fn invalid_date_string() -> *mut crate::StringHeader {
 fn throw_invalid_time_value() -> ! {
     let msg = "Invalid time value";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_rangeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg_str))
 }
 
 /// Coerce a value to a number for an ordered relational comparison

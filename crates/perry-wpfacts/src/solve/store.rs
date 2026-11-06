@@ -114,46 +114,6 @@ impl Model {
         own
     }
 
-    /// Every builtin function value may have been written: every property
-    /// read of one is ⊤ from now on.
-    pub(super) fn write_builtin_fns(&mut self, r: u32) {
-        if self.bf_written.is_some() {
-            return;
-        }
-        self.bf_written = Some(r);
-        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, None));
-        self.bf_stores.clear();
-        for dst in std::mem::take(&mut self.bf_reads) {
-            self.add_top(dst, |_| {
-                "property of a written builtin function value".into()
-            });
-        }
-    }
-
-    /// The stores into a builtin function value, once the worklist is
-    /// empty: one at a node without ⊤ wrote one (true: solve on). A node
-    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good. So
-    /// does one holding a bare marker: another unit's argument whole, which
-    /// every rule reads as ⊤ (DECISIONS 119).
-    pub(super) fn settle_bf_written(&mut self) -> bool {
-        if self.bf_written.is_some() || self.bf_stores.is_empty() {
-            return false;
-        }
-        let stores = std::mem::take(&mut self.bf_stores);
-        let holds_top = |m: &Self, n: NodeId| {
-            let pts = &m.nodes[n as usize].pts;
-            pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
-        };
-        match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(n, r)) => {
-                self.census_bf_opened(Some(n), None);
-                self.write_builtin_fns(r);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// DECISIONS 193: the readers argument marker `x` stands for gain
     /// `new` (a marker below it, or a keyed reach of one, `arg_readers`):
     /// the stores made on `x` and on its keyed reaches reach them, and so do
@@ -174,9 +134,8 @@ impl Model {
             if fresh.is_empty() {
                 continue;
             }
-            self.work += fresh.len() as u64;
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
+            self.charge_work(fresh.len() as u64);
+            if self.past_work_bound() {
                 return;
             }
             self.arg_readers
@@ -259,7 +218,7 @@ impl Model {
             (Some(_), Some(_)) => return,
         };
         for &(key, src, site) in ss {
-            self.work += 1;
+            self.charge_work(1);
             self.store_into(y, key, src, site);
         }
     }
@@ -422,14 +381,9 @@ impl Model {
                 self.fn_touched.insert(t);
             }
         }
-        // A store into a builtin function value is decided once the
-        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
         // The boundary's store for other units' code is theirs to publish.
         let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
-        if let Some(s) = self
-            .shared_of(t)
-            .filter(|s| *s != Shared::BuiltinFn && !theirs)
-        {
+        if let Some(s) = self.shared_of(t).filter(|_| !theirs) {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
                 Key::Any(_) if elem => Some(NUM_KEY.to_string()),
@@ -441,7 +395,7 @@ impl Model {
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
             (&self.toks[t as usize], key)
         {
-            if builtins::global_user_key(&self.atoms[a as usize])
+            if builtins::global_user_key(self, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
                 let f = builtins::global_field(self, t, a);
@@ -449,12 +403,11 @@ impl Model {
                 return;
             }
         }
-        // Rule R1 (STR1): under a key the realm does not declare for a
-        // built-in namespace or native function object, the store is a
-        // field of that object (`builtin_field`): the runtime never reads
-        // it, so nothing is sunk, no key is written on the holder
-        // (`note_native_write`) and no builtin function value is written
-        // (`write_builtin_fns`). Setters on its chain still run.
+        // Native function values use ordinary fields below. Constructors
+        // and namespaces retain the realm-declared boundary: the runtime
+        // itself consumes some declared statics (Error.prepareStackTrace),
+        // even when the program never hands the constructor to an operand
+        // protocol. Only their undeclared keys are program-owned (R1).
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
@@ -498,7 +451,9 @@ impl Model {
         // bound publishes every key), and every unit replays it under its key.
         if !theirs {
             self.census_store_ctx(Some((site, self.store_at)));
-            builtins::note_native_write(self, t, Some(wkey), &what);
+            if !builtins::builtin_function(self, t) {
+                builtins::note_native_write(self, t, Some(wkey), &what);
+            }
             self.census_store_ctx(None);
         }
         // An element store's key is a number: it never names `__proto__`.
@@ -506,6 +461,9 @@ impl Model {
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
+            if !self.unit_mode && self.is_builtin_proto(t) {
+                self.given_prototype(t, src);
+            }
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
                 self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
@@ -522,29 +480,6 @@ impl Model {
             }
             let r = self.reason("stored into a value from unmodeled code");
             self.sink_node(src, r);
-            return;
-        }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            // A builtin function value is opaque: it has no field storage
-            // here. The value is gone to the runtime, and every property
-            // read of such a value is ⊤ from now on (`load_from`).
-            let r = self.reason("stored into a builtin function value");
-            self.sink_node(src, r);
-            // Beside ⊤ the value is that ⊤ (`Model::top_beside`), but it may
-            // reach the node before ⊤ does: the node decides once the
-            // worklist is empty. A store from no rule's node decides now.
-            if self.bf_written.is_none() {
-                match self.store_at {
-                    Some(n) => {
-                        self.census_bf_site(n, site);
-                        self.bf_stores.push((n, r))
-                    }
-                    None => {
-                        self.census_bf_opened(None, Some(site));
-                        self.write_builtin_fns(r)
-                    }
-                }
-            }
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
@@ -832,7 +767,9 @@ impl Model {
                 }
             }
         }
-        // Setters on the chain (and own accessors).
+        // Setters on the chain (and own accessors), including an accessor
+        // installed through another token that may denote this native.
+        self.builtin_field_use(t, key, ChainAct::Store(src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
@@ -840,6 +777,13 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        self.with_b(|m| builtins::tok_store(m, t, key, src));
+        // Callable namespaces still expose their declared static keys to
+        // the runtime. Their program-owned fields use the function graph.
+        let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
+            if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
+        let program_field = matches!(key, Key::Named(a) if builtins::undeclared(self, t, a));
+        if !builtins::builtin_function(self, t) || (namespace && !program_field) {
+            self.with_b(|m| builtins::tok_store(m, t, key, src));
+        }
     }
 }

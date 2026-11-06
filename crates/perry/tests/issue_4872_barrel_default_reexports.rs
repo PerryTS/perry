@@ -1,7 +1,7 @@
 //! Regression test for #4872: undefined default-wrapper symbols for
 //! re-exported barrel modules (the nestjs link wall).
 //!
-//! Three shapes, all taken from the `tests/release/packages/nestjs-hello`
+//! Three shapes, all taken from the `tests/integration/release/packages/nestjs-hello`
 //! fixture's failure:
 //!
 //! 1. A tsc-emitted TYPE-ONLY module whose entire body is

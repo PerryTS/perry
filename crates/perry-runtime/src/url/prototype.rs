@@ -17,8 +17,7 @@ fn require_url_receiver(name: &str, this: crate::closure::JsThis) -> *mut Object
     }
     let message = format!("Value of URL.prototype.{name} called on an incompatible receiver");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 macro_rules! url_getter {

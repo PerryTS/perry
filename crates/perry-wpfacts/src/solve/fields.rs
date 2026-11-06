@@ -109,10 +109,14 @@ impl Model {
                 self.spread_source(tm, site, keys);
             }
         }
-        if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn(_)) {
+        if d == TOP {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
                 self.top_tok_node
+            } else if builtins::builtin_function(self, s) {
+                let read = self.node_l("spread-native-fields");
+                self.builtin_field_use(s, Key::any(), ChainAct::Load(read));
+                read
             } else {
                 self.all_fields(s)
             };
@@ -123,6 +127,7 @@ impl Model {
         // Any key of the source may be an index of an Array target.
         self.mark_hole(d);
         let fa_d = self.any_key_node(d);
+        self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         if opaque {
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
             self.add_prim(fa_d, prim::ALL);
@@ -318,9 +323,10 @@ impl Model {
     /// not in these fields.
     pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
-                false
-            }
+            TokKind::Top
+            | TokKind::Builtin(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::NativeProto(_) => false,
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {
                     site != u32::MAX && builtins::own_values_filled(what)
@@ -341,6 +347,7 @@ impl Model {
         if t == TOP {
             return;
         }
+        self.builtin_field_use(t, Key::any(), ChainAct::Load(dst));
         let fields = self.all_fields(t);
         self.edge(fields, dst);
         let act = ChainAct::Load(dst);
@@ -393,8 +400,13 @@ impl Model {
         self.holes.insert(t, n);
         let born_dense = match self.toks[t as usize] {
             TokKind::Obj(tm, _) => {
-                matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { hole_free: true, .. })
-                    && !self.foreign.contains_key(&tm)
+                matches!(
+                    self.tmpls[tm as usize].kind,
+                    TmplKind::Arr {
+                        hole_free: true,
+                        ..
+                    }
+                ) && !self.foreign.contains_key(&tm)
             }
             _ => false,
         };

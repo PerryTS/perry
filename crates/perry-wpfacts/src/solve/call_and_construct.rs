@@ -560,7 +560,7 @@ impl Model {
         }
     }
 
-    fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
+    pub(super) fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             if self.foreign_ctor_returns.contains(&c) {
@@ -644,7 +644,8 @@ impl Model {
             }
             // A method of an intrinsic prototype is no constructor
             // (TypeError): nothing flows.
-            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::BuiltinFn(Native::Member { .. })
+                if !builtins::native_constructible(self, t) => {}
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
@@ -823,6 +824,24 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // An array is never the iterator the iteration protocol steps or
+        // closes: the step of the iterated value itself (`v.next()`,
+        // `Gen::iterate`) is made only on a value `js_get_iterator` returns
+        // unchanged, never an array (it gives a fresh array iterator); a
+        // for-of record's payload holds the source array beside the
+        // iterator, and closes it through a fresh array iterator
+        // (`js_array_record_close`), not itself. The same predicate as
+        // `Cons::IterNext`'s: the runtime makes no such call on an array,
+        // whatever its chain holds.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && matches!(self.atoms[a as usize].as_str(), "next" | "return")
+                && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                    if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            {
+                return;
+            }
+        }
         // DECISIONS 242(2): a call of a key the receiver may not own.
         if t != TOP {
             self.note_chain_miss(t, key);
@@ -917,6 +936,44 @@ impl Model {
             }
             return;
         }
+        // Native own statics, fields and inherited methods are the same
+        // ordinary read whether the source immediately calls the value or
+        // saves it first. This also covers constructors without a specialized
+        // namespace model.
+        if !self.unit_mode
+            && matches!(self.toks[t as usize], TokKind::BuiltinFn(_))
+            && matches!(key, Key::Named(_))
+        {
+            let callee = self.node_l("builtin-function-read");
+            self.load_from(t, t, key, callee);
+            self.bind_via(callee, call, t);
+            return;
+        }
+        // A described namespace method is the ordinary member value,
+        // called with its receiver. Its aliases use the very same model.
+        if !self.unit_mode {
+            if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
+                if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()
+                    || builtins::namespace_receiver_getter(self, t, &self.atoms[a as usize])
+                {
+                    let callee = self.node_l("builtin-function-read");
+                    self.load_from(t, t, key, callee);
+                    self.bind_via(callee, call, t);
+                    return;
+                }
+            }
+        }
+        // A missing intrinsic member calls exactly the ordinary read's
+        // values, including program fields, getters and reopened chains.
+        // No callable value means a TypeError, with no argument escape.
+        if let Key::Named(a) = key {
+            if builtins::undeclared(self, t, a) {
+                let callee = self.node_l("builtin-member-read");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
+        }
         // Own function-valued fields, then the prototype chain.
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,
@@ -924,8 +981,7 @@ impl Model {
             (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);
-        // Rule R1: a native function value's shared field.
-        self.builtin_field_use(t, key, crate::model::R1Wait::Call(call, t));
+        self.builtin_field_use(t, key, ChainAct::Call(call));
         // A key only another unit's subclass defines runs that subclass's
         // method (DECISIONS 97).
         if let (Key::Named(a), Some(_)) = (key, virt) {

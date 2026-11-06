@@ -458,31 +458,80 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
-    if name == "constructor" {
-        return false;
-    }
-    match fam {
-        Family::Object => true,
-        Family::Function => what == Some(FN_PROTO_ONLY),
-        Family::Array => name == crate::model::NUM_KEY || own(fam, name).is_some(),
-        Family::Str
-        | Family::Num
-        | Family::Bool
-        | Family::Sym
-        | Family::BigInt
-        | Family::Promise => own(fam, name).is_some(),
+    use perry_abi::lock::{final_on, LockHolder, LockKey};
+    use perry_abi::BuiltinProto as P;
+    // The locked prototypes the lookup passes before `Object.prototype`
+    // (which follows on every chain), each with whether `name` is one of its
+    // image members.
+    let own_member = || own(fam, name).is_some();
+    let chain: &[(LockHolder, bool)] = match fam {
+        Family::Object => &[],
+        Family::Function if what == Some(FN_PROTO_ONLY) => {
+            &[(LockHolder::Proto(P::Function), own_member())]
+        }
+        Family::Array => &[(LockHolder::Proto(P::Array), own_member())],
+        Family::Str => &[(LockHolder::Proto(P::String), own_member())],
+        Family::Num => &[(LockHolder::Proto(P::Number), own_member())],
+        Family::Bool => &[(LockHolder::Proto(P::Boolean), own_member())],
+        Family::Sym => &[(LockHolder::Proto(P::Symbol), own_member())],
+        Family::BigInt => &[(LockHolder::Proto(P::BigInt), own_member())],
+        Family::Promise => &[(LockHolder::Proto(P::Promise), own_member())],
         Family::Collection => {
-            let keys = match what {
-                Some("Map") => MAP_KEYS,
-                Some("Set") => SET_KEYS,
-                Some("WeakMap") => WEAKMAP_KEYS,
-                Some("WeakSet") => WEAKSET_KEYS,
+            let (proto, keys) = match what {
+                Some("Map") => (P::Map, MAP_KEYS),
+                Some("Set") => (P::Set, SET_KEYS),
+                Some("WeakMap") => (P::WeakMap, WEAKMAP_KEYS),
+                Some("WeakSet") => (P::WeakSet, WEAKSET_KEYS),
                 _ => return false,
             };
-            keys.contains(&name) && find(COLLECTION, name).is_some()
+            let image = keys.contains(&name) && find(COLLECTION, name).is_some();
+            &[(LockHolder::Proto(proto), image)]
         }
-        Family::Iterator | Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
+        // An array iterator's chain: `%ArrayIteratorPrototype%`, then
+        // `%IteratorPrototype%`. The iterator family's member list is the
+        // union of every iterator kind, so it names neither holder's image;
+        // both holders are add-locked, where an image member and an absent
+        // key are final alike, so the answer does not depend on it. The
+        // Map/Set/String iterator prototypes and the iterator helpers' take
+        // adds: no other iterator kind is final.
+        Family::Iterator if what == Some(ARRAY_ITERATOR) => &[
+            (LockHolder::ArrayIterator, false),
+            (LockHolder::Iterator, false),
+        ],
+        Family::Function
+        | Family::Iterator
+        | Family::Error
+        | Family::Box
+        | Family::Wrapper
+        | Family::Opaque => return false,
+    };
+    let class = |image: bool| {
+        if name == "constructor" {
+            LockKey::Constructor
+        } else if image {
+            LockKey::Image
+        } else if name == crate::model::NUM_KEY {
+            LockKey::Index
+        } else {
+            LockKey::Absent
+        }
+    };
+    // The lock's one decision (`perry_abi::lock`, the runtime's too) on each
+    // prototype the lookup passes: an image member ends it, an absent key
+    // goes on to the next prototype.
+    for &(holder, image) in chain {
+        let key = class(image);
+        if !final_on(holder, key) {
+            return false;
+        }
+        if key == LockKey::Image {
+            return true;
+        }
     }
+    final_on(
+        LockHolder::Proto(P::Object),
+        class(find(OBJECT, name).is_some()),
+    )
 }
 
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every
@@ -494,11 +543,32 @@ pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     }
 }
 
+/// Builtin iterator template kinds (`TmplKind::BObj::what`, family
+/// `Iterator`): the iterator's intrinsic prototype, when the model knows it.
+pub(crate) const ANY_ITERATOR: &str = "Iterator";
+/// `%ArrayIteratorPrototype%` (`extends %IteratorPrototype%`): the runtime
+/// seals and add-locks both (`builtin_proto.rs` `add_locked`:
+/// `ITERATOR_FAMILY`, `ARRAY_ITERATOR_FAMILY`), so past them the chain is
+/// `Object.prototype`, add-locked too: every read but `constructor` is
+/// final (`locked_read`).
+pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
+pub(crate) const MAP_ITERATOR: &str = "MapIterator";
+pub(crate) const SET_ITERATOR: &str = "SetIterator";
+
+/// The iterator kind a collection of kind `what` (`Map`/`Set`) gives.
+pub(super) fn collection_iterator(what: &str) -> &'static str {
+    match what {
+        "Map" => MAP_ITERATOR,
+        "Set" => SET_ITERATOR,
+        _ => ANY_ITERATOR,
+    }
+}
+
 /// The family of a builtin object template kind (`TmplKind::BObj::what`).
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        "Iterator" => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
@@ -545,6 +615,7 @@ pub(super) struct NsStatics {
 // [[Prototype]] is exactly Function.prototype.
 const ERROR_NAMESPACE: NsStatics = NsStatics {
     members: Some(&[
+        ("prototype", Mem::Proto),
         ("captureStackTrace", FN),
         ("isError", FN),
         ("prepareStackTrace", FN),
@@ -567,6 +638,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Object => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("assign", FN),
                 ("create", FN),
                 ("defineProperties", FN),
@@ -614,6 +686,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Array => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("from", FN),
                 ("fromAsync", FN),
                 ("isArray", FN),
@@ -685,6 +758,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Promise => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("all", FN),
                 ("allSettled", FN),
                 ("any", FN),
@@ -703,6 +777,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Error | BuiltinNs::AggregateError => (
             NsProto::Constructor(&ERROR_NAMESPACE),
             Some(&[
+                ("prototype", Mem::Proto),
                 ("captureStackTrace", FN),
                 ("isError", FN),
                 ("stackTraceLimit", N),
@@ -716,6 +791,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Symbol => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("asyncDispose", SY),
                 ("asyncIterator", SY),
                 ("dispose", SY),
@@ -739,6 +815,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Number => (
             NsProto::Function,
             Some(&[
+                ("prototype", Mem::Proto),
                 ("EPSILON", N),
                 ("MAX_SAFE_INTEGER", N),
                 ("MAX_VALUE", N),
@@ -759,22 +836,38 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         ),
         BuiltinNs::String => (
             NsProto::Function,
-            Some(&[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)]),
+            Some(&[
+                ("prototype", Mem::Proto),
+                ("fromCharCode", FN),
+                ("fromCodePoint", FN),
+                ("raw", FN),
+            ]),
         ),
-        BuiltinNs::Boolean
-        | BuiltinNs::Function
-        | BuiltinNs::ObjectProtoMethod
-        | BuiltinNs::ObjectProtoOwn(_) => (NsProto::Function, Some(&[])),
+        BuiltinNs::Boolean | BuiltinNs::Function => {
+            (NsProto::Function, Some(&[("prototype", Mem::Proto)]))
+        }
+        BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {
+            (NsProto::Function, Some(&[]))
+        }
         BuiltinNs::Map => (
             NsProto::Function,
-            Some(&[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)]),
+            Some(&[
+                ("prototype", Mem::Proto),
+                ("groupBy", FN),
+                ("@@__perry_wk_species", Mem::Ctor),
+            ]),
         ),
         BuiltinNs::Set => (
             NsProto::Function,
-            Some(&[("@@__perry_wk_species", Mem::Ctor)]),
+            Some(&[
+                ("prototype", Mem::Proto),
+                ("@@__perry_wk_species", Mem::Ctor),
+            ]),
         ),
         // No statics, no `@@species`.
-        BuiltinNs::WeakMap | BuiltinNs::WeakSet => (NsProto::Function, Some(&[])),
+        BuiltinNs::WeakMap | BuiltinNs::WeakSet => {
+            (NsProto::Function, Some(&[("prototype", Mem::Proto)]))
+        }
         BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
@@ -915,4 +1008,45 @@ pub(super) fn any_member(fam: Family) -> (bool, u16) {
         _ => p,
     });
     (own.iter().any(|(_, m)| *m == Mem::Fn), prims)
+}
+
+/// Emit the description itself for the compiled-runtime behaviour check.
+/// The harness compares observed own keys against these same member tables.
+#[test]
+fn runtime_member_description() {
+    fn keys(d: NsStatics, out: &mut Vec<&'static str>) -> bool {
+        let Some(own) = d.members else { return false };
+        out.extend(own.iter().map(|(key, _)| *key));
+        match d.prototype {
+            NsProto::Function => {
+                out.extend(FUNCTION.iter().map(|(key, _)| *key));
+                out.extend(OBJECT.iter().map(|(key, _)| *key));
+            }
+            NsProto::Object => out.extend(OBJECT.iter().map(|(key, _)| *key)),
+            NsProto::Constructor(parent) => return keys(*parent, out),
+            NsProto::Unknown(_) => return false,
+        }
+        true
+    }
+    let mut rows = 0;
+    for e in crate::native_effects::realm() {
+        let Some(ns) = super::ns_by_name(e.name) else {
+            continue;
+        };
+        let mut names = Vec::new();
+        if !keys(ns_statics(ns), &mut names) {
+            continue;
+        }
+        names.sort_unstable();
+        names.dedup();
+        println!("DESCRIPTION\t{}\t{}", e.name, names.join("\t"));
+        rows += 1;
+    }
+    let mut names: Vec<_> = FUNCTION.iter().chain(OBJECT).map(|(key, _)| *key).collect();
+    names.sort_unstable();
+    names.dedup();
+    for expr in ["Array.prototype.map", "Object.prototype.hasOwnProperty"] {
+        println!("DESCRIPTION\t{expr}\t{}", names.join("\t"));
+    }
+    assert!(rows > 10);
 }

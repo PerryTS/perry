@@ -33,7 +33,7 @@ pub(super) fn decode(owner: f64, value: &Value, payload: &Value, stream: bool) -
         .filter(|_| value.as_object().is_some_and(|object| object.len() == 1))
         .unwrap_or_else(|| fail("Invalid owned writer"));
     let schema = serde_json::to_vec(payload).unwrap();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let token = scope.root_nanbox_f64(producer::managed_text(token.as_bytes()));
         let schema = scope.root_nanbox_f64(producer::managed_text(&schema));
         let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -122,7 +122,7 @@ extern "C" fn write(
     let mut writer = Value::Null;
     let mut list = Value::Null;
     set(state.get_nanbox_f64(), PENDING, 1.0);
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         payload = serde_json::from_str(&string(get(state.get_nanbox_f64(), SCHEMA)))
             .unwrap_or_else(|_| fail("Invalid writer payload schema"));
         writer = descriptor(state.get_nanbox_f64());
@@ -204,7 +204,7 @@ fn control(wrapper: f64, close: bool) -> f64 {
     }
     let owner = scope.root_nanbox_f64(get(state.get_nanbox_f64(), OWNER));
     let mut request = Value::Null;
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         if !close {
             request = descriptor(state.get_nanbox_f64());
             persistent::operations::cancel(owner.get_nanbox_f64(), &request);

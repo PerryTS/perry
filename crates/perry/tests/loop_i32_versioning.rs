@@ -14,7 +14,7 @@ fn check_counter(disabled: bool) {
     let binary = dir.path().join("counter");
     std::fs::write(
         &source,
-        include_str!("../../../test-files/test_gap_loop_i32_versioning.ts"),
+        include_str!("../../../tests/parity/language/control-flow/test_gap_loop_i32_versioning.ts"),
     )
     .unwrap();
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))

@@ -79,7 +79,9 @@ struct Built {
 fn build_and_run(file: &str) -> Built {
     ensure_runtime_archive();
     let dir = tempfile::tempdir().expect("tempdir");
-    let source = workspace_root().join("test-files").join(file);
+    let source = workspace_root()
+        .join("tests/parity/language/class")
+        .join(file);
     let local = dir.path().join(file);
     std::fs::copy(&source, &local).expect("copy fixture");
     let binary = dir.path().join("fixture.bin");

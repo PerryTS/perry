@@ -22,11 +22,11 @@ ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
 crates/perry/src/commands/compile/run_pipeline.rs	6236
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
-crates/perry-hir/src/lower_decl/body_stmt.rs	2063
+crates/perry-hir/src/lower_decl/body_stmt.rs	2059
 # Representation-aware codegen core; further decomposition is tracked in #1435.
 crates/perry-codegen/src/codegen/mod.rs	3572
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
-crates/perry-codegen/src/collectors/hir_facts.rs	2749
+crates/perry-codegen/src/collectors/hir_facts.rs	2743
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
 crates/perry-codegen/src/expr/mod.rs	2836
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
@@ -38,7 +38,7 @@ crates/perry-runtime/src/set.rs	2344
 # Representation feedback core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/typed_feedback.rs	2436
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	15715
+crates/perry-codegen/tests/native_proof_regressions.rs	15680
 # Representation feedback regression cases; test organization is a separate follow-up.
 crates/perry-runtime/src/typed_feedback/tests.rs	2289
 # Lowering report schema and its emitters; split emitters in a follow-up.
@@ -46,7 +46,7 @@ crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
 crates/perry-transform/src/inline/call_inliner.rs	2120
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
-crates/perry-stdlib/src/streams.rs	2418
+crates/perry-stdlib/src/streams.rs	2409
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2856
 # Shape registry table and publication invariants require a coordinated split.

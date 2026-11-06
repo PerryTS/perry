@@ -20,13 +20,52 @@ pub(crate) fn calling_convention(name: &str) -> Option<&'static str> {
 }
 
 pub(super) const BIRTH_FLAGS_OFFSET: &str = "24";
-pub(super) const BIRTH_SEEDS_OFFSET: &str = "32";
+#[cfg(test)]
+const BIRTH_SEEDS_OFFSET: &str = "32";
+
+/// One `usize` word of the arena cell (`offset`, `size`) at `at`, as an i64:
+/// the field address and the widened value.
+pub(crate) fn arena_load(
+    blk: &mut crate::block::LlBlock,
+    arena: &crate::target_layout::InlineArenaLayout,
+    state: &str,
+    at: u64,
+) -> (String, String) {
+    let field = blk.gep(I8, state, &[(I64, &at.to_string())]);
+    let value = blk.load(arena.word, &field);
+    if arena.word == I64 {
+        (field, value)
+    } else {
+        let wide = blk.zext(arena.word, &value, I64);
+        (field, wide)
+    }
+}
+
+/// Store the bumped i64 `value` into the arena word at `field`.
+pub(crate) fn arena_store(
+    blk: &mut crate::block::LlBlock,
+    arena: &crate::target_layout::InlineArenaLayout,
+    value: &str,
+    field: &str,
+) {
+    if arena.word == I64 {
+        // GC_STORE_AUDIT(INIT): arena bump offset is allocator metadata.
+        blk.store(I64, value, field);
+    } else {
+        let narrow = blk.trunc(I64, value, arena.word);
+        // GC_STORE_AUDIT(INIT): arena bump offset is allocator metadata.
+        blk.store(arena.word, &narrow, field);
+    }
+}
 
 /// Read the cell VALUE at every allocation, after the potentially collecting
 /// slow arm. Only the thread-local cell's stable address is cached in state.
 pub(crate) fn flags(ctx: &mut FnCtx<'_>, state: &str) -> String {
+    let at = crate::target_layout::inline_arena_layout(ctx.target_triple)
+        .flags
+        .to_string();
     let blk = ctx.block();
-    let address_field = blk.gep(I8, state, &[(I64, BIRTH_FLAGS_OFFSET)]);
+    let address_field = blk.gep(I8, state, &[(I64, &at)]);
     let address = blk.load(PTR, &address_field);
     let flags = blk.next_reg();
     blk.emit_raw(format!("{flags} = load volatile i8, ptr {address}"));
@@ -52,7 +91,10 @@ pub(crate) fn finish(ctx: &mut FnCtx<'_>, raw: &str, flags: &str, state: &str) {
     let done_label = ctx.block_label(done_idx);
     ctx.block().cond_br(&active, &seed_label, &done_label);
     ctx.current_block = seed_idx;
-    let seed_field = ctx.block().gep(I8, state, &[(I64, BIRTH_SEEDS_OFFSET)]);
+    let at = crate::target_layout::inline_arena_layout(ctx.target_triple)
+        .seeds
+        .to_string();
+    let seed_field = ctx.block().gep(I8, state, &[(I64, &at)]);
     let seeds = ctx.block().load(PTR, &seed_field);
     ctx.block()
         .call_void("js_gc_note_black_birth", &[(PTR, raw), (PTR, &seeds)]);
@@ -73,6 +115,24 @@ mod tests {
             "pub const INLINE_BIRTH_SEEDS_OFFSET_LP64: usize = {};",
             super::BIRTH_SEEDS_OFFSET
         )));
+        let lp64 = crate::target_layout::inline_arena_layout("x86_64-unknown-linux-gnu");
+        assert_eq!(lp64.flags.to_string(), super::BIRTH_FLAGS_OFFSET);
+        assert_eq!(lp64.seeds.to_string(), super::BIRTH_SEEDS_OFFSET);
+        let ilp32 = crate::target_layout::inline_arena_layout("wasm32-wasip2");
+        for (name, value) in [
+            ("OFFSET", ilp32.offset),
+            ("SIZE", ilp32.limit),
+            ("FLAGS", ilp32.flags),
+            ("SEEDS", ilp32.seeds),
+        ] {
+            assert!(
+                runtime.contains(&format!(
+                    "pub const INLINE_{name}_OFFSET_ILP32: usize = {value};"
+                )),
+                "{name}"
+            );
+        }
+        assert_eq!(ilp32.word, crate::types::I32);
     }
 }
 

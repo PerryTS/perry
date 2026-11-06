@@ -1176,33 +1176,18 @@ pub extern "C" fn js_tty_write_stream_remove_all_listeners(
 }
 
 pub fn throw_invalid_fd(fd: f64) -> ! {
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-        let str_val = |s: &str| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(JSValue::string_ptr(ptr).bits())
-        };
-        let set = |key: &str, value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        set("name", str_val("RangeError"));
-        set("code", str_val("ERR_INVALID_FD"));
-        set(
-            "message",
-            str_val(&format!("\"fd\" must be a positive integer: {}", fd as i64)),
-        );
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+    let message = format!("\"fd\" must be a positive integer: {}", fd as i64);
+    crate::exception::throw_core(crate::error::CoreError::range_error_with_own_code(
+        message.as_bytes(),
+        b"ERR_INVALID_FD",
+    ))
 }
 
 pub fn throw_tty_init_failed() -> ! {
     let message = "TTY initialization failed: uv_tty_init returned EINVAL (invalid argument)";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_TTY_INIT_FAILED");
-    let err = crate::error::js_error_new_with_name_message(b"SystemError", msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::named(b"SystemError", msg))
 }
 
 /// `process.stdin.isTTY` / `process.stdout.isTTY` / `process.stderr.isTTY`.

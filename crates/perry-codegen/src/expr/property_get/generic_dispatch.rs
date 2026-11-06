@@ -513,7 +513,7 @@ fn lower_property_site(
 }
 
 /// [`lower_property_site`] after the receiver is evaluated: the ordinary site.
-fn lower_property_site_tail(
+pub(crate) fn lower_property_site_tail(
     ctx: &mut FnCtx<'_>,
     property: &str,
     global_reference: Option<bool>,

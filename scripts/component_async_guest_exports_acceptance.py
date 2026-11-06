@@ -22,7 +22,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     fixture_name = "async-guest-imports" if args.imports else "async-guest-exports"
     host_name = "async_guest_imports" if args.imports else "async_guest_exports"
-    fixture = root / "test-wasi/components" / fixture_name
+    fixture = root / "tests/integration/wasi/components" / fixture_name
     for name in ["world.wit", "guest.ts"]:
         shutil.copyfile(fixture / name, out / name)
     target = args.target_dir.resolve()

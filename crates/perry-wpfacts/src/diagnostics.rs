@@ -87,9 +87,6 @@ pub(crate) struct BirthCensus {
     pub inject_at: Option<(NodeId, Option<(Tok, Atom)>)>,
     /// The store (site, receiver node) whose rule is running.
     pub store_ctx: Option<(u32, Option<NodeId>)>,
-    /// A store into a builtin function value whose decision waits for the
-    /// worklist (`settle_bf_written`): its node's site.
-    pub bf_sites: BTreeMap<NodeId, u32>,
 }
 
 /// A node's first ⊤ (`birth-arrival`): the copy source it came from, or the
@@ -142,15 +139,15 @@ impl Model {
         let written = crate::builtins::census_native_written(self, t, a);
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
-            NativeMiss::Load(n) | NativeMiss::Global(n, _) => (false, n),
+            NativeMiss::Load(n) | NativeMiss::Lookup(n) | NativeMiss::Global(n, _) => (false, n),
             NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
         };
         c.reads.insert((t, a, call, id));
         c.pending_gate = written.then_some((t, a, call, id));
     }
     /// The first write that opens gate (`t`, `k`): `note_native_write` for
-    /// a builtin prototype, ⊤ or a namespace, `write_builtin_fns` for every
-    /// builtin function value. A store names its site and receiver node.
+    /// a builtin prototype, ⊤ or a namespace. A store names its site and
+    /// receiver node; ordinary function-object fields open no global gate.
     pub(crate) fn census_opener(
         &mut self,
         t: Tok,
@@ -190,29 +187,6 @@ impl Model {
         if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
             c.store_ctx = ctx;
         }
-    }
-    /// A deferred store into a builtin function value at node `n` (census only).
-    pub(crate) fn census_bf_site(&mut self, n: NodeId, site: u32) {
-        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
-            c.bf_sites.entry(n).or_insert(site);
-        }
-    }
-    /// The deferred store at node `n` opened every builtin function value.
-    pub(crate) fn census_bf_opened(&mut self, n: Option<NodeId>, site: Option<u32>) {
-        if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
-            return;
-        }
-        let Some(&t) = self.tok_index.get(&TokKind::BuiltinFn(crate::model::Native::Any)) else {
-            return;
-        };
-        let site = site.or_else(|| {
-            n.and_then(|n| {
-                let c = self.diagnostic.as_ref()?.census.as_ref()?;
-                c.bf_sites.get(&n).copied()
-            })
-        });
-        let store = site.map(|s| (s, n));
-        self.census_opener(t, None, "store into a builtin function value", store);
     }
     pub(crate) fn census_native_write(&mut self, t: Tok, k: Option<Atom>) {
         let Some(d) = self.diagnostic.as_mut() else {
@@ -431,16 +405,31 @@ impl Model {
         }
     }
 
-    /// A summary instance keeps its template call identity. `CallSite::site`
-    /// is an allocation context, and synthetic protocol calls may use zero:
-    /// it must never be used to attribute their callees to source call zero.
+    /// A summary instance keeps its template call identity; a call the
+    /// solver makes for a program call (a builtin calling a callback, a
+    /// bound target) reports that program call (`Model::solver_call`).
+    /// `CallSite::site` is an allocation context, and synthetic protocol
+    /// calls may use zero: it must never be used to attribute their callees
+    /// to source call zero.
     pub(crate) fn diagnostic_source_call(&self, call: CallId) -> Option<CallId> {
         let d = self.diagnostic.as_ref()?;
-        if d.source_calls.contains(&call) {
-            return Some(call);
+        let mut c = call;
+        loop {
+            if d.source_calls.contains(&c) {
+                return Some(c);
+            }
+            // Each step goes to an earlier call: the template's, or the one
+            // the solver made this call for.
+            let next = *self
+                .sum
+                .tmpl_of
+                .get(&c)
+                .or_else(|| self.sum.origin.get(&c))?;
+            if next >= c {
+                return None;
+            }
+            c = next;
         }
-        let source = *self.sum.tmpl_of.get(&call)?;
-        d.source_calls.contains(&source).then_some(source)
     }
     /// The function a node's rules run for: its body's owner, or the
     /// function of the run (instance or shared run) it belongs to.
@@ -542,7 +531,11 @@ impl Model {
                 c.active_gate,
             ));
         }
-        let seq = if was { None } else { d.census.as_mut().map(|c| c.tick()) };
+        let seq = if was {
+            None
+        } else {
+            d.census.as_mut().map(|c| c.tick())
+        };
         let cand = (!was).then(|| EscFirst {
             reason,
             cause,
@@ -660,6 +653,7 @@ impl Gen<'_> {
             Expr::IndexGet {
                 object,
                 index,
+                element_offset: _,
                 byte_offset,
                 byte_end,
             } => (
@@ -978,7 +972,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let mut out = vec![format!(
         "{{\"record\":\"analysis\",\"aborted\":{},\"work\":{},\"maxWork\":{}}}",
-        m.aborted, m.work, m.max_work
+        m.aborted,
+        m.work.get(),
+        m.max_work
     )];
     let mut nodes = BTreeSet::new();
     let locations: BTreeMap<CallId, &Site> = d

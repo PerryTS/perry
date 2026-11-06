@@ -1260,9 +1260,7 @@ fn throw_invalid_listener_type(listener: f64) -> ! {
     let msg = b"The \"listener\" argument must be of type function";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    let bits = JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 fn emit_remove_listener_if_watched(target: f64, events: f64, event: f64, listener: f64) {

@@ -215,7 +215,7 @@ fn function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
 }
 
 fn fixture_dir() -> PathBuf {
-    workspace_root().join("test-files/fixtures/issue_8774_argument_shapes")
+    workspace_root().join("tests/fixtures/programs/fixtures/issue_8774_argument_shapes")
 }
 
 fn copy_semantic_fixture(dir: &Path) {
@@ -260,7 +260,8 @@ fn read_native_records(dir: &Path) -> Vec<serde_json::Value> {
 fn stable_argument_clones_are_direct_reported_and_moving_gc_safe() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::copy(
-        workspace_root().join("test-files/test_issue_8774_argument_shape_clones.ts"),
+        workspace_root()
+            .join("tests/parity/language/class/test_issue_8774_argument_shape_clones.ts"),
         temp.path().join("valid.ts"),
     )
     .expect("copy valid fixture");

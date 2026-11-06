@@ -351,8 +351,7 @@ pub(super) unsafe fn throw_unknown_encoding(name: &str) -> ! {
     let message = format!("Unknown encoding: {name}");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_UNKNOWN_ENCODING");
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::type_error(msg))
 }
 
 /// Decode `str_bytes` (a JS string's UTF-8 bytes) into raw bytes per `tag`,

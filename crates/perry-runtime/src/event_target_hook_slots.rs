@@ -48,6 +48,13 @@ pub fn message_event_with_ports(data: f64, ports: f64) -> f64 {
         |run| run(data, ports),
     )
 }
+static NODE_MESSAGE_EVENT: Hook<fn(f64, Option<f64>) -> f64> = Hook::empty();
+pub fn node_message_event(data: f64, ports: Option<f64>) -> f64 {
+    NODE_MESSAGE_EVENT.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(data, ports),
+    )
+}
 static MESSAGE_DISPATCH_STATE: Hook<fn(f64, f64, bool) -> bool> = Hook::empty();
 /// Keep the existing listener queue, but use canonical Event dispatch state.
 /// The runtime trap restores state even with panic=abort foreign exceptions.
@@ -60,13 +67,13 @@ pub fn with_message_event_dispatch(event: f64, target: f64, call: impl FnOnce())
             return;
         }
     }
-    let result = crate::exception::catch_js_throw(call);
-    let error = result.err().map(|value| scope.root_nanbox_f64(value));
+    let result = crate::exception::catch_thrown(call);
+    let error = result.err().map(|caught| caught.root(&scope));
     if let Some(run) = MESSAGE_DISPATCH_STATE.get() {
         run(event.get_nanbox_f64(), target.get_nanbox_f64(), false);
     }
     if let Some(error) = error {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::rethrow_caught(error.caught());
     }
 }
 static JS_CUSTOM_EVENT_NEW: Hook<extern "C" fn(f64, f64, u32) -> *mut ObjectHeader> = Hook::empty();
@@ -344,6 +351,7 @@ pub(crate) fn install() {
         CONSTRUCT_MESSAGE_EVENT.set(crate::event_target::message_event::construct);
         MESSAGE_EVENT.set(crate::event_target::message_event::delivery);
         MESSAGE_EVENT_WITH_PORTS.set(crate::event_target::message_event::delivery_with_ports);
+        NODE_MESSAGE_EVENT.set(crate::event_target::message_event::node_delivery);
         MESSAGE_DISPATCH_STATE.set(crate::event_target::message_event::dispatch_state);
         ABORT_DOM_EXCEPTION_VALUE.set(crate::event_target::abort_dom_exception_value);
         INSTALL_WEB_EVENT_PROTO_METHODS.set(crate::event_target::install_web_event_proto_methods);

@@ -773,8 +773,8 @@ fn is_callable(value: f64) -> bool {
 
 fn throw_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    let err = perry_runtime::error::CoreError::type_error(msg);
+    perry_runtime::exception::throw_core(err)
 }
 
 fn bool_to_f64(value: bool) -> f64 {

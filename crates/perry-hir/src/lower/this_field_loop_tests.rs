@@ -1,7 +1,7 @@
 //! `this` receivers in class-field loops: `this.f op= v` is written in place,
 //! and a declared array field read in a call-free loop is hoisted behind a
 //! `this instanceof C` version check. Behaviour is covered against node by
-//! `test-parity/language/class/test_class_this_*.ts`; these pin the shapes.
+//! `tests/parity/language/class/test_class_this_*.ts`; these pin the shapes.
 
 #![cfg(test)]
 

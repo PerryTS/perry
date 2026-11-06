@@ -74,9 +74,15 @@ impl<'a> Gen<'a> {
             }
         }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
-        self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
-            Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
-            _ => None,
+        self.call_lit_arg = if matches!(callee, Expr::PropertyGet { .. } | Expr::IndexGet { .. }) {
+            args.first()
+                .and_then(|x| self.const_property_key(fx.module, x))
+                .map(|s| self.m.atom(&s))
+        } else {
+            match args.first().and_then(|x| self.const_eval(fx.module, x)) {
+                Some(crate::gen_const::Const::Str(s)) => Some(self.m.atom(&s)),
+                _ => None,
+            }
         };
         if let Expr::ExternFuncRef { name, .. } = callee {
             if self.is_runtime_extern(fx.module, name) {
@@ -84,6 +90,13 @@ impl<'a> Gen<'a> {
                     .iter()
                     .map(|x| match x {
                         Expr::String(s) => Some(s.clone()),
+                        _ if matches!(
+                            name.as_str(),
+                            "js_object_define_getter" | "js_object_define_setter"
+                        ) =>
+                        {
+                            self.const_property_key(fx.module, x)
+                        }
                         _ => None,
                     })
                     .collect();
@@ -124,6 +137,7 @@ impl<'a> Gen<'a> {
                     None => self.expr(fx, object),
                 };
                 self.own_test_recv = Some(o);
+                let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
@@ -131,13 +145,27 @@ impl<'a> Gen<'a> {
                         module: fx.module,
                         byte_offset: off,
                         key: a,
-                        recv: o,
+                        recv: private.unwrap_or(o),
                         is_call: true,
-                        value_call: false,
+                        value_call: private.is_some(),
                         func: fx.f,
                     });
                 }
-                self.mcall(o, Key::Named(a), args, spread)
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(a) = lit {
+                    self.m.call_lit.insert(call, a);
+                }
+                match private {
+                    Some(callee) => self.m.cons(callee, Cons::Call { call }),
+                    None => self.m.cons(
+                        o,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call,
+                        },
+                    ),
+                }
+                ret
             }
             Expr::IndexGet { object, index, .. } => {
                 let o = self.expr(fx, object);
@@ -150,12 +178,27 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
+                let key = self.read_key(index);
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(a) = lit {
+                    self.m.call_lit.insert(call, a);
+                }
                 match self.read_key(index) {
-                    Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
+                    Key::Named(a) => {
+                        self.m.cons(
+                            o,
+                            Cons::MCall {
+                                key: Key::Named(a),
+                                call,
+                            },
+                        );
+                        ret
+                    }
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
                     Key::Any(_) => {
-                        let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
                         let shape = self.m.key_shape(index);
                         self.m.cons(
                             o,
@@ -171,17 +214,12 @@ impl<'a> Gen<'a> {
             }
             // Direct host timer calls use the same guarded global lookup
             // as globalThis.setTimeout. Import/module bindings shadow them.
+            // Unit contracts retain their direct model. The whole-program
+            // path below reads the same value an alias reads.
             Expr::ExternFuncRef { name, .. }
-                if matches!(
-                    name.as_str(),
-                    "setTimeout"
-                        | "setInterval"
-                        | "setImmediate"
-                        | "clearTimeout"
-                        | "clearInterval"
-                        | "clearImmediate"
-                        | "queueMicrotask"
-                ) && !self.is_import(fx.module, name)
+                if self.m.unit_mode
+                    && crate::builtins::global_function(&self.m, name)
+                    && !self.is_import(fx.module, name)
                     && !self.mods[fx.module as usize].scope.contains_key(name) =>
             {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -194,6 +232,7 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
+                self.own_test_recv = Some(c);
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.
@@ -238,6 +277,13 @@ impl<'a> Gen<'a> {
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
+        }
+        if !self.m.unit_mode && crate::builtins::global_function(&self.m, name) {
+            let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let dst = self.m.node_l("global-function-value");
+            let key = Key::Named(self.m.atom(name));
+            self.m.load_from(t, t, key, dst);
+            return dst;
         }
         self.m.top_val(&format!("extern value {name}"))
     }
@@ -354,7 +400,9 @@ impl<'a> Gen<'a> {
                 .add_top(ret, |_| "async/generator closure result".into());
         }
         self.order_ok = true;
+        let own = self.own_helper_shape(params, body, *is_async || *is_generator);
         self.stmts(cfx, body);
+        self.own_helper_finish(f, own);
         (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }
@@ -686,9 +734,28 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
-            "js_object_define_getter" | "js_object_define_setter" | "js_object_define_property" => {
+            "js_object_define_getter" | "js_object_define_setter" => {
+                let (Some(o), Some(k), Some(f)) = (arg(0), arg(1), arg(2)) else {
+                    return self.prim_node(prim::UNDEF);
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), vec![k, f], spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
+                }
+                self.m.cons(
+                    o,
+                    Cons::AnnexBDefine {
+                        call,
+                        setter: name == "js_object_define_setter",
+                    },
+                );
+                self.m.add_prim(ret, prim::UNDEF);
+                ret
+            }
+            "js_object_define_property" => {
                 // E5 on the target.
-                let r = self.m.reason("E5 defineProperty/__defineGetter__");
+                let r = self.m.reason("E5 defineProperty");
                 if let Some(o) = arg(0) {
                     let star = self.m.atom(crate::STAR_KEY);
                     self.m.define_on.insert((o, star, false));
@@ -707,17 +774,22 @@ impl<'a> Gen<'a> {
                 arg(0).unwrap_or(self.m.top_tok_node)
             }
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
-                let r = self.m.reason("__lookupGetter__ result");
-                for a in &args {
-                    self.m.cons(
-                        *a,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::Any,
-                        },
-                    );
+                let Some(o) = arg(0) else {
+                    return self.m.top_val("accessor lookup without a receiver");
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), args[1..].to_vec(), spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
                 }
-                self.m.top_val("__lookupGetter__ result")
+                self.m.cons(
+                    o,
+                    Cons::AnnexBLookup {
+                        call,
+                        setter: name == "js_object_lookup_setter",
+                    },
+                );
+                ret
             }
             "js_tdz_check_binding" | "js_tdz_check_binding_then" => {
                 let out = self.tmp("tdz");
@@ -879,6 +951,22 @@ impl<'a> Gen<'a> {
                 let key = Key::Named(self.m.atom(&k));
                 self.store(fx, recv, key, v, name.to_string(), None, false);
                 v
+            }
+            // Rule G: an unresolved identifier is `[[Get]](globalThis, NAME)`
+            // (`perry-runtime` `error/global_ref.rs`; absent = ReferenceError,
+            // `typeof` = "undefined"), as the load `globalThis.NAME` is.
+            // Whole-program mode only: in per-unit mode another unit's
+            // stores are unseen, so the read stays unknown.
+            "js_global_get_or_throw_unresolved" | "js_global_get_optional"
+                if !self.m.unit_mode =>
+            {
+                let Some(k) = lit(0) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.load(recv, key)
             }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");

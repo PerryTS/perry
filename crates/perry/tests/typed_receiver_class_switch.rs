@@ -141,26 +141,26 @@ const DESCRIBE: &str = "perry_method_main_ts__Shape__describe";
 const UNPROVEN: [(&str, &str, &str, &[&str]); 4] = [
     (
         "method_replaced",
-        include_str!("../../../test-files/test_gap_cls_method_replaced.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_method_replaced.ts"),
         "18\n32\n32\n",
         // `area` is replaced on a prototype: `this.area()` cannot switch.
         &[DESCRIBE],
     ),
     (
         "own_override",
-        include_str!("../../../test-files/test_gap_cls_own_override.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_own_override.ts"),
         "13\n110\n104\n",
         &[TOTAL, DESCRIBE],
     ),
     (
         "set_prototype_of",
-        include_str!("../../../test-files/test_gap_cls_set_prototype_of.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_set_prototype_of.ts"),
         "13\n14\n510\n",
         &[TOTAL, DESCRIBE],
     ),
     (
         "lying_annotation",
-        include_str!("../../../test-files/test_gap_cls_lying_annotation.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_lying_annotation.ts"),
         "2079\n70 7\n2000\n",
         // The loop holds values of other classes behind the annotation.
         &[TOTAL],

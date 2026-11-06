@@ -140,6 +140,7 @@ mod tests {
     /// field. Reading it as unsigned would put the function ~4 GiB past the
     /// map, and every lookup for it would miss — roots lost silently.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn a_function_below_the_map_decodes_from_a_negative_offset() {
         let origin = 0x5555_0000_0000usize;
         let blob = super::super::lazy::test_blob_multi_at(

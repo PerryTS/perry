@@ -501,8 +501,7 @@ fn throw_repeat_range_error(count: f64) -> ! {
     };
     let message = format!("Invalid count value: {}", rendered);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cfg(test)]
@@ -522,7 +521,10 @@ mod pad_length_tests {
         assert_eq!(to_length(1_048_577.0), 1_048_577);
         // +Infinity → the ToLength maximum, which exceeds MAX_STRING_LENGTH
         // so the pad helpers raise RangeError when a longer string is needed.
-        assert_eq!(to_length(f64::INFINITY), (1u64 << 53) as usize - 1);
+        assert_eq!(
+            to_length(f64::INFINITY),
+            (1u64 << 53).wrapping_sub(1) as usize
+        );
         assert!(to_length(f64::INFINITY) > MAX_STRING_LENGTH);
         // MAX is representable; MAX+1 exceeds the engine limit.
         assert_eq!(to_length(MAX_STRING_LENGTH as f64), MAX_STRING_LENGTH);

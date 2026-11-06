@@ -5,7 +5,7 @@ pub(in crate::component) fn drain_collections(component: f64) {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     let mut request = Value::Null;
-    let outcome = crate::exception::catch_js_throw(|| loop {
+    let outcome = crate::exception::catch_thrown(|| loop {
         let ctx = context::get(component.get_nanbox_f64());
         if unsafe { !(*ctx).alive || (*ctx).host.is_null() } {
             break;
@@ -30,6 +30,6 @@ pub(in crate::component) fn drain_collections(component: f64) {
     }
     drop(request);
     if let Err(error) = outcome {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }

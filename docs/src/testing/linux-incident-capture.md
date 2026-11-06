@@ -57,5 +57,5 @@ The profile and memory breakdown are intended to choose the next reproducer.
 Collector tests (also runnable off Linux using synthetic `/proc` fixtures):
 
 ```sh
-python3 -m unittest discover -s scripts -p test_capture_linux_incident.py
+python3 -m unittest discover -s tests/tooling/infrastructure -p test_capture_linux_incident.py
 ```

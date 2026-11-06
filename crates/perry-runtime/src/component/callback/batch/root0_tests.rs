@@ -38,9 +38,9 @@ fn initialization_context_does_not_pop_its_callers_execution_scope_when_it_throw
                 initialization.run(|| {
                     assert_eq!(als::get_store(token.token()), Some(11.0));
                     assert_eq!(crate::async_hooks::execution_async_id_u64(), parent_id);
-                    crate::exception::js_throw(71.0);
+                    crate::exception::test_throw(71.0);
                 }),
-                Err(71.0)
+                Err(crate::exception::test_caught(71.0))
             );
             assert_eq!(als::get_store(token.token()), Some(17.0));
             assert_eq!(

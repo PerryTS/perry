@@ -469,7 +469,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // The value proof is stronger than an erased field annotation.
             // Keep Number selection in agreement with canonical-result and
             // declared-only queries, including an unannotated receiver.
-            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+            if crate::expr::wpfacts_access::proves_number(ctx, e) {
                 return true;
             }
             if crate::expr::contained_number_get(ctx, object, property) {
@@ -857,8 +857,8 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
                 return true;
             }
             // wpfacts slice 2: the bare read of a slot the facts prove always
-            // holds a canonical double (`wpfacts_access::proves_raw_f64`).
-            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+            // holds a canonical double (`wpfacts_access::proves_number`).
+            if crate::expr::wpfacts_access::proves_number(ctx, e) {
                 return true;
             }
             // Object model step 1: a present literal-family key every store

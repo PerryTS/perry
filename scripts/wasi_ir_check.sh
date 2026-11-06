@@ -29,8 +29,6 @@ else
   echo "::error::GNU timeout is required (on macOS: brew install coreutils)" >&2
   exit 1
 fi
-OUT="$(mktemp -d)"
-trap 'rm -rf "$OUT"' EXIT
 
 # A fixed spread of the gap suite: strings, arrays, closures, classes, maps,
 # JSON, regex, async, errors. Named, not globbed, so the sample is stable.
@@ -47,6 +45,34 @@ SAMPLES=(
   test_gap_object_methods
 )
 
+# Resolve all samples before creating output or compiling; command substitution
+# retains the resolver's failure status, unlike process substitution.
+sources="$(python3 - "$ROOT" "${SAMPLES[@]}" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts"))
+from gc_corpus_sources import SourceResolutionError
+from wasi_run import gap_sources
+
+try:
+    for source in gap_sources(root, samples=sys.argv[2:]):
+        print(f"{source.stem}\t{source.relative_to(root).as_posix()}")
+except SourceResolutionError as exc:
+    print(exc.issues[0].diagnostic(root), file=sys.stderr)
+    sys.exit(3)
+PY
+)" || exit $?
+while IFS=$'\t' read -r name source; do
+  if [[ ! -f "$ROOT/$source" ]]; then
+    echo "::error::sample $name.ts no longer exists; update SAMPLES in $0" >&2
+    exit 1
+  fi
+done <<<"$sources"
+OUT="$(mktemp -d)"
+trap 'rm -rf "$OUT"' EXIT
+
 # The IR is saved before object emission, so saved IR alone does not show the
 # objects compiled: reject a failure before the (expected) link failure.
 require_objects() {
@@ -58,12 +84,8 @@ require_objects() {
 }
 
 n=0
-for name in "${SAMPLES[@]}"; do
-  src="$ROOT/test-files/$name.ts"
-  if [[ ! -f "$src" ]]; then
-    echo "::error::sample $name.ts no longer exists; update SAMPLES in $0" >&2
-    exit 1
-  fi
+while IFS=$'\t' read -r name source; do
+  src="$ROOT/$source"
   dir="$OUT/$name"
   mkdir -p "$dir"
   # The link may fail (no wasi-sdk here); the IR is saved before it runs.
@@ -90,7 +112,7 @@ for name in "${SAMPLES[@]}"; do
     fi
     n=$((n + 1))
   done
-done
+done <<<"$sources"
 
 # A mismatch exits 1: capture it so the report still prints, then fail.
 status=0

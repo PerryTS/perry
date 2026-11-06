@@ -209,6 +209,8 @@ pub(super) struct Planner<'p, 'a> {
 
     /// The loop counter and body-local copies an index proof may use.
     bare: HashSet<usize>,
+    /// The keys of the bare accesses.
+    bare_keys: HashSet<String>,
     /// Potential R keys, filtered against exact fresh bare reads at finish.
     number_reads: Vec<(usize, Recv, String)>,
     number_local_uses: HashSet<u32>,
@@ -324,6 +326,7 @@ impl Planner<'_, '_> {
             if self.record {
                 let ptr = e as *const Expr as usize;
                 self.bare.insert(ptr);
+                self.bare_keys.insert(key.to_string());
                 if !store {
                     self.bare_reads.push((ptr, r, key.to_string()));
                 }
@@ -502,6 +505,7 @@ impl Planner<'_, '_> {
                                         object, property, ..
                                     } = l
                                     {
+                                        self.bare_keys.insert(property.clone());
                                         if let Some(r) = Recv::of(object) {
                                             self.bare_reads.push((ptr, r, property.clone()));
                                         }
@@ -1126,6 +1130,8 @@ pub(super) struct Plan {
     /// `(receiver, keys, has a bare store, stored mask, boxed-store mask, R mask)`.
     pub(super) receivers: Vec<(Recv, Vec<String>, bool, u32, u32, u32)>,
     pub(super) bare: HashSet<usize>,
+    /// The keys of the bare accesses.
+    pub(super) bare_keys: HashSet<String>,
     pub(super) bare_reads: Vec<(usize, Recv, String)>,
     pub(super) number_local_uses: HashSet<u32>,
     /// All covered numeric operand reads, including ones a conservative
@@ -1326,6 +1332,7 @@ fn plan_once<'p, 'a>(
         cands: &cands,
         keys: &keys,
         bare: HashSet::new(),
+        bare_keys: HashSet::new(),
         number_reads: Vec::new(),
         number_local_uses: HashSet::new(),
         bare_reads: Vec::new(),
@@ -1414,6 +1421,7 @@ fn plan_once<'p, 'a>(
         };
     }
     let bare = std::mem::take(&mut p.bare);
+    let bare_keys = std::mem::take(&mut p.bare_keys);
     let number_reads = std::mem::take(&mut p.number_reads);
     let bare_reads = std::mem::take(&mut p.bare_reads);
     let mut number_local_uses = std::mem::take(&mut p.number_local_uses);
@@ -1552,6 +1560,7 @@ fn plan_once<'p, 'a>(
     Some(Plan {
         receivers,
         bare,
+        bare_keys,
         bare_reads,
         number_local_uses,
         numeric_candidates,

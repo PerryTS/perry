@@ -1144,6 +1144,7 @@ mod tests {
             value: Box::new(Expr::Number(99.0)),
             receiver: Box::new(Expr::LocalGet(RECEIVER)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -1307,6 +1308,7 @@ mod tests {
                 PROTO,
             )))),
             Stmt::Expr(Expr::TypeOf(Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(PROTO)),
@@ -1318,6 +1320,7 @@ mod tests {
                     byte_end: 0,
                     byte_offset: 78,
                     object: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(PROTO)),

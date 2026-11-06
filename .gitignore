@@ -56,54 +56,50 @@ ir-corpus/
 !/test_*.ts
 !/test-*.ts
 # Re-include the test source directories
-!test-files/
+!tests/fixtures/programs/
 !tests/
-!test-features/
-!test-parity/
-!test-coverage/
-!test-wasi/
+!tests/parity/
+!tests/integration/wasi/
 # But ignore compiled test binaries (no extension) inside them
-test-files/test_*
-test-files/test-*
-!test-files/test_*.ts
-!test-files/test_*.tsx
-!test-files/test-*.ts
-!test-files/test-*.tsx
+tests/fixtures/programs/test_*
+tests/fixtures/programs/test-*
+!tests/fixtures/programs/test_*.ts
+!tests/fixtures/programs/test_*.tsx
+!tests/fixtures/programs/test-*.ts
+!tests/fixtures/programs/test-*.tsx
 # A fixture that must be CommonJS in BOTH runtimes is a `.cts` (this repo's
 # package is `"type": "module"`, so a `.ts` is strict-mode ESM for Node and for
 # Perry alike). Without these it would be an ignored file — a DARK TEST, the
 # exact failure mode `scripts/check_test_registration.py` exists to prevent.
-!test-files/test_*.cts
-!test-files/test_*.mts
-!test-files/test-*.cts
-!test-files/test-*.mts
-!test-files/*/
-tests/test_*
-tests/test-*
-!tests/test_*.ts
-!tests/test-*.ts
-!tests/test_*.sh
-!tests/test-*.sh
-!tests/test_copied_minor_fallback_report.py
-!tests/test_compiler_output_regression.py
-!tests/test_gc_1090_evidence_report.py
-!tests/test_native_abi_evidence_report.py
-!tests/test_changelog_archive.py
-!tests/test_typed_feedback_runtime_evidence.py
-!tests/test_perf_frontier_report.py
-!tests/test_test262_focused_report.py
-!tests/test_zfs_build_storage.py
-!tests/test_npm_sweep.py
-!tests/test_repsel_census.py
-!tests/test_node_core_subset.py
-!tests/test_visual_test_check.py
-# The parity normalizer's golden-fixture test. A new `tests/test_*.py` is invisible
-# to git until it is named here, which pairs with the fact that each python test
-# also needs its own `lint` step: adding one is a conscious act in two places,
-# never a file that is committed and then never run.
-!tests/test_parity_normalize.py
-!tests/test_parity_runner.py
-!tests/test_perf_frontier_gate_smoke.sh
+!tests/fixtures/programs/test_*.cts
+!tests/fixtures/programs/test_*.mts
+!tests/fixtures/programs/test-*.cts
+!tests/fixtures/programs/test-*.mts
+!tests/fixtures/programs/*/
+tests/integration/test_*
+tests/integration/test-*
+!tests/integration/test_*.ts
+!tests/integration/test-*.ts
+!tests/integration/test_*.sh
+!tests/integration/test-*.sh
+!tests/tooling/infrastructure/test_copied_minor_fallback_report.py
+!tests/tooling/infrastructure/test_compiler_output_regression.py
+!tests/tooling/infrastructure/test_gc_1090_evidence_report.py
+!tests/tooling/infrastructure/test_native_abi_evidence_report.py
+!tests/tooling/infrastructure/test_changelog_archive.py
+!tests/tooling/infrastructure/test_typed_feedback_runtime_evidence.py
+!tests/tooling/infrastructure/test_perf_frontier_report.py
+!tests/tooling/compat/test_test262_focused_report.py
+!tests/tooling/infrastructure/test_zfs_build_storage.py
+!tests/tooling/compat/test_npm_sweep.py
+!tests/tooling/infrastructure/test_repsel_census.py
+!tests/tooling/compat/test_node_core_subset.py
+!tests/tooling/infrastructure/test_visual_test_check.py
+# Relocation preserves source tracking; executable CI callers still register
+# standalone regression modules. A directory alone does not make a test run.
+!tests/tooling/parity/test_parity_normalize.py
+!tests/tooling/parity/test_parity_runner.py
+!tests/integration/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*
 !bench_*.ts
@@ -125,6 +121,8 @@ benchmarks/suite/*.o
 # Compiled output binaries (catch-all for extensionless files in root)
 # Named binaries from example/benchmark compilation
 worker
+# Subject and fixture directories are not compiled worker binaries.
+!tests/**/worker/
 controls
 /main
 /cli
@@ -167,8 +165,8 @@ benchmarks/honest_bench/workloads/4_http_fastify/perry/parametric
 benchmarks/honest_bench/workloads/4_http_fastify/perry/text
 
 # Test output
-test-parity/output/
-test-parity/reports/
+tests/parity/output/
+tests/parity/reports/
 
 # Generated bundles
 __perry_js_bundle.js
@@ -204,6 +202,8 @@ menu-demo.ts
 
 # Private files
 private-*
+# Feature probes with private-field syntax are sources, not scratch executables.
+!tests/features/probes/**/private-*.ts
 
 # Claude Code
 .claude/worktrees/
@@ -224,27 +224,29 @@ docs/book/
 # scripts/fp_fuzz.mjs failure dumps (regenerable, machine-local)
 fp_fuzz_failures/
 
-test-files/.perry-cache/
+tests/fixtures/programs/.perry-cache/
 
 # #800/#799: the `/test-*` rule above sweeps all of test-compat/, but the
 # compat radars' source-of-truth (config, shim, README) must be tracked.
 # Re-include node-core (#800) and test262 (#799); keep the rest of
 # test-compat — and each radar's generated report.json — ignored.
-!/test-compat/
-/test-compat/*
-!/test-compat/node-core/
-!/test-compat/node-core/**
-/test-compat/node-core/report.json
-!/test-compat/test262/
-!/test-compat/test262/**
-/test-compat/test262/report.json
-!/test-compat/npm-sweep/
-!/test-compat/npm-sweep/**
-!/test-compat/npm-sweep-history.csv
-/test-compat/npm-sweep/__pycache__/
-/test-compat/npm-sweep/out/
-/test-compat/npm-sweep/.npm-sweep-results/
-/test-compat/test262/reports/
+!/tests/compat/
+/tests/compat/*
+!/tests/compat/node-core/
+!/tests/compat/node-core/**
+/tests/compat/node-core/report.json
+!/tests/compat/test262/
+!/tests/compat/test262/**
+/tests/compat/test262/report.json
+!/tests/compat/cc-parity/
+!/tests/compat/cc-parity/**
+!/tests/compat/npm-sweep/
+!/tests/compat/npm-sweep/**
+!/tests/compat/npm-sweep-history.csv
+/tests/compat/npm-sweep/__pycache__/
+/tests/compat/npm-sweep/out/
+/tests/compat/npm-sweep/.npm-sweep-results/
+/tests/compat/test262/reports/
 
 # Vendored upstream corpora for the compat radars (large; never committed).
 /vendor/
@@ -258,7 +260,7 @@ test-files/.perry-cache/
 /isoA
 /m
 /m5
-/tests/modules/main
+/tests/integration/modules/main
 # generated outputs (perry --target wasm / android builds / i18n emit)
 /wasm_ui_demo.html
 /examples/wasm_ui_demo.html
@@ -273,3 +275,40 @@ android-build/app/src/main/jniLibs/
 
 npm/perry-ui-*/
 npm/perry-wasm-host-*/
+
+# Checked-in test namespaces are not installed dependencies or compiled artifacts.
+!tests/parity/npm/fastify/
+!tests/parity/node-suite/process/config/
+!tests/fixtures/programs/_helpers/node_modules/
+tests/fixtures/programs/_helpers/node_modules/*
+!tests/fixtures/programs/_helpers/node_modules/sf1-require-failures/
+!tests/fixtures/programs/_helpers/node_modules/sf1-require-failures/**
+!tests/fixtures/programs/issue_1069/node_modules/
+tests/fixtures/programs/issue_1069/node_modules/*
+!tests/fixtures/programs/issue_1069/node_modules/duallib/
+!tests/fixtures/programs/issue_1069/node_modules/duallib/**
+!tests/fixtures/programs/issue_321_named_namespace_reexport/node_modules/
+tests/fixtures/programs/issue_321_named_namespace_reexport/node_modules/*
+!tests/fixtures/programs/issue_321_named_namespace_reexport/node_modules/mini-effect/
+!tests/fixtures/programs/issue_321_named_namespace_reexport/node_modules/mini-effect/**
+!tests/fixtures/programs/issue_652/node_modules/
+tests/fixtures/programs/issue_652/node_modules/*
+!tests/fixtures/programs/issue_652/node_modules/minilib/
+!tests/fixtures/programs/issue_652/node_modules/minilib/**
+!tests/fixtures/programs/joi_url_v8_global/node_modules/
+tests/fixtures/programs/joi_url_v8_global/node_modules/*
+!tests/fixtures/programs/joi_url_v8_global/node_modules/url-init-pkg/
+!tests/fixtures/programs/joi_url_v8_global/node_modules/url-init-pkg/**
+!tests/parity/node-suite/module/node_modules/
+tests/parity/node-suite/module/node_modules/*
+!tests/parity/node-suite/module/node_modules/parity-conditions/
+!tests/parity/node-suite/module/node_modules/parity-conditions/**
+!tests/parity/node-suite/module/require/node_modules/
+tests/parity/node-suite/module/require/node_modules/*
+!tests/parity/node-suite/module/require/node_modules/parity-exports/
+!tests/parity/node-suite/module/require/node_modules/parity-exports/**
+!tests/fixtures/programs/test_gap_class_family_method_guard.js
+!tests/fixtures/programs/test_gap_layout_family_run_dominance.js
+!tests/fixtures/programs/test_gap_ocreb_super_proto_per_eval.js
+!tests/fixtures/programs/test_net_echo_server.py
+!tests/fixtures/programs/test_net_upgrade_tls_server.py

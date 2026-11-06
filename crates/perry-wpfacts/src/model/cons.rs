@@ -10,6 +10,10 @@ pub enum OwnGateAt {
     /// gate on their own `call` field: a written one runs instead of
     /// `Function.prototype.call`); any other token opens.
     OwnFn,
+    /// A program function whose body derives the own-test predicate.
+    Helper,
+    /// Propagate a predicate refutation marker, never a program value.
+    Refuted,
     /// The `Object` constructor of `Object.hasOwn(o, k)`: it gates on its
     /// `hasOwn` field (the program may replace the static); any other token
     /// opens.
@@ -67,6 +71,10 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// The target of Reflect.construct; allocation is selected by new_target.
+    ReflectNew { call: CallId, new_target: NodeId },
+    /// New-target values paired with one target, rebuilt from ReflectNew.
+    ReflectNewTarget { call: CallId, target: Tok },
     /// `new Name(...)` of a builtin constructor named in the source: runs
     /// once per call (the holder holds one marker token), so an instance
     /// that renames the call constructs its own object.
@@ -81,6 +89,9 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// A realm field already retains its canonical value. Storing it again
+    /// exposes no new reach; every other alternative takes the usual sink.
+    RuntimeStore { reason: u32, retained: Tok },
     /// A parameter of a closed class's stand-in constructor (design §18.13,
     /// DECISIONS 109): an instance of another unit's contract (a stand-in)
     /// goes to the defining unit's constructor through the argument
@@ -267,8 +278,12 @@ pub enum Cons {
         setter: bool,
     },
     /// Internal: install accessor `f` on every token of the node.
-    /// `f`: the accessor's function token (its closure context included).
+    /// `f`: the accessor's callable token (a known body or opaque callback).
     AccessorInstall { key: Atom, f: Tok, setter: bool },
+    /// A direct Annex B runtime entry, dispatched per receiver token.
+    AnnexBDefine { call: CallId, setter: bool },
+    /// Reflect an accessor descriptor after ToPropertyKey.
+    AnnexBLookup { call: CallId, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
@@ -323,15 +338,16 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
-    /// The node gates the own-only read `obj[idx]` into `dst` behind an
-    /// own-property test (`OwnGateAt`): a value the test may run other than
-    /// the own-property builtin makes the read ordinary (`Cons::IdxLoad`).
+    /// The body-derived own-test predicate: nonmatching callee values or
+    /// replaceable builtin fields refute `dst` outside the value lattice. The same
+    /// predicate serves direct guards and helper-body evidence.
+    OwnTest { dst: NodeId, at: OwnGateAt },
+    /// A refutation marker restores the ordinary read `obj[idx]`.
     OwnGate {
         obj: NodeId,
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
-        at: OwnGateAt,
     },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
@@ -484,10 +500,12 @@ impl Cons {
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::ReflectNew { .. } => "reflectnew",
+            Cons::ReflectNewTarget { .. } => "reflectnewtarget",
             Cons::NewNamed { .. } => "newnamed",
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
-            Cons::TopSink { .. } => "top",
+            Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",
@@ -523,6 +541,8 @@ impl Cons {
             Cons::BirthField { .. } => "birthfield",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
+            Cons::AnnexBDefine { .. } => "annexbdefine",
+            Cons::AnnexBLookup { .. } => "annexblookup",
             Cons::ProtoFrom { .. } => "protofrom",
             Cons::ProtoOf { .. } => "protoof",
             Cons::ProtoValues { .. } => "protovalues",
@@ -537,6 +557,7 @@ impl Cons {
             Cons::IdxOwnLoad { .. } => "idxownload",
             Cons::IdxOwnKey { .. } => "idxownkey",
             Cons::OwnGate { .. } => "owngate",
+            Cons::OwnTest { .. } => "owntest",
             Cons::IdxMCall { .. } => "idxmcall",
             Cons::IdxKeyCall { .. } => "idxkeycall",
             Cons::ForInBody { .. } => "forinbody",

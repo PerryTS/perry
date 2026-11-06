@@ -10,14 +10,20 @@
 //! properties the model holds (literals, instances, `Object.create`
 //! results); any other value, an object or ⊤ key (its ToPropertyKey runs
 //! code at the test and again at the read), and a test whose callee may be
-//! anything but the own-property builtin read as `IdxLoad` does.
+//! anything but the own-property builtin or a body-derived own-test
+//! helper read as `IdxLoad` does.
 
 use super::*;
 use crate::model::{
-    IDX_OWN_ANY, IDX_OWN_CALL, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
+    IDX_OWN_ANY, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
 };
 
 impl Model {
+    /// Markers expose reach fields rather than value fields. Other token
+    /// kinds use a general view; concrete object tokens use key ranges.
+    pub(super) fn index_needs_all_own_fields(&self, t: Tok) -> bool {
+        self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..))
+    }
     /// `Cons::IdxLoad` for one object token `t`.
     pub(super) fn idx_load_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
@@ -33,7 +39,7 @@ impl Model {
         // key names only its numeric fields). A marker's fields are its
         // reach markers under any key; another value (the global object, a
         // namespace) keeps every field.
-        if self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
+        if self.index_needs_all_own_fields(t) {
             let all = self.all_fields(t);
             self.edge(all, dst);
         }
@@ -100,7 +106,7 @@ impl Model {
             self.load_from(obj, obj, Key::Any(shape), dst);
         }
         let key = Key::Any(shape);
-        if prim & (prim::STR | prim::SYMBOL) != 0
+        if index_needs_general_key(Tokens::Slice(&[]), prim)
             && self.idx_done.insert((n, obj, dst, IDX_OWN_STR))
         {
             let f = self.key_fields(obj, key);
@@ -109,9 +115,7 @@ impl Model {
         }
         // ToPropertyKey of a Number or BigInt is a numeric string: the own
         // numeric fields, and an accessor under a numeric name.
-        if prim & (prim::NUM | prim::BIGINT) != 0
-            && self.idx_done.insert((n, obj, dst, IDX_OWN_NUM))
-        {
+        if index_has_numeric_key(prim) && self.idx_done.insert((n, obj, dst, IDX_OWN_NUM)) {
             let f = self.num_fields(obj);
             self.edge(f, dst);
             if self.numeric_accessor {
@@ -138,25 +142,16 @@ impl Model {
         }
     }
 
-    /// `Cons::OwnGate` on node `n` (`OwnGateAt`): a value the test may run
-    /// other than the own-property builtin makes the read `obj[idx]` into
-    /// `dst` ordinary, once. A builtin passes, gated on the field that would
-    /// replace it: `H.call(o, k)` runs `Function.prototype.call` (locked,
-    /// DEC 250) unless the program wrote `call` onto `H` itself;
-    /// `Object.hasOwn` is a static the program may replace.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn own_gate(
-        &mut self,
-        obj: NodeId,
-        idx: NodeId,
-        dst: NodeId,
-        shape: KeyShapeId,
-        at: OwnGateAt,
-        toks: Tokens<'_>,
-    ) {
-        let mut open = false;
-        let mut watch = Vec::new();
-        for &t in toks.into_iter() {
+    /// The one own-test predicate. Every nonmatching value invalidates
+    /// `dst`; passing builtins watch their replaceable fields, and passing
+    /// helpers share their body evidence. Later writes invalidate already
+    /// generated guards through the same monotone edges.
+    pub(super) fn own_test(&mut self, dst: NodeId, at: OwnGateAt, toks: Tokens<'_>) {
+        // Predicate markers are replayed independently of value deltas.
+        if at == OwnGateAt::Refuted {
+            return;
+        }
+        for &t in toks {
             let key = match (at, &self.toks[t as usize]) {
                 (
                     OwnGateAt::OwnFn,
@@ -165,28 +160,91 @@ impl Model {
                     )),
                 ) => "call",
                 (OwnGateAt::ObjectCtor, TokKind::Builtin(BuiltinNs::Object)) => "hasOwn",
+                (OwnGateAt::Helper, TokKind::Func(f, _)) => {
+                    match self.funcs[*f as usize].own_test {
+                        OwnTestBody::Pending(bad) | OwnTestBody::Checked(bad) => self.cons(
+                            bad,
+                            Cons::OwnTest {
+                                dst,
+                                at: OwnGateAt::Refuted,
+                            },
+                        ),
+                        OwnTestBody::Unknown => self.refute_own_test(dst),
+                    }
+                    continue;
+                }
                 _ => {
-                    open = true;
+                    self.refute_own_test(dst);
                     continue;
                 }
             };
-            watch.push((t, key));
-        }
-        for (t, key) in watch {
-            if self.idx_done.insert((obj, t, dst, IDX_OWN_CALL)) {
-                let a = self.atom(key);
-                let f = self.field(t, a);
-                let c = Cons::OwnGate {
-                    obj,
-                    idx,
+            let a = self.atom(key);
+            let f = self.field(t, a);
+            self.cons(
+                f,
+                Cons::OwnTest {
                     dst,
-                    shape,
                     at: OwnGateAt::Value,
-                };
-                self.cons(f, c);
+                },
+            );
+        }
+    }
+
+    /// Refutation is control evidence. It never enters points-to sets,
+    /// primitive masks, ordinary copy edges or the unknown-value census.
+    pub(crate) fn refute_own_test(&mut self, n: NodeId) {
+        let mut pending = vec![n];
+        while let Some(n) = pending.pop() {
+            if self.nodes[n as usize].own_refuted {
+                continue;
+            }
+            self.nodes[n as usize].own_refuted = true;
+            let cs = self.nodes[n as usize].cons.clone();
+            for c in cs {
+                if self.sum_skip(n, &c) {
+                    continue;
+                }
+                match c {
+                    Cons::OwnTest {
+                        dst,
+                        at: OwnGateAt::Refuted,
+                    } => pending.push(dst),
+                    Cons::OwnGate {
+                        obj,
+                        idx,
+                        dst,
+                        shape,
+                    } => self.own_gate(obj, idx, dst, shape),
+                    _ => {}
+                }
             }
         }
-        if open && self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
+    }
+
+    /// A constraint attached after its predicate was refuted sees that
+    /// marker too, including constraints instantiated from summaries.
+    pub(super) fn own_refuted_cons(&mut self, n: NodeId, c: Cons) {
+        if !self.nodes[n as usize].own_refuted || self.sum_skip(n, &c) {
+            return;
+        }
+        match c {
+            Cons::OwnTest {
+                dst,
+                at: OwnGateAt::Refuted,
+            } => self.refute_own_test(dst),
+            Cons::OwnGate {
+                obj,
+                idx,
+                dst,
+                shape,
+            } => self.own_gate(obj, idx, dst, shape),
+            _ => {}
+        }
+    }
+
+    /// Refuted evidence restores the ordinary read, once.
+    fn own_gate(&mut self, obj: NodeId, idx: NodeId, dst: NodeId, shape: KeyShapeId) {
+        if self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
             self.own_read_census[1] += 1;
             self.cons(obj, Cons::IdxLoad { idx, dst, shape });
         }

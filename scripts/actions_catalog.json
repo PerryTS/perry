@@ -54,7 +54,7 @@
                   "default": "full"
                 },
                 "update_gap_snapshot": {
-                  "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+                  "description": "Re-baseline tests/parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
                   "type": "boolean",
                   "default": false
                 }
@@ -73,7 +73,7 @@
               "default": "full"
             },
             "update_gap_snapshot": {
-              "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+              "description": "Re-baseline tests/parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
               "type": "boolean",
               "default": "false"
             }
@@ -223,7 +223,7 @@
           "default": "full"
         },
         "update_gap_snapshot": {
-          "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+          "description": "Re-baseline tests/parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
           "type": "boolean",
           "default": false
         },
@@ -698,7 +698,7 @@
                 "crates/perry-ext-*/**",
                 "crates/perry/**",
                 "crates/perry-codegen/Cargo.toml",
-                "test-files/test_gap_*.ts",
+                "tests/fixtures/programs/test_gap_*.ts",
                 ".github/actions/setup-llvm22/**",
                 "Cargo.toml",
                 ".cargo/**",
@@ -710,7 +710,7 @@
                 "scripts/wasi_toolchain.sh",
                 "scripts/wasi_build_runtime.sh",
                 "scripts/wasi_smoke.sh",
-                "scripts/wasi_smoke/**",
+                "tests/integration/wasi/smoke/**",
                 "crates/perry-codegen/src/**",
                 "crates/perry/src/commands/compile/**",
                 ".github/workflows/wasi-check.yml",
@@ -719,14 +719,14 @@
                 "crates/perry-wit/**",
                 "crates/perry-component-host/**",
                 "types/perry/component/**",
-                "test-wasi/components/**",
+                "tests/integration/wasi/components/**",
                 "scripts/component_*.py",
                 "scripts/component_check.sh",
                 "scripts/wasi_run.py",
-                "scripts/test_wasi_run.py",
+                "tests/tooling/infrastructure/test_wasi_run.py",
                 "scripts/wasi_build_runtime.py",
                 "scripts/wasi_toolchain.ps1",
-                "scripts/wasi_acceptance/**"
+                "tests/integration/wasi/acceptance/**"
               ]
             },
             "schedule": [
@@ -872,7 +872,7 @@
                 "crates/perry-hir/src/lower.rs",
                 "crates/perry-hir/src/ir.rs",
                 "crates/perry-codegen/src/lower_call.rs",
-                "tests/e2e/**",
+                "tests/integration/e2e/**",
                 "types/perry/container/**",
                 "types/perry/compose/**",
                 "types/perry/workloads/**",

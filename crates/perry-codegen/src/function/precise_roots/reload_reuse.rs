@@ -35,7 +35,7 @@
 //! `PERRY_UNBOXED_CLASS_FIELDS=sabotage` is the test-only negative control:
 //! it treats every call as unable to collect, i.e. it reuses reloads ACROSS
 //! safepoints, which is exactly the stale-pointer bug the analysis exists to
-//! prevent. `test-parity/language/class/test_class_field_loop_gc_pressure.ts`
+//! prevent. `tests/parity/language/class/test_class_field_loop_gc_pressure.ts`
 //! must fail under it.
 
 use std::collections::HashMap;

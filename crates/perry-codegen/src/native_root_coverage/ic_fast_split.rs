@@ -273,6 +273,7 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
                 25,
                 "keyed",
                 Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(100)),

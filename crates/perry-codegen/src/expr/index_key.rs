@@ -155,6 +155,7 @@ mod tests {
         let mut module = Module::new("intkey.ts");
         let mut body = prelude;
         body.push(Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -239,7 +240,10 @@ mod tests {
             runtime_block.contains("call double @perry_array_read_cold_shared("),
             "{runtime_block}"
         );
-        assert!(!ir.contains("call double @js_array_get_index_or_string("), "{ir}");
+        assert!(
+            !ir.contains("call double @js_array_get_index_or_string("),
+            "{ir}"
+        );
     }
 
     #[test]
@@ -405,6 +409,7 @@ mod tests {
                     init: Some(code),
                 },
                 Stmt::Expr(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),

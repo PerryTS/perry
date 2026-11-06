@@ -154,12 +154,6 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "perry_plugin_init",
 ];
 
-/// Checked-in Node v26.5.1 / N-API v8 export inventory. The runtime build
-/// consumes the same file to generate retention anchors.
-pub(super) fn node_api_host_symbols() -> impl Iterator<Item = &'static str> {
-    perry_runtime_manifest::node_api_host_symbols()
-}
-
 fn add_node_api_host_link_args(
     cmd: &mut Command,
     ctx: &CompilationContext,
@@ -169,16 +163,19 @@ fn add_node_api_host_link_args(
     is_harmonyos: bool,
     is_cross_macos: bool,
 ) -> Result<()> {
-    if ctx.native_addons.is_empty() {
+    // A native addon reaches what its Node-API imports reach: the host
+    // retains and exports those symbols (all of them for an open addon).
+    let exports = ctx.node_api_host_exports();
+    if exports.is_empty() {
         return Ok(());
     }
     if is_windows {
-        for symbol in node_api_host_symbols() {
+        for symbol in &exports {
             cmd.arg(format!("/INCLUDE:{symbol}"));
             cmd.arg(format!("/EXPORT:{symbol}"));
         }
     } else if is_linux || is_android || is_harmonyos {
-        for symbol in node_api_host_symbols() {
+        for symbol in &exports {
             cmd.arg(format!("-Wl,-u,{symbol}"));
             cmd.arg(format!("-Wl,--export-dynamic-symbol={symbol}"));
         }
@@ -187,13 +184,14 @@ fn add_node_api_host_link_args(
         if let Some(parent) = exports_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let exports = node_api_host_symbols()
+        let list = exports
+            .iter()
             .map(|symbol| format!("_{symbol}\n"))
             .collect::<String>();
-        fs::write(&exports_path, exports)?;
+        fs::write(&exports_path, list)?;
         if is_cross_macos {
             cmd.arg("-exported_symbols_list").arg(&exports_path);
-            for symbol in node_api_host_symbols() {
+            for symbol in &exports {
                 cmd.arg("-u").arg(format!("_{symbol}"));
             }
         } else {
@@ -201,7 +199,7 @@ fn add_node_api_host_link_args(
                 "-Wl,-exported_symbols_list,{}",
                 exports_path.display()
             ));
-            for symbol in node_api_host_symbols() {
+            for symbol in &exports {
                 cmd.arg(format!("-Wl,-u,_{symbol}"));
             }
         }
@@ -211,7 +209,7 @@ fn add_node_api_host_link_args(
 
 #[cfg(test)]
 mod node_api_symbol_inventory_tests {
-    use super::node_api_host_symbols;
+    use perry_runtime_manifest::node_api_host_symbols;
     use std::collections::BTreeSet;
 
     #[test]

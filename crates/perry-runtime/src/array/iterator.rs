@@ -875,16 +875,14 @@ fn throw_not_iterable(value: f64) -> ! {
     };
     let msg = format!("{label} is not iterable");
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 #[cold]
 fn throw_iterator_method_not_callable() -> ! {
     let msg = b"object is not iterable";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 fn object_like_iterator_result(value: f64) -> bool {
@@ -912,7 +910,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
 /// GetIterator semantics for every use: an operand without `@@iterator`
 /// (nullish, a number, an array-like object) throws a TypeError.
 pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
-    use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
+    use crate::value::{js_nanbox_get_pointer, JSValue, POINTER_MASK};
 
     // #7498: the spread receiver is a GC-managed value, and this function
     // carries it across a dozen classification probes AND the whole
@@ -1215,9 +1213,9 @@ pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
                 Some(iter) => iter,
                 None => {
                     // Factory threw: re-propagate to the enclosing handler.
-                    let exc = crate::exception::js_get_exception();
+                    let exc = crate::exception::pending_exception();
                     crate::exception::js_clear_exception();
-                    crate::exception::js_throw(exc)
+                    crate::exception::rethrow_caught(exc)
                 }
             };
             let iter_h = scope.root_nanbox_f64(iter);
@@ -1231,8 +1229,7 @@ pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
             if !object_like_iterator_result(iter_h.get_nanbox_f64()) {
                 let msg = b"Result of the Symbol.iterator method is not an object";
                 let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                let err = crate::error::js_typeerror_new(msg_str);
-                crate::exception::js_throw(js_nanbox_pointer(err as i64));
+                crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
             }
             return js_iterator_to_array(iter_h.get_nanbox_f64());
         }
@@ -1339,8 +1336,7 @@ fn is_object_like_value(value: f64) -> bool {
 fn throw_iterator_too_long() -> ! {
     let msg = b"Iterator produced more than the maximum supported number of elements";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg_str))
 }
 
 #[cold]
@@ -1351,8 +1347,7 @@ fn throw_iterator_result_not_object() -> ! {
     );
     let msg = b"Iterator result is not an object";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// `IteratorNext(iterator)` for assignment destructuring lowering.
@@ -1529,8 +1524,7 @@ fn spread_append_iterator(dest: *mut ArrayHeader, iter: f64) -> *mut ArrayHeader
     if !object_like_iterator_result(iter) {
         let msg = b"Result of the Symbol.iterator method is not an object";
         let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg_str);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
     }
     drain_iterator_into(dest, iter)
 }
@@ -1574,7 +1568,11 @@ fn drain_iterator_into(dest: *mut ArrayHeader, iter_f64: f64) -> *mut ArrayHeade
     // so the null check reads back through the handle rather than gating it.
     let iter_h = scope.root_nanbox_f64(iter_f64);
 
-    let arr = if dest.is_null() { js_array_alloc(8) } else { dest }; // a fresh array starts with capacity 8
+    let arr = if dest.is_null() {
+        js_array_alloc(8)
+    } else {
+        dest
+    }; // a fresh array starts with capacity 8
     let result_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64));
     let read_result = || js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
 
@@ -1589,7 +1587,8 @@ fn drain_iterator_into(dest: *mut ArrayHeader, iter_f64: f64) -> *mut ArrayHeade
     // a sync generator with its intrinsic `next` resumes directly (no
     // `{ value, done }` object), anything else is Call(next, iterator) with
     // the result validated and read by ordinary [[Get]].
-    let next_h = scope.root_nanbox_f64(unsafe { super::iterator_step::iterator_next_method_rooted(&iter_h) });
+    let next_h = scope
+        .root_nanbox_f64(unsafe { super::iterator_step::iterator_next_method_rooted(&iter_h) });
     for drained in 0..MAX_ITERATOR_DRAIN {
         if drained == MAX_ITERATOR_DRAIN - 1 {
             // Reached the cap with the iterator still producing: refuse rather

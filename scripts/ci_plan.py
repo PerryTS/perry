@@ -134,7 +134,7 @@ PARITY_SHARDS = 16
 # is ~1.1 CPU-s per case, so sixteen 4-core shards run about an hour each after
 # the build. `test262-aggregate` (not in JOBS: it keys off `jobs.test262`)
 # merges the shard reports and ratchets them against
-# test-compat/test262/baseline.json.
+# tests/compat/test262/baseline.json.
 TEST262_SHARDS = 16
 
 # The growing `perry` integration inventory cannot finish serially inside
@@ -180,7 +180,7 @@ NON_CORE_GLOBS = (
     ".claude/**",
     "skills/**",
     ".github/**",  # re-included below: the gate's own file and shared actions
-    "test-compat/**",  # node-core corpus, driven by its own scheduled workflow
+    "tests/compat/**",  # node-core corpus, driven by its own scheduled workflow
     "web/**",
     "www/**",
 )
@@ -192,9 +192,9 @@ CORE_OVERRIDES = (
     "scripts/actions_catalog.json",
     "scripts/actions_plan.py",
     "scripts/check_actions_topology.py",
-    "scripts/test_actions_plan.py",
+    "tests/tooling/infrastructure/test_actions_plan.py",
     "scripts/release_gate_runs.py",
-    "scripts/test_release_gate_runs.py",
+    "tests/tooling/infrastructure/test_release_gate_runs.py",
     ".github/actions/**",
     "docs/api/**",  # generated API docs are checked for drift by `check`
     "docs/src/api/**",
@@ -451,7 +451,7 @@ def _self_test() -> int:
     check("other workflow change is not core", not is_core(".github/workflows/benchmark.yml"))
     check("nested .md is not core", not is_core("crates/perry/README.md"))
     check("AGENTS.md is core (lint doc-claim audits)", is_core("AGENTS.md"))
-    check("a .ts test file is core", is_core("test-files/test_gap_x.ts"))
+    check("a .ts test file is core", is_core("tests/fixtures/programs/test_gap_x.ts"))
     check("scripts are core", is_core("scripts/parity.py"))
     check("generated api docs are core", is_core("docs/api/perry.d.ts"))
 

@@ -253,6 +253,16 @@ pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn(crate::gc::HeapSnapshotFormat) -> 
 pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
 
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+/// Clears Node-API weak references whose targets died; set when the host installs.
+pub(crate) static NODE_API_WEAK_PRUNE: Hook<fn(&dyn Fn(usize) -> bool)> = Hook::empty();
+
+/// `gc::dead_owner` entry for Node-API weak references: a no-op until the
+/// Node-API host is installed (its TLS storage does not exist before that).
+pub(crate) fn prune_dead_node_api_weak_references(is_dead: &dyn Fn(usize) -> bool) {
+    if let Some(prune) = NODE_API_WEAK_PRUNE.peek() {
+        prune(is_dead);
+    }
+}
 pub(crate) static WASM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static DGRAM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();

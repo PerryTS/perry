@@ -173,8 +173,7 @@ fn hex_nibble(b: u8) -> Option<u8> {
 fn throw_symbol_to_string_type_error() -> ! {
     let message = b"Cannot convert a Symbol value to a string";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::type_error(msg))
 }
 
 unsafe fn querystring_public_arg_to_string(value: f64) -> String {

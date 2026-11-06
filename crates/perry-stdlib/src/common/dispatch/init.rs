@@ -217,6 +217,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_message_channel_new,
         crate::worker_threads::js_worker_threads_broadcast_channel_new,
     );
+    perry_runtime::messaging::register_broadcast_channel_dispatch(
+        crate::worker_threads::dispatch_broadcast_channel_operation,
+    );
     crate::worker_threads::register_message_port_codec();
     perry_runtime::messaging::js_register_worker_threads_message_port_dispatch(
         crate::worker_threads::dispatch_message_port_core_operation,

@@ -66,6 +66,7 @@ pub use channel_pump::{
 // Same for the BroadcastChannel constructor and the main-thread pump entry
 // points, which moved into sibling modules to keep this file under the
 // 2000-line lint cap.
+pub(crate) use broadcast_channel::dispatch_broadcast_channel_operation;
 pub use broadcast_channel::js_worker_threads_broadcast_channel_new;
 pub use entry_table::{js_worker_threads_register_entry, js_worker_threads_worker_new_by_spec};
 pub use thread_values::{
@@ -939,7 +940,7 @@ fn throw_dom_exception(name: &str, detail: &str) -> ! {
     let message = string_value(detail);
     let name = string_value(name);
     let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message, name);
-    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    perry_runtime::exception::throw_open(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 
 fn string_value(value: &str) -> f64 {
@@ -1413,12 +1414,12 @@ fn worker_new_started(
         perry_runtime::process::WorkerProcessState::capture(options_state.env.as_deref())
             .with_worker_argv(source, options_state.argv.take());
     let payload =
-        match perry_runtime::exception::catch_js_throw(|| environment_data::prepare(options)) {
+        match perry_runtime::exception::catch_thrown(|| environment_data::prepare(options)) {
             Ok(payload) => payload,
             Err(error) => {
                 drop(process_state);
                 drop(options_state);
-                perry_runtime::exception::js_throw(error)
+                perry_runtime::exception::rethrow_caught(error)
             }
         };
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);

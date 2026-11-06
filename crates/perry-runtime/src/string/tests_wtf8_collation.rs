@@ -12,7 +12,7 @@
 //!
 //! Every expectation is the output of Node v26.5.1 (the `.node-version`
 //! oracle) under `node --experimental-strip-types`; the same table is in
-//! `test-files/test_gap_10692_normalize_lone_surrogate.ts`.
+//! `tests/parity/language/string/test_gap_10692_normalize_lone_surrogate.ts`.
 
 use super::wtf8::Wtf8Str;
 use super::*;

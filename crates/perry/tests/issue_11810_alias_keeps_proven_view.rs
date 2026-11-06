@@ -13,14 +13,14 @@
 //! This pins the clone's element accesses: no typed-array runtime helper and
 //! no coercion call is left in it. The behavioural half (the same kernel plus
 //! alias, reassignment and `.buffer` cases) is
-//! `test-files/test_gap_11810_typed_array_alias_view.ts`, compared against
+//! `tests/parity/language/typed-array/test_gap_11810_typed_array_alias_view.ts`, compared against
 //! node.
 //!
 //! The computed-length half: `new Float64Array(rows.length * 7)` is the same
 //! length form (a product is never an Object), so it gets the same clone,
 //! `$spec_ta7_*` with the length read from the header instead of a constant,
 //! and its element accesses and arithmetic must be just as native. Its
-//! behavioural half is `test-files/test_gap_11810_computed_length_view.ts`.
+//! behavioural half is `tests/parity/language/typed-array/test_gap_11810_computed_length_view.ts`.
 
 use std::path::PathBuf;
 use std::process::Command;

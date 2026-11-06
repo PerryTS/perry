@@ -64,7 +64,7 @@ fn private_element_class_id(ctx: &FnCtx<'_>, class_name: &str) -> u32 {
 /// assignment is reached before anything that could read the field.
 ///
 /// **What the elided write is NOT** (the obvious objection, and it is
-/// measurably wrong — `test-parity/language/class/test_class_field_init_proto_setter.ts`): it
+/// measurably wrong — `tests/parity/language/class/test_class_field_init_proto_setter.ts`): it
 /// is not an observable `[[Set]]`, so eliding it cannot change how many times
 /// an accessor runs. A class field declaration is a `CreateDataProperty` — a
 /// DEFINE — per `ClassFieldDefinitionRecord` evaluation, so it never consults

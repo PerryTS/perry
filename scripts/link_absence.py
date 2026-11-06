@@ -27,7 +27,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURES = ROOT / "tests/link_absence"
+FIXTURES = ROOT / "tests/integration/link_absence"
 NEGATIVES = {
     "hello": None,
     "without_math": ["global_math"],

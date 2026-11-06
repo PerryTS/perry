@@ -18,7 +18,7 @@ fn text(bytes: &[u8]) -> f64 {
 }
 fn schema_string(ty: &Value) -> f64 {
     let bytes = serde_json::to_vec(ty).expect("native WIT schema");
-    let outcome = crate::exception::catch_js_throw(|| text(&bytes));
+    let outcome = crate::exception::catch_thrown(|| text(&bytes));
     drop(bytes);
     finish(outcome)
 }
@@ -259,7 +259,7 @@ pub(super) fn drain_replies(component: f64, batch: &callbacks::Batch<'_>) {
         records::release(entries.get_nanbox_f64(), index);
         drop((ty, encoded, output));
         if let Err(error) = outcome {
-            remember(component.get_nanbox_f64(), origin, error);
+            remember(component.get_nanbox_f64(), origin, error.value());
             unsafe {
                 (*state(component.get_nanbox_f64())).abort = true;
             }

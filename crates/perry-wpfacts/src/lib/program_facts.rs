@@ -1,6 +1,21 @@
 use super::*;
 
 impl ProgramFacts {
+    /// A member's solved receiver and key. Includes every PutValueSet (also
+    /// named writes); constant computed calls folded to named calls have no
+    /// element record. Updates publish both Read and Write.
+    /// Offsets use the HIR's
+    /// SWC 1-based coordinates; zero is an unlocated/synthetic site. A missing
+    /// site (including an aborted or per-unit solve) gives no receiver proof.
+    pub fn element(&self, module: u32, byte_offset: u32, op: ElementOp) -> Option<&ElementFacts> {
+        if byte_offset == 0 {
+            return None;
+        }
+        self.elements
+            .iter()
+            .find(|s| s.module == module && s.byte_offset == byte_offset && s.op == op)
+    }
+
     /// DECISIONS 225: `s`, a site of another run (`path` its module), is
     /// dead in this whole-program run: no view of it here, and activation
     /// proved that no body holding it can run. Any fact about it is
@@ -181,16 +196,12 @@ pub(super) fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
 /// took one under a key it does not declare (the native function values'
 /// shared holder: all of its fields), the ten largest by set size.
 pub(super) fn builtin_fields(m: &model::Model) -> (usize, Vec<(String, usize)>, [u64; 4]) {
-    let any = m
-        .tok_index
-        .get(&model::TokKind::BuiltinFn(model::Native::Any))
-        .copied();
     let mut v: Vec<(usize, String)> = Vec::new();
     let mut hs: Vec<model::Tok> = m.r1_holders.iter().copied().collect();
     hs.sort_unstable();
     for h in hs {
         for &a in m.field_keys.get(&h).map(|v| v.as_slice()).unwrap_or(&[]) {
-            if Some(h) != any && crate::builtins::undeclared(m, h, a).is_none() {
+            if !crate::builtins::undeclared(m, h, a) {
                 continue;
             }
             if let Some(&n) = m.fields.get(&(h, a)) {

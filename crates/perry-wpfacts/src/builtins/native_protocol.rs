@@ -382,6 +382,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     old
                 });
             match miss {
+                NativeMiss::Lookup(dst) => {
+                    m.add_top(dst, |_| {
+                        "accessor descriptor of a written intrinsic key".into()
+                    });
+                }
                 NativeMiss::Load(dst) => {
                     let bf = builtin_fn(m, "written key replay");
                     m.add_tok(dst, bf);
@@ -500,24 +505,23 @@ pub fn is_builtin_module(s: &str) -> bool {
     }
 }
 
-/// Object.prototype's legacy members: the only `__` names the global object
-/// inherits.
-pub const OBJECT_PROTO_DUNDER: [&str; 5] = [
-    "__proto__",
-    "__defineGetter__",
-    "__defineSetter__",
-    "__lookupGetter__",
-    "__lookupSetter__",
-];
-
-/// A global-object key the program owns: the host defines no global whose
-/// name starts with `__` beyond `Object.prototype`'s legacy members (the
-/// test `host_defines_no_dunder_global` reads the runtime's global-object
-/// sources). Such a global holds what the program stored, plus ⊤ once
-/// something unmodeled may write it (`native_written`, as for native
-/// prototypes).
-pub fn global_user_key(name: &str) -> bool {
-    name.starts_with("__") && !OBJECT_PROTO_DUNDER.contains(&name) && name != crate::STAR_KEY
+/// A global-object key the program owns: the runtime realm declares it
+/// neither on the global object nor on its chain (`Object.prototype`), so
+/// only stores the solver sees put a value there (the runtime's unresolved
+/// read is `[[Get]](globalThis, name)`, absent = ReferenceError). Such a
+/// global holds what the program stored, plus ⊤ once something unmodeled
+/// may write it (`native_written`, as for native prototypes).
+///
+/// Per-unit mode (retiring) keeps the old cut: another unit may store any
+/// global, so only `__` names the realm does not declare are owned there.
+pub fn global_user_key(m: &Model, name: &str) -> bool {
+    name != crate::STAR_KEY
+        && (!m.unit_mode || name.starts_with("__"))
+        && !["%Global%", "Object.prototype"].into_iter().any(|holder| {
+            m.declarations
+                .named(holder, m)
+                .is_some_and(|s| m.declarations.property(s, name, m).is_some())
+        })
 }
 
 /// The global object's field under program-owned key `a`.

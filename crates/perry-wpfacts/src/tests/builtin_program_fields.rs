@@ -3,9 +3,9 @@
 //! (`solve/builtin_fields.rs`). The value stays the program's: a receiver
 //! that may be such an object (a computed read of a dictionary may yield the
 //! inherited `constructor`, `Object`, or an `Object.prototype` method) no
-//! longer sinks it, and its readers see it. A declared key, the anonymous
-//! native as the store receiver, and a holder handed to unknown code keep
-//! the opaque path. Fixtures from /root/STR1/fixtures (f1, f1t, f2, f3, f3t).
+//! longer sinks it, and its readers see it. A constructor's declared key
+//! keeps the runtime-owned boundary; a holder handed to unknown code
+//! exposes its fields. Fixtures from /root/STR1/fixtures (f1, f1t, f2, f3, f3t).
 use super::*;
 
 /// The read sites under `key` on the line holding `marker`.
@@ -120,8 +120,8 @@ const K: &str = "class In { n: number; constructor(n: number) { this.n = n; } }\
     class K { inner: In; constructor(n: number) { this.inner = new In(n); } }\n";
 
 /// f3 with identified natives (`Array.prototype` methods read off an
-/// array): a store on what may be one of them is a field every native
-/// function value shares; the stored object is not sunk.
+/// array): a store on what may be one of them is an ordinary field;
+/// the stored object is not sunk.
 #[test]
 fn a_store_on_an_identified_native_is_a_field() {
     let src = format!(
@@ -146,18 +146,17 @@ fn a_native_field_is_read_back_through_any_native() {
          const f = table[process.argv[2] ?? \"push\"];\n\
          const k1 = new K(1);\n\
          (f as any).tag = k1;\n\
-         (([] as any).slice.tag as any).inner = (globalThis as any)[process.argv[3] ?? \"y\"];\n\
+         (([] as any)[process.argv[4] ?? \"slice\"].tag as any).inner = (globalThis as any)[process.argv[3] ?? \"y\"];\n\
          console.log(k1.inner.n); // SITE-MT\n"
     );
     let pf = facts(&src);
     assert!(unproven(&pf, &src, "// SITE-MT", "n"));
 }
 
-/// f3 itself: `Math.max` is a namespace static, the anonymous native
-/// (`Native::Any`), which may be a native the description does not cover:
-/// a store on it keeps the opaque path (rule R1 case c).
+/// An anonymous native retains the value in its own field just as an
+/// identified native does; merely storing it hands nothing to unknown code.
 #[test]
-fn a_store_on_the_anonymous_native_keeps_the_opaque_path() {
+fn a_store_on_the_anonymous_native_is_an_ordinary_field() {
     let src = format!(
         "{K}const table: {{ [s: string]: (a: number, b: number) => number }} = {{ max: Math.max, min: Math.min }};\n\
          const f = table[process.argv[2] ?? \"max\"];\n\
@@ -166,13 +165,14 @@ fn a_store_on_the_anonymous_native_keeps_the_opaque_path() {
          console.log(k1.inner.n.toFixed(0)); // SITE-D\n"
     );
     let pf = facts(&src);
-    assert!(unproven(&pf, &src, "// SITE-D", "inner"));
+    assert!(proven(&pf, &src, "// SITE-D", "inner"));
 }
 
-/// f3t: the program reads the native's field back and replaces what it
-/// holds: stays unproven.
+/// Reading a stored object back and replacing its field with a primitive
+/// joins that primitive, without exposing the original object to unknown
+/// code. The remaining object receiver is still a closed In layout.
 #[test]
-fn f3_twin_stays_unproven() {
+fn a_native_field_primitive_store_does_not_escape_its_old_value() {
     let src = format!(
         "{K}const table: {{ [s: string]: (a: number, b: number) => number }} = {{ max: Math.max, min: Math.min }};\n\
          const f = table[process.argv[2] ?? \"max\"];\n\
@@ -182,7 +182,7 @@ fn f3_twin_stays_unproven() {
          console.log(k1.inner.n); // SITE-D2\n"
     );
     let pf = facts(&src);
-    assert!(unproven(&pf, &src, "// SITE-D2", "n"));
+    assert!(proven(&pf, &src, "// SITE-D2", "n"));
 }
 
 /// A declared key keeps today's path: the runtime reads it. A function
@@ -213,7 +213,7 @@ fn a_stored_builtin_field_is_read_back() {
          const w = (Object as any).myTag;\n\
          if (w) console.log(w.n); // SITE-R\n\
          ([] as any).push.myTag = v;\n\
-         const w2 = ([] as any).pop.myTag;\n\
+         const w2 = ([] as any).push.myTag;\n\
          if (w2) console.log(w2.n); // SITE-R2\n\
          console.log(v.n.toFixed(0)); // SITE-V\n";
     let pf = facts(src);
@@ -241,4 +241,18 @@ fn a_builtin_handed_to_unknown_code_sinks_its_fields() {
          console.log(v.n.toFixed(0)); // SITE-E\n";
     let pf = facts(src);
     assert!(unproven(&pf, src, "// SITE-E", "n"));
+}
+
+#[test]
+fn identified_slice_does_not_read_push_or_pop_fields() {
+    let src = format!(
+        "{K}const table: {{ [s: string]: any }} = {{ push: [].push, pop: [].pop }};\n\
+         const f = table[process.argv[2] ?? \"push\"];\n\
+         const k1 = new K(1);\n\
+         (f as any).tag = k1;\n\
+         (([] as any).slice.tag as any).inner = (globalThis as any)[process.argv[3] ?? \"y\"];\n\
+         console.log(k1.inner.n); // SITE-DISJOINT\n"
+    );
+    let pf = facts(&src);
+    assert!(proven(&pf, &src, "// SITE-DISJOINT", "n"));
 }

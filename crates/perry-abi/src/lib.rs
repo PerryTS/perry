@@ -15,6 +15,7 @@ pub mod accessor_guards;
 mod builtin_proto;
 pub use builtin_proto::{BuiltinProto, FunctionProtoKind};
 pub mod intrinsic_serials;
+pub mod lock;
 pub mod object_meta_flags;
 mod shape_kind;
 pub use shape_kind::ShapeObjectKind;

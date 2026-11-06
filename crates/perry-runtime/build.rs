@@ -660,6 +660,11 @@ fn main() {
     // same lowering as generated code.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
         println!("cargo:rerun-if-changed=src/ffi/perry_wasi_net.c");
+        // Linear memory starts at 0. The runtime's own test link places the
+        // stack first at perry's size (`link/wasi.rs` `STACK_SIZE`), so static
+        // data, like every heap address, lies above the small-handle band.
+        println!("cargo:rustc-link-arg=-z");
+        println!("cargo:rustc-link-arg=stack-size=8388608");
         println!("cargo:rerun-if-changed=src/ffi/perry_wasm_throw.c");
         println!("cargo:rerun-if-changed=src/ffi/perry_wasm_trap.ll");
         let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());

@@ -62,6 +62,7 @@ fn read_method() -> Function {
         ],
         Type::Any,
         vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(COLUMN_ID)),
@@ -96,6 +97,7 @@ fn checked_read_method() -> Function {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(COLUMN_ID)),
@@ -165,6 +167,7 @@ fn shaped_reader_class() -> Class {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::PropertyGet {
@@ -224,6 +227,7 @@ fn shaped_push_class() -> Class {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::PropertyGet {
@@ -417,6 +421,7 @@ fn bitset_class() -> Class {
         vec![Stmt::Return(Some(Expr::Binary {
             op: perry_hir::BinaryOp::BitAnd,
             left: Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(MASK_ID)),
@@ -534,6 +539,7 @@ fn emit_versioned_checked_reader_loop() -> String {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(ENTITIES)),
@@ -877,12 +883,10 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                index: Box::new(Expr::LocalGet(DERIVED_ID)),
-            })),
+            Stmt::Return(Some(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(ARRAY_ID)),
+                Box::new(Expr::LocalGet(DERIVED_ID)),
+            ))),
         ],
     );
     assert!(

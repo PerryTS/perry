@@ -96,7 +96,7 @@ fn ensure_runtime_archive() {
 }
 
 fn fixture_dir() -> PathBuf {
-    workspace_root().join("test-files/fixtures/issue_8693_imported_this")
+    workspace_root().join("tests/fixtures/programs/fixtures/issue_8693_imported_this")
 }
 
 fn copy_fixture(dir: &Path) {

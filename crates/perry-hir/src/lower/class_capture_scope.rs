@@ -270,6 +270,7 @@ fn current_capture_slot(class_value: &Expr, index: usize) -> Expr {
     Expr::Conditional {
         condition: Box::new(class_value.clone()),
         then_expr: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::PropertyGet {

@@ -141,10 +141,12 @@ fn decode_handle(handle: *mut c_void) -> Option<(usize, u32)> {
 pub(crate) struct ReferenceRecord {
     env_serial: u64,
     value_bits: u64,
-    /// A Perry `WeakRef` object rooted by this record while `refcount == 0`.
-    /// The weak holder is traced, but its target is not. Primitive values,
-    /// which cannot be weak targets, remain in `value_bits` instead.
-    weak_holder_bits: Option<u64>,
+    /// `value_bits` is held weakly: the count is 0 and the value is an object
+    /// or symbol. A weak target is not traced; a moving collection rewrites
+    /// it and [`prune_dead_weak_references`] clears it to undefined when the
+    /// target dies, so `napi_get_reference_value` answers NULL as in node.
+    /// Primitive values cannot be weak targets and stay strong at count 0.
+    weak: bool,
     refcount: u32,
     deleted: bool,
     /// A rooted WeakRef to the metadata payload and its scalar finalizer id;
@@ -167,10 +169,12 @@ pub(crate) struct CallbackInfoRecord {
     pub new_target: NapiValue,
 }
 
+/// A pending deferred. It is in `Env::deferreds` exactly while it is
+/// unsettled: settling removes it, so the root scan walks pending promises
+/// only.
 pub(crate) struct DeferredRecord {
     env_serial: u64,
     promise_bits: u64,
-    settled: bool,
 }
 
 // The boxed records are intentional: their addresses are the opaque pointers
@@ -406,18 +410,22 @@ impl Env {
         self.deferreds
             .get(index)
             .map(Box::as_ref)
-            .filter(|record| record.env_serial == self.serial && !record.settled)
+            .filter(|record| record.env_serial == self.serial)
     }
 
-    fn deferred_mut(&mut self, deferred: NapiDeferred) -> Option<&mut DeferredRecord> {
-        if deferred.is_null() {
-            return None;
+    /// Settling ends a deferred (as in Node, where the deferred is freed by
+    /// `napi_resolve_deferred`/`napi_reject_deferred`): its record leaves the
+    /// list and the record that took its place is re-indexed. Returns the
+    /// promise it held.
+    fn take_deferred(&mut self, deferred: NapiDeferred) -> Option<u64> {
+        let promise_bits = self.deferred(deferred)?.promise_bits;
+        let index = self.deferred_lookup.remove(&(deferred as usize))?;
+        self.deferreds.swap_remove(index);
+        if let Some(moved) = self.deferreds.get(index) {
+            let pointer = (&**moved) as *const DeferredRecord as usize;
+            self.deferred_lookup.insert(pointer, index);
         }
-        let index = *self.deferred_lookup.get(&(deferred as usize))?;
-        self.deferreds
-            .get_mut(index)
-            .map(Box::as_mut)
-            .filter(|record| record.env_serial == self.serial && !record.settled)
+        Some(promise_bits)
     }
 
     fn async_context(&self, context: NapiAsyncContext) -> Option<&AsyncContextRecord> {
@@ -428,18 +436,23 @@ impl Env {
         self.async_contexts
             .get(index)
             .map(Box::as_ref)
-            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+            .filter(|record| record.env_serial == self.serial)
     }
 
-    fn async_context_mut(&mut self, context: NapiAsyncContext) -> Option<&mut AsyncContextRecord> {
-        if context.is_null() {
-            return None;
+    /// `napi_async_destroy` ends a context: its record leaves the list and
+    /// the record that took its place is re-indexed. Returns its ids.
+    fn take_async_context(
+        &mut self,
+        context: NapiAsyncContext,
+    ) -> Option<crate::async_hook_slots::AsyncResourceIds> {
+        let ids = self.async_context(context)?.ids;
+        let index = self.async_context_lookup.remove(&(context as usize))?;
+        self.async_contexts.swap_remove(index);
+        if let Some(moved) = self.async_contexts.get(index) {
+            let pointer = (&**moved) as *const AsyncContextRecord as usize;
+            self.async_context_lookup.insert(pointer, index);
         }
-        let index = *self.async_context_lookup.get(&(context as usize))?;
-        self.async_contexts
-            .get_mut(index)
-            .map(Box::as_mut)
-            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+        Some(ids)
     }
 }
 
@@ -567,7 +580,6 @@ pub(crate) fn catch_value_call(env: NapiEnv, f: impl FnOnce() -> f64) -> Result<
 pub(crate) const ROOT_SCANNER_NAME: &str = "crate::node_api_host::scan_node_api_roots_mut";
 
 pub(crate) fn install() {
-    symbols::retain();
     hooks::install();
 }
 
@@ -588,20 +600,15 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         if let Some(exception) = env.pending_exception_bits.as_mut() {
             visitor.visit_nanbox_u64_slot(exception);
         }
+        // The list holds pending deferreds only (settling removes the record).
         for deferred in &mut env.deferreds {
-            if !deferred.settled {
-                visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
-            }
+            visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
         }
         // Each native async context owns its token until napi_async_destroy,
-        // including contexts created without a JavaScript resource value.
+        // including contexts created without a JavaScript resource value;
+        // destroying it removes the record.
         for context in &mut env.async_contexts {
-            if !context.destroyed {
-                crate::async_hook_slots::resource_state::scan_token(
-                    &mut context.ids.async_id,
-                    visitor,
-                );
-            }
+            crate::async_hook_slots::resource_state::scan_token(&mut context.ids.async_id, visitor);
         }
         for tsfn in &env.tsfns {
             tsfn::scan_tsfn_function_root(tsfn, visitor);
@@ -613,14 +620,46 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
             if reference.deleted {
                 continue;
             }
-            if reference.refcount > 0 || reference.weak_holder_bits.is_none() {
+            if reference.weak {
+                let mut target = f64::from_bits(reference.value_bits);
+                if visitor.visit_metadata_nanbox_f64_slot(&mut target) {
+                    reference.value_bits = target.to_bits();
+                }
+            } else {
                 visitor.visit_nanbox_u64_slot(&mut reference.value_bits);
-            }
-            if let Some(holder) = reference.weak_holder_bits.as_mut() {
-                visitor.visit_nanbox_u64_slot(holder);
             }
             if let Some((holder, _)) = reference.finalizer_link.as_mut() {
                 visitor.visit_nanbox_u64_slot(holder);
+            }
+        }
+    });
+}
+
+/// The heap address a weak reference's target occupies, if it has one.
+fn weak_target_addr(bits: u64) -> Option<usize> {
+    use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+    if !matches!(bits & TAG_MASK, POINTER_TAG | STRING_TAG | BIGINT_TAG) {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    (addr != 0 && !crate::value::addr_class::is_handle_band(addr)).then_some(addr)
+}
+
+/// Clear every weak reference whose target this collection found dead
+/// (`gc::dead_owner::DEAD_KEY_PRUNES`). The target word becomes undefined,
+/// which a weak record reads as "collected".
+pub(crate) fn prune_dead_weak_references(is_dead: &dyn Fn(usize) -> bool) {
+    NODE_API_ENV.with(|cell| {
+        let mut borrowed = cell.borrow_mut();
+        let Some(env) = borrowed.as_deref_mut() else {
+            return;
+        };
+        for reference in &mut env.references {
+            if reference.deleted || !reference.weak {
+                continue;
+            }
+            if weak_target_addr(reference.value_bits).is_some_and(is_dead) {
+                reference.value_bits = crate::value::TAG_UNDEFINED;
             }
         }
     });

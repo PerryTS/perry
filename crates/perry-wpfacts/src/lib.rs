@@ -42,7 +42,10 @@ mod tests;
 mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
-pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
+pub use derive::{
+    ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
+    TemplateFacts, Verdict,
+};
 use perry_hir::Module;
 
 /// Reserved atom for computed-key accessors ("any key").
@@ -137,6 +140,12 @@ pub struct Stats {
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
     pub aborted: bool,
+    /// The solve passed its work bound and finished widened
+    /// (`Model::widened`): the facts no later arrival touched.
+    pub widened: bool,
+    /// The widened solve stopped at `WIDENED_WORK` times the bound
+    /// (`aborted` is set too: no facts).
+    pub widened_stop: bool,
     /// Contract checks run after the solve (§11.2): none past the bound.
     pub checks: u64,
     pub top_calls: u64,
@@ -170,6 +179,9 @@ pub struct ProgramFacts {
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
+    /// Computed member sites in a whole-program solve. Per-unit facts do
+    /// not publish values whose token/template ids belong to separate solves.
+    pub elements: Vec<ElementFacts>,
     pub stats: Stats,
     /// Interpreted code can run (decision 150), and why. It is no kill: its
     /// data flow is the ⊤ summary node (everything it can receive already
@@ -396,6 +408,7 @@ fn generate<'a>(
     g.m.unit_mode = cfg.unit;
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
+    g.m.widen = !cfg.unit;
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.interp_free = cfg.dynamic_code.is_none()
         && !cfg.dynamic_code_reach.globals
@@ -466,6 +479,18 @@ fn generate<'a>(
         for f in g.m.funcs.iter_mut() {
             f.no_summary = true;
         }
+    }
+    // An unwalked body is no evidence, even if its token reached a guard.
+    let pending: Vec<_> =
+        g.m.funcs
+            .iter()
+            .filter_map(|f| match f.own_test {
+                model::OwnTestBody::Pending(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+    for n in pending {
+        g.m.refute_own_test(n);
     }
     g.m.summarize_and_replay();
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
@@ -723,6 +748,8 @@ fn compute_act<'a>(
         }
     }
     g.m.dump_meta();
+    #[cfg(test)]
+    tests::delivery_boundaries::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
@@ -764,11 +791,17 @@ fn compute_act<'a>(
     } else {
         derive::derive(&mut g)
     };
+    let mut elements = if g.m.aborted {
+        Vec::new()
+    } else {
+        derive::element_facts(&g)
+    };
     let mut bindings = bindings::collect(&g);
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.
         templates.clear();
         sites.clear();
+        elements.clear();
         bindings.clear();
     }
     if let Some(spec) = &cfg.sabotage {
@@ -803,8 +836,10 @@ fn compute_act<'a>(
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
         contexts: g.m.sum.ctx_nodes.len() as u64,
-        work: g.m.work,
+        work: g.m.work.get(),
         aborted: g.m.aborted,
+        widened: g.m.widened,
+        widened_stop: g.m.widened_stop,
         checks,
         pts_entries: g.m.pts_entries,
         big_nodes: big_nodes(&g.m),
@@ -1936,6 +1971,7 @@ fn compute_act<'a>(
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
         sites,
+        elements,
         stats,
         interp_guard,
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),

@@ -1409,7 +1409,7 @@ mod take_tests {
             if has_truthy_hidden(source, crate::runtime_state_key!(b"rejectAfterLimit")) {
                 return rejected_promise(9.0);
             }
-            crate::exception::js_throw(9.0);
+            crate::exception::test_throw(9.0);
         }
         let done = get_hidden_value(source, crate::runtime_state_key!(b"doneAfter"))
             .is_some_and(|done_after| value > done_after);

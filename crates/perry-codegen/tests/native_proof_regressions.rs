@@ -736,12 +736,7 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 }
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
-    Expr::IndexGet {
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(local(object_id)),
-        index: Box::new(index),
-    }
+    Expr::synthetic_index_get(Box::new(local(object_id)), Box::new(index))
 }
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
@@ -810,13 +805,11 @@ fn native_library_opts_typed(
 }
 
 fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
-    Stmt::Expr(Expr::IndexSet {
-        object: Box::new(local(array_id)),
-        index: Box::new(index),
-        value: Box::new(value),
-        byte_offset: 0,
-        byte_end: 0,
-    })
+    Stmt::Expr(Expr::synthetic_index_set(
+        Box::new(local(array_id)),
+        Box::new(index),
+        Box::new(value),
+    ))
 }
 
 fn increment(id: u32) -> Expr {
@@ -1956,12 +1949,7 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
         vec![param(1, "values", Type::Array(Box::new(Type::Number)))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
-            Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(local(1)),
-                index: Box::new(int(0)),
-            },
+            Expr::synthetic_index_get(Box::new(local(1)), Box::new(int(0))),
         ))))],
     );
 
@@ -1990,13 +1978,11 @@ fn typed_array_f64_store_coerces_annotation_only_numeric_value() {
                 int(0),
                 int(8),
             ),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(2)),
-                index: Box::new(int(0)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(2)),
+                Box::new(int(0)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -2041,12 +2027,10 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(local(2)),
                 property: "gain".to_string(),
-                value: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(local(3)),
-                    index: Box::new(int(0)),
-                }),
+                value: Box::new(Expr::synthetic_index_get(
+                    Box::new(local(3)),
+                    Box::new(int(0)),
+                )),
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -2970,21 +2954,14 @@ fn compound_alias_body(array_id: u32, counter_id: u32, base_temp: u32, key_temp:
     vec![
         alias(base_temp, "__cmpd_base_5", local(array_id)),
         alias(key_temp, "__cmpd_key_6", local(counter_id)),
-        Stmt::Expr(Expr::IndexSet {
-            object: Box::new(local(base_temp)),
-            index: Box::new(local(key_temp)),
-            value: Box::new(add(
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(local(base_temp)),
-                    index: Box::new(local(key_temp)),
-                },
+        Stmt::Expr(Expr::synthetic_index_set(
+            Box::new(local(base_temp)),
+            Box::new(local(key_temp)),
+            Box::new(add(
+                Expr::synthetic_index_get(Box::new(local(base_temp)), Box::new(local(key_temp))),
                 int(1),
             )),
-            byte_offset: 0,
-            byte_end: 0,
-        }),
+        )),
     ]
 }
 
@@ -7541,13 +7518,11 @@ fn artifact_records_dynamic_index_set_value_bits_before_helper() {
         ],
         Type::Number,
         vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7580,13 +7555,11 @@ fn artifact_records_array_runtime_key_index_set_value_bits_before_helper() {
         Type::Number,
         vec![
             number_let(2, "key", false, number(1.5)),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7616,13 +7589,11 @@ fn artifact_records_direct_f64_to_js_value_bits_for_write_barrier() {
         vec![
             string_let(2, "key", "key"),
             number_let(3, "value", false, number(1.5)),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7666,13 +7637,11 @@ fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
                 mutable: false,
                 init: Some(Expr::Bool(true)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7709,13 +7678,11 @@ fn artifact_records_static_write_barrier_elision_for_primitive_array_store() {
         Type::Number,
         vec![
             string_let(2, "key", "key"),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(Expr::Bool(true)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(Expr::Bool(true)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -11744,12 +11711,10 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
         "dynamic_property" => {
             module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
                 op: CompareOp::Gt,
-                left: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::This),
-                    index: Box::new(Expr::String("x".to_string())),
-                }),
+                left: Box::new(Expr::synthetic_index_get(
+                    Box::new(Expr::This),
+                    Box::new(Expr::String("x".to_string())),
+                )),
                 right: Box::new(local(12)),
             }))];
         }
@@ -15863,12 +15828,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     // with `arr: number[]` written through the generic PutValue form.
     let arr = 1u32;
     let i = 2u32;
-    let read_arr_i = Expr::IndexGet {
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(Expr::LocalGet(arr)),
-        index: Box::new(Expr::LocalGet(i)),
-    };
+    let read_arr_i =
+        Expr::synthetic_index_get(Box::new(Expr::LocalGet(arr)), Box::new(Expr::LocalGet(i)));
     let body = vec![
         Stmt::Let {
             id: arr,
@@ -15925,6 +15886,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
                 }),
                 receiver: Box::new(Expr::LocalGet(arr)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })],
@@ -15997,6 +15959,7 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
                 }),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),
@@ -16052,6 +16015,7 @@ fn immutable_string_key_reuses_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),
@@ -16096,6 +16060,7 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
             value: Box::new(Expr::Integer(1)),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -16135,6 +16100,7 @@ fn mutable_string_key_rejects_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),
@@ -16170,6 +16136,7 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
             value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }))],
@@ -16213,11 +16180,7 @@ fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
             traced(rest.split(',').next())
         } else if let Some(args) = rhs.strip_prefix("call double @perry_store_or_put(") {
             // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`
-            match traced(
-                args.split(", ")
-                    .nth(2)
-                    .and_then(|a| a.strip_prefix("i64 ")),
-            ) {
+            match traced(args.split(", ").nth(2).and_then(|a| a.strip_prefix("i64 "))) {
                 Some(k) if k < keys => counts[k] += 1,
                 _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
             }
@@ -16249,6 +16212,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             }),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -16260,12 +16224,10 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             name: "object".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(objects)),
-                index: Box::new(Expr::LocalGet(inner)),
-            }),
+            init: Some(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(objects)),
+                Box::new(Expr::LocalGet(inner)),
+            )),
         }];
         for (index, property) in ["a", "b", "c", "d", "e"]
             .into_iter()
@@ -16678,6 +16640,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
                     value: Box::new(Expr::Number(7.0)),
                     receiver: Box::new(local(1)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),
@@ -16771,6 +16734,7 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
                     value: Box::new(local(2)),
                     receiver: Box::new(local(1)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),
@@ -16784,7 +16748,8 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("call double @perry_store_or_put(") && !body.contains("class_field_sloppy_set"),
+            body.contains("call double @perry_store_or_put(")
+                && !body.contains("class_field_sloppy_set"),
             "strict={strict}: a pointer-field store must reach the store probe \
              (#5094 P1, #12483):\n{body}"
         );

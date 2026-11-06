@@ -379,7 +379,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // refusal is too — a claim now costs a guard branch and nothing else,
             // which is exactly the deal element reads have always taken.
             //
-            // `test-files/test_gap_7853_declared_array_length_runtime_value.ts`
+            // `tests/parity/typescript/type-erasure/test_gap_7853_declared_array_length_runtime_value.ts`
             // and `test_gap_declared_field_type_refine_guarded.ts` are the
             // sabotage: both feed a `string[]`-declared local an array, a
             // string, a number, an array-like object with numeric and

@@ -659,6 +659,7 @@ impl ShapeRecord {
 
     /// Learned deprecation words past word 0 (bit n of word k = slot
     /// 32 * (k + 1) + n), as plain values.
+    #[cfg(test)]
     pub(crate) fn tail_deprecation(&self, word: usize) -> u32 {
         if !self.has_boxed_extras() {
             return 0;

@@ -63,10 +63,7 @@ fn regex_receiver_or_throw(this: crate::closure::JsThis, getter: &str) -> RegexR
 fn throw_regex_brand_error(getter: &str) -> ! {
     let msg = format!("get RegExp.prototype.{getter} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Read the already branded immutable data. This leaf performs no allocation
@@ -362,10 +359,7 @@ fn regex_instance_or_throw(
     }
     let msg = format!("RegExp.prototype.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[cfg(feature = "regex-engine")]

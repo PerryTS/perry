@@ -270,8 +270,12 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted {
+            if s.widened_stop {
+                ", widened past the work bound, then OVER 1000 times it: no facts"
+            } else if s.aborted {
                 ", OVER the work/time bound: no facts"
+            } else if s.widened {
+                ", past the work bound: widened"
             } else {
                 ""
             },
@@ -761,3 +765,11 @@ fn facts_inputs(
 #[cfg(test)]
 #[path = "program_facts/worker_roots_tests.rs"]
 mod worker_roots_tests;
+
+#[cfg(test)]
+#[path = "program_facts/native_addon_tests.rs"]
+mod native_addon_tests;
+
+#[cfg(test)]
+#[path = "program_facts/element_tests.rs"]
+mod element_tests;

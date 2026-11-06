@@ -621,7 +621,6 @@ impl IntrinsicPrivateReadSite {
 
 /// A runtime intrinsic's field uses the same qualified namespace as a class
 /// field. Only this runtime API can request evaluation 0.
-#[cfg(feature = "regex-engine")]
 pub(crate) fn intrinsic_private_set(receiver: f64, name: &'static str, value: f64) -> bool {
     let key = private_storage_key_by_id(0, 0, name);
     if key.set_cached(receiver, value) {

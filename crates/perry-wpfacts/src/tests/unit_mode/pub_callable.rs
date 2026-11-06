@@ -328,11 +328,14 @@ function root() { return apply((x: any) => x.described, {described: 1}); } conso
 /// stays the bare marker.
 #[test]
 fn pub_callable_parameters_stay_unknown_beyond_their_runners() {
-    let escaped = r#"function apply(cb: any, value: any) { return cb(value); }
+    let escaped = r#"import "unseen-host";
+function apply(cb: any, value: any) { return cb(value); }
 function root() { const f = (x: any) => x.described; (globalThis as any).held = f; return apply(f, {described: 1}); } console.log(root());"#;
-    let undescribed = r#"function apply(cb: any, value: any) { return cb((globalThis as any).unknown); }
+    let undescribed = r#"import "unseen-host";
+function apply(cb: any, value: any) { return cb((globalThis as any).unknown); }
 function root() { return apply((x: any) => x.described, {described: 1}); } console.log(root());"#;
-    let union = r#"function apply(cb: any, value: any) { return cb((globalThis as any).pick ? value : (globalThis as any).unknown); }
+    let union = r#"import "unseen-host";
+function apply(cb: any, value: any) { return cb((globalThis as any).pick ? value : (globalThis as any).unknown); }
 function root() { return apply((x: any) => x.described, {described: 1}); } console.log(root());"#;
     for src in [escaped, undescribed, union] {
         let whole = facts(src);
@@ -379,7 +382,8 @@ function root() { return single((x: any) => x.described, (inner: any) => inner({
 /// called with anything (its parameter stays ⊤ per unit, as whole).
 #[test]
 fn pub_callable_runner_callbacks_held_by_unknown_code_stay_unknown() {
-    let src = r#"function single(cb: any, create: any) { const own = (v: any) => cb(v.ownParam); (globalThis as any).held = own; return create(own); }
+    let src = r#"import "unseen-host";
+function single(cb: any, create: any) { const own = (v: any) => cb(v.ownParam); (globalThis as any).held = own; return create(own); }
 function root() { return single((x: any) => x, (inner: any) => inner({ownParam: 1})); } console.log(root());"#;
     let whole = facts(src);
     let unit = units(src);

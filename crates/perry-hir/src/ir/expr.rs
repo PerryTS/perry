@@ -259,6 +259,9 @@ pub enum Expr {
         /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
     IndexSet {
         object: Box<Expr>,
@@ -268,6 +271,9 @@ pub enum Expr {
         /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
     // Index update (arr[i]++ or obj[key]++)
     IndexUpdate {
@@ -280,6 +286,9 @@ pub enum Expr {
         /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
 
     // Object literal
@@ -2829,6 +2838,9 @@ pub enum Expr {
         /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
     ReflectHas {
         target: Box<Expr>,
@@ -3012,5 +3024,30 @@ impl Expr {
     pub fn is_global_fetch_callee(&self) -> bool {
         matches!(self, Expr::PropertyGet { object, property, .. }
             if matches!(object.as_ref(), Expr::GlobalGet(0)) && property == "fetch")
+    }
+}
+
+impl Expr {
+    /// A compiler-owned indexed read with no source or verdict identity.
+    pub fn synthetic_index_get(object: Box<Expr>, index: Box<Expr>) -> Self {
+        Self::IndexGet {
+            object,
+            index,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+
+    /// A compiler-owned indexed write with no source or verdict identity.
+    pub fn synthetic_index_set(object: Box<Expr>, index: Box<Expr>, value: Box<Expr>) -> Self {
+        Self::IndexSet {
+            object,
+            index,
+            value,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+        }
     }
 }

@@ -993,6 +993,7 @@ pub(crate) fn lower_member_tail(
                 });
             }
             Ok(Expr::IndexGet {
+                element_offset: member.span.lo.0,
                 byte_offset: 0,
                 byte_end: 0,
                 object,

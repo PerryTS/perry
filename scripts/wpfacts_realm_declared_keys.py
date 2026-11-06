@@ -16,7 +16,11 @@ Rows: `ns <Name> <key>` own string keys of a global constructor or namespace
 object; `proto <Function.prototype|Object.prototype> <key>` their own string
 keys (the chain of every native function value and namespace); `fn <name>
 <key>` own string keys other than length/name of a native prototype method.
-Symbol keys are left out: R1 never takes a symbol key.
+`global %Global% <key>` own string keys of the global object: the globals
+the realm defines (every other global name is the program's).
+Symbol keys are left out of key rows: R1 never takes a symbol key.
+`native <owner> <key> <identity>` rows resolve callable property references on global, namespace and prototype holders
+(an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
 """
 import argparse
 import json
@@ -27,14 +31,52 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "crates/perry-wpfacts/src
 FN_KINDS = {"method", "function", "getter", "setter", "alias"}
 
 
+def namespace_holder(name, kind):
+    return kind in ("constructor", "namespace") and not any(c in name for c in ".%:")
+
+
+def member_properties(declarations, holder, inherited):
+    """Ordinary descriptor lookup: an own key shadows the same inherited key."""
+    seen_keys, seen_holders = set(), set()
+    while holder and holder["name"] not in seen_holders:
+        seen_holders.add(holder["name"])
+        for prop in holder.get("properties", []):
+            key = (bool(prop.get("symbol")), prop["key"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                yield prop
+        holder = declarations.get(holder.get("prototype")) if inherited else None
+
+
+def intrinsic_prototype(name, kind):
+    """A realm prototype named by its intrinsic (`%GeneratorPrototype%`), not
+    reachable as a constructor's `.prototype`: its own callable members only."""
+    return kind == "prototype" and name.startswith("%") and name.endswith("%")
+
+
 def rows(realm):
     out = set()
+    declarations = {d["name"]: d for d in realm["declarations"]}
+    receiver_result = [{"returns": {"slot": {"root": "this", "steps": []}}}]
+    callable_names = {d["name"] for d in realm["declarations"]
+                      if d["kind"] in FN_KINDS | {"constructor"}}
     for d in realm["declarations"]:
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
+        if (name.endswith(".prototype") or namespace_holder(name, kind) or name == "%Global%"
+                or intrinsic_prototype(name, kind)):
+            for prop in member_properties(declarations, d, namespace_holder(name, kind) or name == "%Global%"):
+                getter = prop.get("get")
+                if getter and declarations[getter].get("effects") == receiver_result:
+                    out.add(("getter-this", name, prop["key"], getter))
+                value = prop.get("value", {}).get("value")
+                if prop.get("value", {}).get("kind") == "reference" and value in callable_names:
+                    out.add(("native", name, prop["key"], value))
+        if name == "%Global%":
+            out.update(("global", name, k) for k in keys)
         if name in ("Function.prototype", "Object.prototype"):
             out.update(("proto", name, k) for k in keys)
-        elif kind in ("constructor", "namespace") and not any(c in name for c in ".%:"):
+        elif namespace_holder(name, kind):
             out.update(("ns", name, k) for k in keys)
         elif kind in FN_KINDS and ".prototype." in name:
             out.update(("fn", name, k) for k in keys if k not in ("length", "name"))

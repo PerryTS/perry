@@ -4,8 +4,8 @@
 //! are `any` so the calls stay calls of the native (not HIR array folds).
 
 use super::*;
-use crate::model::prim;
 use crate::builtins::effects_for_tests::{declared_array_method, interpretable};
+use crate::model::prim;
 use perry_hir::realm_manifest::{RealmEffect, RealmOperand, RealmSlot, RealmSlotRoot};
 use std::borrow::Cow;
 
@@ -39,16 +39,22 @@ const P: &str = r#"
     function arr(): any { return [new P()]; }
 "#;
 
-/// The migrated methods are declared in forms the interpreter runs; `sort`,
-/// `forEach`, `map` and `filter` are declared too but keep their hand arms
-/// (see `builtins/collections.rs`). An undeclared method has no declaration.
+/// The migrated methods are declared in forms the interpreter runs.
+/// forEach keeps its hand arm; species map/filter declarations are refused
+/// by the interpreter (see `builtins/collections.rs`).
 #[test]
 fn the_array_declarations_are_interpretable() {
     for n in [
-        "push", "reverse", "filter", "map", "every", "some", "find", "indexOf", "includes", "join",
-        "sort", "forEach",
+        "push", "reverse", "every", "some", "find", "indexOf", "includes", "join", "sort",
+        "forEach",
     ] {
         assert!(declared_array_method(n), "Array.prototype.{n}");
+    }
+    for n in ["map", "filter"] {
+        assert!(
+            !declared_array_method(n),
+            "Array.prototype.{n} constructs species"
+        );
     }
     for n in ["slice", "concat", "pop", "splice"] {
         assert!(
@@ -274,15 +280,34 @@ fn for_each_keeps_its_hand_arm() {
     );
 }
 
-/// sort keeps its hand arm: the comparator's result is converted.
+/// The declared coerce(returned(0), ToPrimitive) converts comparator results.
 #[test]
-fn sort_keeps_its_hand_arm() {
+fn sort_coerces_its_declared_callback_result() {
     let pf = facts(
         r#"
         class I { k: number; constructor() { this.k = 0; } valueOf() { this.k = 2; return 0; } }
         function arr(): any { return [1, 2]; }
         const i = new I();
         arr().sort(() => i);
+        console.log(i.k);
+    "#,
+    );
+    assert!(
+        field(tmpl(&pf, "I"), "k").writers_post > 0,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// The no-comparator call runs the declared coercion of elements as well.
+#[test]
+fn sort_default_coerces_elements() {
+    let pf = facts(
+        r#"
+        class I { k: number; constructor() { this.k = 0; } toString() { this.k = 2; return "x"; } }
+        const i = new I();
+        function arr(): any { return [i, i]; }
+        arr().sort();
         console.log(i.k);
     "#,
     );

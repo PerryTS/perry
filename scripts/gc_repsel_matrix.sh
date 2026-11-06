@@ -30,7 +30,7 @@
 #          requirement was met on this test
 #   UNVER  output byte-exact but the arm was INERT here (no collection, or
 #          nothing moved for an evacuating arm) -- NOT green, by design
-#   XFAIL  a triaged, justified expected-red (test-parity/gc_repsel_triage.txt)
+#   XFAIL  a triaged, justified expected-red (tests/parity/gc_repsel_triage.txt)
 #   FAIL   output mismatch, crash, non-zero exit, or compile failure
 #
 # A cell that matched the oracle under an inert arm is UNVER, never PASS. A
@@ -45,7 +45,7 @@
 # per-run cycle counts belong in the run's own output, not here.)
 #
 # ADDING A REPRESENTATION: register its gap file in
-# test-parity/gc_repsel_corpus.txt. This script FAILS if a `test_gap_repsel_*`
+# tests/parity/gc_repsel_corpus.txt. This script FAILS if a `test_gap_repsel_*`
 # or `test_gap_specabi_*` file exists that is not registered (see
 # docs/representation-selection-rfc.md 5.6).
 #
@@ -55,7 +55,7 @@
 # and exit 0. Every run therefore ends in
 # `scripts/gc_matrix_liveness_check.py`, which fails when an arm satisfied its
 # own `requires=` on zero cells — and equally when an arm listed in
-# `test-parity/gc_matrix_inert_arms.txt` starts biting again, so the registry
+# `tests/parity/gc_matrix_inert_arms.txt` starts biting again, so the registry
 # cannot rot in the other direction either.
 #
 # ***DO NOT PUT LIVENESS NUMBERS IN THIS HEADER.*** The last hand-maintained
@@ -105,8 +105,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-MANIFEST="test-parity/gc_repsel_corpus.txt"
-TRIAGE="test-parity/gc_repsel_triage.txt"
+MANIFEST="tests/parity/gc_repsel_corpus.txt"
+TRIAGE="tests/parity/gc_repsel_triage.txt"
 ARMS_SEL="pr"
 FILTER=""
 PRESSURE_MB="8"
@@ -321,7 +321,7 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # inert. The liveness gate exists because that one is invisible on screen.
 # ---------------------------------------------------------------------------
 ARMS=(
-"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***LIVE AGAIN AS OF 2026-08-09*** -- its known-inert entry was deleted in test-parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
+"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***LIVE AGAIN AS OF 2026-08-09*** -- its known-inert entry was deleted in tests/parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
 "safepoint_minor|PERRY_GC_MOVING_LOOP_POLLS=1|%P% PERRY_GC_MOVING_LOOP_POLLS=1|scavenge|THE SOUND RELOCATING ARM, and what keeps the #6993 defect class reachable per-PR while #7161's stopgap holds. Sets the poll flag at BOTH compile and run time (same env on both sides -- keyed into the object cache as env_gc_moving_loop_polls, so a warm cache cannot serve poll-free objects). The copying minor then runs at js_gc_loop_safepoint -> gc_safepoint_moving_minor, where the loop body has completed and every live heap value is a named local on the shadow stack: precise, rewritable roots. No %E%, no force -- this is exactly what default was between #7024 and #7161, and what default becomes again when the stopgap lifts. NOT a replacement for the %E% arms: a back-edge poll only fires while user JS runs, so it cannot expose an unrooted local inside runtime code that never re-enters user JS (#7249). evac_minor and force_verify remain in the PR subset for that."
 "evac_minor||%P% %E%|move|THE evacuating arm, and the STRONGER acceptance route (#7249): the automatic alloc-point collection as a COPYING minor that relocates survivors at a register-imprecise point, which is where an unrooted runtime-side local is exposed. No stress knob -- this is the collector's own moving path."
 "force_evac||%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|stress-copy every marked non-pinned nursery object"
@@ -422,16 +422,17 @@ while IFS= read -r line; do
 done < "$MANIFEST"
 
 missing_reg=0
-for f in test-files/test_gap_repsel_*.ts test-files/test_gap_specabi_*.ts; do
-    [ -f "$f" ] || continue
-    b="$(basename "$f" .ts)"
+REGISTRATION_MAP="$(python3 "$SCRIPT_DIR/gc_corpus_sources.py" --root "$ROOT" \
+    --pattern 'test_gap_repsel_*.ts' --pattern 'test_gap_specabi_*.ts' --allow-empty-patterns)" || exit 3
+while IFS="$(printf '\t')" read -r b f; do
+    [ -n "$f" ] || continue
     found=0
     for c in "${CORPUS[@]}"; do [ "$c" = "$b" ] && found=1 && break; done
     if [ "$found" = 0 ]; then
         echo "${RED}UNREGISTERED${NC} $f is a representation-selection gap file but is not in $MANIFEST" >&2
         missing_reg=1
     fi
-done
+done <<< "$REGISTRATION_MAP"
 if [ "$missing_reg" = 1 ]; then
     echo "A NEW REPRESENTATION MUST REGISTER ITS GAP FILE in $MANIFEST." >&2
     echo "See docs/representation-selection-rfc.md 5.6 (GC under unboxed representations)." >&2

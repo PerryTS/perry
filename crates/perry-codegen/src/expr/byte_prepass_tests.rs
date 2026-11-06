@@ -401,6 +401,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
             // tracked construction descriptor and exercises the plain resolver.
             let mut reader = function(
                 vec![Stmt::Return(Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
@@ -447,6 +448,7 @@ fn reassigned_module_table_cannot_get_a_fixed_receiver() {
         vec![loop_body(vec![
             call_callback(),
             Stmt::Expr(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),

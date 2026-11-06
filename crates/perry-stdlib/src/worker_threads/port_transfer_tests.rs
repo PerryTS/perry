@@ -128,9 +128,9 @@ extern "C" fn throwing_getter(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    perry_runtime::exception::js_throw(perry_runtime::closure::js_closure_get_capture_f64(
-        closure, 0,
-    ))
+    perry_runtime::exception::throw_program_value(
+        perry_runtime::closure::js_closure_get_capture_f64(closure, 0),
+    )
 }
 #[test]
 fn getter_throw_keeps_buffer_ports_and_inbox_unchanged() {

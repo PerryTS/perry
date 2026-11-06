@@ -32,6 +32,7 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(iterable),
@@ -57,6 +58,7 @@ pub(crate) fn lazy_or_index_elem(
         Expr::LocalGet(result_id)
     } else {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(arr_id)),
@@ -1634,6 +1636,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     }
                 } else {
                     let raw_item_expr = Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
@@ -1934,6 +1937,7 @@ pub(crate) fn lower_stmt_for_in(
 
     // Prepend the key binding/assignment: <head> = __keys[__i]
     let key_source = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(keys_id)),

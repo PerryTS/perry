@@ -89,5 +89,8 @@ fn whole_program_mode_is_unchanged_by_the_contract() {
     // Whole program: the program's own `swap` is seen as the getter's
     // result, so the rewrite is proven (a set), not unknown.
     assert!(whole(&lacthis()).0);
-    assert!(!whole(&negmut0()).0);
+    // Rule G: `globalThis.f` is the program's own field, so its function is
+    // the program's too; beside an unseen module its code may own the field.
+    assert!(whole(&negmut0()).0);
+    assert!(!whole(&super::unseen(&negmut0())).0);
 }

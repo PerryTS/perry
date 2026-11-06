@@ -64,6 +64,7 @@ fn canary_clear() {
     canary().lock().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn the_probe_catches_a_bare_process_global_sink() {
     let key = 0xCA_1A_0000_7672usize;

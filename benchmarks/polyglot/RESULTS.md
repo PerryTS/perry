@@ -7,7 +7,7 @@ language's idiomatic release-mode build. A companion `RESULTS_OPT.md`
 (phase 2 of this investigation) shows what happens when each language is
 given flags equivalent to Perry's defaults.
 
-See [`METHODOLOGY.md`](./METHODOLOGY.md) for iteration counts, clocks,
+See [`METHODOLOGY.md`](METHODOLOGY.md) for iteration counts, clocks,
 compiler versions, and a full explanation of which optimizations create
 each delta.
 
@@ -134,7 +134,7 @@ bash run_all.sh 5      # best of 5 runs (what the above table used)
 Bun, Static Hermes (`shermes`), Rust (`rustc`), C++ (`g++` or `clang++`),
 Swift, Go, Java (`javac` + `java`), Python 3.
 
-See [`METHODOLOGY.md`](./METHODOLOGY.md) for what each benchmark measures,
+See [`METHODOLOGY.md`](METHODOLOGY.md) for what each benchmark measures,
 compiler versions, why certain cells look the way they do, and where Perry
 wins (`loop_overhead`, `math_intensive`, `accumulate`, `array_read`) vs
 where it matches the compiled pack (`nested_loops`, `fibonacci`) vs where
@@ -155,7 +155,7 @@ top of the integer rewrite LLVM autovectorizes the body into a
 (four SIMD lanes worth of fadd happening per iteration). `g++ -O3
 -ffast-math` on `bench.cpp` drops C++ from 96 ms to 11 ms, matching
 Perry — same LLVM, same pipeline, one flag. See
-[RESULTS_OPT.md](./RESULTS_OPT.md) for the per-language opt-sweep (C++
+[RESULTS_OPT.md](RESULTS_OPT.md) for the per-language opt-sweep (C++
 opt = 12 ms, Rust opt = 24 ms on stable, Go = 99 ms because Go has no
 fast-math flag).
 
@@ -169,7 +169,7 @@ wins 3×**. Same fast-math default + vectorization story as
 `loop_overhead`: the reciprocal divide has a 10+ cycle latency, but
 vectorizing into a parallel 4-accumulator reduction keeps 4 independent
 divides in flight so the scheduler hides the latency. C++ `-ffast-math`
-matches Perry at 14 ms per [RESULTS_OPT.md](./RESULTS_OPT.md). Regressed
+matches Perry at 14 ms per [RESULTS_OPT.md](RESULTS_OPT.md). Regressed
 to 48 ms at v0.5.162, restored in v0.5.164 ([#140](https://github.com/PerryTS/perry/issues/140)).
 
 ### `accumulate` — `sum += i % 1000` × 100M

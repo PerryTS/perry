@@ -331,7 +331,7 @@ extern "C" fn closes_then_throws(
     err: f64,
 ) -> f64 {
     assert_eq!(np::close(this.as_f64(), &FAMILY), CloseOutcome::Deferred);
-    crate::exception::js_throw(err)
+    crate::exception::test_throw(err)
 }
 #[test]
 fn l9_callback_throw_wins_over_deferred_close() {

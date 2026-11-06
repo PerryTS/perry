@@ -735,7 +735,8 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         }
         Throw(t) => {
             let value = eval_expr(ctx, &t.arg, env_idx);
-            crate::exception::js_throw(value)
+            // interpreted program throw: counted with dynamic code
+            crate::exception::throw_program_value(value)
         }
         While(w) => exec_while(ctx, w, env_idx, None),
         DoWhile(w) => exec_do_while(ctx, w, env_idx, None),
@@ -1131,14 +1132,15 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
             // try (or catch) threw. Run the finalizer, then rethrow — unless the
             // finalizer itself completes abruptly, which swallows the exception
             // (spec Completion-record semantics).
-            let exc = crate::exception::js_get_exception();
+            let exc = crate::exception::pending_exception();
             crate::exception::js_clear_exception();
-            let exc_idx = root_push(exc);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let caught = exc.root(&scope);
+            let exc_idx = root_push(caught.value());
             match exec_block_scope(ctx, finalizer, env_idx) {
                 Flow::Normal => {
-                    let exc = root_get(exc_idx);
                     roots_truncate(exc_idx);
-                    crate::exception::js_throw(exc)
+                    crate::exception::rethrow_caught(caught.caught())
                 }
                 abrupt => {
                     roots_truncate(exc_idx);
@@ -1163,15 +1165,15 @@ fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     // exception is live (in the rooted TLS slot); put the rooted stack + call
     // depth back to this try's entry state.
     super::interp_restore(saved);
-    let exc = crate::exception::js_get_exception();
+    let exc = crate::exception::pending_exception();
     crate::exception::js_clear_exception();
 
     let Some(handler) = &t.handler else {
         // No catch: let the outer trap (the finalizer wrapper — `try {} finally {}`
         // is the only parse without either) or the caller's trap take it.
-        crate::exception::js_throw(exc)
+        crate::exception::rethrow_caught(exc)
     };
-    let exc_idx = root_push(exc);
+    let exc_idx = root_push(exc.value());
     let catch_env = env::env_new(root_get(env_idx));
     let catch_env_idx = root_push(catch_env);
     if let Some(param) = &handler.param {

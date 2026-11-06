@@ -46,6 +46,8 @@ pub(crate) enum Unknown {
     ModuleNamespace,
     /// A function value without a known body.
     FunctionWithoutIdentity,
+    /// An installed accessor whose callable body is unknown.
+    UnknownAccessorFunction,
     /// Host input: native modules, process, host globals.
     ExternalInput,
     /// A reflective operation took the object (defineProperty, delete,
@@ -110,6 +112,7 @@ impl Unknown {
             EscapedObjectField => "escaped-object-field",
             ModuleNamespace => "module-namespace",
             FunctionWithoutIdentity => "function-without-identity",
+            UnknownAccessorFunction => "unknown-accessor-function",
             ExternalInput => "external-input",
             ReflectiveOperation => "reflective-operation",
             DynamicCode => "dynamic-code",
@@ -224,6 +227,9 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("RegExp operand")
             || starts("getOwnPropertyDescriptor")
             || starts("__lookupGetter__ result")
+            || starts("accessor descriptor")
+            || starts("unrepresented native accessor descriptor")
+            || starts("accessor lookup without a receiver")
             || starts("To")
             || starts("replace")
             || starts("array join")
@@ -343,10 +349,9 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("re-exported by ")
         {
             ModuleNamespace
-        } else if starts("unregistered function id")
-            || starts("accessor of unknown function value")
-            || starts("unresolved class value")
-        {
+        } else if starts("accessor of unknown function value") {
+            UnknownAccessorFunction
+        } else if starts("unregistered function id") || starts("unresolved class value") {
             FunctionWithoutIdentity
         } else if starts("result of an unknown function") {
             UnknownCalleeEscape
@@ -356,6 +361,9 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("__lookupGetter__ result")
+            || starts("accessor descriptor")
+            || starts("unrepresented native accessor descriptor")
+            || starts("accessor lookup without a receiver")
             || starts("structuredClone/transfer result")
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")

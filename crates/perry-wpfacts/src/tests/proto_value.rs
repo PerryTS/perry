@@ -175,8 +175,9 @@ fn a_number_key_calls_no_object_prototype_method() {
     assert!(!call_escapes(arr, "table[n]('y', () => d)"));
     let inst = "class T { 0(a: any, b: any) { return 1; } } const table: any = new T();";
     assert!(!call_escapes(inst, "table[n]('y', () => d)"));
-    // A key that may be any string may name `__defineGetter__`.
-    assert!(call_escapes(table, "table[k]('y', () => d)"));
+    // A string key may name `__defineGetter__`, which retains the getter
+    // on the table; installing alone does not expose its result `d`.
+    assert!(!call_escapes(table, "table[k]('y', () => d)"));
 }
 
 #[test]

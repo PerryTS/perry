@@ -122,7 +122,21 @@ fn keys_that_may_be_constructor_stay_any_key() {
     ];
     for (pre, key) in any {
         let pf = run(JSON_MAP, pre, key);
-        assert!(!yy_proven(&pf), "{key}: {:?}", yy_reads(&pf));
+        // A missing Object.map no longer escapes the callback. Inspect
+        // the receiver identity to test that the key still admits it.
+        let calls: Vec<_> = pf
+            .sites
+            .iter()
+            .filter(|s| s.is_call && s.key == "map")
+            .collect();
+        assert!(!calls.is_empty(), "missing map site");
+        assert!(
+            calls
+                .iter()
+                .any(|s| s.receivers.iter().any(|r| r == "builtin:Object")),
+            "{key}: {}",
+            pf.dump_text()
+        );
     }
 }
 

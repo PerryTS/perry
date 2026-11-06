@@ -820,6 +820,7 @@ mod length_only_tests {
         ));
         assert!(!arguments_used_only_for_length(
             &[Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(ARGUMENTS)),
@@ -887,6 +888,7 @@ mod elision_tests {
 
     fn index(i: i64) -> Expr {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: args(),
@@ -907,6 +909,7 @@ mod elision_tests {
         vec![
             Stmt::Expr(length()),
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: args(),

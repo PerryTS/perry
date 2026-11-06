@@ -71,8 +71,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
     if b == TAG_UNDEFINED || b == TAG_NULL {
         let msg = b"Cannot convert undefined or null to object";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
     // A symbol is `POINTER_TAG`-shaped (heap-allocated), so it must be boxed
     // BEFORE the generic pointer early-return below — otherwise `ToObject` would

@@ -271,6 +271,7 @@ impl Model {
     }
 
     pub fn tok(&mut self, k: TokKind) -> Tok {
+        let k = crate::builtins::canonical_native(k, !self.unit_mode);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
         }
@@ -280,8 +281,10 @@ impl Model {
                 self.site_toks.entry(tm).or_default().push(t);
             }
         }
-        self.toks.push(k.clone());
+        let shape = self.declarations.resolve(&k, self);
+        self.toks.push(k.clone(), shape);
         self.tok_index.insert(k, t);
+        self.builtin_token_created(t);
         t
     }
 
@@ -355,11 +358,9 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn(crate::model::Native::Member { fam, what, key }) => format!(
-                "builtin-fn:{fam:?}{}.{}",
-                what.map(|w| format!("({w})")).unwrap_or_default(),
-                self.atoms[*key as usize]
-            ),
+            TokKind::BuiltinFn(crate::model::Native::Member { identity }) => {
+                format!("builtin-fn:{identity}")
+            }
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
@@ -369,13 +370,13 @@ impl Model {
     /// What this solve can observe of the shared objects ([`SharedReads`]).
     pub fn shared_reads(&self) -> SharedReads {
         let mut r = SharedReads::default();
-        // An object's writes reach this solve through its field nodes, by
-        // key (its any-key field: every key); a builtin function value has
-        // none: through its property reads, any of which a write of any
-        // builtin function value turns opaque (`write_builtin_fns`).
-        for (k, &t) in &self.tok_index {
+        // Shared objects expose their writes through ordinary field nodes.
+        for (k, &t) in self.tok_index.iter() {
             let read = match k {
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_) => {
+                TokKind::ObjectProto
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn(_)
+                | TokKind::NativeProto(_) => {
                     if self.field_any.contains_key(&t) {
                         Some(None)
                     } else {
@@ -384,7 +385,6 @@ impl Model {
                         })
                     }
                 }
-                TokKind::BuiltinFn(_) => (!self.bf_reads.is_empty()).then_some(None),
                 _ => None,
             };
             if let (Some(s), Some(keys)) = (self.shared_of(t), read) {
@@ -632,11 +632,12 @@ impl Model {
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
     /// it, or it escaped.
     pub fn activate(&mut self, f: FnIdx, path: &str) {
-        if self
-            .act
-            .as_ref()
-            .is_none_or(|a| a.fixed || a.sabotage.as_deref() == Some(path))
-            || f as usize >= self.funcs.len()
+        if self.act.as_ref().is_none_or(|a| {
+            a.fixed
+                || a.sabotage
+                    .as_deref()
+                    .is_some_and(|s| s.split('+').any(|p| p == path))
+        }) || f as usize >= self.funcs.len()
         {
             return;
         }
@@ -719,7 +720,7 @@ impl Model {
             let mut st = vec![(t, bits)];
             while let Some((x, b)) = st.pop() {
                 // Each marker the walk visits is solve work (113-CWL3).
-                self.work += 1;
+                self.charge_work(1);
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -977,7 +978,7 @@ impl Model {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
-            self.work += 1;
+            self.charge_work(1);
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;

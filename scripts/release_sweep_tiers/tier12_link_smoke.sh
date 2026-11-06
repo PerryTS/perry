@@ -30,7 +30,7 @@ TIER_DIR="$(sweep_tier_dir "$OUT" 12)"
 LOG="$TIER_DIR/link_smoke.log"
 SUMMARY="$TIER_DIR/summary.json"
 PERRY_BIN="${PERRY_BIN:-$REPO_ROOT/target/release/perry}"
-FIXTURE="$REPO_ROOT/tests/release/link_smoke/fixture.ts"
+FIXTURE="$REPO_ROOT/tests/integration/release/link_smoke/fixture.ts"
 
 if [[ ! -x "$PERRY_BIN" ]]; then
     sweep_tier_emit "$OUT" 12 "link_smoke" "FAIL" 0 \
@@ -179,7 +179,7 @@ done
 # the default link. node:http server only links on the host (perry-ext-http
 # isn't cross-compiled to the mobile targets), so this is host-only. The
 # fixture exits immediately (never `.listen()`s), so we compile AND run it.
-NH_FIXTURE="$REPO_ROOT/tests/release/link_smoke/node_http_webfetch.ts"
+NH_FIXTURE="$REPO_ROOT/tests/integration/release/link_smoke/node_http_webfetch.ts"
 if [[ -f "$NH_FIXTURE" ]]; then
     nh_artifact="$TIER_DIR/node_http_webfetch"
     rm -f "$nh_artifact"

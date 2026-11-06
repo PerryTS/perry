@@ -186,3 +186,24 @@ fn per_unit_is_never_stronger_than_whole() {
         assert!(s.is_empty(), "{s:?}\n{}", u.dump_text());
     }
 }
+
+/// m.ts's init's own site `p.r`, proven: the init runs.
+fn init_ran(pf: &ProgramFacts) -> bool {
+    pf.sites
+        .iter()
+        .any(|s| s.module == 0 && s.key == "r" && !s.is_call && proven(s))
+}
+
+#[test]
+fn a_module_only_import_loads_runs_only_through_the_import_path() {
+    // DECISIONS 225, activation path `import`: m.ts is reached by `import()`
+    // alone. Its init runs; with the `import` path left out the pass would
+    // claim the init never runs (its site is dropped as dead), which is the
+    // claim codegen must never act on. Leaving out `call` keeps it.
+    let pf = program(CONTROL, &["./m.js"], false, None);
+    assert!(init_ran(&pf), "{}", pf.dump_text());
+    let pf = program(CONTROL, &["./m.js"], false, Some("activation:call"));
+    assert!(init_ran(&pf), "{}", pf.dump_text());
+    let pf = program(CONTROL, &["./m.js"], false, Some("activation:import"));
+    assert!(!init_ran(&pf), "{}", pf.dump_text());
+}

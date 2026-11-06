@@ -705,10 +705,7 @@ mod tests {
             .map(|(sym, class, throws)| {
                 (
                     (*sym).to_string(),
-                    perry_gc_effects::Entry {
-                        class: *class,
-                        throws: *throws,
-                    },
+                    perry_gc_effects::Entry::unknown(*class, *throws),
                 )
             })
             .collect()

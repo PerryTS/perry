@@ -312,7 +312,7 @@ extern "C" fn throw_on_coercion(
     _this: crate::closure::JsThis,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(731.0)
+    crate::exception::test_throw(731.0)
 }
 
 #[test]

@@ -324,6 +324,7 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
     // The row stays so that no other runtime word moves.
     "CJS_MODULE_RECORD",
+    "DGRAM_RINFO",
     "DUPLEX",
     "DUPLEX_PROTOTYPE",
     "EE_ASYNC_RESOURCE_PROTO",
@@ -571,7 +572,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 126);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 127);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);
