@@ -237,6 +237,17 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
         .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
 }
 
+pub(crate) fn receiver_checked(ctx: &FnCtx<'_>, object: &Expr) {
+    if crate::verify_facts::enabled() {
+        if let Some((r, _)) = receiver(ctx, object) {
+            crate::verify_facts::covered(
+                crate::verify_facts::Fact::Receiver,
+                || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+            );
+        }
+    }
+}
+
 /// FVA 3.4: the facts prove class `cid`'s own static `key` holds its
 /// definition for the program's life (no write, no escape of the class
 /// object, no interpreted code).

@@ -544,6 +544,14 @@ pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<
 /// codegen runs — `compile_module` up to the header-image table, then an early
 /// return. `opts` must be the options the module's codegen will get.
 pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<ModuleBirth>> {
+    if crate::verify_facts::enabled() {
+        crate::verify_facts::begin_module(
+            &hir.name,
+            opts.module_source.as_deref(),
+            opts.debug_source_line_offset,
+        );
+        crate::verify_facts::bodies(&opts.program_facts);
+    }
     let mut births = Vec::new();
     lower_module(hir, opts, Some(&mut births))?;
     Ok(births)

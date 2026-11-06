@@ -145,6 +145,8 @@
                 // array arm's IteratorClose is unobservable: only the
                 // protocol arm reaches the runtime.
                 let result = if ctx.wpfacts.array_iterator_close_unwritten {
+                    crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                        || serde_json::json!({}));
                     let skipped = if throwing { values[5].1.to_owned() } else {
                         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     };
@@ -169,10 +171,14 @@
                 return Ok(result);
             }
             "arrayRecordCloseAbsent" if ctx.wpfacts.array_iterator_close_unwritten => {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                    || serde_json::json!({}));
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
             }
             // The array arm of IteratorClose: nothing to observe (#13645).
             "arrayRecordClose" if ctx.wpfacts.array_iterator_close_unwritten => {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                    || serde_json::json!({}));
                 if matches!(args.get(4), Some(Expr::Bool(true))) {
                     return lower_expr(ctx, &args[3]);
                 }

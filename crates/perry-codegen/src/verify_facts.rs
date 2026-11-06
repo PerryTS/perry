@@ -12,6 +12,8 @@ use std::sync::{Mutex, OnceLock};
 mod coverage;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
+#[cfg(feature = "llvm-inprocess")]
+pub(crate) use coverage::{emitted, optimized};
 
 use perry_hir::Expr;
 
@@ -77,7 +79,7 @@ pub(crate) fn begin_module(name: &str, source: Option<&str>, prefix_lines: u32) 
             ordinal: 0,
             site_ordinal: 0,
             bodies: None,
-            copy: String::new(),
+            copy: "<layout planning>".to_owned(),
         })
     });
     SITE.with(|s| s.set(None));
@@ -87,6 +89,7 @@ pub(crate) struct SiteGuard {
     outer: Option<(u32, &'static str)>,
     outer_copy: Option<u64>,
     outer_key: Option<String>,
+    outer_body: Option<String>,
 }
 
 /// Lowering `e` starts: a source site (a call, read, write) becomes the
@@ -95,16 +98,18 @@ pub(crate) fn enter(e: &Expr, copy: &str) -> Option<SiteGuard> {
     if !witnesses() {
         return None;
     }
-    if enabled() {
+    let outer_body = if enabled() {
         MODULE.with(|m| {
             if let Some(m) = m.borrow_mut().as_mut() {
                 if m.copy != copy {
-                    m.copy.clear();
-                    m.copy.push_str(copy);
+                    return Some(std::mem::replace(&mut m.copy, copy.to_owned()));
                 }
             }
-        });
-    }
+            None
+        })
+    } else {
+        None
+    };
     let here = crate::facts_consumed::site_of(e).map(|(s, _, k)| (s, k));
     let outer = SITE.with(|s| s.get());
     if here.is_some() {
@@ -128,6 +133,7 @@ pub(crate) fn enter(e: &Expr, copy: &str) -> Option<SiteGuard> {
         outer,
         outer_copy,
         outer_key,
+        outer_body,
     })
 }
 
@@ -139,6 +145,13 @@ impl Drop for SiteGuard {
         }
         if let Some(outer) = self.outer_key.take() {
             KEY.with(|s| *s.borrow_mut() = outer);
+        }
+        if let Some(outer) = self.outer_body.take() {
+            MODULE.with(|m| {
+                if let Some(m) = m.borrow_mut().as_mut() {
+                    m.copy = outer;
+                }
+            });
         }
     }
 }
@@ -337,6 +350,11 @@ pub(crate) fn body_entry(ctx: &mut FnCtx<'_>, id: u32, name: &str) {
     if !enabled() || !inactive(id, name) {
         return;
     }
+    MODULE.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.copy = ctx.func.name.clone();
+        }
+    });
     coverage::entry(id, name, &ctx.func.name);
     let site = raw_site(
         ctx,
@@ -400,6 +418,19 @@ fn source_key(e: &Expr) -> String {
 
 pub(crate) fn number_checked(id: u32) {
     coverage::number(id);
+}
+
+pub(crate) fn covered(fact: Fact, operands: impl FnOnce() -> serde_json::Value) {
+    if enabled() {
+        coverage::checked(fact, operands());
+    }
+}
+
+pub(crate) fn bodies_checked(bodies: &[crate::codegen::FactsBody], width: usize) {
+    covered(
+        Fact::Bodies,
+        || serde_json::json!({"bodies":bodies.iter().map(|b| (b.func_id,b.params,b.closure)).collect::<Vec<_>>(),"call_width":width}),
+    );
 }
 
 pub(crate) fn normal_call_miss(class: &str, key: &str) {

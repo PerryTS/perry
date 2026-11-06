@@ -94,10 +94,6 @@ pub(crate) fn try_lower_proven_value_call(
     let Some(bodies) = ctx.wpfacts.local_bodies.get(id).cloned() else {
         return Ok(None);
     };
-    crate::verify_facts::consumed(
-        crate::verify_facts::Fact::Bodies,
-        || serde_json::json!({"local":id,"bodies":bodies.iter().map(|b| (b.func_id,b.params,b.closure)).collect::<Vec<_>>()}),
-    );
     crate::facts_consumed::used();
     let Some(symbols) = bodies
         .iter()
@@ -169,10 +165,6 @@ pub(crate) fn try_lower_proven_field_call(
     for &cid in &p.class_ids {
         match ctx.wpfacts.field(cid, property) {
             Some(f) if !f.fns.is_empty() => {
-                crate::verify_facts::consumed(
-                    crate::verify_facts::Fact::Bodies,
-                    || serde_json::json!({"class":cid,"key":property,"bodies":f.fns.iter().map(|b| (b.func_id,b.params,b.closure)).collect::<Vec<_>>()}),
-                );
                 crate::facts_consumed::used();
                 bodies.extend(f.fns.iter().cloned())
             }
@@ -339,6 +331,7 @@ fn emit_proven_call(
             .max(args.len()),
     };
     if crate::verify_facts::witnesses() {
+        crate::verify_facts::bodies_checked(bodies, width);
         emit_call_witness(ctx, symbols, callee_box, width);
     }
     let handle = unbox_to_i64(ctx.block(), callee_box);

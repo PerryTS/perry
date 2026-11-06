@@ -502,6 +502,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     crate::verify_facts::normal_call_miss(class_name, method_name);
                 }
                 if proven && contracts {
+                    crate::verify_facts::covered(
+                        crate::verify_facts::Fact::Static,
+                        || serde_json::json!({"class":static_cid,"key":method_name}),
+                    );
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),

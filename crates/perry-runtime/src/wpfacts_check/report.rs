@@ -5,7 +5,7 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(super) struct Witness<const RAW: bool> {
     site: u64,
-    len: Option<usize>,
+    len: usize,
     receiver: Option<u64>,
     callee: Option<u64>,
 }
@@ -14,7 +14,7 @@ impl Witness<false> {
     pub(super) fn legacy(site: i64) -> Self {
         Self {
             site: site as u64,
-            len: None,
+            len: 0,
             receiver: None,
             callee: None,
         }
@@ -24,7 +24,7 @@ impl Witness<true> {
     pub(super) fn raw(site: i64, len: i64) -> Self {
         Self {
             site: site as u64,
-            len: Some(len as usize),
+            len: len as usize,
             receiver: None,
             callee: None,
         }
@@ -56,9 +56,9 @@ impl<const RAW: bool> Witness<RAW> {
     #[inline(never)]
     fn report(self, predicate: Option<&str>, detail: String) -> ! {
         if !RAW {
-            super::violate(self.site, predicate.expect("legacy predicate"), detail);
+            super::violate(self.site, predicate.unwrap_or(""), detail);
         }
-        let len = self.len.unwrap();
+        let len = self.len;
         let metadata = unsafe { std::slice::from_raw_parts(self.site as *const u8, len) };
         let mut line = String::from_utf8_lossy(metadata).into_owned();
         if let Some(predicate) = predicate {

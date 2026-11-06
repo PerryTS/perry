@@ -155,52 +155,18 @@ fn describe(bits: u64) -> String {
     }
 }
 
-/// One elided field access. `cids01`/`cids23` carry up to four class ids
-/// (low half first; `u32::MAX` = none); `slot` names the key, `off` is the
-/// byte offset from the object the access used. Returns 0.
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn perry_wpfacts_check_field(
-    obj: f64,
-    value: f64,
-    key: i64,
-    cids01: i64,
-    cids23: i64,
-    slot: i32,
-    off: i32,
-    kind_mask: i32,
-    flags: i32,
-    site: i64,
-) -> i32 {
-    let key = string_bytes(key as usize as *const StringHeader).unwrap_or_default();
-    perry_wpfacts_check_field_impl(
-        obj,
-        value,
-        &key,
-        cids01,
-        cids23,
-        slot,
-        off,
-        kind_mask,
-        flags,
-        Witness::legacy(site),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline(always)]
-fn perry_wpfacts_check_field_impl<const RAW: bool>(
-    obj: f64,
-    value: f64,
-    key: &[u8],
-    cids01: i64,
-    cids23: i64,
-    slot: i32,
-    off: i32,
-    kind_mask: i32,
-    flags: i32,
-    site: Witness<RAW>,
-) -> i32 {
+macro_rules! check_field {
+    ($obj:expr, $value:expr, $key:expr, $cids01:expr, $cids23:expr, $slot:expr, $off:expr, $kind_mask:expr, $flags:expr, $site:expr $(,)?) => {{
+        let obj = $obj;
+        let value = $value;
+        let key = $key;
+        let cids01 = $cids01;
+        let cids23 = $cids23;
+        let slot = $slot;
+        let off = $off;
+        let kind_mask = $kind_mask;
+        let flags = $flags;
+        let site = $site;
     let (site, flags, slot, off, kind_mask) = (
         site,
         flags as u32,
@@ -315,6 +281,69 @@ fn perry_wpfacts_check_field_impl<const RAW: bool>(
         );
     }
     0
+    }};
+}
+
+/// One elided field access. `cids01`/`cids23` carry up to four class ids
+/// (low half first; `u32::MAX` = none); `slot` names the key, `off` is the
+/// byte offset from the object the access used. Returns 0.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn perry_wpfacts_check_field(
+    obj: f64,
+    value: f64,
+    key: i64,
+    cids01: i64,
+    cids23: i64,
+    slot: i32,
+    off: i32,
+    kind_mask: i32,
+    flags: i32,
+    site: i64,
+) -> i32 {
+    let key = string_bytes(key as usize as *const StringHeader).unwrap_or_default();
+    check_field!(
+        obj,
+        value,
+        &key,
+        cids01,
+        cids23,
+        slot,
+        off,
+        kind_mask,
+        flags,
+        Witness::legacy(site),
+    )
+}
+
+macro_rules! check_call {
+    ($callee:expr, $argc:expr, $site:expr) => {{
+        let (callee, argc, site) = ($callee, $argc, $site);
+        let site = site.callee(callee.to_bits());
+        CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bits = callee.to_bits();
+        if bits & TAG_MASK != POINTER_TAG {
+            site.fail(
+                "callee set",
+                format!("callee bits {bits:#018x} are not a function object"),
+            );
+        }
+        let closure = (bits & POINTER_MASK) as usize as *const crate::closure::ClosureHeader;
+        let Some(info) = crate::closure::closure_info(closure) else {
+            site.fail(
+                "callee set",
+                format!("callee {closure:p} is not a function object"),
+            );
+        };
+        let params = info.plain_params();
+        if params == crate::codegen_abi::NOT_PLAIN || i64::from(params) > argc {
+            site.fail(
+                "call form",
+                format!("the body declares {params} plain parameters, the site passes {argc}"),
+            );
+        }
+        info
+    }};
 }
 
 /// One elided call (FVA): a call through a value or a field whose callee
@@ -330,39 +359,7 @@ pub extern "C" fn perry_wpfacts_check_call(
     argc: i64,
     site: i64,
 ) -> *const crate::closure::JsFunctionInfo {
-    perry_wpfacts_check_call_impl(callee, argc, Witness::legacy(site))
-}
-
-#[inline(always)]
-fn perry_wpfacts_check_call_impl<const RAW: bool>(
-    callee: f64,
-    argc: i64,
-    site: Witness<RAW>,
-) -> *const crate::closure::JsFunctionInfo {
-    let site = site.callee(callee.to_bits());
-    CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let bits = callee.to_bits();
-    if bits & TAG_MASK != POINTER_TAG {
-        site.fail(
-            "callee set",
-            format!("callee bits {bits:#018x} are not a function object"),
-        );
-    }
-    let closure = (bits & POINTER_MASK) as usize as *const crate::closure::ClosureHeader;
-    let Some(info) = crate::closure::closure_info(closure) else {
-        site.fail(
-            "callee set",
-            format!("callee {closure:p} is not a function object"),
-        );
-    };
-    let params = info.plain_params();
-    if params == crate::codegen_abi::NOT_PLAIN || i64::from(params) > argc {
-        site.fail(
-            "call form",
-            format!("the body declares {params} plain parameters, the site passes {argc}"),
-        );
-    }
-    info
+    check_call!(callee, argc, Witness::legacy(site))
 }
 
 /// The callee's body is none of the proven set (`perry_wpfacts_check_call`).
@@ -447,7 +444,29 @@ pub unsafe extern "C" fn perry_verify_facts_field(
     site: i64,
     site_len: i64,
 ) -> i32 {
-    perry_wpfacts_check_field_impl(
+    zzz_perry_verify_facts_field(
+        obj, value, key, key_len, cids01, cids23, slot, off, kind_mask, flags, site, site_len,
+    )
+}
+
+#[no_mangle]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn zzz_perry_verify_facts_field(
+    obj: f64,
+    value: f64,
+    key: i64,
+    key_len: i64,
+    cids01: i64,
+    cids23: i64,
+    slot: i32,
+    off: i32,
+    kind_mask: i32,
+    flags: i32,
+    site: i64,
+    site_len: i64,
+) -> i32 {
+    check_field!(
         obj,
         value,
         std::slice::from_raw_parts(key as usize as *const u8, key_len as usize),
@@ -468,7 +487,18 @@ pub extern "C" fn perry_verify_facts_call(
     site: i64,
     site_len: i64,
 ) -> *const crate::closure::JsFunctionInfo {
-    perry_wpfacts_check_call_impl(callee, argc, Witness::raw(site, site_len))
+    zzz_perry_verify_facts_call(callee, argc, site, site_len)
+}
+
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn zzz_perry_verify_facts_call(
+    callee: f64,
+    argc: i64,
+    site: i64,
+    site_len: i64,
+) -> *const crate::closure::JsFunctionInfo {
+    check_call!(callee, argc, Witness::raw(site, site_len))
 }
 
 #[no_mangle]
@@ -479,10 +509,7 @@ pub extern "C" fn perry_verify_facts_call_miss(
 ) -> i32 {
     Witness::raw(site, site_len)
         .callee(info as usize as u64)
-        .fail(
-            "callee set",
-            format!("body info {info:p} is not a proven body"),
-        )
+        .fail("callee set", String::new())
 }
 
 #[no_mangle]

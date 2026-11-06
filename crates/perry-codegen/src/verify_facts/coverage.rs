@@ -65,7 +65,14 @@ impl Fact {
     }
 }
 
-static RECORDS: Mutex<BTreeMap<String, Value>> = Mutex::new(BTreeMap::new());
+struct Inventory {
+    claims: BTreeMap<String, Value>,
+    copies: BTreeMap<(String, u64), Vec<Value>>,
+}
+static RECORDS: Mutex<Inventory> = Mutex::new(Inventory {
+    claims: BTreeMap::new(),
+    copies: BTreeMap::new(),
+});
 
 pub(crate) fn consumed(fact: Fact, operands: impl FnOnce() -> Value) {
     if !enabled() {
@@ -79,27 +86,43 @@ pub(crate) fn checked(fact: Fact, operands: Value) {
 }
 
 fn record(predicate: &str, operands: Value, checked: bool) {
-    let (module, offset, copy) = MODULE.with(|m| {
+    let (module, offset, copy, emission) = MODULE.with(|m| {
         let m = m.borrow();
         match m.as_ref() {
             Some(m) => (
                 m.name.clone(),
                 SITE.with(|s| s.get().map(|s| s.0.saturating_sub(1))),
                 m.copy.clone(),
+                m.ordinal,
             ),
-            None => ("<program>".to_owned(), None, "<layout planning>".to_owned()),
+            None => (
+                "<program>".to_owned(),
+                None,
+                "<layout planning>".to_owned(),
+                0,
+            ),
         }
     });
     let site_copy = COPY_SITE.with(|s| s.get());
     let identity = json!([module, offset, copy, site_copy, predicate, operands]).to_string();
     let mut records = RECORDS.lock().expect("verification coverage poisoned");
-    let entry = records.entry(identity.clone()).or_insert_with(|| json!({
+    let entry = records.claims.entry(identity.clone()).or_insert_with(|| json!({
         "identity":identity, "module":module, "byte_offset":offset, "copy":{"body":copy,"site":site_copy},
         "predicate":predicate,"operands":operands,"check":null,
         "reason":"not covered before slice S6"}));
     if checked {
         entry["check"] = json!(predicate);
         entry["reason"] = Value::Null;
+        let emissions = entry
+            .as_object_mut()
+            .unwrap()
+            .entry("raw_emissions")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap();
+        if !emissions.contains(&json!(emission)) {
+            emissions.push(json!(emission));
+        }
     }
 }
 
@@ -135,10 +158,48 @@ pub(crate) fn entry(id: u32, name: &str, copy: &str) {
 }
 
 pub fn take_manifest() -> Vec<String> {
-    std::mem::take(&mut *RECORDS.lock().expect("verification coverage poisoned"))
-        .into_values()
-        .map(|r| r.to_string())
-        .collect()
+    let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+    let claims = std::mem::take(&mut inventory.claims);
+    let copies = std::mem::take(&mut inventory.copies);
+    claims.into_values().map(|mut r| {
+        if let Some(emissions) = r.as_object_mut().unwrap().remove("raw_emissions") {
+            let mut checks = Vec::new();
+            let mut optimized = true;
+            for emission in emissions.as_array().unwrap() {
+                let identity = (r["module"].as_str().unwrap().to_owned(), emission.as_u64().unwrap());
+                match copies.get(&identity) {
+                    Some(c) => checks.extend(c.iter().cloned()),
+                    None => optimized = false,
+                }
+            }
+            assert!(optimized, "checked claim did not reach final copy accounting: {r}");
+            if checks.is_empty() {
+                r["check"] = Value::Null;
+                r["dead"] = json!("LLVM optimization removed every use of this failure site's static metadata");
+            } else {
+                r["emitted_checks"] = json!(checks);
+            }
+        }
+        r.to_string()
+    }).collect()
+}
+
+pub(super) fn optimized(origins: &[(String, u64)]) {
+    let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+    for origin in origins {
+        inventory.copies.entry(origin.clone()).or_default();
+    }
+}
+
+pub(super) fn emitted(module: &str, emission: u64, copy: Value) {
+    let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+    let copies = inventory
+        .copies
+        .entry((module.to_owned(), emission))
+        .or_default();
+    if !copies.contains(&copy) {
+        copies.push(copy);
+    }
 }
 
 pub(crate) fn number(id: u32) {
@@ -157,8 +218,7 @@ pub(crate) fn normal_call_miss(class: &str, key: &str) {
 }
 
 pub(crate) fn reset() {
-    RECORDS
-        .lock()
-        .expect("verification coverage poisoned")
-        .clear();
+    let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+    inventory.claims.clear();
+    inventory.copies.clear();
 }

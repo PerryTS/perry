@@ -205,6 +205,10 @@ pub(super) fn emit_tower_pshape_call(
 
     ctx.current_block = generic_idx;
     if verify {
+        crate::verify_facts::covered(
+            crate::verify_facts::Fact::FixedLayout,
+            || serde_json::json!({"class":cid}),
+        );
         let site = crate::verify_facts::site_arg(
             ctx,
             &format!(

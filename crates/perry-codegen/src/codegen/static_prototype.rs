@@ -136,7 +136,11 @@ pub(crate) fn collect(
                     match symbols.iter_mut().find(|(k, _)| *k == spelling) {
                         None => symbols.push((
                             spelling,
-                            (m.function.id, method.then_some(m), if method { 2 } else { 10 | half }),
+                            (
+                                m.function.id,
+                                method.then_some(m),
+                                if method { 2 } else { 10 | half },
+                            ),
                         )),
                         // A redefined symbol member takes the general path.
                         Some((_, entry)) => {
@@ -318,7 +322,8 @@ pub(crate) fn chain(
                 .constfn
                 .iter()
                 .any(|entry| entry.slot as usize == slot)
-                && (c.methods
+                && (c
+                    .methods
                     .iter()
                     .any(|m| m.name == method && !m.is_async && !m.is_generator)
                     || declared_symbol_method(c, method).is_some()))

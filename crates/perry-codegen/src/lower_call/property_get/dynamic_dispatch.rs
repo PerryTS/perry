@@ -672,6 +672,7 @@ fn lower_instance_method_call(
                         .as_ref()
                         .map(|(map, _)| map.iter().map(|&(cid, _)| cid).collect())
                         .unwrap_or_default();
+                    crate::expr::wpfacts_access::receiver_checked(ctx, object);
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("method .{property} receiver class_ids={ids:?}"),
