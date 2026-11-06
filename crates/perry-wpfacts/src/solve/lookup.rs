@@ -449,6 +449,12 @@ impl Model {
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::LoadFrom(
+            origin, t, key, dst,
+        )) {
+            return;
+        }
         self.mark_use(t, crate::model::MARK_READ);
         // A class private field on an object this unit does not own: what
         // the class's code stored (`private_field`).

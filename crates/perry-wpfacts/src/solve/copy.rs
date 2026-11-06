@@ -14,6 +14,10 @@ impl Model {
 
     /// Copy edge a → b (pts(a) ⊆ pts(b)).
     pub fn edge(&mut self, a: NodeId, b: NodeId) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Edge(a, b)) {
+            return;
+        }
         self.edge_impl(a, b, true);
     }
 

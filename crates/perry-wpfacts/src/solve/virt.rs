@@ -172,6 +172,8 @@ impl Model {
             self.atoms[a as usize], self.tmpls[tm as usize].display
         );
         self.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: 0,
             func_id: u32::MAX,
             name,
