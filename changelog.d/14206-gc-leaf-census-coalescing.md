@@ -1,0 +1,1 @@
+A small-space collection near the Eden window no longer runs a whole young-cell leaf census for each tiny leaf birth: a leaf service now also needs a quarter-window of young leaves. Every owed GC check still runs and young memory stays bounded. On the Supabase CLI, `--version` startup drops by 85.7 M instructions (leaf services 4 to 1).
