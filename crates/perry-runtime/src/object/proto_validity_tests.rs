@@ -58,3 +58,87 @@ fn marking_is_visible_and_arms_the_latch() {
         );
     }
 }
+
+/// A runtime intrinsic holder born on the born-prototype lineage
+/// (`shapes::stamp_born_prototype_root`) takes its prototype mark without a
+/// shape transition: its ShapeId does not move. The control, the same build
+/// without the born root, still mints its private lineage at the mark, and
+/// that lineage is never the born generation.
+#[test]
+fn a_born_prototype_holder_is_marked_without_a_transition() {
+    use crate::object::shapes::{object_on_born_prototype_lineage, object_shape_stamp};
+    let _scope = Scope::new();
+    unsafe {
+        let holder = crate::object::object_alloc_prototype_old(0, 2);
+        crate::object::shapes::stamp_born_prototype_root(holder);
+        assert!(object_on_born_prototype_lineage(holder));
+        set(holder, "pv_born_a", 1.0);
+        assert!(
+            object_on_born_prototype_lineage(holder),
+            "a key add carries the born lineage"
+        );
+        let before = object_shape_stamp(holder);
+        mark_object_as_prototype(holder as usize);
+        assert!(object_is_marked_prototype(holder as usize));
+        assert_eq!(
+            object_shape_stamp(holder).0,
+            before.0,
+            "a born-lineage holder's mark mints no shape"
+        );
+
+        let plain = crate::object::object_alloc_prototype_old(0, 2);
+        set(plain, "pv_born_a", 1.0);
+        assert!(!object_on_born_prototype_lineage(plain));
+        let before = object_shape_stamp(plain);
+        mark_object_as_prototype(plain as usize);
+        assert!(object_is_marked_prototype(plain as usize));
+        assert_ne!(
+            object_shape_stamp(plain).0,
+            before.0,
+            "an ordinary object's mark mints its private lineage"
+        );
+        assert!(
+            !object_on_born_prototype_lineage(plain),
+            "the counter never hands out the born generation"
+        );
+    }
+}
+
+/// The generator prototypes and the built-in iterator prototypes are born on
+/// the born-prototype lineage, so their seals (#14165, #14185) cost no shape
+/// mint at startup: each is marked, sealed, and still on that lineage.
+#[test]
+fn the_generator_and_iterator_prototypes_keep_their_born_lineage() {
+    use crate::object::shapes::object_on_born_prototype_lineage;
+    let _scope = Scope::new();
+    crate::object::ensure_generator_intrinsics();
+    let _ = crate::object::iterator_ctor::iterator_prototype_object();
+    let mut holders = Vec::new();
+    for slot in [
+        &crate::object::GENERATOR_PROTOTYPE_PTR,
+        &crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR,
+        &crate::object::iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
+        &crate::object::iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
+        &crate::object::iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
+        &crate::object::iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+    ] {
+        holders.push(slot.load(std::sync::atomic::Ordering::Acquire) as *mut crate::object::ObjectHeader);
+    }
+    for holder in holders {
+        assert!(!holder.is_null());
+        unsafe {
+            assert!(object_is_marked_prototype(holder as usize));
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder));
+            assert!(
+                !meta.is_null()
+                    && (*meta).flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
+                        != 0,
+                "sealed"
+            );
+            assert!(
+                object_on_born_prototype_lineage(holder),
+                "the seal took no private-lineage transition"
+            );
+        }
+    }
+}
