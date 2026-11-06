@@ -538,6 +538,10 @@ pub fn run_with_parse_cache(
     if args.target.as_deref() == Some("wasi") {
         perry_codegen::wasi_toolchain::check()?;
     }
+    if perry_codegen::verify_facts::enabled() {
+        std::env::set_var("PERRY_NO_CACHE", "1");
+        perry_codegen::verify_facts::reset();
+    }
     if perry_codegen::fallback_diag::enabled() {
         perry_codegen::fallback_diag::reset();
     }
@@ -8045,6 +8049,9 @@ pub fn run_with_parse_cache(
     asset_manifest::write(&ctx, &embedded_assets, format)?;
 
     if args.no_link {
+        if perry_codegen::verify_facts::enabled() {
+            perry_codegen::verify_facts::write_manifest(&exe_path)?;
+        }
         let codegen_cache_stats = if object_cache.is_enabled() {
             Some((
                 object_cache.hits(),

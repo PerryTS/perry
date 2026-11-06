@@ -299,6 +299,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         crate::expr::wpfacts_access::proves_static(ctx, cid, method_name)
                     });
                 let contracts = crate::verify_facts::witnesses();
+                if proven {
+                    crate::verify_facts::tick(ctx);
+                }
                 let static_cid = static_cid.filter(|_| !proven || contracts);
                 // The class whose ClassBody declares the body this call runs.
                 let owner_cid = {

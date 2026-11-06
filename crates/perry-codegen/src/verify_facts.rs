@@ -91,9 +91,19 @@ pub(crate) struct SiteGuard {
 
 /// Lowering `e` starts: a source site (a call, read, write) becomes the
 /// innermost site until the guard drops.
-pub(crate) fn enter(e: &Expr) -> Option<SiteGuard> {
+pub(crate) fn enter(e: &Expr, copy: &str) -> Option<SiteGuard> {
     if !witnesses() {
         return None;
+    }
+    if enabled() {
+        MODULE.with(|m| {
+            if let Some(m) = m.borrow_mut().as_mut() {
+                if m.copy != copy {
+                    m.copy.clear();
+                    m.copy.push_str(copy);
+                }
+            }
+        });
     }
     let here = crate::facts_consumed::site_of(e).map(|(s, _, k)| (s, k));
     let outer = SITE.with(|s| s.get());
@@ -375,4 +385,24 @@ pub(crate) fn number_checked(id: u32) {
 
 pub(crate) fn normal_call_miss(class: &str, key: &str) {
     coverage::normal_call_miss(class, key);
+}
+
+pub fn reset() {
+    if enabled() {
+        coverage::reset();
+    }
+}
+
+pub fn write_manifest(path: &std::path::Path) -> std::io::Result<()> {
+    if !enabled() {
+        return Ok(());
+    }
+    let path = std::path::PathBuf::from(format!("{}.facts.jsonl", path.display()));
+    std::fs::write(path, take_manifest().join("\n") + "\n")
+}
+
+pub(crate) fn tick(ctx: &mut FnCtx<'_>) {
+    if enabled() {
+        ctx.block().call_void("perry_verify_facts_tick", &[]);
+    }
 }

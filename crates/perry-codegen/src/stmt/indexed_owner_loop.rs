@@ -650,6 +650,7 @@ fn boxed_binding(ctx: &mut FnCtx<'_>, id: u32) -> String {
 /// A facts-verification build (`verify_facts`): the input the facts prove a
 /// Number is one, or the witness reports the site.
 fn verify_number_input(ctx: &mut FnCtx<'_>, number: &str, value: &str, id: u32) {
+    crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("indexed.owner.verify_miss");
     let miss_l = ctx.block_label(miss);
     branch_guard(ctx, number, &miss_l);

@@ -161,7 +161,7 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
                 crate::facts_consumed::used();
                 crate::verify_facts::consumed(
                     crate::verify_facts::Fact::Receiver,
-                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable}),
+                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
                 );
                 (r.clone(), format!("local {id}"))
             })
@@ -176,7 +176,7 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
                 crate::facts_consumed::used();
                 crate::verify_facts::consumed(
                     crate::verify_facts::Fact::Receiver,
-                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable}),
+                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
                 );
                 (r.clone(), format!("this of fn {fid}"))
             })

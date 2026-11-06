@@ -562,6 +562,7 @@ fn lower_instance_method_call(
                             .expect("a proven class's implementor is cased")
                     };
                     let contracts = crate::verify_facts::witnesses();
+                    crate::verify_facts::tick(ctx);
                     let (listed, default) = if *nullable || contracts {
                         (&map[..], generic_label.clone())
                     } else {

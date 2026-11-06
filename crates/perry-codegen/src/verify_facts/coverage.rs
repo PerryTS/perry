@@ -110,7 +110,7 @@ pub(crate) fn field(p: &crate::expr::wpfacts_access::FieldProof, key: &str, chec
     for (fact, operands) in [
         (
             Fact::Receiver,
-            json!({"classes":p.class_ids,"nullable":p.nullable}),
+            json!({"classes":p.class_ids,"nullable":p.nullable,"guarded":p.guarded()}),
         ),
         (
             Fact::Slot,
@@ -154,4 +154,11 @@ pub(crate) fn normal_call_miss(class: &str, key: &str) {
         json!({"class":class,"key":key}),
         true,
     );
+}
+
+pub(crate) fn reset() {
+    RECORDS
+        .lock()
+        .expect("verification coverage poisoned")
+        .clear();
 }

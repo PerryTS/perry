@@ -97,6 +97,10 @@ pub(crate) fn shadow_tests() -> bool {
 /// Missing facts decline the proof; no program-wide dynamic-code veto.
 pub(crate) fn heritage_is_unrelinked(ctx: &crate::expr::FnCtx<'_>, class_id: u32) -> bool {
     if ctx.wpfacts.super_unrelinked.contains_key(&class_id) {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Super,
+            || serde_json::json!({"class":class_id,"parent":ctx.wpfacts.super_unrelinked[&class_id]}),
+        );
         return true;
     }
     // Unit tests install a complete synthetic program census. Production
@@ -551,6 +555,10 @@ pub(crate) fn lower_known_holder_read(
         property: property.to_string(),
         byte_offset: *byte_offset,
     };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ProtoHolder,
+        || serde_json::json!({"holder":holder,"key":property}),
+    );
     Some((|| {
         let tests = shadow_tests();
         if !tests && !crate::codegen::helpers::check_contracts() {

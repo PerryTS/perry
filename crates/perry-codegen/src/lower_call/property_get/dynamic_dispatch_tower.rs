@@ -154,6 +154,9 @@ pub(super) fn emit_tower_pshape_call(
 ) -> String {
     // A facts-verification build keeps the recheck: its miss is the witness.
     let verify = layout_proven && crate::verify_facts::enabled();
+    if verify {
+        crate::verify_facts::tick(ctx);
+    }
     if layout_proven && !verify {
         return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
     }

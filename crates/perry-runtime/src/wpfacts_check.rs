@@ -488,6 +488,7 @@ pub extern "C" fn perry_verify_facts_miss(value: f64, site: i64, site_len: i64) 
 
 #[no_mangle]
 pub extern "C" fn perry_verify_facts_entry(site: i64, site_len: i64) {
+    CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Witness::raw(site, site_len).fail("inactive body", "body entered".into())
 }
 
@@ -502,4 +503,10 @@ pub extern "C" fn perry_verify_facts_init() {
             }
         }
     });
+}
+
+/// Count one already-emitted inline predicate without allocating or collecting.
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_tick() {
+    CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
