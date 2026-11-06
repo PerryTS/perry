@@ -560,7 +560,7 @@ impl Model {
         }
     }
 
-    fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
+    pub(super) fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             if self.foreign_ctor_returns.contains(&c) {

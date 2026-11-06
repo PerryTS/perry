@@ -17,6 +17,7 @@ mod own_read;
 use crate::builtins;
 mod call_and_construct;
 mod native_value;
+mod reflect_construct;
 mod shared;
 use crate::delta::Tokens;
 use crate::model::*;
@@ -1265,6 +1266,10 @@ impl Model {
             Cons::Call { call } => format!("call {n} {call}"),
             Cons::CallThis { call, this } => format!("callthis {n} {call} {this}"),
             Cons::New { call } => format!("new {n} {call}"),
+            Cons::ReflectNew { call, new_target } => format!("reflectnew {n} {call} {new_target}"),
+            Cons::ReflectNewTarget { call, target } => {
+                format!("reflectnewtarget {n} {call} {target}")
+            }
             Cons::NewNamed { name, call } => format!(
                 "newnamed {n} {} {call}",
                 esc_key(&self.atoms[*name as usize])
