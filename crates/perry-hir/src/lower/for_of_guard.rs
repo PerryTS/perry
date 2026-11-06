@@ -224,7 +224,7 @@ fn source_for_of(
         out.push(Stmt::Let {
             id: source,
             name: source_name.clone(),
-            ty: source_ty,
+            ty: source_ty.clone(),
             mutable: false,
             init: Some(value),
         });
@@ -239,10 +239,22 @@ fn source_for_of(
             },
             _ => Type::Array(Box::new(Type::Any)),
         };
-        let array = ctx.fresh_local();
+        // A source already typed as that array is walked through the temp
+        // itself. For a Number array the counted entry below
+        // (`arrayRecordNeedsIterator(t, true)`) admits the packed-f64 loop over
+        // `t` in the same runtime call as the proof, so the loop needs no
+        // guard call of its own.
+        let walk_source = array_ty == source_ty;
+        let array = if walk_source {
+            source
+        } else {
+            ctx.fresh_local()
+        };
         let array_name = format!("{TEMP_PREFIX}arr_{array}");
-        ctx.locals
-            .push((array_name.clone(), array, array_ty.clone()));
+        if !walk_source {
+            ctx.locals
+                .push((array_name.clone(), array, array_ty.clone()));
+        }
         let element_ty = match &array_ty {
             Type::Array(element) => element.as_ref().clone(),
             _ => Type::Any,
@@ -312,17 +324,21 @@ fn source_for_of(
         // The IteratorRecord's own array-mode proof: an ordinary array whose
         // iteration members (its prototype's, the array iterator's) nobody
         // replaced. It reads the program's iteration facts itself.
+        // Only a Number array can take the packed-f64 loop; asking any other
+        // source for the admission would scan its slots for nothing.
+        let mut entry_args = vec![Expr::LocalGet(source)];
+        if walk_source && matches!(&array_ty, Type::Array(e) if **e == Type::Number) {
+            entry_args.push(Expr::Bool(true));
+        }
         let plain = Expr::Compare {
             op: CompareOp::Eq,
-            left: Box::new(runtime(
-                "arrayRecordNeedsIterator",
-                vec![Expr::LocalGet(source)],
-            )),
+            left: Box::new(runtime("arrayRecordNeedsIterator", entry_args)),
             right: Box::new(Expr::Bool(false)),
         };
-        out.push(Stmt::If {
-            condition: plain,
-            then_branch: vec![
+        let then_branch = if walk_source {
+            vec![counted]
+        } else {
+            vec![
                 Stmt::Let {
                     id: array,
                     name: array_name,
@@ -331,7 +347,11 @@ fn source_for_of(
                     init: Some(Expr::LocalGet(source)),
                 },
                 counted,
-            ],
+            ]
+        };
+        out.push(Stmt::If {
+            condition: plain,
+            then_branch,
             else_branch: Some(protocol),
         });
         Ok(())

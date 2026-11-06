@@ -881,6 +881,34 @@ mod tests {
         }
     }
 
+    /// The walk's entry over a source typed as an array walks the source temp
+    /// itself; a Number array also asks for the packed-loop admission in the
+    /// same call (`arrayRecordNeedsIterator(t, true)`). A module `const` reads
+    /// the same way from inside a function.
+    #[test]
+    fn source_walk_entry_follows_the_source_type() {
+        let walk_entry = |ir: &str| {
+            let at = ir.find("\"arrayRecordNeedsIterator\"").expect(ir);
+            let entry = &ir[at..];
+            entry[..entry.find(']').unwrap()].to_string()
+        };
+        for source in [
+            "function f(a: number[]) { let s = 0; for (const x of a) s += x; return s; }",
+            "const K = [1, 2, 3]; function f() { let s = 0; for (const x of K) s += x; return s; }",
+            "let K = [1, 2, 3]; function f() { let s = 0; for (const x of K) s += x; return s; }",
+        ] {
+            let ir = hir(source);
+            assert!(walk_entry(&ir).contains("Bool(true)"), "{ir}");
+            assert!(!ir.contains("__forof_lit_arr_"), "{ir}");
+        }
+        let strings = hir("function f(a: string[]) { for (const x of a) console.log(x); }");
+        assert!(!walk_entry(&strings).contains("Bool(true)"), "{strings}");
+        assert!(!strings.contains("__forof_lit_arr_"), "{strings}");
+        let erased = hir("function f(a: any) { for (const x of a) console.log(x); }");
+        assert!(!walk_entry(&erased).contains("Bool(true)"), "{erased}");
+        assert!(erased.contains("__forof_lit_arr_"), "{erased}");
+    }
+
     #[test]
     fn literal_binding_step_preserves_exact_close_cursor_without_indexing() {
         let mut ctx = LoweringContext::new("literal");
