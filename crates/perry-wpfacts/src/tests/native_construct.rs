@@ -193,3 +193,41 @@ for (const x of k) console.log(x);
 "#,
     );
 }
+
+/// `map` and `filter` of an array run their declarations: ArraySpeciesCreate
+/// reads the receiver's `constructor`, and a program constructor there is
+/// constructed (`species(this, ...)`, `Cons::NewProgram`).
+#[test]
+fn a_declared_species_method_constructs_the_receivers_constructor() {
+    runs(
+        "map",
+        r#"
+function hit() { return 1; }
+class Other extends Array { constructor(n: any) { super(); hit(); } }
+const a: any = [1, 2];
+a.constructor = Other;
+console.log(a.map((x: any) => x).length);
+"#,
+    );
+    runs(
+        "filter",
+        r#"
+function hit() { return 1; }
+class Other extends Array { constructor(n: any) { super(); hit(); } }
+const a: any = [1, 2];
+a.constructor = Other;
+console.log(a.filter((x: any) => x > 1).length);
+"#,
+    );
+    stays(
+        "constructor of another array",
+        r#"
+function hit() { return 1; }
+class Other extends Array { constructor(n: any) { super(); hit(); } }
+const a: any = [1, 2];
+const b: any = [3];
+b.constructor = Other;
+console.log(a.map((x: any) => x).length, b.length);
+"#,
+    );
+}

@@ -539,18 +539,21 @@ pub(crate) fn construct_into(
 }
 
 /// ArraySpeciesCreate's construct for template `out` of `call`
-/// (`array_species`): `new C(length)` of a program species `C`, a call of
-/// its own, its result one of `call`'s.
-fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId) {
+/// (`array_species`): `new C(...args)` of a program species `C` (`None`:
+/// `new C(length)`), a call of its own, its result one of `call`'s.
+fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Option<Vec<NodeId>>) {
     let c = m.calls[call as usize].clone();
-    let num = m.node_l("species-length");
-    m.add_prim(num, prim::NUM);
+    let args = args.unwrap_or_else(|| {
+        let num = m.node_l("species-length");
+        m.add_prim(num, prim::NUM);
+        vec![num]
+    });
     let made = m.node_l("species-constructed");
     let mc = m.solver_call(
         call,
         CallSite {
             this: ThisArg::Undef,
-            args: vec![num],
+            args,
             spread: vec![],
             ret: made,
             site: c.site,
@@ -609,8 +612,14 @@ fn species_link(m: &mut Model, tm: TmplId, cn: NodeId) -> bool {
 /// `out` (a call's array) is made from receiver `t` with ArraySpeciesCreate
 /// (`array_species`). What `t.constructor` reads depends on `t` alone: one
 /// constructor node per receiver token, made on first use, linked to each
-/// call's template.
-fn species_from(m: &mut Model, out: Tok, t: Tok, call: CallId) {
+/// call's template. `args`: what the construct passes (`species_construct`).
+pub(super) fn species_from(
+    m: &mut Model,
+    out: Tok,
+    t: Tok,
+    call: CallId,
+    args: Option<Vec<NodeId>>,
+) {
     let tm = m.tmpl_of(out).expect("site template");
     let cn = match m.species_ctor.get(&t) {
         Some(&n) => n,
@@ -624,7 +633,7 @@ fn species_from(m: &mut Model, out: Tok, t: Tok, call: CallId) {
     };
     if species_link(m, tm, cn) {
         let sc = m.tmpls[tm as usize].species.expect("species node");
-        species_construct(m, out, sc, call);
+        species_construct(m, out, sc, call, args);
     }
 }
 
@@ -696,7 +705,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
-            species_from(m, out, t, call);
+            species_from(m, out, t, call, None);
             ret_tok(m, call, out);
         }
         // Arrays and strings are iterables, not iterators: no `next`,
@@ -728,7 +737,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
-            species_from(m, out, t, call);
+            species_from(m, out, t, call, None);
             ret_tok(m, call, out);
         }
         // In place: the receiver itself.
@@ -740,7 +749,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         Some("slice" | "concat" | "toReversed" | "flat" | "with" | "toSpliced") => {
             let out = site_tmpl(m, call, "Array");
             if matches!(name, Some("slice" | "concat" | "flat")) {
-                species_from(m, out, t, call);
+                species_from(m, out, t, call, None);
             }
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
@@ -793,40 +802,25 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `forEach` is declared, kept here: its declaration passes the
         // callback a Map/Set receiver's key as the second argument
         // (`prim(num) | elems(this)`), an array's is a number. `map` and
-        // `filter` are declared, kept here: the runtime builds their result
-        // by ArraySpeciesCreate (`js_array_map` / `js_array_filter` read
-        // the receiver's `constructor` and `@@species`); the interpreter
-        // refuses their species declarations.
-        Some(
-            "forEach" | "map" | "filter" | "findIndex" | "findLast" | "findLastIndex" | "flatMap",
-        ) => {
+        // `filter` run their declarations (`species(this, ...)`).
+        Some("forEach" | "findIndex" | "findLast" | "findLastIndex" | "flatMap") => {
             let Some(&cb) = c.args.first() else {
                 return;
             };
             let r = cb_call(m, call, cb, this_arg(1), vec![elems, num, recv]);
             match name {
-                Some("map" | "flatMap") => {
+                Some("flatMap") => {
                     let out = site_tmpl(m, call, "Array");
-                    species_from(m, out, t, call);
+                    species_from(m, out, t, call, None);
                     let ofa = m.field_any(out);
                     m.edge(r, ofa);
-                    if name == Some("flatMap") {
-                        m.cons(
-                            r,
-                            Cons::Load {
-                                key: Key::any(),
-                                dst: ofa,
-                            },
-                        );
-                    }
-                    ret_tok(m, call, out);
-                }
-                // A new array of some of the receiver's elements.
-                Some("filter") => {
-                    let out = site_tmpl(m, call, "Array");
-                    species_from(m, out, t, call);
-                    let ofa = m.field_any(out);
-                    m.edge(elems, ofa);
+                    m.cons(
+                        r,
+                        Cons::Load {
+                            key: Key::any(),
+                            dst: ofa,
+                        },
+                    );
                     ret_tok(m, call, out);
                 }
                 Some("findLast") => {
