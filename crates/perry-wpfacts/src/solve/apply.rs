@@ -853,6 +853,14 @@ impl Model {
                         self.reshape(Some(key));
                     }
                     if t == TOP {
+                        // An accessor installed on a value from unmodeled
+                        // code (a native object, a built-in prototype the
+                        // model gives as ⊤) is that code's to run, as a
+                        // value stored there is (`store_into`): every read
+                        // of the key there, by compiled code or by the
+                        // runtime, may call it with any receiver.
+                        let r = self.reason("accessor installed on a value from unmodeled code");
+                        self.escape(f, r);
                         continue;
                     }
                     if key == star && !builtins::accessor_receiver(self, t, key) {
