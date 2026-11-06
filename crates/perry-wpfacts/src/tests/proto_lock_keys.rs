@@ -33,16 +33,17 @@ fn v_proven(src: &str, marker: &str) -> (bool, String) {
 }
 
 /// `holder` is the receiver of `holder[k](n)`; `store` runs before. `top`
-/// comes from an unseen module (each program loads one).
+/// is a global under a computed key: unknown, and no unseen module runs
+/// (one could replace the global `Map` the arms read).
 fn program(holder: &str, store: &str, key: &str) -> String {
-    unseen(&format!(
+    format!(
         "class N {{ v = 1; }}
         const tab: any = {holder};
-        const top: any = (globalThis as any).someHost;
+        const top: any = (globalThis as any)[process.argv[2]];
         {store}
         function run(k: any, n: N): number {{ return tab[k](n); }}
         console.log(run({key}, new N()), run({key}, new N()));"
-    ))
+    )
 }
 
 const TABLE: &str = "{ 0: function (n: N) { return /*A*/ n.v; }, 1: (n: N) => n.v + 1 }";
@@ -81,14 +82,14 @@ fn computed_key_meets_the_exempt_constructor() {
 #[test]
 fn open_chain_still_takes_the_number_key_write() {
     let src = |store: &str| {
-        unseen(&format!(
+        format!(
             "class N {{ v = 1; }}
-            const top: any = (globalThis as any).someHost;
+            const top: any = (globalThis as any)[process.argv[2]];
             {store}
             const mp: any = new Map();
             function run(k: number, n: N): number {{ try {{ mp[k](n); }} catch {{}} return /*A*/ n.v; }}
             console.log(run(Math.random() > 0.5 ? 1 : 0, new N()));"
-        ))
+        )
     };
     let (p, dump) = v_proven(&src("top[0] = 1;"), "/*A*/");
     assert!(!p, "the Map chain must replay the number-key write\n{dump}");

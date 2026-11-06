@@ -279,6 +279,34 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     }
 }
 
+/// Global `n`, which the realm declares as namespace `ns` (`Error`, `Math`),
+/// read off the global object `t` (`globalThis.Error`, or the bare name off
+/// the HIR sentinel, the same object): what the program stored under the
+/// key (the global's field, as for a program-owned global), and the
+/// realm's value. A key some other writer may have written
+/// (`global_value_written`: unmodeled code, an accessor, a write under any
+/// key) also reads ⊤, and what the program stored there reaches unmodeled
+/// code; a later such write replays the read (`NativeMiss::Global`) to the
+/// same result.
+fn declared_global_load(m: &mut Model, t: Tok, ns: BuiltinNs, n: &str, dst: NodeId) {
+    if !m.unit_mode {
+        let a = m.atom(n);
+        let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let f = global_field(m, g, a);
+        m.edge(f, dst);
+        if global_value_written(m, t, a) {
+            m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
+            m.add_prim(dst, prim::ALL);
+            let r = m.reason(&format!("globalThis.{n} reaches unmodeled code"));
+            m.sink_node(f, r);
+        } else {
+            m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
+        }
+    }
+    let bt = m.tok(TokKind::Builtin(ns));
+    m.add_tok(dst, bt);
+}
+
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
@@ -288,8 +316,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
             Some(n) => {
                 if let Some(ns) = ns_by_name(n) {
-                    let bt = m.tok(TokKind::Builtin(ns));
-                    m.add_tok(dst, bt);
+                    declared_global_load(m, t, ns, n, dst);
                 } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
@@ -311,7 +338,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some(n) if global_user_key(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
                     let f = global_field(m, t, a);
-                    if native_written(m, t, a) {
+                    if global_value_written(m, t, a) {
                         if m.explain {
                             let op = m.tok_index.get(&TokKind::ObjectProto).copied();
                             let hits: Vec<String> = m
@@ -348,8 +375,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     tok_load(m, op, key, dst);
                 }
                 Some(n) if ns_by_name(n).is_some() => {
-                    let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
-                    m.add_tok(dst, bt);
+                    declared_global_load(m, t, ns_by_name(n).unwrap(), n, dst);
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
