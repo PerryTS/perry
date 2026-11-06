@@ -131,7 +131,8 @@ def main():
     assert all(bool(row.get("check")) + bool(row.get("reason")) + bool(row.get("dead")) == 1 for row in inventory), inventory
     assert all(row.get("emitted_checks") for row in inventory if row.get("check")), inventory
     uncovered = sum(bool(row.get("reason")) for row in inventory)
-    assert uncovered == 2, (uncovered, inventory)
+    assert uncovered == 3, (uncovered, inventory)
+    assert sum(row.get("consumed", False) for row in inventory) == 2, inventory
     save("manifest", consumed=len(inventory), uncovered=uncovered)
 
     samples = []
