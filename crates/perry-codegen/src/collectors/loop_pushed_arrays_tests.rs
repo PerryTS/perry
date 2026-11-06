@@ -72,5 +72,8 @@ fn the_larger_birth_reserves_sixteen_slots() {
         "the once-pushed literal keeps the four-slot birth:\n{ir}"
     );
     // Length 0, capacity 16.
-    assert!(ir.contains(&format!("store i64 {}, ptr %array", 16u64 << 32)), "{ir}");
+    assert!(
+        ir.contains(&format!("store i64 {}, ptr %array", 16u64 << 32)),
+        "{ir}"
+    );
 }

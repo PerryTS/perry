@@ -338,8 +338,16 @@ pub(super) fn scalar_rebind(ctx: &FnCtx<'_>, id: u32, init: Option<&perry_hir::E
                 && ctx.non_escaping_news.contains_key(&id)
                 && !ctx.imported_class_ctors.contains_key(class_name)
         }
-        Some(perry_hir::Expr::Array(..)) | Some(perry_hir::Expr::Call { .. }) => {
-            ctx.scalar_replaced_arrays.contains_key(&id) && ctx.non_escaping_arrays.contains_key(&id)
+        Some(perry_hir::Expr::Array(..)) => {
+            ctx.scalar_replaced_arrays.contains_key(&id)
+                && ctx.non_escaping_arrays.contains_key(&id)
+        }
+        // Only the split the scalar path takes: any other call initializes
+        // ordinary storage, so it must take the redeclaration store.
+        Some(perry_hir::Expr::Call { callee, args, .. }) => {
+            ctx.scalar_replaced_arrays.contains_key(&id)
+                && ctx.non_escaping_arrays.contains_key(&id)
+                && is_scalar_split(ctx, callee, args)
         }
         _ => false,
     }
@@ -356,4 +364,21 @@ pub(super) fn scalar_slot(ctx: &mut FnCtx<'_>, existing: Option<&String>) -> Str
     let slot = ctx.func.alloca_entry(DOUBLE);
     ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
     slot
+}
+
+/// `s.split("sep")` on a string local with a non-empty literal separator: the
+/// call shape `lower_let` scalar-replaces when its result does not escape.
+pub(super) fn is_scalar_split(
+    ctx: &FnCtx<'_>,
+    callee: &perry_hir::Expr,
+    args: &[perry_hir::Expr],
+) -> bool {
+    matches!(args, [perry_hir::Expr::String(s)] if !s.is_empty())
+        && matches!(
+            callee,
+            perry_hir::Expr::PropertyGet { object, property, .. }
+                if crate::type_analysis::is_string_expr(ctx, object)
+                    && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
+                    && property == "split"
+        )
 }

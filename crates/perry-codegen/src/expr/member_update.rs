@@ -718,29 +718,47 @@ fn class_field_update(
     ctx.block().br(&merge_l);
 
     ctx.current_block = slow_idx;
-    let slow_old = ctx
-        .block()
-        .call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+    let slow_old = ctx.block().call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
     let step_arg = match op {
         BinaryOp::Sub => "0",
         _ => "1",
     };
-    let slow_new = ctx.block().call(
-        DOUBLE,
-        "js_numeric_step",
-        &[(DOUBLE, &slow_old), (I32, step_arg)],
-    );
+    let step = |ctx: &mut FnCtx<'_>, operand: &str| {
+        ctx.block().call(
+            DOUBLE,
+            "js_numeric_step",
+            &[(DOUBLE, operand), (I32, step_arg)],
+        )
+    };
+    // A postfix update yields `old_num`, a heap BigInt on this arm, and
+    // `js_numeric_step` allocates: root it across the step and read it back,
+    // as the generic arm's `adopt_emitted` does.
+    let (slow_old, slow_new) = if !prefix && !not_bigint {
+        crate::rooting::with_scoped_values(ctx, &[(slow_old.as_str(), None)], |ctx, reads| {
+            let new = step(ctx, &slow_old);
+            Ok((lower_expr(ctx, &reads[0])?, new))
+        })?
+    } else {
+        let new = step(ctx, &slow_old);
+        (slow_old, new)
+    };
     let slow_end = ctx.block_label(ctx.current_block);
     ctx.block().br(&merge_l);
 
     ctx.current_block = merge_idx;
     let old_num = ctx.block().phi(
         DOUBLE,
-        &[(old.as_str(), fast_end.as_str()), (slow_old.as_str(), slow_end.as_str())],
+        &[
+            (old.as_str(), fast_end.as_str()),
+            (slow_old.as_str(), slow_end.as_str()),
+        ],
     );
     let new = ctx.block().phi(
         DOUBLE,
-        &[(fast_new.as_str(), fast_end.as_str()), (slow_new.as_str(), slow_end.as_str())],
+        &[
+            (fast_new.as_str(), fast_end.as_str()),
+            (slow_new.as_str(), slow_end.as_str()),
+        ],
     );
 
     // Both results may be BigInt heap values on the cold arm, and the store
