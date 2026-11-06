@@ -1949,10 +1949,7 @@ pub(super) fn compile_function(
                 let admits = llmod
                     .function_estimated_ir_bytes(&llvm_name)
                     .is_some_and(|bytes| {
-                        super::helpers::guarded_specialization_admits_preinline(
-                            bytes,
-                            f.body.len(),
-                        )
+                        super::helpers::guarded_specialization_admits_preinline(bytes, f.body.len())
                     });
                 if admits {
                     for name in [&llvm_name, &public_llvm_name] {

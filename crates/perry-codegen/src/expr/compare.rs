@@ -1542,7 +1542,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some((class, _)) =
                         crate::expr::hoist_dispatch::dispatch_check(left.as_ref(), right.as_ref())
                     {
-                        if !crate::expr::hoist_dispatch::prototype_is_stable(&ctx.module_slug, class) {
+                        if !crate::expr::hoist_dispatch::prototype_is_stable(
+                            &ctx.module_slug,
+                            class,
+                        ) {
                             let bits = if matches!(op, CompareOp::Eq) {
                                 crate::nanbox::TAG_FALSE_I64
                             } else {
@@ -1579,7 +1582,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // members' pool handles settle the false case by identity
                     // alone. Only a speed hint — a value matching none of them
                     // takes the full test, so a lying annotation costs nothing.
-                    let operand = if lit_on_right { left.as_ref() } else { right.as_ref() };
+                    let operand = if lit_on_right {
+                        left.as_ref()
+                    } else {
+                        right.as_ref()
+                    };
                     let others: Vec<String> = literal_union_members(ctx, operand)
                         .into_iter()
                         .filter(|m| *m != lit)

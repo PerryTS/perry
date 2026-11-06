@@ -217,8 +217,7 @@ fn stmt_is_hoist_safe(stmt: &Stmt, scan: &Scan<'_>) -> bool {
         // than refuse. A nested loop is safe on exactly the same terms: it may
         // not rebind the receiver and may not call anything.
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_is_hoist_safe(condition, scan)
-                && body.iter().all(|s| stmt_is_hoist_safe(s, scan))
+            expr_is_hoist_safe(condition, scan) && body.iter().all(|s| stmt_is_hoist_safe(s, scan))
         }
         Stmt::For {
             init,
@@ -230,18 +229,14 @@ fn stmt_is_hoist_safe(stmt: &Stmt, scan: &Scan<'_>) -> bool {
                 && condition
                     .as_ref()
                     .is_none_or(|e| expr_is_hoist_safe(e, scan))
-                && update
-                    .as_ref()
-                    .is_none_or(|e| expr_is_hoist_safe(e, scan))
+                && update.as_ref().is_none_or(|e| expr_is_hoist_safe(e, scan))
                 && body.iter().all(|s| stmt_is_hoist_safe(s, scan))
         }
         Stmt::Labeled { body, .. } => stmt_is_hoist_safe(body, scan),
         // Leaving the loop early is fine: the hoisted `Let` is evaluated
         // before the loop either way, and the property read it replaces was
         // never reached on this path.
-        Stmt::Return(value) => value
-            .as_ref()
-            .is_none_or(|e| expr_is_hoist_safe(e, scan)),
+        Stmt::Return(value) => value.as_ref().is_none_or(|e| expr_is_hoist_safe(e, scan)),
         Stmt::Throw(value) => expr_is_hoist_safe(value, scan),
         Stmt::Break | Stmt::Continue => true,
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
@@ -289,9 +284,7 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
             expr_is_hoist_safe(left, scan) && expr_is_hoist_safe(right, scan)
         }
         Expr::Unary { operand, .. } => expr_is_hoist_safe(operand, scan),
-        Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => {
-            expr_is_hoist_safe(inner, scan)
-        }
+        Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => expr_is_hoist_safe(inner, scan),
         Expr::Conditional {
             condition,
             then_expr,
@@ -328,9 +321,7 @@ fn stmt_reads_property(stmt: &Stmt, recv: Recv, property: &str) -> bool {
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             expr_reads_property(condition, recv, property)
-                || body
-                    .iter()
-                    .any(|s| stmt_reads_property(s, recv, property))
+                || body.iter().any(|s| stmt_reads_property(s, recv, property))
         }
         Stmt::For {
             init,
@@ -346,9 +337,7 @@ fn stmt_reads_property(stmt: &Stmt, recv: Recv, property: &str) -> bool {
                 || update
                     .as_ref()
                     .is_some_and(|e| expr_reads_property(e, recv, property))
-                || body
-                    .iter()
-                    .any(|s| stmt_reads_property(s, recv, property))
+                || body.iter().any(|s| stmt_reads_property(s, recv, property))
         }
         Stmt::Labeled { body, .. } => stmt_reads_property(body, recv, property),
         Stmt::Return(value) => value
@@ -372,8 +361,7 @@ fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
         Expr::Binary { left, right, .. }
         | Expr::Logical { left, right, .. }
         | Expr::Compare { left, right, .. } => {
-            expr_reads_property(left, recv, property)
-                || expr_reads_property(right, recv, property)
+            expr_reads_property(left, recv, property) || expr_reads_property(right, recv, property)
         }
         Expr::Unary { operand, .. } => expr_reads_property(operand, recv, property),
         Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => {
@@ -631,9 +619,8 @@ pub(crate) fn hoist_this_array_fields(
     if !hoist_enabled() || !this_hoist_enabled() || has_computed_members {
         return;
     }
-    let accessor = |n: &str| {
-        getters.iter().any(|(g, _)| g == n) || setters.iter().any(|(s, _)| s == n)
-    };
+    let accessor =
+        |n: &str| getters.iter().any(|(g, _)| g == n) || setters.iter().any(|(s, _)| s == n);
     let data: Vec<String> = fields
         .iter()
         .filter(|f| {
@@ -792,9 +779,7 @@ fn hoist_this_for(
             recv: Recv::This,
             writable: &writable,
         };
-        let init_safe = init
-            .as_deref()
-            .is_none_or(|s| stmt_is_hoist_safe(s, &scan));
+        let init_safe = init.as_deref().is_none_or(|s| stmt_is_hoist_safe(s, &scan));
         if !init_safe || !loop_is_hoist_safe(&cond, update.as_ref(), &body, Recv::This, &writable) {
             continue;
         }
@@ -871,13 +856,15 @@ fn expr_has_set(e: &Expr) -> bool {
 /// An argument that may be dropped or duplicated by inlining: evaluating it
 /// cannot throw and has no effect.
 fn arg_is_trivial(e: &Expr) -> bool {
-    matches!(e, Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_))
+    matches!(
+        e,
+        Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_)
+    )
 }
 
 fn count_local(e: &Expr, id: u32) -> usize {
     let s = format!("{e:?}");
-    s.matches(&format!("LocalGet({id})")).count()
-        + s.matches(&format!("LocalSet({id},")).count()
+    s.matches(&format!("LocalGet({id})")).count() + s.matches(&format!("LocalSet({id},")).count()
 }
 
 fn substitute(e: &Expr, map: &std::collections::HashMap<u32, Expr>) -> Expr {
@@ -892,7 +879,10 @@ fn inline_this_calls(e: &Expr, class: &ThisClass<'_>, used: &mut Vec<String>) ->
         let Expr::Call { callee, args, .. } = x else {
             return None;
         };
-        let Expr::PropertyGet { object, property, .. } = callee.as_ref() else {
+        let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        else {
             return None;
         };
         if !matches!(object.as_ref(), Expr::This) {

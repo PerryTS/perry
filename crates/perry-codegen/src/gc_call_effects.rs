@@ -532,7 +532,10 @@ fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) ->
             match item {
                 FinalItem::Inst(LlInst::Call { callee, .. })
                     if shadow_calls_vanish
-                        && matches!(callee.as_str(), "js_shadow_slot_bind" | "js_shadow_slot_set") => {}
+                        && matches!(
+                            callee.as_str(),
+                            "js_shadow_slot_bind" | "js_shadow_slot_set"
+                        ) => {}
                 FinalItem::Inst(LlInst::Call { callee, .. }) => {
                     note_direct_callee(gc, &mut effects, callee, defined)
                 }
