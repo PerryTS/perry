@@ -126,6 +126,7 @@ pub(crate) fn run(
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
         verify_facts: perry_codegen::verify_facts::enabled(),
+        dce_bodies: perry_codegen::verify_facts::dce_enabled(),
         roots,
         diagnostics: dump.is_some(),
         relations,
@@ -324,10 +325,23 @@ pub(crate) fn view_for(
         Vec::new()
     };
     let elision = elision_for(pf, &key);
+    // The bodies this module's code is removed for: its object depends on
+    // them, so they join the digest (only with removal on and some inactive).
+    let inactive: Vec<(u32, &str)> = if perry_codegen::verify_facts::dce_enabled() {
+        pf.verification_bodies
+            .iter()
+            .flatten()
+            .filter(|((path, _, _), active)| path == &key && !**active)
+            .map(|((_, id, name), _)| (*id, name.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let digest = if elision.is_empty()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()
         && !elision.fnproto_borrow_unwritten
+        && inactive.is_empty()
     {
         pf.digest_for(&key)
     } else {
@@ -335,11 +349,14 @@ pub(crate) fn view_for(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         pf.digest_for(&key).hash(&mut h);
         elision.hash(&mut h);
+        inactive.hash(&mut h);
         h.finish()
     };
     perry_codegen::ProgramFactsView {
         fallback: super::fallback_diag::facts_for(pf, &key),
-        verification_bodies: if perry_codegen::verify_facts::enabled() {
+        verification_bodies: if perry_codegen::verify_facts::enabled()
+            || perry_codegen::verify_facts::dce_enabled()
+        {
             pf.verification_bodies.as_ref().map(|b| {
                 Arc::new(
                     b.iter()
@@ -351,7 +368,9 @@ pub(crate) fn view_for(
         } else {
             None
         },
-        verification_module: perry_codegen::verify_facts::enabled().then(|| key.clone()),
+        verification_module: (perry_codegen::verify_facts::enabled()
+            || perry_codegen::verify_facts::dce_enabled())
+        .then(|| key.clone()),
         verification_sites: perry_codegen::verify_facts::enabled()
             .then(|| Arc::new(verification_sites(pf, Some(&key)))),
         digest,
