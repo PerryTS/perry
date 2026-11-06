@@ -245,7 +245,7 @@ def main():
      entry["path"]=string(tid,a[0]); argv=[]; index=0
      while True:
       item=memory(tid,a[1]+8*index,8)
-      if item is None:break
+      if item is None:entry["unsupported_payload"]=True;break
       ptr=struct.unpack("Q",item)[0]
       if not ptr:break
       argv.append(string(tid,ptr));index+=1
@@ -253,7 +253,7 @@ def main():
      envp=[];index=0
      while True:
       item=memory(tid,a[2]+8*index,8)
-      if item is None:break
+      if item is None:entry["unsupported_payload"]=True;break
       pointer=struct.unpack("Q",item)[0]
       if not pointer:break
       envp.append(string(tid,pointer));index+=1
@@ -276,6 +276,24 @@ def main():
     a=e["args"];nr=e["nr"]
     if ret>=0:
      if nr==298:state["diagnostic_fds"].add(ret)
+     if nr==9 and C.c_int(a[4]).value>=0:
+      # A file-backed mapping is an input/resource boundary even if its
+      # contents are first used later. Capture this observation; subsequent
+      # concurrently changed mapped bytes cannot be certified by a syscall
+      # tracer and therefore the mapping is a STOP.
+      try:
+       mapped_fd=os.open(f"/proc/{tid}/fd/{a[4]}",os.O_RDONLY)
+       try:
+        st=os.fstat(mapped_fd);length=min(a[1],max(0,st.st_size-a[5]))
+        data=os.pread(mapped_fd,length,a[5])
+        e["file_mapping"]={"file_size":st.st_size,"offset":a[5],"length":a[1],
+          "observed_file_bytes":data.hex(),"complete":len(data)==length,
+          "note":"file observation at mmap; concurrent later mapped changes require memory instrumentation"}
+        if len(data)!=length:e["complete"]=False
+       finally:os.close(mapped_fd)
+      except OSError as error:
+       e["file_mapping"]={"error":error.errno};e["complete"]=False
+      e["policy"]="STOP"
      if nr in (0,17,45,78,217):e["bytes"]=blob(tid,a[1],ret)
      elif nr==19:e["bytes"]=iov(tid,a[1],a[2],ret)
      elif nr==318:e["bytes"]=blob(tid,a[0],ret)
@@ -340,7 +358,11 @@ def main():
     if ret==-errno.EINTR and nr in (35,230):
      address=a[1] if nr==35 else a[3]
      e["remaining_time"]=blob(tid,address,16) if address else None
-    if e["name"]=="UNKNOWN" or e.get("unsupported_payload"):e["complete"]=False
+    def unreadable(value):
+     if isinstance(value,dict):return any(str(k).startswith("unreadable") or unreadable(v) for k,v in value.items())
+     if isinstance(value,list):return any(unreadable(v) for v in value)
+     return False
+    if e["name"]=="UNKNOWN" or e.get("unsupported_payload") or e.get("complete") is False or unreadable(e):e["complete"]=False
     else:e["complete"]=True
     out.write(json.dumps(e,separators=(",",":"))+"\n")
   elif event == 0 and sig==signal.SIGTRAP and handle_probe(tid):
