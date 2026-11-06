@@ -1419,6 +1419,7 @@ impl Model {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))
             }
             Cons::AnyAccessors { origin, act } => format!("anyaccessors {n} {origin} {act:?}"),
+            Cons::UnnamedSet { target } => format!("unnamedset {n} {target}"),
             Cons::StoreTopProto { origin, src } => format!("storetopproto {n} {origin} {src}"),
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
