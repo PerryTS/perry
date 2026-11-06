@@ -6,6 +6,7 @@ mod accessor_reach;
 mod accessor_receiver;
 mod activation_paths;
 mod annexb_accessors;
+mod args_beside_rest;
 mod arguments_object;
 mod array_ctor;
 mod array_elements;
