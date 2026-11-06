@@ -662,13 +662,11 @@ fn element_shape_versioned_loop_declines_a_body_that_stores() {
     let ir = emit(&element_shape_module(
         vec![
             accumulate_stmt(SUM_ID, ARRAY_ID, Expr::LocalGet(COUNTER_ID)),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                index: Box::new(Expr::LocalGet(COUNTER_ID)),
-                value: Box::new(Expr::Number(1.0)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(ARRAY_ID)),
+                Box::new(Expr::LocalGet(COUNTER_ID)),
+                Box::new(Expr::Number(1.0)),
+            )),
         ],
         None,
     ));
@@ -1395,12 +1393,10 @@ fn binding_stmt(mutable: bool) -> Stmt {
         name: "r".to_string(),
         ty: Type::Named("Node".to_string()),
         mutable,
-        init: Some(Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(ARRAY_ID)),
-            index: Box::new(Expr::LocalGet(COUNTER_ID)),
-        }),
+        init: Some(Expr::synthetic_index_get(
+            Box::new(Expr::LocalGet(ARRAY_ID)),
+            Box::new(Expr::LocalGet(COUNTER_ID)),
+        )),
     }
 }
 
@@ -1562,12 +1558,10 @@ fn element_binding_declines_a_second_array() {
                 name: "r".to_string(),
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(OTHER_ID)),
-                    index: Box::new(Expr::LocalGet(COUNTER_ID)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(OTHER_ID)),
+                    Box::new(Expr::LocalGet(COUNTER_ID)),
+                )),
             },
             binding_accumulate(elem_field(ARRAY_ID, Expr::LocalGet(COUNTER_ID))),
         ],
@@ -1633,12 +1627,10 @@ fn an_element_binding_indexed_by_a_non_counter_declines() {
                 name: "r".to_string(),
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                    index: Box::new(Expr::Integer(0)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(ARRAY_ID)),
+                    Box::new(Expr::Integer(0)),
+                )),
             },
             binding_accumulate(binding_field("v")),
         ],
@@ -1714,12 +1706,10 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                         name: "r".to_string(),
                         ty: Type::Named("Node".to_string()),
                         mutable: false,
-                        init: Some(Expr::IndexGet {
-                            byte_offset: 0,
-                            byte_end: 0,
-                            object: Box::new(Expr::LocalGet(PS_ID)),
-                            index: Box::new(Expr::LocalGet(F_COUNTER_ID)),
-                        }),
+                        init: Some(Expr::synthetic_index_get(
+                            Box::new(Expr::LocalGet(PS_ID)),
+                            Box::new(Expr::LocalGet(F_COUNTER_ID)),
+                        )),
                     },
                     Stmt::Expr(Expr::LocalSet(
                         F_SUM_ID,

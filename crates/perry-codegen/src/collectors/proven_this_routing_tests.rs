@@ -1446,12 +1446,10 @@ fn indexed_tower_site_module() -> Module {
         Type::Any,
         vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
-            left: Box::new(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(this_get("values")),
-                index: Box::new(Expr::LocalGet(INDEX_ID)),
-            }),
+            left: Box::new(Expr::synthetic_index_get(
+                Box::new(this_get("values")),
+                Box::new(Expr::LocalGet(INDEX_ID)),
+            )),
             right: Box::new(this_get("id")),
         }))],
     ));
@@ -1782,12 +1780,7 @@ fn polymorphic_array_site_module() -> Module {
     m.classes.extend([derived, inherited]);
     m.functions[0].params[0].ty = Type::Array(Box::new(Type::Named("Counter".into())));
     m.functions[0].body = vec![Stmt::Expr(call(
-        Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(2)),
-            index: Box::new(Expr::Integer(0)),
-        },
+        Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(0))),
         "bump",
         Vec::new(),
     ))];
