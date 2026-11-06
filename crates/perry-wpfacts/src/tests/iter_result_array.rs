@@ -105,3 +105,37 @@ fn consumers_of_the_array_itself_stay_final() {
         assert!(proven(&v), "{use_src}: {r:?} {v:?}");
     }
 }
+
+/// The for-of runs in a function called from two contexts (two instances):
+/// in each, the array `[Symbol.iterator]()` returns is the iterator, and its
+/// step is a program call of the `next` its chain answers.
+#[test]
+fn for_of_in_a_function_called_twice_steps_an_array_returned_by_symbol_iterator() {
+    let (r, v) = verdict(
+        "function run(x: any) { for (const s of x) console.log(s); } run(src); run([1]);",
+        false,
+    );
+    assert!(!proven(&v), "{r:?} {v:?}");
+}
+
+/// The same with destructuring, in a method run on two receivers.
+#[test]
+fn destructuring_in_a_method_instance_steps_an_array_returned_by_symbol_iterator() {
+    let (r, v) = verdict(
+        "class R { constructor(public x: any) {} run() { const [s] = this.x; console.log(s); } }
+         new R(src).run(); new R([1]).run();",
+        false,
+    );
+    assert!(!proven(&v), "{r:?} {v:?}");
+}
+
+/// Control for the two above: the array itself iterated in those instances
+/// is never the iterator; `a[0]` stays proven.
+#[test]
+fn for_of_over_the_array_itself_in_a_function_called_twice_stays_final() {
+    let (r, v) = verdict(
+        "function run(x: any) { for (const s of x) console.log(s); } run(src); run([1]);",
+        true,
+    );
+    assert!(proven(&v), "{r:?} {v:?}");
+}
