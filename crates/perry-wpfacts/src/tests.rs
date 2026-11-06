@@ -81,6 +81,7 @@ mod native_given_proto;
 mod native_member;
 mod native_proto;
 mod num_key;
+mod objproto_protocol;
 mod own_guarded_read;
 mod own_helper_guard;
 mod own_key_shadow;
