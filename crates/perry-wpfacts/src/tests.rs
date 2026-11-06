@@ -1901,6 +1901,7 @@ mod shared_sets;
 mod builtin_missing_member;
 
 mod annexb_alias;
+mod shaped_key_proto_methods;
 mod uri_coercion;
 
 mod accessor_lookup_values;
