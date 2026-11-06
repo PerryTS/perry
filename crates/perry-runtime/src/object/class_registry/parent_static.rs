@@ -793,7 +793,10 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         }
         if is_static == 0 {
             let proto = super::state::class_decl_prototype_object(class_id);
-            if !is_class_object_value(owner.get_nanbox_f64()) && !proto.is_null() {
+            if !is_class_object_value(owner.get_nanbox_f64())
+                && !proto.is_null()
+                && super::declarations::class_declaration(class_id).is_none()
+            {
                 install_symbol_method(
                     proto,
                     class_id,
@@ -928,7 +931,10 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         }
         if is_static == 0 {
             let proto = super::state::class_decl_prototype_object(class_id);
-            if !is_class_object_value(owner.get_nanbox_f64()) && !proto.is_null() {
+            if !is_class_object_value(owner.get_nanbox_f64())
+                && !proto.is_null()
+                && super::declarations::class_declaration(class_id).is_none()
+            {
                 install_symbol_accessor(
                     class_id,
                     crate::value::js_nanbox_pointer(proto as i64),
@@ -1791,6 +1797,6 @@ include!("parent_static/static_accessor_call.rs");
 
 mod symbol_members;
 pub(crate) use symbol_members::{
-    class_has_own_symbol_member, class_has_symbol_member_in_chain,
+    class_has_own_symbol_member, class_has_symbol_member_in_chain, install_prototype_symbol_member,
     install_prototype_symbol_members, install_symbol_accessor, install_symbol_method,
 };

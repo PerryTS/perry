@@ -477,21 +477,6 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         if let Some(vb) = static_lookup {
             return f64::from_bits(vb);
         }
-        // #9101: statically-known well-known-symbol METHODS are registered
-        // under synthetic names (`@@toPrimitive`, etc.), rather than in the
-        // class-static-symbol data-property table above. Reify a static method
-        // value with the constructor ClassRef as its receiver. This also makes
-        // an explicit `C[Symbol.toPrimitive]` read agree with the ToPrimitive
-        // consumer instead of returning undefined.
-        if let Some(method_name) = well_known_symbol_method_key(sym_f64) {
-            if crate::object::lookup_static_method_in_chain(class_id, method_name).is_some() {
-                return crate::object::js_class_method_bind(
-                    obj_f64,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-        }
         let is_proto_ref_receiver = crate::object::class_prototype_ref_id(obj_f64).is_some();
         // A constructor whose heritage was a runtime value inherits from that
         // exact value, the same edge `Object.getPrototypeOf(C)` reports. A
@@ -1016,26 +1001,6 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 {
                     return v;
                 }
-                // #1838: a class can define a computed well-known-symbol METHOD
-                // (`[Symbol.iterator]() {}`) — class lowering names it
-                // `@@iterator` in the vtable (class_members.rs), NOT as a symbol
-                // property, so the proto-chain symbol walk above misses it. Map
-                // the well-known symbol back to its `@@name`, and if the class
-                // (or an ancestor) has that method, return it bound to the
-                // instance. This is how effect's `EffectPrimitive` exposes
-                // `Symbol.iterator` (→ `SingleShotGen`), so `yield* effectValue`
-                // / `Symbol.iterator in effectValue` resolve.
-                if let Some(at_name) = well_known_symbol_method_key(sym_f64) {
-                    if crate::object::shapes::receiver_has_class_identity(obj_ptr)
-                        && class_chain_has_method(cid, at_name)
-                    {
-                        return crate::object::js_class_method_bind(
-                            obj_f64,
-                            at_name.as_ptr(),
-                            at_name.len(),
-                        );
-                    }
-                }
             }
         }
     }
@@ -1141,54 +1106,6 @@ pub(crate) unsafe fn has_declared_prototype_symbol_property(receiver: f64, sym: 
     }
     let class_id = (*ptr).class_id;
     class_id != 0 && declared_prototype_symbol_holder(receiver, sym, class_id).is_some()
-}
-
-/// #1838: map a well-known symbol value to the synthetic `@@<name>` vtable key
-/// that class lowering assigns to a computed `[Symbol.X]() {}` method (see
-/// `lower_decl/class_members.rs`). Returns `None` for symbols that don't name a
-/// class method (or non-symbol values). `dispose`/`asyncDispose` use distinct
-/// `__perry_*__` names and are dispatched via the using-block desugarer, so
-/// they're deliberately excluded here.
-unsafe fn well_known_symbol_method_key(sym_f64: f64) -> Option<&'static str> {
-    let sk = sym_key_from_f64(sym_f64);
-    if sk == 0 {
-        return None;
-    }
-    for (short, at_name) in [
-        ("iterator", "@@iterator"),
-        ("asyncIterator", "@@asyncIterator"),
-        ("hasInstance", "@@hasInstance"),
-        ("toPrimitive", "@@toPrimitive"),
-        ("toStringTag", "@@toStringTag"),
-    ] {
-        let wk = well_known_symbol(short);
-        if !wk.is_null() {
-            let wk_f64 = f64::from_bits(crate::value::JSValue::pointer(wk as *const u8).bits());
-            if sym_key_from_f64(wk_f64) == sk {
-                return Some(at_name);
-            }
-        }
-    }
-    None
-}
-
-/// #1838: does `class_id` or any ancestor define a vtable method named `name`?
-fn class_chain_has_method(class_id: u32, name: &str) -> bool {
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while depth < 32 && cid != 0 {
-        if crate::object::class_has_own_method(cid, name) {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
 }
 
 #[cfg(test)]

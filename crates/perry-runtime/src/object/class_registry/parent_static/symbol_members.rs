@@ -135,8 +135,70 @@ pub(crate) unsafe fn install_symbol_accessor(
     );
 }
 
-/// Birth reads immutable member bodies and the keys retained by this actual
-/// evaluation. Only compile-time symbol spellings come from the declaration.
+/// Install one symbol descriptor from this evaluation's key and immutable body.
+/// Returning false leaves an ordinary string member to the same birth walk.
+pub(crate) fn install_prototype_symbol_member(
+    proto: &crate::gc::RuntimeHandle<'_>,
+    class_id: u32,
+    owner: &crate::gc::RuntimeHandle<'_>,
+    member: &super::super::declarations::ClassMemberDecl,
+) -> bool {
+    if member.code.is_null() || (!member.name.is_null() && !member.is_symbol_named()) {
+        return false;
+    }
+    let key = if let Some(sym) = member.symbol_key() {
+        Some(crate::value::js_nanbox_pointer(sym as i64))
+    } else if member.name.is_null() {
+        if is_class_object_value(owner.get_nanbox_f64()) {
+            unsafe {
+                super::super::declarations::evaluation_computed_member_key(
+                    crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64())
+                        as *const ObjectHeader,
+                    class_id,
+                    member,
+                )
+            }
+        } else {
+            super::super::declarations::computed_key_value(class_id, member.definition_order)
+        }
+    } else {
+        None
+    };
+    let Some(key) = key.filter(|key| unsafe { crate::symbol::js_is_symbol(*key) != 0 }) else {
+        return false;
+    };
+    unsafe {
+        if member.is_method() {
+            install_symbol_method(
+                proto.get_raw_mut_ptr(),
+                class_id,
+                owner.get_nanbox_f64(),
+                key,
+                member.code as usize,
+                member.param_count,
+                member.has_synthetic_arguments(),
+                member.has_rest(),
+                member.entry as usize,
+            );
+        } else if member.is_accessor() {
+            let getter = member.kind == super::super::declarations::CLASS_MEMBER_GETTER;
+            install_symbol_accessor(
+                class_id,
+                proto
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
+                key,
+                if getter { member.code as usize } else { 0 },
+                if getter { 0 } else { member.code as usize },
+                false,
+            );
+        }
+    }
+    true
+}
+
+/// Birth stops where ClassBody evaluation has not named a member yet. The
+/// declaration's existing resume walk installs that member and its successors
+/// when their keys are ready, preserving symbol creation order on the shape.
 pub(crate) fn install_prototype_symbol_members(
     proto: *mut ObjectHeader,
     class_id: u32,
@@ -148,56 +210,10 @@ pub(crate) fn install_prototype_symbol_members(
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
     let owner = scope.root_nanbox_f64(owner);
-    for member in decl.members().iter().filter(|m| !m.code.is_null()) {
-        let key = if let Some(sym) = member.symbol_key() {
-            Some(crate::value::js_nanbox_pointer(sym as i64))
-        } else if member.name.is_null() {
-            if is_class_object_value(owner.get_nanbox_f64()) {
-                unsafe {
-                    super::super::declarations::evaluation_computed_member_key(
-                        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64())
-                            as *const ObjectHeader,
-                        class_id,
-                        member,
-                    )
-                }
-            } else {
-                super::super::declarations::computed_key_value(class_id, member.definition_order)
-            }
-        } else {
-            None
-        };
-        let Some(key) = key.filter(|key| unsafe { crate::symbol::js_is_symbol(*key) != 0 }) else {
-            continue;
-        };
-        let key = scope.root_nanbox_f64(key);
-        unsafe {
-            if member.is_method() {
-                install_symbol_method(
-                    proto.get_raw_mut_ptr(),
-                    class_id,
-                    owner.get_nanbox_f64(),
-                    key.get_nanbox_f64(),
-                    member.code as usize,
-                    member.param_count,
-                    member.has_synthetic_arguments(),
-                    member.has_rest(),
-                    member.entry as usize,
-                );
-            } else if member.is_accessor() {
-                let getter = member.kind == super::super::declarations::CLASS_MEMBER_GETTER;
-                install_symbol_accessor(
-                    class_id,
-                    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
-                        crate::value::js_nanbox_pointer(p as i64)
-                    }),
-                    key.get_nanbox_f64(),
-                    if getter { member.code as usize } else { 0 },
-                    if getter { 0 } else { member.code as usize },
-                    false,
-                );
-            }
-        }
+    let end =
+        super::super::declarations::first_unnamed(class_id, decl).unwrap_or(decl.members().len());
+    for member in &decl.members()[..end] {
+        install_prototype_symbol_member(&proto, class_id, &owner, member);
     }
 }
 
