@@ -14,10 +14,21 @@ impl Model {
     }
 
     pub fn field(&mut self, t: Tok, a: Atom) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.field(t, a));
+        }
         if let Some(&n) = self.fields.get(&(t, a)) {
             return n;
         }
         let n = self.node_named("field", || format!("field({t},{a})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::Named(self.atoms[a as usize].clone()),
+            });
+        }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -183,11 +194,23 @@ impl Model {
     /// ordinary field space, not a concrete own key: do not publish it as
     /// a layout key or a definite key copied by a spread.
     pub(super) fn numeric_field(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.numeric_field(t));
+        }
         let a = self.atom(NUM_KEY);
         let n = match self.fields.get(&(t, a)).copied() {
             Some(n) => n,
             None => {
                 let n = self.node_named("numericfield", || format!("numericfield({t})"));
+                #[cfg(test)]
+                {
+                    self.nodes[n as usize].field_origin =
+                        Some(crate::summary::packet::FieldOrigin {
+                            object: Some(t),
+                            key: crate::summary::packet::FieldPort::Numeric,
+                        });
+                }
                 self.nodes[n as usize].obs = self.obs_toks.contains(&t);
                 self.nodes[n as usize].frame = self.fam_home(t);
                 self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -211,10 +234,21 @@ impl Model {
     }
 
     pub fn field_any(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.field_any(t));
+        }
         if let Some(&n) = self.field_any.get(&t) {
             return n;
         }
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::Any,
+            });
+        }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -304,10 +338,21 @@ impl Model {
     /// (`is_elem_array`): its named non-index keys read them, and they are
     /// among its elements as well.
     pub fn named_any(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.named_any(t));
+        }
         if let Some(&n) = self.named_any.get(&t) {
             return n;
         }
         let n = self.node_named("namedany", || format!("namedany({t})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::NamedAny,
+            });
+        }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.named_any.insert(t, n);
@@ -375,10 +420,21 @@ impl Model {
     /// marker, ⊤, another unit's instance) finds what this holds: the
     /// value never leaves through that receiver.
     pub fn private_field(&mut self, a: Atom) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.private_field(a));
+        }
         if let Some(&n) = self.private_fields.get(&a) {
             return n;
         }
         let n = self.node_named("private", || format!("private({a})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: None,
+                key: crate::summary::packet::FieldPort::Private(self.atoms[a as usize].clone()),
+            });
+        }
         self.private_fields.insert(a, n);
         n
     }
@@ -402,10 +458,21 @@ impl Model {
     /// index and leaves none. Unknown code's writes (escape, HARD) put
     /// every primitive among the elements already (`any_key_node`).
     pub fn hole(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.hole(t));
+        }
         if let Some(&n) = self.holes.get(&t) {
             return n;
         }
         let n = self.node_named("hole", || format!("hole({t})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::Hole,
+            });
+        }
         self.nodes[n as usize].frame = self.fam_home(t);
         self.holes.insert(t, n);
         let born_dense = match self.toks[t as usize] {
@@ -435,10 +502,21 @@ impl Model {
     }
 
     pub fn all_fields(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.all_fields(t));
+        }
         if let Some(&n) = self.all_fields.get(&t) {
             return n;
         }
         let n = self.node_named("allfields", || format!("allfields({t})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::All,
+            });
+        }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -463,10 +541,21 @@ impl Model {
     /// a numeric key or the element key, and what it holds under a
     /// computed key. ToPropertyKey of a number names no other.
     pub fn num_fields(&mut self, t: Tok) -> NodeId {
+        #[cfg(test)]
+        if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
+            return self.packet_field_protocol(|m| m.num_fields(t));
+        }
         if let Some(&n) = self.num_fields.get(&t) {
             return n;
         }
         let n = self.node_named("numfields", || format!("numfields({t})"));
+        #[cfg(test)]
+        {
+            self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
+                object: Some(t),
+                key: crate::summary::packet::FieldPort::NumberKeys,
+            });
+        }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.num_fields.insert(t, n);

@@ -371,6 +371,8 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
     let p = m.node_l("resolver-param");
     m.edge(p, dst);
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         name: "<resolver>".into(),
@@ -420,6 +422,8 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
     m.add_top(ret, |_| "result of another unit's accessor".into());
     m.add_prim(ret, prim::ALL);
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         name: "<another unit's accessor>".into(),
@@ -1421,15 +1425,15 @@ fn ns_method_inner(
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             let vals = all_arg_values(m, call);
-            m.cons(
-                vals,
-                Cons::Load {
-                    key: Key::any(),
-                    dst: fa,
-                },
-            );
             if name == "of" {
                 m.edge(vals, fa);
+            } else {
+                // ECMA-262 23.1.2.1: an iterable is iterated; an array-like
+                // (no `@@iterator`) is read at its indices below `length`.
+                let it = iterate(m, call, vals);
+                m.edge(it, fa);
+                let ek = m.elem_key();
+                m.cons(vals, Cons::Load { key: ek, dst: fa });
             }
             // A map function is called with each element.
             if let Some(f) = arg(m, call, 1) {
@@ -1577,15 +1581,10 @@ fn ns_method_inner(
             let v = promise_value(m, p);
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
+            // ECMA-262 27.2.4.1 ff.: the iterable is iterated
+            // (GetIterator); its values are the items.
             let vals = all_arg_values(m, call);
-            let items = m.node_l("promise-items");
-            m.cons(
-                vals,
-                Cons::Load {
-                    key: Key::any(),
-                    dst: items,
-                },
-            );
+            let items = iterate(m, call, vals);
             let settled = m.node_l("settled");
             adopt(m, call, items, settled);
             m.edge(settled, fa);

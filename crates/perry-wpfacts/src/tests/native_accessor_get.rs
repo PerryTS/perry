@@ -198,3 +198,44 @@ console.log(c.k, typeof p);
 "#,
     );
 }
+
+/// structuredClone serializes its argument (StructuredSerialize, HTML
+/// 2.7.3): it [[Get]]s every own value, so own getters run, nested ones
+/// too, and it calls nothing else (a function throws DataCloneError).
+#[test]
+fn structured_clone_reads_own_values_and_calls_nothing() {
+    runs(
+        "own getter",
+        r#"
+function hit() { return 1; }
+const o = { get g() { return hit(); } };
+console.log(typeof structuredClone(o));
+"#,
+    );
+    runs(
+        "nested own getter",
+        r#"
+function hit() { return 1; }
+const parent: any = { first: {}, tail: 2 };
+Object.defineProperty(parent.first, "trigger", { enumerable: true, get() { return hit(); } });
+console.log(typeof structuredClone(parent));
+"#,
+    );
+    stays(
+        "a method of the clone source",
+        r#"
+function hit() { return 1; }
+const o = { a: 1, m() { return hit(); } };
+try { structuredClone(o); } catch (e) { console.log("DataCloneError"); }
+console.log(typeof o);
+"#,
+    );
+    stays(
+        "a getter of an object that is not cloned",
+        r#"
+function hit() { return 1; }
+const other = { get g() { return hit(); } };
+console.log(typeof structuredClone({ a: 1 }), typeof other);
+"#,
+    );
+}

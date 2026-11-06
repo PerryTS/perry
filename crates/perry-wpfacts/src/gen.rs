@@ -122,6 +122,8 @@ pub(crate) enum PendingWalk<'a> {
     Fields(u32, &'a perry_hir::Class),
     /// A closure's body (its emitted definition) in its creation context.
     Closure(crate::gen::Fx, &'a perry_hir::Expr),
+    #[cfg(test)]
+    OwnedClosure(crate::gen::Fx, Box<perry_hir::Expr>),
     /// A module only `import()` loads: its body runs once an `import()`
     /// site a body that can run holds names it (or a module it loads
     /// imports it).
@@ -405,6 +407,42 @@ mod class_values;
 mod indexed_owner;
 
 impl<'a> Gen<'a> {
+    #[cfg(test)]
+    pub(crate) fn packet_generator_effect(
+        &mut self,
+        f: FnIdx,
+        object: NodeId,
+        is_async: bool,
+        publish: impl FnOnce(&mut Self),
+    ) {
+        let mode = self.m.packet_generator_action(f, object, is_async);
+        if mode.unwrap_or(true) {
+            publish(self);
+        }
+        if mode.is_some() {
+            self.m.packet_protocol_depth -= 1;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn packet_class_effect(
+        &mut self,
+        mi: u32,
+        name: &str,
+        action: crate::summary::packet::ClassAction<NodeId>,
+        publish: impl FnOnce(&mut Self),
+    ) {
+        let mode = self
+            .m
+            .packet_class_action(self.modules[mi as usize].0, name, action);
+        if mode.unwrap_or(true) {
+            publish(self);
+        }
+        if mode.is_some() {
+            self.m.packet_protocol_depth -= 1;
+        }
+    }
+
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
         Self::new_observed(modules, relations, explain, false)
     }
@@ -1127,6 +1165,12 @@ impl<'a> Gen<'a> {
             }
         }
         let fx = self.m.funcs.len() as FnIdx;
+        #[cfg(test)]
+        let packet_prior = self.m.packet_header(
+            fx,
+            crate::summary::packet::Identity(self.modules[mi as usize].0.into(), id, String::new()),
+            params,
+        );
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         if is_closure {
             self.m.closures.insert(fx);
@@ -1224,6 +1268,8 @@ impl<'a> Gen<'a> {
             }
         }
         self.m.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: mi,
             func_id: id,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
@@ -1248,6 +1294,8 @@ impl<'a> Gen<'a> {
             parent: if is_closure { outer_fn } else { NO_FN },
             forwarded: false,
         });
+        #[cfg(test)]
+        self.m.packet_end(packet_prior, false);
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
     }
@@ -1514,6 +1562,15 @@ impl<'a> Gen<'a> {
                 let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 self.m.add_tok(this, inst);
                 self.m.funcs[f as usize].no_summary = true;
+                #[cfg(test)]
+                if self.m.packets_enabled {
+                    std::rc::Rc::make_mut(&mut self.m.funcs[f as usize].body_packet)
+                        .header
+                        .shared
+                        .push(crate::summary::packet::SharedEntry::ComputedAccessor {
+                            class: self.m.tmpls[tm as usize].display.clone(),
+                        });
+                }
                 let fa = self.m.field_any(proto);
                 let ret = self.m.funcs[f as usize].ret;
                 self.m.edge(ret, fa);
@@ -1531,11 +1588,23 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn synthetic_fn(&mut self, mi: u32, name: &str) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
+        #[cfg(test)]
+        let packet_prior = self.m.packet_header(
+            fx,
+            crate::summary::packet::Identity(
+                self.modules[mi as usize].0.into(),
+                u32::MAX,
+                name.into(),
+            ),
+            &[],
+        );
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
         self.m.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
@@ -1560,6 +1629,8 @@ impl<'a> Gen<'a> {
             parent: NO_FN,
             forwarded: false,
         });
+        #[cfg(test)]
+        self.m.packet_end(packet_prior, false);
         fx
     }
 
@@ -1844,6 +1915,8 @@ impl<'a> Gen<'a> {
             return self.extern_value(mi, name);
         }
         if let Some(&n) = self.mods[mi as usize].locals.get(&id) {
+            #[cfg(test)]
+            self.m.packet_cell(n, id);
             if self.m.node_fn[n as usize] != self.m.cur_fn {
                 if self.m.cur_fn != NO_FN {
                     let f = self.m.cur_fn;
@@ -1855,6 +1928,8 @@ impl<'a> Gen<'a> {
         let n = self.m.node_named("local", || format!("local({mi},{id})"));
         self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
+        #[cfg(test)]
+        self.m.packet_cell(n, id);
         n
     }
 
@@ -2009,6 +2084,15 @@ impl<'a> Gen<'a> {
 
     /// A generation-time birth template belongs to the body making it.
     pub(crate) fn note_birth_fn(&mut self, tm: TmplId) {
+        #[cfg(test)]
+        if let Some(b) = &mut self.m.packet_scope {
+            b.packet.births.push(crate::summary::packet::Birth {
+                template: tm,
+                module: String::new(),
+                kind: None,
+                keys: Vec::new(),
+            });
+        }
         if self.m.cur_fn != NO_FN {
             let f = self.m.cur_fn;
             self.m.tmpl_fn.insert(tm, f);

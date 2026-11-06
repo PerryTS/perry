@@ -136,7 +136,15 @@ impl<'a> Gen<'a> {
                 self.m.cons(nt, Cons::NewTargetHard { reason: r });
                 // A new target picks the prototype of whatever the target
                 // constructs, an Array exotic object included (#13645).
-                self.m.array_member_write.get_or_insert(r);
+                #[cfg(test)]
+                let recorded = self
+                    .m
+                    .packet_emit(crate::summary::packet::Emission::ArrayMemberWrite(r));
+                #[cfg(not(test))]
+                let recorded = false;
+                if !recorded {
+                    self.m.array_member_write.get_or_insert(r);
+                }
                 let (call, ret) = self.new_call(ThisArg::Undef, vec![], vec![a]);
                 self.m.cons(
                     t,
