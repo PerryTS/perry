@@ -109,11 +109,11 @@ def main():
     assert observed.returncode == 0 and observed.stdout == oracle(source), observed
     save("slot-key", status=86, key=value["key"])
 
-    for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call")]:
+    for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call"), ("copy-inline", "activation:this")]:
         source = fixtures / (name + ".ts")
         exe, e = compile_(source, name, PERRY_FACTS_SABOTAGE=wrong_claim)
         values = [report(observe(exe, e, branch)) for branch in ["first", "second"]]
-        if name == "copy-store":
+        if name == "copy-inline":
             assert values[0]["copy"] != values[1]["copy"], values
         inventory = [json.loads(line) for line in Path(str(exe) + ".facts.jsonl").read_text().splitlines() if line]
         emitted = [copy for row in inventory for copy in row.get("emitted_checks", [])]
