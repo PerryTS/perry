@@ -86,9 +86,6 @@ pub(crate) use thunks::{
     dgram_unref_thunk, dgram_zero_thunk,
 };
 
-pub(crate) const EVENT_LISTENERS_PREFIX: &[u8] = b"__perryDgramListeners:";
-pub(crate) const EVENT_ONCE_PREFIX: &[u8] = b"__perryDgramOnce:";
-
 pub(crate) const KEY_TYPE: Slot = Slot::Type;
 pub(crate) const KEY_BOUND: Slot = Slot::Bound;
 pub(crate) const KEY_CLOSED: Slot = Slot::Closed;
@@ -111,6 +108,7 @@ pub(crate) const KEY_ABORT_LISTENER: Slot = Slot::AbortListener;
 pub(crate) const KEY_REACTOR_ID: Slot = Slot::ReactorId;
 pub(crate) const KEY_ASYNC_ID: Slot = Slot::AsyncId;
 pub(crate) const KEY_TRIGGER_ASYNC_ID: Slot = Slot::TriggerAsyncId;
+pub(crate) const KEY_EVENTS: Slot = Slot::Events;
 
 type MethodThunk = crate::closure::body_call::js_body_fn_ty!(a);
 
@@ -361,10 +359,6 @@ pub fn real_bind_for_test(address: &str) -> Option<u64> {
 
 pub(crate) fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-}
-
-pub(crate) fn hidden_key(bytes: &[u8]) -> *mut crate::StringHeader {
-    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
 pub(crate) fn boxed_pointer(ptr: *const u8) -> f64 {
