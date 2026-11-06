@@ -253,12 +253,17 @@ macro_rules! check_field {
         );
     }
     let at = unsafe { keys.get(slot) }.bits();
-    if !key_matches(at, key) {
+    let key_matches = if site.is_legacy() {
+        key_value_bytes(at).as_deref() == Some(key)
+    } else {
+        key_matches(at, key)
+    };
+    if !key_matches {
         field_failure!(site, key, key_name,
             "F3 slot",
             format!(
                 ".{key_name}: slot {slot} of class_id {cid} holds key {:?}",
-                at
+                key_value_bytes(at).map(|b| String::from_utf8_lossy(&b).into_owned())
             ),
         );
     }
