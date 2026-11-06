@@ -38,7 +38,9 @@ map walk 1|2|3|
 map manual true 1 2
 map 0 next 1 1
 map 0 return 1 1
-map 1 next 1 1
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map 1 next 1 0
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 map 1 return 1 1
 DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
 map 2 next 1 0
@@ -53,7 +55,9 @@ set walk 1|2|3|
 set manual true 1 2
 set 0 next 1 1
 set 0 return 1 1
-set 1 next 1 1
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+set 1 next 1 0
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 set 1 return 1 1
 DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
 set 2 next 1 0
@@ -68,7 +72,9 @@ string walk a|😀|b|
 string manual true a 😀
 string 0 next a 1
 string 0 return a 1
-string 1 next a 1
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+string 1 next a 0
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 string 1 return a 1
 DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
 string 2 next a 0
@@ -106,9 +112,14 @@ generator 0 return 1 1
 generator-finally
 generator 1 next 1 1
 generator 1 return 1 1
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 generator-finally
-generator 2 next 1 1
-generator 2 return 1 1
+generator 2 next 1 0
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)
+generator-finally
+generator 2 return 1 0
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)
 generator break end 1
 generator throw body-error 1
 generator return 1 1
