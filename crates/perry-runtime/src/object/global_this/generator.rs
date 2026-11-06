@@ -1000,6 +1000,11 @@ pub extern "C" fn js_generator_attach_closure_prototype(
             },
         );
     }
+    // DEC 250: from here on the program cannot replace, delete or redefine
+    // `next`/`return`/`throw`/`@@toStringTag` here (`constructor` stays
+    // patchable; adds stay open).
+    // SAFETY: the live, fully built prototype, unexposed until the stores below.
+    unsafe { crate::object::builtin_proto::seal_generator_prototype(gen_proto, is_async) };
     ctor_slot.store(ctor as i64, Ordering::Release);
     proto_slot.store(proto as i64, Ordering::Release);
     gen_proto_slot.store(gen_proto as i64, Ordering::Release);

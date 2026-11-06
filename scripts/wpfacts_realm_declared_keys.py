@@ -18,7 +18,7 @@ keys (the chain of every native function value and namespace); `fn <name>
 <key>` own string keys other than length/name of a native prototype method.
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `native <owner> <key> <identity>` rows resolve callable property references on global, namespace and prototype holders
-(including aliases) once, at generation, as canonical native function identities.
+(an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
 """
 import argparse
 import json
@@ -46,6 +46,12 @@ def member_properties(declarations, holder, inherited):
         holder = declarations.get(holder.get("prototype")) if inherited else None
 
 
+def intrinsic_prototype(name, kind):
+    """A realm prototype named by its intrinsic (`%GeneratorPrototype%`), not
+    reachable as a constructor's `.prototype`: its own callable members only."""
+    return kind == "prototype" and name.startswith("%") and name.endswith("%")
+
+
 def rows(realm):
     out = set()
     declarations = {d["name"]: d for d in realm["declarations"]}
@@ -55,7 +61,8 @@ def rows(realm):
     for d in realm["declarations"]:
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
-        if name.endswith(".prototype") or namespace_holder(name, kind) or name == "%Global%":
+        if (name.endswith(".prototype") or namespace_holder(name, kind) or name == "%Global%"
+                or intrinsic_prototype(name, kind)):
             for prop in member_properties(declarations, d, namespace_holder(name, kind) or name == "%Global%"):
                 getter = prop.get("get")
                 if getter and declarations[getter].get("effects") == receiver_result:

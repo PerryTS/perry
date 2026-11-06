@@ -253,6 +253,7 @@ impl<'a> Gen<'a> {
             lexical_this: true,
             no_summary: false,
             gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
             proto: None,

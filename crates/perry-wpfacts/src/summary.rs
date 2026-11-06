@@ -797,7 +797,15 @@ impl Model {
             self.edge(x, c);
             self.edge(c, x);
         }
-        self.tok(TokKind::Func(g, ctx))
+        let t = self.tok(TokKind::Func(g, ctx));
+        // A generator function's per-context `prototype` is one its
+        // generator objects may inherit from (`FuncInfo::gen_fn_protos`).
+        if let Some(gp) = self.funcs[g as usize].gen_fn_protos {
+            let pa = self.atom("prototype");
+            let f = self.field(t, pa);
+            self.edge(f, gp);
+        }
+        t
     }
 
     /// Arguments and result of `call` into summarized function token `ft`.
