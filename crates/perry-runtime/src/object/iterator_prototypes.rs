@@ -356,6 +356,8 @@ fn build_iterator_prototypes() {
     let _no_move = crate::gc::GcSuppressScope::new();
     // Shared %IteratorPrototype% — carries [Symbol.iterator] returning `this`.
     let shared = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%IteratorPrototype%", members = { [Symbol.iterator]; [Symbol.toStringTag] = "Iterator", attrs = writable | enumerable | configurable; }; } };
+    // SAFETY: the keyless newborn, unexposed, in this no-move window.
+    unsafe { crate::object::shapes::stamp_born_prototype_root(shared) };
     if shared.is_null() {
         return;
     }
@@ -410,6 +412,13 @@ fn build_iterator_prototypes() {
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
     WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
     super::iterator_ctor::note_birth_keys(shared);
+    // `%IteratorHelperPrototype%` was born on the born-prototype lineage
+    // (`build_family_proto`) and is no sealed family: mark it here, before
+    // it is exposed, as every holder of that lineage is.
+    // SAFETY: the live, fully built prototype, in this no-move window.
+    unsafe {
+        let _ = super::proto_validity::mark_object_as_prototype(iterator_helper_proto as usize);
+    }
     // SAFETY: all are live, fully built ordinary objects (collection is
     // suppressed above).
     unsafe {
@@ -474,6 +483,8 @@ fn build_family_proto(
     shared: *mut ObjectHeader,
 ) -> *mut ObjectHeader {
     let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%ArrayIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Array Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%MapIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Map Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%SetIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Set Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%StringIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "String Iterator", attrs = writable | enumerable | configurable; }, never_move = true; } };
+    // SAFETY: the keyless newborn, unexposed, in this no-move window.
+    unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     if proto.is_null() {
         return std::ptr::null_mut();
     }

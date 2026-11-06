@@ -496,7 +496,10 @@ fn lower_instance_method_call(
             // `arms`: the implementors a selection names (one per switch arm);
             // `None` for a proven site, whose switch lists every class.
             let (selected, arms) = if let Some((_, nullable)) = &proven {
-                (crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable), None)
+                (
+                    crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable),
+                    None,
+                )
             } else if cased.contains(&true) {
                 let (selected, arms) = select::select(ctx, &recv, property, &implementors, &cased);
                 (selected, Some(arms))
@@ -551,6 +554,7 @@ fn lower_instance_method_call(
                 // facts-verification build lists every class and its default
                 // is the witness.
                 Some((map, nullable)) => {
+                    crate::verify_facts::tick(ctx);
                     let label_of = |i: usize| {
                         case_idxs
                             .iter()
@@ -668,14 +672,19 @@ fn lower_instance_method_call(
                         .as_ref()
                         .map(|(map, _)| map.iter().map(|&(cid, _)| cid).collect())
                         .unwrap_or_default();
+                    crate::expr::wpfacts_access::receiver_checked(ctx, object);
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("method .{property} receiver class_ids={ids:?}"),
+                        crate::verify_facts::Fact::Receiver,
+                        &ids,
                     );
-                    let _ = ctx.block().call(
+                    let _ = crate::verify_facts::check(
+                        ctx,
                         I32,
                         "perry_wpfacts_check_miss",
-                        &[(DOUBLE, &recv_box), (I64, &site)],
+                        &[(DOUBLE, &recv_box)],
+                        &site,
                     );
                 }
                 ctx.block().unreachable();

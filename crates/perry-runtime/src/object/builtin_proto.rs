@@ -281,6 +281,19 @@ const _: () = assert!(
     "the meta family field holds every sealed family"
 );
 
+/// Does the realm seal the prototype the constructor loop
+/// (`global_this::populate`) births for `declaration`? A family prototype is
+/// sealed by [`seal_realm`] before any program code can reach it, so it is
+/// born on the born-prototype lineage (`shapes::stamp_born_prototype_root`)
+/// and that seal's mark mints no shape. Every other one keeps the ordinary
+/// lineage until something marks it (a runtime prototype with a declared
+/// class or layout word is restamped onto that word's lineage first).
+pub(crate) fn realm_seals_constructor_prototype(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) -> bool {
+    BuiltinProto::ALL.iter().any(|(_, ctor)| *ctor == declaration.name)
+}
+
 /// Seal the built-in iterator prototypes the moment `iterator_prototypes`
 /// completes them, before any program code can reach them: `shared`
 /// (`%IteratorPrototype%`), then the families in `ITERATOR_FAMILIES` order.
@@ -1309,10 +1322,16 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
         crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
         _ => return None,
     };
-    Some(ReceiverFact::Builtin(
-        family,
-        family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0,
-    ))
+    // The receiver's own link: an array's header bit; a Map, Set or Date
+    // cell's meta record (its own `[[Prototype]]` or an own key lives there).
+    let own = if family == BuiltinProto::Array {
+        header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    } else {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        // SAFETY: `header` is this live cell's validated header.
+        unsafe { super::cell_meta::builtin_cell_has_meta(addr, header.obj_type) }
+    };
+    Some(ReceiverFact::Builtin(family, own))
 }
 
 /// The intrinsic's shadow bit and the receiver's own prototype link are

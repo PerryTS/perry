@@ -1001,7 +1001,11 @@ fn constfn_slots_past_word_zero_hash_apart_round_trip_and_keep_old_hashes() {
         }
         h
     };
-    assert_eq!(low.content_hash(), one_byte, "slots below 255 hash as one byte");
+    assert_eq!(
+        low.content_hash(),
+        one_byte,
+        "slots below 255 hash as one byte"
+    );
     // Seed sidecar round trip with bodies at slots 3, 40 and 300.
     let shape = birth_with_bodies(&[3, 40, 300]);
     let line = encode_static_seed(7, &shape);

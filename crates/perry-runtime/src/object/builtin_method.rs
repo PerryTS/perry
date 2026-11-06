@@ -114,7 +114,7 @@ unsafe fn forwarded_head(addr: usize) -> Option<usize> {
 unsafe fn map_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_MAP
-            && super::cell_meta::map_cell_meta(raw(v) as *const crate::map::MapHeader).is_null()
+            && !super::cell_meta::builtin_cell_has_meta(raw(v) as usize, (*h).obj_type)
     }) && pristine(BuiltinProto::Map)
 }
 
@@ -123,7 +123,7 @@ unsafe fn map_ok(v: f64) -> bool {
 unsafe fn set_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_SET
-            && super::cell_meta::set_cell_meta(raw(v) as *const crate::set::SetHeader).is_null()
+            && !super::cell_meta::builtin_cell_has_meta(raw(v) as usize, (*h).obj_type)
     }) && pristine(BuiltinProto::Set)
 }
 

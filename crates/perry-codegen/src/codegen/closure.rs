@@ -185,6 +185,8 @@ pub(super) fn compile_typed_string_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -237,6 +239,8 @@ pub(super) fn compile_typed_f64_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -283,6 +287,8 @@ pub(super) fn compile_typed_i1_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -329,6 +335,8 @@ pub(super) fn compile_typed_i32_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -629,6 +637,8 @@ pub(super) fn compile_closure(
     };
 
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let versioned_loop_deopt_context = versioned_loop_callback.then(|| {
         let scratch_param = params

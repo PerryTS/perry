@@ -159,6 +159,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             }
             ctx.wpfacts.locals.get(id).map(|r| {
                 crate::facts_consumed::used();
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::Receiver,
+                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+                );
                 (r.clone(), format!("local {id}"))
             })
         }
@@ -170,6 +174,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
             ctx.wpfacts.this_of.get(fid).map(|r| {
                 crate::facts_consumed::used();
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::Receiver,
+                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+                );
                 (r.clone(), format!("this of fn {fid}"))
             })
         }
@@ -194,6 +202,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             let mut nullable = false;
             for &cid in &r.class_ids {
                 let f = ctx.wpfacts.field(cid, property)?;
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::HolderClasses,
+                    || serde_json::json!({"holder":cid,"key":property,"classes":f.classes,"nullable":f.nullable}),
+                );
                 if f.reserved || f.classes.is_empty() {
                     return None;
                 }
@@ -225,6 +237,17 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
         .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
 }
 
+pub(crate) fn receiver_checked(ctx: &FnCtx<'_>, object: &Expr) {
+    if crate::verify_facts::enabled() {
+        if let Some((r, _)) = receiver(ctx, object) {
+            crate::verify_facts::covered(
+                crate::verify_facts::Fact::Receiver,
+                || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+            );
+        }
+    }
+}
+
 /// FVA 3.4: the facts prove class `cid`'s own static `key` holds its
 /// definition for the program's life (no write, no escape of the class
 /// object, no interpreted code).
@@ -237,6 +260,10 @@ pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
             .get(&cid)
             .is_some_and(|ks| ks.iter().any(|k| k == key));
     if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Static,
+            || serde_json::json!({"class":cid,"key":key}),
+        );
         crate::facts_consumed::used();
     }
     proved
@@ -506,8 +533,25 @@ pub(crate) fn prove(
         any_f64 |= lane;
         names.push(name);
     }
+    if maybe_absent {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Presence,
+            || serde_json::json!({"classes":recv.class_ids,"key":property}),
+        );
+    }
+    if ta_stable {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::TypedOwner,
+            || serde_json::json!({"classes":recv.class_ids,"key":property,"kind":ta_kind.flatten()}),
+        );
+    }
+    if interp_guard {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::InterpreterGuard, || {
+            serde_json::json!({})
+        });
+    }
     let guarded = checked || interp_guard;
-    Some(FieldProof {
+    let proof = FieldProof {
         class_ids: recv.class_ids.clone(),
         class_names: names,
         slot: slot?,
@@ -527,7 +571,9 @@ pub(crate) fn prove(
         checked,
         interp_guard,
         maybe_absent,
-    })
+    };
+    crate::verify_facts::field_consumed(&proof, property);
+    Some(proof)
 }
 
 /// A stable id for one elided site (printed by the witness on a violation,
@@ -609,6 +655,7 @@ pub(crate) fn emit_witness(
     if !crate::verify_facts::witnesses() {
         return;
     }
+    crate::verify_facts::field_checked(p, property);
     let what = format!(
         "{site:#018x} {} .{property} classes={:?} class_ids={:?} slots={:?}",
         if flags & WPF_STORE != 0 {
@@ -620,7 +667,57 @@ pub(crate) fn emit_witness(
         p.class_ids,
         p.slots
     );
-    let site_arg = crate::verify_facts::site_arg(ctx, &what);
+    if crate::verify_facts::enabled() {
+        let site_arg =
+            crate::verify_facts::raw_site(ctx, "field", Some(property), &p.class_ids, &what);
+        let (key, key_len) =
+            crate::verify_facts::raw_bytes(ctx.strings.module_prefix(), property.as_bytes());
+        let (c01, c23) = pack_cids(&p.class_ids);
+        let (triple, form) = (ctx.target_triple, p.form());
+        let off_of = |s: u32| crate::target_layout::layout_key_off(triple, form, s).to_string();
+        let (slot, off) = if p.agrees() {
+            (p.slot.to_string(), off_of(p.slot))
+        } else {
+            let bits = ctx.block().bitcast_double_to_i64(recv_box);
+            let biased = ctx.block().sub(
+                I64,
+                &bits,
+                &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+            );
+            (
+                select_by_class(ctx, &biased, p, |s| s.to_string()),
+                select_by_class(ctx, &biased, p, &off_of),
+            )
+        };
+        let flags = flags
+            | if p.nullable { WPF_NULLABLE } else { 0 }
+            | if p.raw_f64 && flags & WPF_STORE == 0 {
+                WPF_RAW_F64
+            } else {
+                0
+            };
+        ctx.block().call(
+            I32,
+            "perry_verify_facts_field",
+            &[
+                (DOUBLE, recv_box),
+                (DOUBLE, value),
+                (I64, &key),
+                (I64, &key_len),
+                (I64, &c01),
+                (I64, &c23),
+                (I32, &slot),
+                (I32, &off),
+                (I32, &(p.kind_mask as i32).to_string()),
+                (I32, &flags.to_string()),
+                (I64, &site_arg.pointer),
+                (I64, site_arg.len.as_deref().unwrap()),
+            ],
+        );
+        return;
+    }
+    let site_arg =
+        crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::Slot, &p.class_ids);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);
