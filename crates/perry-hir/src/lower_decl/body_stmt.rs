@@ -1250,6 +1250,12 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // `for_head::rewrite_collection_view_for_of`.
             let view_rewrite = crate::lower::rewrite_collection_view_for_of(ctx, for_of_stmt);
             let for_of_stmt = view_rewrite.as_ref().unwrap_or(for_of_stmt);
+            // A short array literal: a counted loop over its elements
+            // (`lower::for_of_guard`).
+            if let Some(stmts) = crate::lower::lower_body_literal_for_of(ctx, for_of_stmt)? {
+                result.extend(stmts);
+                return Ok(result);
+            }
 
             // --- Issue #237: `for await (const c of <ReadableStream>)` ---
             // Lower to a getReader/read loop so the body sees Uint8Array

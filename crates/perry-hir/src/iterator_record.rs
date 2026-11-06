@@ -814,10 +814,21 @@ mod tests {
     }
 
     fn hir(source: &str) -> String {
+        lower(source, false)
+    }
+
+    /// The loop as the IteratorRecord lowers it, without the counted walk
+    /// `for_of_guard` puts in front of a non-literal source.
+    fn hir_record(source: &str) -> String {
+        lower(source, true)
+    }
+
+    fn lower(source: &str, walk_off: bool) -> String {
         let source = source.to_owned();
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
+                crate::lower::for_of_guard::SOURCE_WALK_OFF.with(|c| c.set(walk_off));
                 let mut cache = perry_diagnostics::SourceCache::new();
                 let parsed = perry_parser::parse_typescript_with_cache(
                     &source,
@@ -842,7 +853,9 @@ mod tests {
             "function f(a: any) { for (const x of a) console.log('unique-body', x); }",
             "function f(a: number[]) { for (const x of a) console.log('unique-body', x); }",
         ] {
-            let ir = hir(source);
+            let walked = hir(source);
+            assert!(walked.contains("__forof_lit_src_"), "{walked}");
+            let ir = hir_record(source);
             assert!(ir.contains("arrayRecordNeedsIterator"), "{ir}");
             assert!(
                 ir.contains("iteratorStep") && ir.contains("IndexGet"),
@@ -900,13 +913,13 @@ mod tests {
             init: Some(Expr::NativeMethodCall { args, .. }), .. }
             if !matches!(args.last(), Some(Expr::Bool(true)))));
 
-        let ir = hir("function f(a: number[]) { for (const x of a) { console.log(x); } }");
+        let ir = hir_record("function f(a: number[]) { for (const x of a) { console.log(x); } }");
         let entry = &ir[ir.find("\"arrayRecordNeedsIterator\"").unwrap()..];
         assert!(
             entry[..entry.find(']').unwrap()].contains("Bool(true)"),
             "the static candidate selects the counted entry: {ir}"
         );
-        let erased = hir("function f(a: any) { for (const x of a) { console.log(x); } }");
+        let erased = hir_record("function f(a: any) { for (const x of a) { console.log(x); } }");
         let entry = &erased[erased.find("\"arrayRecordNeedsIterator\"").unwrap()..];
         assert!(
             !entry[..entry.find(']').unwrap()].contains("Bool(true)"),

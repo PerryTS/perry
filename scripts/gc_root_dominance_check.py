@@ -702,7 +702,7 @@ JS_ALLOC_RE = re.compile(
 ALLOC_RE = re.compile(
     "^(" + "|".join("js_" + a for a in
                      JS_ALLOC_RE.pattern[len("^js_("):-len(")$")].split("|"))
-    + r"|perry_birth_class|perry_birth_empty_array)$"
+    + r"|perry_birth_class|perry_birth_empty_array|perry_birth_empty_array_16)$"
 )
 
 
@@ -1723,7 +1723,7 @@ POLL_CAPABLE_RUNTIME = {
     # Null-raw birth calls reach js_inline_arena_slow_alloc, which can collect.
     # Non-null fast calls carry a call-site gc-leaf-function attribute; the
     # symbol itself must never be classified as noncollecting.
-    "perry_birth_class", "perry_birth_empty_array",
+    "perry_birth_class", "perry_birth_empty_array", "perry_birth_empty_array_16",
     "js_inline_arena_slow_alloc",
     "js_call_function",
     # Calling a JS closure. The four names this replaces
@@ -3302,7 +3302,8 @@ def _stale_use_replacing_edges(f, def_of, src_reg, chain, direct, use):
 def _collecting_insn(ins):
     # The fast birth call shares a symbol with the collecting slow call.
     # Codegen proves the fast arm leaf at the call site, never on the symbol.
-    if ins.callee in {"perry_birth_class", "perry_birth_empty_array"}:
+    if ins.callee in {"perry_birth_class", "perry_birth_empty_array",
+                      "perry_birth_empty_array_16"}:
         if '"gc-leaf-function"' in ins.text:
             return False
     return is_collecting(ins.callee)
@@ -6836,7 +6837,8 @@ def self_test():
     # Both birth entry points are heap sources through their fast/slow phi.
     # Prove a late store and a missing bind fail, while the rooted/reloaded
     # twin clears. Also prove only the non-leaf call is a collection window.
-    for birth in ("perry_birth_class", "perry_birth_empty_array"):
+    for birth in ("perry_birth_class", "perry_birth_empty_array",
+                  "perry_birth_empty_array_16"):
         fixture = f"""define i64 @birth_control(i1 %fits, ptr %raw) {{
 entry.0:
   %home = alloca i64
