@@ -17,6 +17,7 @@ mod once;
 mod own_guard;
 pub(crate) use own_guard::Region;
 mod primitives;
+mod private_methods;
 mod shared_closures;
 mod view;
 mod walk;

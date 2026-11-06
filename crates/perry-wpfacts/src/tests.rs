@@ -88,6 +88,7 @@ mod parent_value;
 mod plus_string;
 mod prim_result;
 mod private_field;
+mod private_method_flow;
 mod process_argv;
 mod proof_receivers;
 mod proto_lock_keys;

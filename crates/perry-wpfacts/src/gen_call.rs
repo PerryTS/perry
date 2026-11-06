@@ -137,6 +137,7 @@ impl<'a> Gen<'a> {
                     None => self.expr(fx, object),
                 };
                 self.own_test_recv = Some(o);
+                let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
@@ -144,9 +145,9 @@ impl<'a> Gen<'a> {
                         module: fx.module,
                         byte_offset: off,
                         key: a,
-                        recv: o,
+                        recv: private.unwrap_or(o),
                         is_call: true,
-                        value_call: false,
+                        value_call: private.is_some(),
                         func: fx.f,
                     });
                 }
@@ -154,13 +155,16 @@ impl<'a> Gen<'a> {
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
-                self.m.cons(
-                    o,
-                    Cons::MCall {
-                        key: Key::Named(a),
-                        call,
-                    },
-                );
+                match private {
+                    Some(callee) => self.m.cons(callee, Cons::Call { call }),
+                    None => self.m.cons(
+                        o,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call,
+                        },
+                    ),
+                }
                 ret
             }
             Expr::IndexGet { object, index, .. } => {
