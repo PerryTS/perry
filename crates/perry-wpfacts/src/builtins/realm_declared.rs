@@ -5,11 +5,13 @@
 //! (generated from `realm-v1.json` by `scripts/wpfacts_realm_declared_keys.py`,
 //! whose `--check` keeps it current); every row must be a member here.
 
+#[cfg(test)]
 use super::*;
 
-const DECLARED: &str = include_str!("realm_declared_keys.tsv");
+pub(super) const DECLARED: &str = include_str!("realm_declared_keys.tsv");
 
 /// The canonical realm reference under a native prototype member key.
+#[cfg(test)]
 pub(super) fn native_identity(owner: &str, key: &str) -> Option<&'static str> {
     DECLARED.lines().find_map(|line| {
         let mut row = line.split('\t');
@@ -21,6 +23,7 @@ pub(super) fn native_identity(owner: &str, key: &str) -> Option<&'static str> {
 
 /// Coordinates of the canonical reference, including bracketed symbol
 /// names. Alias rows do not choose the call model's holder or key.
+#[cfg(test)]
 pub(super) fn identity_member(identity: &str) -> Option<(&'static str, &'static str)> {
     DECLARED
         .lines()
@@ -65,6 +68,7 @@ pub(super) fn identity_member(identity: &str) -> Option<(&'static str, &'static 
 /// A namespace token may summarize several constructors. Exempting it as
 /// one known stored value requires every global reference it denotes to
 /// name the same realm object.
+#[cfg(test)]
 pub(super) fn namespace_singleton(ns: BuiltinNs, identity: &str) -> bool {
     DECLARED
         .lines()
@@ -81,6 +85,7 @@ pub(super) fn namespace_singleton(ns: BuiltinNs, identity: &str) -> bool {
 }
 
 /// The realm gives this own accessor exactly the pure returns(this) effect.
+#[cfg(test)]
 pub(super) fn getter_returns_receiver(ns: BuiltinNs, key: &str) -> bool {
     let key = key.replace(WK_PREFIX, "@@");
     DECLARED.lines().any(|line| {
@@ -93,6 +98,7 @@ pub(super) fn getter_returns_receiver(ns: BuiltinNs, key: &str) -> bool {
 
 /// Own declared keys of an identified constructor/namespace value. The
 /// same rows cover holders without a specialized namespace call model.
+#[cfg(test)]
 pub(super) fn namespace_own_key(identity: &str, key: &str) -> bool {
     DECLARED.lines().any(|line| {
         let mut row = line.split('\t');
@@ -103,6 +109,7 @@ pub(super) fn namespace_own_key(identity: &str, key: &str) -> bool {
 /// A callable property of a namespace (Other is the HIR global sentinel).
 /// Holder names and references come from the generated realm, not a second
 /// list of global function names.
+#[cfg(test)]
 pub(super) fn namespace_identity(ns: BuiltinNs, key: &str) -> Option<&'static str> {
     let key = key.replace(WK_PREFIX, "@@");
     let ns = if ns == BuiltinNs::Other {

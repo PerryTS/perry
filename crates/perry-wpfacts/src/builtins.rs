@@ -22,6 +22,7 @@ pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
 mod realm_declared;
+pub(crate) mod realm_shapes;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{builtin_function, native_may_be, undeclared};
@@ -659,36 +660,31 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 
 /// Resolve the member's object reference before interning its token. The
 /// receiver family locates the holder, but is never part of value identity.
-fn member_native(fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
-    let owner = match what {
-        Some("TypedArray") => "%TypedArray%.prototype".to_string(),
-        Some(w) => format!("{w}.prototype"),
-        None => {
-            let holder = crate::native_effects::realm().iter().find_map(|e| {
-                let ns = ns_by_name(e.name)?;
-                let (f, w, _) = loads::proto_family(ns)?;
-                (f == fam && w.is_none()).then_some(e.name)
-            })?;
-            format!("{holder}.prototype")
-        }
-    };
-    let key = name.replace(WK_PREFIX, "@@");
-    let identity = realm_declared::native_identity(&owner, &key).or_else(|| {
-        // The family can inherit an Object.prototype member. A described
-        // own method with no realm entry cannot establish that fallback.
-        (members::own(fam, name).is_none())
-            .then(|| realm_declared::native_identity("Object.prototype", &key))
-            .flatten()
-    })?;
+fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
+    let holder = match what {
+        Some("TypedArray") => m.declarations.named("%TypedArray%.prototype", m),
+        Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
+        None => m.declarations.family(fam, m),
+    }?;
+    let identity = m
+        .declarations
+        .property(holder, name, m)
+        .and_then(|p| p.native)
+        .or_else(|| {
+            if members::own(fam, name).is_some() {
+                return None;
+            }
+            let object = m.declarations.family(Family::Object, m)?;
+            m.declarations.property(object, name, m)?.native
+        })?;
     Some(Native::Member { identity })
 }
 
-/// The existing model of a canonical prototype member. Its identity may
-/// name another family's member (e.g. TypedArray's toString is Array's).
-pub(crate) fn native_model(
-    identity: &'static str,
+/// Canonical coordinates are resolved with the value's shape, once.
+fn prototype_model(
+    owner: &'static str,
+    key: &'static str,
 ) -> Option<(Family, Option<&'static str>, &'static str)> {
-    let (owner, key) = realm_declared::identity_member(identity)?;
     let owner = owner.strip_suffix(".prototype")?;
     let (fam, what) = match owner {
         "Object" => (Family::Object, None),
@@ -699,6 +695,13 @@ pub(crate) fn native_model(
         },
     };
     Some((fam, what, key))
+}
+
+pub(crate) fn native_model(
+    m: &Model,
+    t: Tok,
+) -> Option<(Family, Option<&'static str>, &'static str)> {
+    m.native_coordinates(t)?.prototype
 }
 
 /// The three receiver-independent Object.prototype summaries already have
@@ -919,12 +922,13 @@ pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
 pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
 /// Whether the generated global object declares a callable under this key.
-pub(crate) fn global_function(name: &str) -> bool {
-    realm_declared::namespace_identity(BuiltinNs::GlobalThis, name).is_some()
+pub(crate) fn global_function(m: &Model, name: &str) -> bool {
+    m.namespace_property(BuiltinNs::GlobalThis, name)
+        .is_some_and(|p| p.native.is_some())
 }
 
-pub(crate) fn namespace_receiver_getter(ns: BuiltinNs, key: &str) -> bool {
-    realm_declared::getter_returns_receiver(ns, key)
+pub(crate) fn namespace_receiver_getter(m: &Model, t: Tok, key: &str) -> bool {
+    m.native_property(t, key).is_some_and(|p| p.getter_this)
 }
 
 /// A pure native accessor is read with the original receiver, even when
@@ -933,11 +937,11 @@ fn namespace_getter_load(
     m: &mut Model,
     origin: Tok,
     holder: Tok,
-    ns: BuiltinNs,
+    _ns: BuiltinNs,
     a: Atom,
     dst: NodeId,
 ) -> bool {
-    if m.unit_mode || !namespace_receiver_getter(ns, &m.atoms[a as usize]) {
+    if m.unit_mode || !namespace_receiver_getter(m, holder, &m.atoms[a as usize]) {
         return false;
     }
     if native_written(m, holder, a) {
@@ -971,16 +975,18 @@ pub(crate) fn native_own_load(
             if namespace_getter_load(m, origin, holder, ns, a, dst) {
                 return true;
             }
-            if realm_declared::namespace_identity(ns, &name).is_some() {
+            if m.native_property(holder, &name)
+                .is_some_and(|p| p.native.is_some())
+            {
                 loads::ns_load(m, holder, ns, a, dst);
                 return true;
             }
         }
-        TokKind::BuiltinFn(Native::Member { identity }) => {
-            let key = name.replace(WK_PREFIX, "@@");
-            let value = realm_declared::native_identity(identity, &key);
+        TokKind::BuiltinFn(Native::Member { .. }) => {
+            let property = m.native_property(holder, &name);
+            let value = property.and_then(|p| p.native);
             if value.is_none()
-                && (!realm_declared::namespace_own_key(identity, &key)
+                && (!property.is_some_and(|p| p.own_namespace)
                     || members::member(Family::Function, &name).is_some())
             {
                 return false;
@@ -1005,51 +1011,31 @@ pub(crate) fn native_own_load(
 
 /// Constructibility is the realm declaration's object shape, independent
 /// of whether this solver has a specialized constructor call model.
-pub(crate) fn native_constructible(identity: &str) -> bool {
-    crate::native_effects::realm().iter().any(|entry| {
-        entry.name == identity && entry.kind == perry_hir::realm_manifest::RealmKind::Constructor
-    })
+pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
+    m.native_coordinates(t).is_some_and(|c| c.constructible)
 }
 
-/// The member an ordinary namespace read names, including its intrinsic
-/// chain. Writes are handled by that ordinary read, never by this lookup.
-pub(crate) fn namespace_native(ns: BuiltinNs, name: &str) -> Option<Native> {
-    if let Some(identity) = realm_declared::namespace_identity(ns, name) {
+/// Read the function reference from this receiver's declared property shape.
+pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
+    if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
         return Some(Native::Member { identity });
     }
     matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
-        .then(|| member_native(members::ns_chain(ns), None, name))
+        .then(|| member_native(m, members::ns_chain(ns), None, name))
         .flatten()
 }
 
-/// A call through a namespace/global member value runs the direct member's
-/// model, independent of the spelling or receiver used to reach the value.
-pub(crate) fn native_namespace_call(
-    m: &mut Model,
-    identity: &'static str,
-    t: Tok,
-    call: CallId,
-) -> bool {
+/// The function value carries its canonical namespace call coordinates.
+pub(crate) fn native_namespace_call(m: &mut Model, t: Tok, call: CallId) -> bool {
     if m.unit_mode {
         return false;
     }
-    let Some((owner, name)) = realm_declared::identity_member(identity) else {
+    let Some((ns, name)) = m.native_coordinates(t).and_then(|c| c.namespace) else {
         return false;
-    };
-    if owner.ends_with(".prototype") {
-        return false;
-    }
-    let Some(ns) = ns_by_name(owner) else {
-        return false;
-    };
-    let ns = if ns == BuiltinNs::GlobalThis {
-        BuiltinNs::Other
-    } else {
-        ns
     };
     if m.bind_done.insert((call, t, u32::MAX - 6)) {
         m.diagnostic_callee(call, t);
-        m.with_b(|m| ns_method(m, ns, Some(name), call));
+        m.with_b(|m| ns_method_inner(m, ns, Some(name), call, true));
     }
     true
 }
@@ -1144,9 +1130,19 @@ fn console_args(m: &mut Model, call: CallId) {
 }
 
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    ns_method_inner(m, ns, name, call, false)
+}
+
+fn ns_method_inner(
+    m: &mut Model,
+    ns: BuiltinNs,
+    name: Option<&str>,
+    call: CallId,
+    identified: bool,
+) {
     if let Some(name) = name {
         if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
-            || ns == BuiltinNs::Other && global_function(name)
+            || ns == BuiltinNs::Other && (identified || global_function(m, name))
         {
             m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
         }
@@ -1241,7 +1237,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         // is not handed to unknown code by the call (`global.gc()`). A key the
         // program may write onto the global object (now or later in the
         // solve) is the opaque call as well.
-        (BuiltinNs::GlobalThis, n) if global_function(n) => {
+        (BuiltinNs::GlobalThis, n) if global_function(m, n) => {
             let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let a = m.atom(n);
             if native_written(m, g, a) {

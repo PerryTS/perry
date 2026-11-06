@@ -53,7 +53,7 @@ pub(super) fn family_load(
     dst: NodeId,
 ) {
     let name = m.atoms[a as usize].clone();
-    if fam == Family::Opaque && member_native(fam, what, &name).is_none() {
+    if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
         undescribed_member(m, dst);
         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
             opaque_member(m, dst);
@@ -62,7 +62,7 @@ pub(super) fn family_load(
     }
     match members::member(fam, &name) {
         Some(Mem::Fn) => {
-            let bf = match member_native(fam, what, &name) {
+            let bf = match member_native(m, fam, what, &name) {
                 Some(n) => {
                     if m.explain {
                         *m.bf_mints.entry("described member (named)").or_insert(0) += 1;
@@ -76,7 +76,7 @@ pub(super) fn family_load(
         Some(Mem::Prim(p)) => m.add_prim(dst, p),
         Some(Mem::Ctor) => {
             if let Some(n) = (!m.unit_mode)
-                .then(|| member_native(fam, what, &name))
+                .then(|| member_native(m, fam, what, &name))
                 .flatten()
             {
                 let f = m.tok(TokKind::BuiltinFn(n));
@@ -140,7 +140,7 @@ pub(crate) fn proto_own_native(
     {
         return None;
     }
-    let native = member_native(fam, what, &name)?;
+    let native = member_native(m, fam, what, &name)?;
     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
     let ga = m.atom(global);
     if native_written(m, g, ga) {
@@ -170,7 +170,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         return;
     }
     if !m.unit_mode {
-        if let Some(n) = namespace_native(ns, &name) {
+        if let Some(n) = namespace_native(m, t, ns, &name) {
             if native_written(m, t, a) {
                 return opaque_member(m, dst);
             }
@@ -254,7 +254,7 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     match members::prim_member(prim, &name) {
         Some(Mem::Fn) => {
             for fam in members::prim_families(prim) {
-                let bf = match member_native(fam, None, &name) {
+                let bf = match member_native(m, fam, None, &name) {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),
                     None => builtin_fn(m, "primitive member"),
                 };
@@ -290,7 +290,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 if let Some(ns) = ns_by_name(n) {
                     let bt = m.tok(TokKind::Builtin(ns));
                     m.add_tok(dst, bt);
-                } else if !m.unit_mode && global_function(n) {
+                } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
                     m.load_from(g, g, key, dst);
@@ -347,7 +347,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
                     m.add_tok(dst, bt);
                 }
-                Some(n) if !m.unit_mode && global_function(n) => {
+                Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
                     ns_load(m, t, BuiltinNs::GlobalThis, a, dst);
                 }
@@ -438,8 +438,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 if members::ns_member(ns, n).is_some()
                     || members::is_host(ns)
                     || (!m.unit_mode
-                        && (namespace_native(ns, n).is_some()
-                            || namespace_receiver_getter(ns, n))) =>
+                        && (namespace_native(m, t, ns, n).is_some()
+                            || namespace_receiver_getter(m, t, n))) =>
             {
                 let Key::Named(a) = key else { unreachable!() };
                 ns_load(m, t, ns, a, dst);
@@ -494,7 +494,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             Some("call" | "apply" | "bind" | "toString") => {
                 let Key::Named(a) = key else { unreachable!() };
                 let bf = match (!m.unit_mode)
-                    .then(|| member_native(Family::Function, None, name.as_deref().unwrap()))
+                    .then(|| member_native(m, Family::Function, None, name.as_deref().unwrap()))
                     .flatten()
                 {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),

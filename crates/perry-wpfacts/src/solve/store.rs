@@ -134,8 +134,8 @@ impl Model {
             if fresh.is_empty() {
                 continue;
             }
-            self.work += fresh.len() as u64;
-            if self.max_work != 0 && self.work > self.max_work {
+            self.charge_work(fresh.len() as u64);
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 return;
             }
@@ -219,7 +219,7 @@ impl Model {
             (Some(_), Some(_)) => return,
         };
         for &(key, src, site) in ss {
-            self.work += 1;
+            self.charge_work(1);
             self.store_into(y, key, src, site);
         }
     }
