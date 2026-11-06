@@ -18,9 +18,6 @@
 use crate::object::ObjectHeader;
 use crate::StringHeader;
 
-mod report;
-use report::Witness;
-
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -85,19 +82,17 @@ fn string_bytes(ptr: *const StringHeader) -> Option<Vec<u8>> {
     }
 }
 
-fn key_matches(bits: u64, expected: &[u8]) -> bool {
+/// The bytes of a key in an object's key list, without materializing or
+/// interning anything (heap string or SSO immediate).
+fn key_value_bytes(bits: u64) -> Option<Vec<u8>> {
     match bits & TAG_MASK {
-        STRING_TAG => unsafe {
-            let ptr = (bits & POINTER_MASK) as *const StringHeader;
-            std::slice::from_raw_parts(crate::string::string_data(ptr), (*ptr).byte_len as usize)
-                == expected
-        },
+        STRING_TAG => string_bytes((bits & POINTER_MASK) as *const StringHeader),
         SHORT_STRING_TAG => {
-            let mut buf = [0; crate::value::SHORT_STRING_MAX_LEN];
+            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             let n = crate::JSValue::from_bits(bits).short_string_to_buf(&mut buf);
-            buf.get(..n).is_some_and(|actual| actual == expected)
+            Some(buf[..n].to_vec())
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -555,4 +550,23 @@ pub extern "C" fn perry_verify_facts_init() {
 #[no_mangle]
 pub extern "C" fn perry_verify_facts_tick() {
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+mod report;
+use report::Witness;
+
+fn key_matches(bits: u64, expected: &[u8]) -> bool {
+    match bits & TAG_MASK {
+        STRING_TAG => unsafe {
+            let ptr = (bits & POINTER_MASK) as *const StringHeader;
+            std::slice::from_raw_parts(crate::string::string_data(ptr), (*ptr).byte_len as usize)
+                == expected
+        },
+        SHORT_STRING_TAG => {
+            let mut buf = [0; crate::value::SHORT_STRING_MAX_LEN];
+            let n = crate::JSValue::from_bits(bits).short_string_to_buf(&mut buf);
+            buf.get(..n).is_some_and(|actual| actual == expected)
+        }
+        _ => false,
+    }
 }
