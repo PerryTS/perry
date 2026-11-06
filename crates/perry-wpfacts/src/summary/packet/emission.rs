@@ -415,6 +415,26 @@ impl Model {
         }
     }
 
+    pub(crate) fn packet_generator_action(
+        &mut self,
+        f: FnIdx,
+        object: NodeId,
+        is_async: bool,
+    ) -> Option<bool> {
+        let mut b = self.packet_scope.take()?;
+        let object = self.packet_term(&mut b, object);
+        let function = self.funcs[f as usize].body_packet.header.identity.clone();
+        b.packet.operations.push(Operation::GeneratorPrototype {
+            function,
+            object,
+            is_async,
+        });
+        let publish = !b.inert;
+        self.packet_scope = Some(b);
+        self.packet_protocol_depth += 1;
+        Some(publish)
+    }
+
     pub(crate) fn packet_class_action(
         &mut self,
         module: &str,

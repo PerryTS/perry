@@ -408,6 +408,23 @@ mod indexed_owner;
 
 impl<'a> Gen<'a> {
     #[cfg(test)]
+    pub(crate) fn packet_generator_effect(
+        &mut self,
+        f: FnIdx,
+        object: NodeId,
+        is_async: bool,
+        publish: impl FnOnce(&mut Self),
+    ) {
+        let mode = self.m.packet_generator_action(f, object, is_async);
+        if mode.unwrap_or(true) {
+            publish(self);
+        }
+        if mode.is_some() {
+            self.m.packet_protocol_depth -= 1;
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn packet_class_effect(
         &mut self,
         mi: u32,

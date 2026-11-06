@@ -590,3 +590,150 @@ fn per_evaluation_class_is_a_symbolic_class_binding_action() {
 fn evaluated_parent_is_a_symbolic_class_binding_action() {
     assert_class_action(fresh_class(true), "EvaluatedParent");
 }
+
+fn generator_link_bytes(seed: bool, inert: bool, is_async: bool) -> String {
+    let ast =
+        perry_parser::parse_typescript("function make() {} function step() {}", "t.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "t", "t.ts").unwrap();
+    let id = |name: &str| hir.functions.iter().find(|f| f.name == name).unwrap().id;
+    let mut g = Gen::new(vec![("t.ts", &hir)], false, false);
+    g.m.packets_enabled = true;
+    g.register_all();
+    let f = g.mods[0].funcs[&id("make")];
+    let step = g.mods[0].funcs[&id("step")];
+    let t = g.m.funcs[step as usize].token;
+    g.m.proto_node(t);
+    let input = g.m.node_l("step binding");
+    g.mods[0].imports.insert("incomingStep".into(), input);
+    if seed {
+        g.m.add_tok(input, t);
+    }
+    g.m.packets_inert = inert;
+    let fi = &g.m.funcs[f as usize];
+    let fx = crate::gen::Fx {
+        module: 0,
+        f,
+        this: fi.this,
+        ret: fi.ret,
+        class: None,
+        ctor_of: None,
+        new_target: fi.ret,
+        fn_ctor: true,
+        guard: None,
+    };
+    let prior = g.m.packet_body(f);
+    g.expr(
+        &fx,
+        &perry_hir::Expr::LinkGeneratorPrototype {
+            obj: Box::new(perry_hir::Expr::ExternFuncRef {
+                name: "incomingStep".into(),
+                param_types: vec![],
+                return_type: perry_hir::types::Type::Any,
+            }),
+            is_async,
+            fixed_state: false,
+            i32_controls: vec![],
+            i1_controls: vec![],
+        },
+    );
+    g.m.packet_end(prior, true);
+    if inert {
+        assert!(
+            g.m.funcs[step as usize].gen_proto.is_none(),
+            "prototype escaped staging"
+        );
+    }
+    g.m.funcs[f as usize].body_packet.bytes()
+}
+
+#[test]
+fn incoming_step_values_cannot_choose_generator_prototype_operations() {
+    for is_async in [false, true] {
+        let bytes = generator_link_bytes(false, false, is_async);
+        assert_eq!(
+            bytes,
+            generator_link_bytes(true, false, is_async),
+            "incoming step values selected generator operations"
+        );
+        assert_eq!(
+            bytes,
+            generator_link_bytes(true, true, is_async),
+            "inert generator link differs"
+        );
+        assert!(bytes.contains("generator prototype"));
+    }
+}
+
+#[test]
+fn fixed_resume_aliases_and_controls_remain_ordinary_packet_operations() {
+    use crate::summary::packet::{Operation, Term};
+    let ast = perry_parser::parse_typescript(
+        "function* make(){const value=yield 1;return value;}",
+        "t.ts",
+    )
+    .unwrap();
+    let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").unwrap();
+    perry_transform::transform_generators(&mut hir);
+    let mut expected = None;
+    perry_hir::tdz_check::for_each_module_expr(&hir, &mut |e| {
+        if let perry_hir::Expr::LinkGeneratorPrototype {
+            obj,
+            fixed_state: true,
+            i32_controls,
+            i1_controls,
+            ..
+        } = e
+        {
+            if let perry_hir::Expr::Closure {
+                params, captures, ..
+            } = obj.as_ref()
+            {
+                let value = if params.len() == 1 {
+                    params.first()
+                } else {
+                    params.get(1)
+                };
+                expected = Some((
+                    value.unwrap().id,
+                    captures[2],
+                    i32_controls
+                        .iter()
+                        .chain(i1_controls)
+                        .copied()
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+    });
+    let (value, sent, controls) = expected.expect("control must use fixed resume lowering");
+    assert!(!controls.is_empty(), "control must exercise scalar seeds");
+    let mut g = Gen::new(vec![("t.ts", &hir)], false, false);
+    g.m.packets_enabled = true;
+    g.register_all();
+    g.walk_all();
+    fn local(t: &Term) -> Option<u32> {
+        match t {
+            Term::Cell(c) | Term::Environment(c) => Some(c.local),
+            _ => None,
+        }
+    }
+    let packet =
+        g.m.funcs
+            .iter()
+            .map(|f| &f.body_packet)
+            .find(|p| {
+                p.operations
+                    .iter()
+                    .any(|op| matches!(op, Operation::GeneratorPrototype { .. }))
+            })
+            .unwrap();
+    assert!(
+        packet.operations.iter().any(
+            |op| matches!(op,Operation::Edge(a,b) if local(a)==Some(value)&&local(b)==Some(sent))
+        ),
+        "fixed resume alias disappeared"
+    );
+    for id in controls {
+        assert!(packet.operations.iter().any(|op|matches!(op,Operation::Seed(n,_,p) if local(n)==Some(id)&&*p==crate::model::prim::NUM|crate::model::prim::BOOL)),"control seed {id} disappeared");
+    }
+}

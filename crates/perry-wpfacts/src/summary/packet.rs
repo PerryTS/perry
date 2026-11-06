@@ -117,6 +117,11 @@ pub(crate) enum Operation {
     Escape(String, String),
     ArrayMemberWrite(String),
     SharedBirth(Identity, Term),
+    GeneratorPrototype {
+        function: Identity,
+        object: Term,
+        is_async: bool,
+    },
     ClassBinding {
         module: String,
         name: String,
@@ -314,6 +319,11 @@ impl Operation {
                 name,
                 action,
             } => format!("class binding {module:?} {name:?} {action:?}"),
+            Self::GeneratorPrototype {
+                function,
+                object,
+                is_async,
+            } => format!("generator prototype {function:?} {object:?} async={is_async}"),
             Self::SharedBirth(body, value) => format!("shared-birth {body:?} {value:?}"),
             Self::Rule(n, rule, c, terms, calls) => {
                 let _kind = rule.kind_name();
