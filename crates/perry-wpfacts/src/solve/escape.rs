@@ -15,6 +15,10 @@ impl Model {
     }
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {
+            return;
+        }
         // DECISIONS 225: unknown code may call an escaped function.
         if self.act.is_some() {
             if let TokKind::Func(f, _) = self.toks[t as usize] {

@@ -457,35 +457,41 @@ impl<'a> Gen<'a> {
                 // function is never constructed (`new g()` throws), so the
                 // instance template's birth keys are never read. Every token
                 // of the step function (one per closure context) has it.
-                let g = fx.f;
-                let tm = self.m.fn_inst_template(g);
-                let p = self.m.tok(TokKind::Proto(tm));
-                let gt = self.m.funcs[g as usize].token;
-                let pa = self.m.atom("prototype");
-                let gf = self.m.field(gt, pa);
-                self.m.add_tok(gf, p);
-                // Every token of `g` (one per closure context, made later by
-                // `closure_tok`) feeds its own `prototype` field here.
-                let gp = match self.m.funcs[g as usize].gen_fn_protos {
-                    Some(n) => n,
-                    None => {
-                        let n = self.m.node_l("gen-fn-protos");
-                        self.m.funcs[g as usize].gen_fn_protos = Some(n);
-                        n
-                    }
-                };
-                self.m.edge(gf, gp);
-                for t in self.m.nodes[o as usize].pts.to_sorted() {
-                    if let TokKind::Func(f, _) = self.m.toks[t as usize] {
-                        self.m.funcs[f as usize].gen_proto = Some(gp);
-                        self.m.funcs[f as usize].gen_async = *is_async;
-                        // A chain made before this link (`proto_node` seeds
-                        // later ones from `gen_proto`).
-                        if let Some(&pn) = self.m.proto_node.get(&t) {
-                            self.m.edge(gp, pn);
+                let publish = |gen: &mut Self| {
+                    let g = fx.f;
+                    let tm = gen.m.fn_inst_template(g);
+                    let p = gen.m.tok(TokKind::Proto(tm));
+                    let gt = gen.m.funcs[g as usize].token;
+                    let pa = gen.m.atom("prototype");
+                    let gf = gen.m.field(gt, pa);
+                    gen.m.add_tok(gf, p);
+                    // Every token of `g` (one per closure context, made later by
+                    // `closure_tok`) feeds its own `prototype` field here.
+                    let gp = match gen.m.funcs[g as usize].gen_fn_protos {
+                        Some(n) => n,
+                        None => {
+                            let n = gen.m.node_l("gen-fn-protos");
+                            gen.m.funcs[g as usize].gen_fn_protos = Some(n);
+                            n
+                        }
+                    };
+                    gen.m.edge(gf, gp);
+                    for t in gen.m.nodes[o as usize].pts.to_sorted() {
+                        if let TokKind::Func(f, _) = gen.m.toks[t as usize] {
+                            gen.m.funcs[f as usize].gen_proto = Some(gp);
+                            gen.m.funcs[f as usize].gen_async = *is_async;
+                            // A chain made before this link (`proto_node` seeds
+                            // later ones from `gen_proto`).
+                            if let Some(&pn) = gen.m.proto_node.get(&t) {
+                                gen.m.edge(gp, pn);
+                            }
                         }
                     }
-                }
+                };
+                #[cfg(test)]
+                self.packet_generator_effect(fx.f, o, *is_async, publish);
+                #[cfg(not(test))]
+                publish(self);
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
                     let l = self.local(mi, *id);
                     self.m.add_prim(l, prim::NUM | prim::BOOL);

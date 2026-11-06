@@ -24,6 +24,7 @@ mod birth_elements;
 mod birth_site;
 mod body_activation;
 mod body_identity;
+mod body_packets;
 mod bound_in_summary;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
@@ -1417,6 +1418,8 @@ fn a_parameter_node_holds_its_argument_marker() {
     );
     let token = m.tok(TokKind::Func(0, NO_CTX));
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: 0,
         name: "f".into(),
@@ -1486,6 +1489,8 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
     let token = m.tok(TokKind::Func(0, NO_CTX));
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: 0,
         name: "f".into(),
@@ -1544,6 +1549,8 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
     let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
     let token = m.tok(TokKind::Func(0, NO_CTX));
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: 0,
         name: "f".into(),
@@ -1596,6 +1603,8 @@ fn marker_model() -> crate::model::Model {
     let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
     let token = m.tok(TokKind::Func(0, NO_CTX));
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: 0,
         name: "f".into(),
@@ -1823,6 +1832,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     let tj = m.marker_load(r, Some(a));
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
+mod array_iter_lock;
 mod collection_entries;
 mod concat_elements;
 mod console_protocol;
@@ -1830,14 +1840,13 @@ mod constructor_values;
 mod date_methods;
 mod delegate_step;
 mod gen_proto_lock;
-mod array_iter_lock;
-mod iter_result_array;
 mod gen_proto_members;
 mod generator_results;
 mod generator_resume_arguments;
 mod global_unresolved;
 mod helper_protocols;
 mod host_helpers;
+mod iter_result_array;
 mod key_shape;
 mod method_this_escape;
 mod native_proto_member;
@@ -1886,9 +1895,11 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
             .fnproto_borrow_written
             .is_some()
     );
-    assert!(facts("import \"unseen-host\"; const p = missing(); p.call = function() {}; ")
-        .fnproto_borrow_written
-        .is_some());
+    assert!(
+        facts("import \"unseen-host\"; const p = missing(); p.call = function() {}; ")
+            .fnproto_borrow_written
+            .is_some()
+    );
     // A bind-specific write must not prevent a call/apply proof.
     assert!(facts("Function.prototype.bind = function() {}; ")
         .fnproto_borrow_written

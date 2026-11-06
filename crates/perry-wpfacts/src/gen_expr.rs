@@ -293,14 +293,23 @@ impl<'a> Gen<'a> {
             | Expr::PutValueSet { element_offset, .. } => *element_offset,
             _ => 0,
         };
-        self.element_sites.push(crate::gen::ElementSite {
+        let site = crate::gen::ElementSite {
             module: fx.module,
             byte_offset,
             op,
             recv,
             idx,
             key,
-        });
+        };
+        #[cfg(test)]
+        self.m.packet_observe(
+            site.byte_offset,
+            format!("element {:?}", site.op),
+            self.m.key_name(site.key),
+            site.recv,
+            Some(site.idx),
+        );
+        self.element_sites.push(site);
     }
 
     /// The key a computed access names: a string literal, or a binding that
@@ -532,7 +541,13 @@ impl<'a> Gen<'a> {
         // `builtins::iterate`.
         let (sc, r2) = self.new_call(ThisArg::Node(v), vec![], vec![]);
         self.m.protocol_calls.insert(sc);
-        self.m.cons(v, Cons::MCall { key: Key::Named(na), call: sc });
+        self.m.cons(
+            v,
+            Cons::MCall {
+                key: Key::Named(na),
+                call: sc,
+            },
+        );
         // Only results seen not done: `Model::yield_key`.
         let va = self.m.yield_key();
         self.m.cons(r1, Cons::Load { key: va, dst: out });
@@ -1598,10 +1613,21 @@ impl<'a> Gen<'a> {
                 parent_expr,
             } => {
                 let p = self.expr(fx, parent_expr);
-                let tm = self.resolve_class_name(mi, class_name);
-                if !self.parent_to_cell(mi, class_name, tm, p) {
-                    self.feed_parent(p, tm, "E11 dynamic class parent");
-                }
+                let publish = |g: &mut Self| {
+                    let tm = g.resolve_class_name(mi, class_name);
+                    if !g.parent_to_cell(mi, class_name, tm, p) {
+                        g.feed_parent(p, tm, "E11 dynamic class parent");
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::DynamicParent(p),
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
@@ -1678,18 +1704,35 @@ impl<'a> Gen<'a> {
                 is_static,
                 ..
             } => {
-                let _ = self.expr(fx, key_expr);
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let holder = if *is_static {
-                        self.m.tok(TokKind::ClassObj(tm))
-                    } else {
-                        self.m.tok(TokKind::Proto(tm))
-                    };
-                    let a = self.m.atom(method_name);
-                    let src = self.m.field(holder, a);
-                    let fa = self.m.field_any(holder);
-                    self.m.edge(src, fa);
-                }
+                let key_value = self.expr(fx, key_expr);
+                #[cfg(not(test))]
+                let _ = key_value;
+                let publish = |g: &mut Self| {
+                    if let Some(tm) = g.resolve_class_name(mi, class_name) {
+                        let holder = if *is_static {
+                            g.m.tok(TokKind::ClassObj(tm))
+                        } else {
+                            g.m.tok(TokKind::Proto(tm))
+                        };
+                        let a = g.m.atom(method_name);
+                        let src = g.m.field(holder, a);
+                        let fa = g.m.field_any(holder);
+                        g.m.edge(src, fa);
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::ComputedMethod {
+                        key: key_value,
+                        method: method_name.clone(),
+                        is_static: *is_static,
+                    },
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassComputedAccessor {
@@ -1700,13 +1743,32 @@ impl<'a> Gen<'a> {
                 is_static,
                 ..
             } => {
-                let _ = self.expr(fx, key_expr);
+                let key_value = self.expr(fx, key_expr);
+                #[cfg(not(test))]
+                let _ = key_value;
                 // Under a constant key it is that key's accessor, installed
                 // with the class (`Gen::named_computed`).
                 let named = !*is_static && self.const_key(mi, key_expr).is_some();
-                if let (false, Some(tm)) = (named, self.resolve_class_name(mi, class_name)) {
-                    self.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
-                }
+                let publish = |g: &mut Self| {
+                    if let (false, Some(tm)) = (named, g.resolve_class_name(mi, class_name)) {
+                        g.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::ComputedAccessor {
+                        key: key_value,
+                        getter: getter_name.clone(),
+                        setter: setter_name.clone(),
+                        is_static: *is_static,
+                        named,
+                    },
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 self.prim_node(prim::UNDEF)
             }
             Expr::ClassExprFresh {
@@ -1724,9 +1786,20 @@ impl<'a> Gen<'a> {
                 let cv = self.class_value(mi, template);
                 // Rule C (DECISIONS 251): one template, one class object per
                 // evaluation.
-                if let Some(tm) = self.resolve_class_name(mi, template) {
-                    self.m.tmpls[tm as usize].per_evaluation = true;
-                }
+                let publish = |g: &mut Self| {
+                    if let Some(tm) = g.resolve_class_name(mi, template) {
+                        g.m.tmpls[tm as usize].per_evaluation = true;
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    template,
+                    crate::summary::packet::ClassAction::PerEvaluation,
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 if let Some(id) = evaluation_owner {
                     // The class's self binding gets the class before its
                     // statics run. A binding the HIR made a cell (codegen's
@@ -1769,10 +1842,21 @@ impl<'a> Gen<'a> {
                 }
                 if let Some(p) = evaluated_parent {
                     let v = self.expr(fx, p);
-                    let tm = self.resolve_class_name(mi, template);
-                    if !self.parent_to_cell(mi, template, tm, v) {
-                        self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
-                    }
+                    let publish = |g: &mut Self| {
+                        let tm = g.resolve_class_name(mi, template);
+                        if !g.parent_to_cell(mi, template, tm, v) {
+                            g.feed_parent(v, tm, "E11 class expression with an evaluated parent");
+                        }
+                    };
+                    #[cfg(test)]
+                    self.packet_class_effect(
+                        mi,
+                        template,
+                        crate::summary::packet::ClassAction::EvaluatedParent(v),
+                        publish,
+                    );
+                    #[cfg(not(test))]
+                    publish(self);
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);
@@ -1796,15 +1880,27 @@ impl<'a> Gen<'a> {
                 value,
             } => {
                 let v = self.expr(fx, value);
-                match self.resolve_class_name(mi, class_name) {
+                let publish = |g: &mut Self| match g.resolve_class_name(mi, class_name) {
                     Some(tm) => {
-                        let p = self.m.tok(TokKind::Proto(tm));
-                        let a = self.m.atom(method_name);
-                        let f = self.m.field(p, a);
-                        self.m.edge(v, f);
+                        let p = g.m.tok(TokKind::Proto(tm));
+                        let a = g.m.atom(method_name);
+                        let f = g.m.field(p, a);
+                        g.m.edge(v, f);
                     }
-                    None => self.to_sink(v, "method registered on an unresolved class"),
-                }
+                    None => g.to_sink(v, "method registered on an unresolved class"),
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::PrototypeMethod {
+                        key: method_name.clone(),
+                        value: v,
+                    },
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 v
             }
             Expr::RegisterFunctionPrototypeMethod {
