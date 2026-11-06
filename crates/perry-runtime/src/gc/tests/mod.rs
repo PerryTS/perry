@@ -213,3 +213,5 @@ mod young_dynamic_growth;
 mod object_descriptor_walk;
 
 mod inline_birth_bound;
+
+mod leaf_census_coalescing;
