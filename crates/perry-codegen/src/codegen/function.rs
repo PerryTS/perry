@@ -1935,6 +1935,35 @@ pub(super) fn compile_function(
             // The guard would decide between two identical bodies: take the
             // generic body unconditionally and skip the per-call validation.
             emit_public_forwarder(llmod, f, &public_llvm_name, &llvm_name);
+            // The forwarder and the generic body it reaches flatten into
+            // their callers on the same budget a specialized clone gets: this
+            // is the same small leaf, it only proved nothing worth a clone
+            // (`sign(c: Color)` on a string-literal union).
+            if !crate::stmt::this_field_fast_off()
+                && !f.is_async
+                && !f.is_generator
+                && !f.was_plain_async
+                && std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+                && !llmod.callable_worker
+            {
+                let admits = llmod
+                    .function_estimated_ir_bytes(&llvm_name)
+                    .is_some_and(|bytes| {
+                        super::helpers::guarded_specialization_admits_preinline(
+                            bytes,
+                            f.body.len(),
+                        )
+                    });
+                if admits {
+                    for name in [&llvm_name, &public_llvm_name] {
+                        if let Some(lowered) = llmod.function_named_mut(name) {
+                            if !lowered.is_preserve_none() {
+                                lowered.pre_statepoint_inline = true;
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
         }

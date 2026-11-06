@@ -49,12 +49,18 @@ fn emit_raw_window_load(
     arr_id: Option<u32>,
     arr_box: &str,
     idx_i32: &str,
+    elements_slot: Option<&str>,
 ) -> String {
-    let arr_handle = super::receiver_descriptor_handle_i64(ctx, arr_id, arr_box);
+    let elements_addr = match elements_slot {
+        Some(slot) => ctx.block().load(I64, slot),
+        None => {
+            let arr_handle = super::receiver_descriptor_handle_i64(ctx, arr_id, arr_box);
+            ctx.block().array_elements_addr(&arr_handle)
+        }
+    };
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
-    let elements_addr = blk.array_elements_addr(&arr_handle);
     let element_addr = blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = blk.inttoptr(I64, &element_addr);
     blk.load(DOUBLE, &element_ptr)
@@ -90,7 +96,7 @@ fn emit_window_load_f64(
 ) -> String {
     match &fact.elem {
         MaskedWindowElem::PlainF64 => {
-            emit_raw_window_load(ctx, Some(fact.array_local_id), arr_box, idx_i32)
+            emit_raw_window_load(ctx, Some(fact.array_local_id), arr_box, idx_i32, fact.elements_slot.as_deref())
         }
         MaskedWindowElem::TaI32 { data_ptr } => {
             let data_ptr = data_ptr.clone();
@@ -398,7 +404,7 @@ pub(crate) fn lower_masked_window_index_get_i32(
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
     let (value, materialization_note) = match &fact.elem {
         MaskedWindowElem::PlainF64 => {
-            let raw_f64 = emit_raw_window_load(ctx, Some(fact.array_local_id), &arr_box, &idx_i32);
+            let raw_f64 = emit_raw_window_load(ctx, Some(fact.array_local_id), &arr_box, &idx_i32, fact.elements_slot.as_deref());
             (
                 ctx.block().fptosi(DOUBLE, &raw_f64, I32),
                 "integer_materialization=fptosi_guarded_dense_i32",

@@ -1367,6 +1367,17 @@ pub fn lower_class_decl(
         }
     }
 
+    // Loop-invariant `this.F` array reads in instance methods
+    // (`property_array_hoist::hoist_this_array_fields`).
+    crate::lower::property_array_hoist::hoist_this_array_fields(
+        ctx,
+        &name,
+        &fields,
+        &getters,
+        &setters,
+        !computed_members.is_empty(),
+        &mut methods,
+    );
     Ok(Class {
         id: class_id,
         name,
