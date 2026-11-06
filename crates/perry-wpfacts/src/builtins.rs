@@ -890,6 +890,14 @@ pub(crate) fn is_collection(what: &str) -> bool {
     members::bobj_family(what) == Family::Collection
 }
 
+/// A builtin object template kind whose iteration reads indices as an
+/// Array's does (`Family::Box`: the arrays and records the runtime fills,
+/// `Object.keys` results among them). Every other builtin object iterates
+/// its internal entries, or has no `@@iterator`.
+pub(crate) fn iterates_indices(what: &str) -> bool {
+    members::bobj_family(what) == Family::Box
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property

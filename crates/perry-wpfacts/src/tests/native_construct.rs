@@ -182,4 +182,14 @@ Object.defineProperty(s, "length", { value: 2 });
 console.log(Array.from(s));
 "#,
     );
+    // An array the runtime made iterates as an Array: its index getter runs.
+    runs(
+        "keys array",
+        r#"
+function hit() { return "k"; }
+const k: any = Object.keys({ a: 1 });
+Object.defineProperty(k, "0", { get() { return hit(); }, configurable: true });
+for (const x of k) console.log(x);
+"#,
+    );
 }
