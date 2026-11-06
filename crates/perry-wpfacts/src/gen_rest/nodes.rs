@@ -132,10 +132,12 @@ impl<'a> Gen<'a> {
         self.tok_node(t)
     }
 
-    /// A builtin iterator object (`arr.values()`, `entries()`, `keys()`)
-    /// yielding `vals` through `next().value` (`builtins::iterator_method`).
-    pub(crate) fn new_iter_from(&mut self, mi: u32, vals: &[NodeId]) -> NodeId {
-        let (t, n) = self.bobj(mi, "Iterator");
+    /// A builtin iterator object of kind `what` (`builtins::ITERATOR_KIND`
+    /// for `arr.values()`, `entries()`, `keys()`, whose receiver may be any
+    /// iterable) yielding `vals` through `next().value`
+    /// (`builtins::iterator_method`).
+    pub(crate) fn new_iter_from(&mut self, mi: u32, what: &'static str, vals: &[NodeId]) -> NodeId {
+        let (t, n) = self.bobj(mi, what);
         let a = self.m.atom("#elems");
         let e = self.m.field(t, a);
         for &v in vals {

@@ -590,7 +590,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     (_, None) => {
                         let bf = builtin_fn(m, "builtin object computed key");
                         m.add_tok(dst, bf);
-                        if what == "Iterator" || what == "IterResult" {
+                        if members::bobj_family(what) == Family::Iterator || what == "IterResult" {
                             m.add_prim(dst, prim::UNDEF);
                         } else {
                             m.add_prim(dst, prim::ALL);
