@@ -211,7 +211,7 @@ impl<'a> Gen<'a> {
             // path below reads the same value an alias reads.
             Expr::ExternFuncRef { name, .. }
                 if self.m.unit_mode
-                    && crate::builtins::global_function(name)
+                    && crate::builtins::global_function(&self.m, name)
                     && !self.is_import(fx.module, name)
                     && !self.mods[fx.module as usize].scope.contains_key(name) =>
             {
@@ -271,7 +271,7 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        if !self.m.unit_mode && crate::builtins::global_function(name) {
+        if !self.m.unit_mode && crate::builtins::global_function(&self.m, name) {
             let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let dst = self.m.node_l("global-function-value");
             let key = Key::Named(self.m.atom(name));

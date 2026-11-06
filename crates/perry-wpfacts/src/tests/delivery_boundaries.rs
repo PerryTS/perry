@@ -1,4 +1,4 @@
-//! Saved base solver dumps cover every node, not just proven sites.
+//! Saved solver dumps cover every node, not just proven sites.
 use crate::model::{prim, Model, TokKind};
 use std::cell::RefCell;
 thread_local! {
@@ -118,7 +118,7 @@ fn drained_event_storage_is_pending_only() {
     }
     m.solve();
     assert!(!m.aborted);
-    assert!(m.work >= 1000);
+    assert!(m.work.get() >= 1000);
     assert_eq!(
         m.nodes.iter().filter(|n| n.pts.contains_tok(t)).count(),
         2000

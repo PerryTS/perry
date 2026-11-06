@@ -68,17 +68,18 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
             {
                 match _key {
-                    Key::Named(a) => realm_declared::namespace_identity(
-                        BuiltinNs::GlobalThis,
-                        &m.atoms[a as usize],
-                    ),
+                    Key::Named(a) => m
+                        .native_property(t, &m.atoms[a as usize])
+                        .and_then(|p| p.native),
                     _ => None,
                 }
                 .and_then(|identity| {
                     let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
                     match m.toks[value as usize] {
-                        TokKind::Builtin(ns)
-                            if !realm_declared::namespace_singleton(ns, identity) =>
+                        TokKind::Builtin(_)
+                            if !m
+                                .native_shape(value)
+                                .is_none_or(|s| s.global_identity.matches(identity)) =>
                         {
                             None
                         }

@@ -777,3 +777,56 @@ fn an_extracted_native_call_method_retains_the_string_replace_result() {
     "#;
     verdict(src, "// STRING-REPLACE-CALL", "length", true);
 }
+
+#[test]
+fn cxid3_unknown_code_can_replace_the_json_function_before_a_length_read() {
+    let src = r#"
+const ns = JSON;
+new Function("ns", process.argv[2])(ns);
+const value = ns.stringify(0).slice(1);
+console.log(value.length); // DYNAMIC-LENGTH
+"#;
+    verdict(src, "// DYNAMIC-LENGTH", "length", false);
+}
+
+#[test]
+fn cxid3_a_wildcard_native_read_charges_every_holder_it_inspects() {
+    use crate::model::{prim, ChainAct, Key, Model, Native, TokKind};
+    let mut m = Model::default();
+    m.tok(TokKind::Top);
+    for i in 0..2000 {
+        m.tok(TokKind::ModNs(i));
+    }
+    let identities: std::collections::BTreeSet<_> =
+        include_str!("../builtins/realm_declared_keys.tsv")
+            .lines()
+            .filter_map(|line| {
+                let mut row = line.split('\t');
+                if row.next()? != "native" {
+                    return None;
+                }
+                row.next()?;
+                row.next()?;
+                row.next()
+            })
+            .collect();
+    for identity in identities {
+        m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+    }
+    let f = m.tok(TokKind::BuiltinFn(Native::Any));
+    let dst = m.node_l("bounded-native-read");
+    // With no stored indexed fields, the work is the holder walk itself.
+    let key = m.atom(crate::model::ELEM);
+    let before = m.work.get();
+    m.max_work = before + 128;
+    m.builtin_field_use(f, Key::Named(key), ChainAct::Load(dst));
+    let charged = m.work.get() - before;
+    assert!(
+        charged >= 1000,
+        "{} token values, over 1000 native holders examined, {charged} work charged",
+        m.toks.len()
+    );
+    m.add_prim(dst, prim::NUM);
+    m.solve();
+    assert!(m.aborted, "the native holder walk must obey the work bound");
+}

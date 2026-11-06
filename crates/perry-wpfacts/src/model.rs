@@ -1005,8 +1005,9 @@ pub struct FnJoined {
 #[derive(Default)]
 pub struct Model {
     pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
-    pub toks: Vec<TokKind>,
-    pub tok_index: FxHashMap<TokKind, Tok>,
+    pub toks: token_values::TokenValues,
+    pub(crate) declarations: crate::builtins::realm_shapes::Declarations,
+    pub tok_index: token_values::TokenIndex,
     /// Template -> its birth-site tokens (`Obj(tm, ctx)`, ctx != NO_CTX).
     pub site_toks: FxHashMap<TmplId, Vec<Tok>>,
     pub tmpls: Vec<Template>,
@@ -1018,7 +1019,7 @@ pub struct Model {
     pub pts_entries: u64,
     pub max_pts: u64,
     /// Solve work so far and its bound (0 = none); see `FactsConfig::max_work`.
-    pub work: u64,
+    pub work: std::cell::Cell<u64>,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -2024,3 +2025,11 @@ pub const MARK_TOUCHES: u8 = MARK_TOUCH
     | MARK_TOUCH_ITER_NEXT
     | MARK_TOUCH_ITER_RESULT
     | MARK_TOUCH_HAS_INSTANCE;
+
+mod token_values;
+
+impl Model {
+    pub(crate) fn charge_work(&self, amount: u64) {
+        self.work.set(self.work.get() + amount);
+    }
+}

@@ -1326,7 +1326,7 @@ impl Model {
                 for &t in toks {
                     // Each receiver binds every call looked up through
                     // this node: solve work per call.
-                    self.work += calls.len() as u64;
+                    self.charge_work(calls.len() as u64);
                     self.this_to(t, origin, &calls);
                     self.this_calls(t, origin, &calls);
                 }

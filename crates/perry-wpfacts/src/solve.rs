@@ -190,7 +190,7 @@ impl Model {
     pub fn prof_mark(&mut self, n: NodeId, phase: &'static str) {
         let Some(p) = self.prof.as_mut() else { return };
         let (at, w0, ph) = p.at;
-        let w = self.work - w0;
+        let w = self.work.get() - w0;
         if w != 0 {
             if at == NO_NODE {
                 *p.phase.entry(ph).or_default() += w;
@@ -198,13 +198,13 @@ impl Model {
                 *p.node.entry(at).or_default() += w;
             }
         }
-        p.at = (n, self.work, phase);
-        if self.work >= p.next_curve {
-            p.next_curve = (self.work / WorkProfile::STEP + 1) * WorkProfile::STEP;
+        p.at = (n, self.work.get(), phase);
+        if self.work.get() >= p.next_curve {
+            p.next_curve = (self.work.get() / WorkProfile::STEP + 1) * WorkProfile::STEP;
             let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
             eprintln!(
                 "perry: wpfacts curve work={} pops={} nodes={} pts={} cons={} toks={} insts={} wl={}",
-                self.work,
+                self.work.get(),
                 self.pops,
                 self.nodes.len(),
                 self.pts_entries,
@@ -225,7 +225,7 @@ impl Model {
         let in_pops: u64 = p.node.values().sum();
         eprintln!(
             "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
-            self.work, p.step[0], p.step[1], p.step[2], p.step[3]
+            self.work.get(), p.step[0], p.step[1], p.step[2], p.step[3]
         );
         let [sites, shaped, no_ctor] = self.key_shape_census;
         eprintln!(
@@ -543,7 +543,7 @@ impl Model {
         toks.clear();
         self.nodes[n as usize].pts.sorted_into(&mut toks);
         // The replay is solve work: the bound covers it.
-        self.work += toks.len() as u64 + 1;
+        self.charge_work(toks.len() as u64 + 1);
         if let Some(p) = self.prof.as_mut() {
             let e = p.kind.entry(c.kind_name()).or_default();
             e.2 += 1;
@@ -630,7 +630,7 @@ impl Model {
             self.cur_src = n;
             self.cur_why = u32::MAX;
             let ncons0 = self.nodes[n as usize].cons.len();
-            self.work += (delta.len() as u64 + 1) * ncons0 as u64;
+            self.charge_work((delta.len() as u64 + 1) * ncons0 as u64);
             if let Some(p) = self.prof.as_mut() {
                 p.step[0] += (delta.len() as u64 + 1) * ncons0 as u64;
             }
@@ -639,7 +639,7 @@ impl Model {
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
-            if self.max_work != 0 && self.work > self.max_work {
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 return;
             }
@@ -647,11 +647,11 @@ impl Model {
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
                 if self.try_copy_delivery(n, s, i as u32, &delta, dprim) {
-                    self.work += 1 + delivery_overhead;
+                    self.charge_work(1 + delivery_overhead);
                     if let Some(p) = self.prof.as_mut() {
                         p.step[1] += 1 + delivery_overhead;
                     }
-                    if self.max_work != 0 && self.work > self.max_work {
+                    if self.max_work != 0 && self.work.get() > self.max_work {
                         self.aborted = true;
                         return;
                     }
@@ -669,7 +669,7 @@ impl Model {
                     Tokens::Delivery(&delta, i as u32)
                 };
                 let visits = toks.len() as u64;
-                self.work += visits + checks + delivery_overhead;
+                self.charge_work(visits + checks + delivery_overhead);
                 if let Some(p) = self.prof.as_mut() {
                     p.step[2] += visits + checks + delivery_overhead;
                 }
@@ -679,7 +679,7 @@ impl Model {
                         .or_default()
                         .0 += visits;
                 }
-                if self.max_work != 0 && self.work > self.max_work {
+                if self.max_work != 0 && self.work.get() > self.max_work {
                     self.aborted = true;
                     return;
                 }
@@ -687,11 +687,11 @@ impl Model {
                     self.add_tokens(s, toks, dprim);
                 } else {
                     let extra = self.copy_to(n, s, toks, dprim);
-                    self.work += extra;
+                    self.charge_work(extra);
                     if let Some(p) = self.prof.as_mut() {
                         p.step[3] += extra;
                     }
-                    if self.max_work != 0 && self.work > self.max_work {
+                    if self.max_work != 0 && self.work.get() > self.max_work {
                         self.aborted = true;
                         return;
                     }
@@ -821,13 +821,13 @@ impl Model {
         }
         if self.profile.is_some() {
             let started = std::time::Instant::now();
-            let w0 = self.work;
+            let w0 = self.work.get();
             self.apply_inner(n, c, toks, prim);
             let name = c.kind_name();
             if let Some(p) = self.prof.as_mut() {
                 let e = p.kind.entry(name).or_default();
                 e.0 += 1;
-                e.1 += self.work - w0;
+                e.1 += self.work.get() - w0;
             }
             let e = self.profile.as_mut().unwrap().entry(name).or_default();
             e.0 += 1;
@@ -1028,8 +1028,8 @@ impl Model {
             if !seen.insert(x) {
                 continue;
             }
-            self.work += 1;
-            if self.max_work != 0 && self.work > self.max_work {
+            self.charge_work(1);
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 return;
             }

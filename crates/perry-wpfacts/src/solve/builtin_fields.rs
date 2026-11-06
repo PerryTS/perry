@@ -28,9 +28,7 @@ impl Model {
         if !self.visits.entry(t).or_default().insert((t, key, act)) {
             return;
         }
-        let holders: Vec<_> = (0..self.toks.len() as Tok)
-            .filter(|&h| builtins::native_may_be(self, t, h))
-            .collect();
+        let holders = self.native_holders(t);
         for h in holders {
             self.native_field_at(t, h, key, act);
         }
@@ -76,7 +74,7 @@ impl Model {
                     self.with_b(|m| builtins::native_own_load(m, origin, holder, key, value));
                     self.bind_via(value, call, origin);
                 }
-                ChainAct::Store(_) => {}
+                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
             }
         }
         // A function value's inherited fields are observations of the same
@@ -108,18 +106,17 @@ impl Model {
             }
             return;
         }
-        let uses: Vec<_> = self
-            .visits
-            .iter()
-            .filter_map(|(&holder, uses)| {
-                builtins::native_may_be(self, holder, t).then_some((holder, uses))
-            })
-            .flat_map(|(holder, uses)| {
-                uses.iter()
-                    .copied()
-                    .filter(move |&(origin, _, _)| origin == holder)
-            })
-            .collect();
+        let mut uses = Vec::new();
+        for holder in self.native_holders(t) {
+            if let Some(registered) = self.visits.get(&holder) {
+                for &(origin, key, act) in registered {
+                    self.charge_work(1);
+                    if origin == holder {
+                        uses.push((origin, key, act));
+                    }
+                }
+            }
+        }
         for (origin, key, act) in uses {
             self.native_field_at(origin, t, key, act);
         }
@@ -127,6 +124,42 @@ impl Model {
             let reason = self.reason("built-in function object interpreted code may read");
             self.escape(t, reason);
         }
+    }
+
+    /// Exact values can overlap only themselves and the existing wildcard
+    /// values. A wildcard walks the interning index's builtin values. Every
+    /// candidate is charged, including values the overlap predicate rejects.
+    fn native_holders(&self, t: Tok) -> Vec<Tok> {
+        if matches!(
+            self.toks[t as usize],
+            TokKind::BuiltinFn(Native::Any) | TokKind::Builtin(BuiltinNs::ObjectProtoMethod)
+        ) {
+            return self
+                .tok_index
+                .builtin_values()
+                .copied()
+                .filter(|&h| {
+                    self.charge_work(1);
+                    builtins::native_may_be(self, t, h)
+                })
+                .collect();
+        }
+        let mut candidates = vec![t];
+        for kind in [
+            TokKind::BuiltinFn(Native::Any),
+            TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+        ] {
+            if let Some(&h) = self.tok_index.get(&kind) {
+                candidates.push(h);
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates.retain(|&h| {
+            self.charge_work(1);
+            builtins::native_may_be(self, t, h)
+        });
+        candidates
     }
 
     /// Non-callable runtime objects retain the namespace escape rule.

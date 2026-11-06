@@ -387,7 +387,7 @@ impl Model {
         let mut x = o;
         while let TokKind::Obj(_, c) = self.toks[x as usize] {
             // The walk is solve work: the bound covers a chain that grows.
-            self.work += 1;
+            self.charge_work(1);
             match self.made_entry(c) {
                 Some((s, _)) if s == site => return c,
                 Some((_, Maker::Obj(m, _))) => x = m,
@@ -519,7 +519,7 @@ impl Model {
         let s = self.sum.of[&f].clone();
         let inst = self.sum.insts.len() as u32;
         // An instance is solve work: the work bound covers instances too.
-        self.work += s.nslots as u64 + 1;
+        self.charge_work(s.nslots as u64 + 1);
         // Outer slots are the context's nodes (the enclosing instance's);
         // a token without a context observes through the shared nodes.
         let mut outer_at = vec![u32::MAX; s.nslots as usize];
@@ -672,7 +672,7 @@ impl Model {
         while i < self.sum.pending.len() {
             // Instances queue more instances: the work bound holds here too,
             // not only between worklist pops.
-            if self.max_work != 0 && self.work > self.max_work {
+            if self.max_work != 0 && self.work.get() > self.max_work {
                 self.aborted = true;
                 self.sum.pending.clear();
                 return;
@@ -719,7 +719,9 @@ impl Model {
             self.cur_src = s.orig.get(slot as usize).copied().unwrap_or(NO_NODE);
             self.cur_why = u32::MAX;
             self.add(base[slot as usize], toks, prim);
-            if refuted { self.refute_own_test(base[slot as usize]); }
+            if refuted {
+                self.refute_own_test(base[slot as usize]);
+            }
             (self.cur_src, self.cur_why) = saved;
         }
         // Closures born here carry this instance's nodes for their outer
@@ -976,7 +978,7 @@ impl Model {
             }
             for &m in args[i].as_ref().unwrap() {
                 // Each lifted token is solve work, as a delivery is.
-                self.work += 1;
+                self.charge_work(1);
                 let x = self.lift(m, b, t);
                 lifted.push(x);
             }
@@ -1016,7 +1018,7 @@ impl Model {
         let mut out = Vec::with_capacity(ms.len() * held.len());
         for &m in &ms {
             for &t in &held {
-                self.work += 1;
+                self.charge_work(1);
                 out.push(self.lift(m, b, t));
             }
         }

@@ -281,7 +281,8 @@ impl Model {
                 self.site_toks.entry(tm).or_default().push(t);
             }
         }
-        self.toks.push(k.clone());
+        let shape = self.declarations.resolve(&k, self);
+        self.toks.push(k.clone(), shape);
         self.tok_index.insert(k, t);
         self.builtin_token_created(t);
         t
@@ -370,7 +371,7 @@ impl Model {
     pub fn shared_reads(&self) -> SharedReads {
         let mut r = SharedReads::default();
         // Shared objects expose their writes through ordinary field nodes.
-        for (k, &t) in &self.tok_index {
+        for (k, &t) in self.tok_index.iter() {
             let read = match k {
                 TokKind::ObjectProto
                 | TokKind::Builtin(_)
@@ -718,7 +719,7 @@ impl Model {
             let mut st = vec![(t, bits)];
             while let Some((x, b)) = st.pop() {
                 // Each marker the walk visits is solve work (113-CWL3).
-                self.work += 1;
+                self.charge_work(1);
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -976,7 +977,7 @@ impl Model {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
-            self.work += 1;
+            self.charge_work(1);
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;

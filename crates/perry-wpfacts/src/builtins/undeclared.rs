@@ -40,8 +40,9 @@ pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
         return false;
     }
     match m.toks[t as usize] {
-        TokKind::BuiltinFn(Native::Member { identity }) => {
-            !realm_declared::namespace_own_key(identity, &m.atoms[a as usize])
+        TokKind::BuiltinFn(Native::Member { .. }) => {
+            !m.native_property(t, &m.atoms[a as usize])
+                .is_some_and(|p| p.own_namespace)
                 && members::member(Family::Function, &m.atoms[a as usize]).is_none()
         }
         TokKind::Builtin(BuiltinNs::GlobalThis) => false,

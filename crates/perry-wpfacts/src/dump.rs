@@ -491,7 +491,7 @@ pub fn apply_sabotage(ts: &mut [TemplateFacts], spec: &str) {
 #[cfg(test)]
 pub(crate) fn solver_state(m: &crate::model::Model) -> String {
     use std::fmt::Write;
-    let mut out = format!("solve work={} aborted={}\n", m.work, m.aborted);
+    let mut out = format!("solve work={} aborted={}\n", m.work.get(), m.aborted);
     for (i, n) in m.nodes.iter().enumerate() {
         writeln!(
             out,

@@ -644,8 +644,8 @@ impl Model {
             }
             // A method of an intrinsic prototype is no constructor
             // (TypeError): nothing flows.
-            TokKind::BuiltinFn(Native::Member { identity })
-                if !builtins::native_constructible(identity) => {}
+            TokKind::BuiltinFn(Native::Member { .. })
+                if !builtins::native_constructible(self, t) => {}
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
@@ -935,8 +935,8 @@ impl Model {
         // called with its receiver. Its aliases use the very same model.
         if !self.unit_mode {
             if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
-                if builtins::namespace_native(*ns, &self.atoms[a as usize]).is_some()
-                    || builtins::namespace_receiver_getter(*ns, &self.atoms[a as usize])
+                if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()
+                    || builtins::namespace_receiver_getter(self, t, &self.atoms[a as usize])
                 {
                     let callee = self.node_l("builtin-function-read");
                     self.load_from(t, t, key, callee);

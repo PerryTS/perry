@@ -817,7 +817,7 @@ fn compute_act<'a>(
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
         contexts: g.m.sum.ctx_nodes.len() as u64,
-        work: g.m.work,
+        work: g.m.work.get(),
         aborted: g.m.aborted,
         checks,
         pts_entries: g.m.pts_entries,

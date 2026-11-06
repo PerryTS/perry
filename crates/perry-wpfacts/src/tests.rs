@@ -687,7 +687,7 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
         assert!(
             !m.aborted,
             "{count}-value copies aborted at {} work",
-            m.work
+            m.work.get()
         );
         for n in reads {
             for &v in &values {
@@ -738,7 +738,7 @@ fn copying_a_base_into_a_superset_keeps_extra_values_and_primitives() {
     m.add_prim(src, prim::NUM);
     m.max_work = 100;
     m.solve();
-    assert!(!m.aborted, "base copy used {} work", m.work);
+    assert!(!m.aborted, "base copy used {} work", m.work.get());
     for t in values {
         assert!(m.nodes[dst as usize].pts.contains_tok(t));
     }
@@ -822,13 +822,13 @@ fn observed_bases_avoid_recopying_pending_prefixes_and_keep_independent_members(
         let later = m.tok(TokKind::ModNs(40));
         m.add(src, &[later], prim::STR);
         // The bound measures the solve's deliveries, not setup.
-        m.work = 0;
+        m.work.set(0);
         m.max_work = 6000;
         m.solve();
         assert!(
             !m.aborted,
             "observed-base copies used {} work (own={own_members})",
-            m.work
+            m.work.get()
         );
         for (i, &dst) in destinations.iter().enumerate() {
             let n = &m.nodes[dst as usize];
@@ -863,10 +863,10 @@ fn observed_relay_bases_share_new_batches_without_enumerating_each_transfer() {
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 5000;
     m.solve();
-    assert!(!m.aborted, "batch sharing used {} work", m.work);
+    assert!(!m.aborted, "batch sharing used {} work", m.work.get());
     for dst in destinations {
         for &t in first.iter().chain(&next) {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -922,10 +922,10 @@ fn small_observed_sets_preserve_superset_members_without_recopying_values() {
         extras.push(extra);
     }
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 1500;
     m.solve();
-    assert!(!m.aborted, "small supersets used {} work", m.work);
+    assert!(!m.aborted, "small supersets used {} work", m.work.get());
     for (i, dst) in destinations.into_iter().enumerate() {
         for t in [a, b, extras[i]] {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -962,10 +962,10 @@ fn equal_snapshot_groups_keep_old_owners_covered_after_coalescing() {
     let added = m.tok(TokKind::ModNs(40));
     m.add_tok(src, added);
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 5000;
     m.solve();
-    assert!(!m.aborted, "coalesced snapshots used {} work", m.work);
+    assert!(!m.aborted, "coalesced snapshots used {} work", m.work.get());
     for dst in first {
         assert!(m.nodes[dst as usize].pts.contains_tok(added));
     }
@@ -1003,10 +1003,10 @@ fn delivered_cardinality_proves_batch_adoption_with_independent_storage() {
     m.add_tok(destinations[999], own);
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 2000;
     m.solve();
-    assert!(!m.aborted, "cardinality batches used {} work", m.work);
+    assert!(!m.aborted, "cardinality batches used {} work", m.work.get());
     for (i, dst) in destinations.into_iter().enumerate() {
         let n = &m.nodes[dst as usize];
         for &t in first.iter().chain(&next) {
@@ -1036,10 +1036,10 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
             }
         }
         // The bound measures the solve's deliveries, not setup.
-        m.work = 0;
+        m.work.set(0);
         m.max_work = group as u64 * 9;
         m.solve();
-        assert!(!m.aborted, "late subscribers used {} work", m.work);
+        assert!(!m.aborted, "late subscribers used {} work", m.work.get());
         for &dst in &destinations {
             for t in [a, b, c] {
                 assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -1047,7 +1047,7 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
         }
         let d = m.tok(TokKind::ModNs(4));
         m.add_tok(src, d);
-        m.work = 0;
+        m.work.set(0);
         m.max_work = group as u64 * 4;
         m.solve();
         assert!(!m.aborted);
@@ -1614,19 +1614,19 @@ fn a_use_through_an_argument_marker_is_solve_work() {
     }
     let a = m.atom("k");
     let k = m.keyed_reach_of(r, a);
-    let w = m.work;
+    let w = m.work.get();
     m.mark_use(k, MARK_ESCAPE);
     assert!(
-        m.work - w >= n,
+        m.work.get() - w >= n,
         "a keyed use walked {n} members for {} work",
-        m.work - w
+        m.work.get() - w
     );
-    let w = m.work;
+    let w = m.work.get();
     m.mark_use(r, MARK_ESCAPE);
     assert!(
-        m.work - w >= n,
+        m.work.get() - w >= n,
         "a use walked {n} members for {} work",
-        m.work - w
+        m.work.get() - w
     );
 }
 
@@ -1713,14 +1713,14 @@ fn a_repeated_keyed_use_costs_one_step() {
     let k = m.keyed_reach_of(r, a);
     m.mark_use(k, MARK_READ);
     let reps = 100;
-    let w = m.work;
+    let w = m.work.get();
     for _ in 0..reps {
         m.mark_use(k, MARK_READ);
     }
     assert!(
-        m.work - w <= reps,
+        m.work.get() - w <= reps,
         "{reps} repeated uses cost {} work",
-        m.work - w
+        m.work.get() - w
     );
 }
 
@@ -1747,13 +1747,13 @@ fn a_keyed_use_in_a_recursion_walks_each_member_once_per_bit() {
         m.link_marker(mks[i], rs[i]);
         m.link_marker(rs[(i + 1) % n as usize], rs[i]);
     }
-    let w = m.work;
+    let w = m.work.get();
     let atoms: Vec<_> = (0..keys).map(|i| m.atom(&format!("k{i}"))).collect();
     for &a in &atoms {
         let k = m.keyed_reach_of(rs[0], a);
         m.mark_use(k, MARK_ESCAPE);
     }
-    let spent = m.work - w;
+    let spent = m.work.get() - w;
     assert!(
         spent <= 3 * keys + 2 * n as u64 + 4,
         "{keys} keys on a ring of {n} cost {spent} work"

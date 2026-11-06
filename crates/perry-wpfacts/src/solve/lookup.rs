@@ -1666,7 +1666,7 @@ impl Model {
             toks.clear();
             self.nodes[callee as usize].pts.sorted_into(&mut toks);
             // A replay per new call is solve work.
-            self.work += toks.len() as u64;
+            self.charge_work(toks.len() as u64);
             for &t in &toks {
                 self.this_calls(t, origin, &[call]);
             }
@@ -1695,7 +1695,7 @@ impl Model {
             toks.clear();
             self.nodes[callee as usize].pts.sorted_into(&mut toks);
             // A replay per new call is solve work.
-            self.work += toks.len() as u64;
+            self.charge_work(toks.len() as u64);
             for &t in &toks {
                 if self.per_receiver_callee(t) {
                     self.call_tok(call, t, Some(origin));
