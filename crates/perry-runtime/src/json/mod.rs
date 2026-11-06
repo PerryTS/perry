@@ -557,6 +557,10 @@ pub(crate) fn note_parse_shape_cache_carriers() {
 unsafe fn allocate_parse_shape_keys_array(
     keys: &[*const StringHeader],
 ) -> crate::object::canonical_keys::CanonicalKeys {
+    // A shape-keys cache fill on first use (the temporary source array): the
+    // first parser of a key list makes it, whichever init that is, so the SNAP
+    // census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     // Shape-cache entries and live receivers own this ordinary array. The
     // construction helper publishes its pointer layout and, for large arrays
     // born in old generation, remembers young key strings before return.

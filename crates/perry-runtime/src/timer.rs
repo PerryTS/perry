@@ -782,6 +782,7 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
+    crate::effect!(host_write, timer);
     schedule_js_timer(
         callback,
         0.0,
@@ -964,6 +965,7 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
+    crate::effect!(host_write, timer);
     schedule_js_timer(
         callback,
         0.0,

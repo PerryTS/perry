@@ -28,7 +28,8 @@ fn hit_runs(src: &str, sab: Option<&str>) -> bool {
         ..FactsConfig::default()
     };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
-    let on = pf.active_bodies.as_ref().expect("activated");
+    assert!(pf.body_reach.complete, "activated");
+    let on = &pf.body_reach.bodies;
     let id = hir
         .functions
         .iter()

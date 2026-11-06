@@ -193,6 +193,15 @@ fn the_lock_set_is_the_builtin_prototype_families() {
     assert!(locked_family(ASYNC_GENERATOR_FAMILY));
     assert!(!add_locked(GENERATOR_FAMILY));
     assert!(!add_locked(ASYNC_GENERATOR_FAMILY));
+    for family in [
+        MAP_ITERATOR_FAMILY,
+        SET_ITERATOR_FAMILY,
+        STRING_ITERATOR_FAMILY,
+        REGEXP_STRING_ITERATOR_FAMILY,
+    ] {
+        assert!(locked_family(family), "{family}");
+        assert!(!add_locked(family), "{family}");
+    }
     for (family, _) in BuiltinProto::ALL {
         assert!(locked_family(family as usize), "{family:?}");
     }
@@ -803,6 +812,73 @@ fn the_generator_prototypes_lock_their_image_and_take_adds() {
                 locked_violation(proto, meta, Mutation::Delete(Key::Bytes(b"constructor"))),
                 None,
                 "{name}: constructor is exempt"
+            );
+            assert_eq!(
+                locked_violation(proto, meta, Mutation::Add(Key::Bytes(b"helper"))),
+                None,
+                "{name}: an add is allowed"
+            );
+        }
+        assert_eq!(locked_object_name(family), name);
+    }
+}
+
+/// DEC 250 as narrowed 2026-11-03, like the generator prototypes:
+/// `%MapIteratorPrototype%`, `%SetIteratorPrototype%`,
+/// `%StringIteratorPrototype%` and `%RegExpStringIteratorPrototype%` are
+/// sealed when the iterator tower is built; `next` and `@@toStringTag` are
+/// refused, adds are not.
+#[test]
+fn the_collection_and_string_iterator_prototypes_lock_their_image_and_take_adds() {
+    use crate::object::iterator_prototypes as ip;
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    ip::ensure_iterator_prototypes();
+    for (slot, family, name) in [
+        (
+            &ip::MAP_ITERATOR_PROTOTYPE_PTR,
+            MAP_ITERATOR_FAMILY,
+            "%MapIteratorPrototype%",
+        ),
+        (
+            &ip::SET_ITERATOR_PROTOTYPE_PTR,
+            SET_ITERATOR_FAMILY,
+            "%SetIteratorPrototype%",
+        ),
+        (
+            &ip::STRING_ITERATOR_PROTOTYPE_PTR,
+            STRING_ITERATOR_FAMILY,
+            "%StringIteratorPrototype%",
+        ),
+        (
+            &ip::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+            REGEXP_STRING_ITERATOR_FAMILY,
+            "%RegExpStringIteratorPrototype%",
+        ),
+    ] {
+        let proto = slot.load(std::sync::atomic::Ordering::Acquire) as *mut ObjectHeader;
+        assert!(!proto.is_null(), "{name}");
+        unsafe {
+            let meta = meta_of(proto);
+            assert_ne!(
+                (*meta).flags & super::super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC,
+                0,
+                "{name}"
+            );
+            assert_eq!(sealed_family((*meta).flags), family, "{name}");
+            assert!(
+                matches!(
+                    locked_violation(proto, meta, Mutation::Delete(Key::Bytes(b"next"))),
+                    Some(Violation::Delete(_))
+                ),
+                "{name}: next is refused"
+            );
+            assert!(
+                matches!(
+                    locked_violation(proto, meta, Mutation::Redefine(Key::Bytes(b"next"))),
+                    Some(Violation::Redefine(_))
+                ),
+                "{name}: next is refused"
             );
             assert_eq!(
                 locked_violation(proto, meta, Mutation::Add(Key::Bytes(b"helper"))),

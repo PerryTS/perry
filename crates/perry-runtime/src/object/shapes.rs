@@ -5191,7 +5191,7 @@ pub(crate) const PROTO_ID_PER_OBJECT: u64 = PROTO_ID_UNIQUE;
 /// hands it out.
 pub(crate) const PROTO_ID_RECORD_HELD: u64 = PROTO_ID_NULL - 1;
 /// Serial bits a MIXED identity can carry beside a 32-bit class id.
-const PROTO_ID_MIXED_SERIAL_BITS: u32 = 30;
+pub(crate) const PROTO_ID_MIXED_SERIAL_BITS: u32 = 30;
 
 static PROTO_ID_UNIQUE_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -5248,7 +5248,7 @@ pub(crate) fn class_proto_id(class_id: u32) -> u64 {
 ///
 /// # Safety
 /// `bits` are a recorded `ObjectMeta.prototype` word.
-unsafe fn prototype_serial(bits: u64) -> u64 {
+pub(crate) unsafe fn prototype_serial(bits: u64) -> u64 {
     let value = crate::value::JSValue::from_bits(bits);
     if !value.is_pointer() {
         return 0;

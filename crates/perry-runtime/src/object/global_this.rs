@@ -113,6 +113,8 @@ pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 pub(crate) use fetch_globals::init_fetch_backed_receiver;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
+#[cfg(perry_gc_instruments)]
+pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,

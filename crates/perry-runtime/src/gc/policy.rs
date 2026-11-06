@@ -1761,6 +1761,12 @@ pub fn gc_suppress() {
 /// every `gc_suppress` caller accounts for the window's growth itself right
 /// after this call (see [`GC_FLAG_TRIGGER_OWED`]).
 pub fn gc_unsuppress() {
+    // The SNAP census holds collection off until its boundary (an address
+    // names one object for the whole run); a parse window's unsuppress must
+    // not end that hold.
+    if crate::snap_census::holds_collection() {
+        return;
+    }
     GC_FLAGS.with(|f| f.set(f.get() & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED)));
 }
 
@@ -3664,12 +3670,10 @@ pub(super) fn gc_mutator_assist_scaled_work_units() -> usize {
         .saturating_add(arena_units)
         .saturating_add(malloc_units)
 }
-
 pub const JS_GC_STEP_STATUS_IDLE: u32 = 0;
 pub const JS_GC_STEP_STATUS_ACTIVE: u32 = 1;
 pub const JS_GC_STEP_STATUS_COMPLETED: u32 = 2;
 pub const JS_GC_STEP_STATUS_SKIPPED: u32 = 3;
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct JsGcStepResult {
@@ -3683,14 +3687,12 @@ pub struct JsGcStepResult {
     pub malloc_debt_objects: u64,
     pub old_reclaim_debt_bytes: u64,
 }
-
 #[derive(Clone, Copy)]
 enum BudgetedGcRebaseline {
     ArenaBytes { pre_in_use: usize },
     MallocCount { pre_count: usize, pre_in_use: usize },
     OldReclaim,
 }
-
 struct BudgetedGcCycle {
     state: GcCycleState,
     trigger_kind: GcTriggerKind,
@@ -3699,7 +3701,6 @@ struct BudgetedGcCycle {
     /// Next automatic slice. Caller-requested budgets do not advance it.
     automatic_work_units: usize,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BudgetedGcTrigger {
     OldReclaim,
@@ -3716,7 +3717,6 @@ pub(super) enum BudgetedGcTrigger {
     YoungScavengeCap,
     MallocCount,
 }
-
 crate::perry_thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
     static GC_BUDGETED_CYCLE_ACTIVE: TriggerInput<bool> = const { TriggerInput::new(false) };
@@ -5221,6 +5221,9 @@ extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
 }
 
 fn js_gc_collect_body() {
+    if crate::snap_census::explicit_gc() {
+        return;
+    }
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
@@ -5233,6 +5236,7 @@ fn js_gc_collect_body() {
     let start = std::time::Instant::now();
     manual_gc_collect_now();
     super::instruments::note_full_collect_us(start.elapsed().as_micros() as u64);
+    crate::snap_census::explicit_gc_done();
 }
 
 /// Run an explicit (`gc()`) full collection, with **precise roots** — the same

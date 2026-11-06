@@ -41,6 +41,19 @@ struct ProgramCell {
 /// needs more than this is searched by the evaluator alone.
 const DFA_MAX_WORDS: usize = 64 * 1024;
 
+/// SNAP census (design §2.10.16 R2): the immutable program words of the cell
+/// at `cell`, the content that names it. Instrumented builds only.
+///
+/// # Safety
+/// `cell` must be the payload address of a live `GC_TYPE_REGEX_PROGRAM`.
+#[cfg(perry_gc_instruments)]
+pub(crate) unsafe fn snap_program_words<'a>(cell: usize) -> &'a [u32] {
+    unsafe {
+        let c = cell as *const ProgramCell;
+        std::slice::from_raw_parts(c.add(1).cast(), (*c).word_count)
+    }
+}
+
 /// The address of the program cell's automaton-storage edge, for the
 /// collector's trace and rewrite of the cell at `cell`.
 ///

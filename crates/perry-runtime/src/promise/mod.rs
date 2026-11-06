@@ -821,6 +821,8 @@ pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
 }
 
 pub(crate) fn enter_microtask_context(snapshot: AsyncContextSnapshot) {
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::job_enter(snapshot.snap_init);
     let previous = crate::async_context::enter_owned_context(snapshot);
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
@@ -829,6 +831,7 @@ pub(crate) fn restore_microtask_context() {
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         if let Some(previous) = stack.borrow_mut().pop() {
             restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }
@@ -838,6 +841,7 @@ pub(crate) fn restore_all_microtask_contexts() {
         let mut stack = stack.borrow_mut();
         while let Some(previous) = stack.pop() {
             restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }

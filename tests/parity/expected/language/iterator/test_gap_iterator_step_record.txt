@@ -57,7 +57,9 @@ array 2 return-mid-loop 0
 map 0 next accessor 1 1 1
 map 0 return accessor 1 1 1
 map 0 return-mid-loop 1
-map 1 next accessor 1 1 1
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map 1 next accessor 0 0 1
+DEC 250: Cannot redefine built-in member %MapIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 map 1 return accessor 1 1 1
 map 1 return-mid-loop 1
 DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
@@ -69,7 +71,9 @@ map 2 return-mid-loop 0
 set 0 next accessor 1 1 1
 set 0 return accessor 1 1 1
 set 0 return-mid-loop 1
-set 1 next accessor 1 1 1
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+set 1 next accessor 0 0 1
+DEC 250: Cannot redefine built-in member %SetIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 set 1 return accessor 1 1 1
 set 1 return-mid-loop 1
 DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program
@@ -81,7 +85,9 @@ set 2 return-mid-loop 0
 string 0 next accessor 1 1 a
 string 0 return accessor 1 1 a
 string 0 return-mid-loop 1
-string 1 next accessor 1 1 a
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+string 1 next accessor 0 0 a
+DEC 250: Cannot redefine built-in member %StringIteratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
 string 1 return accessor 1 1 a
 string 1 return-mid-loop 1
 DEC 250: Cannot add member Iterator.prototype.next: built-in objects are read-only in a compiled program

@@ -10,8 +10,8 @@
 use crate::BuiltinProto;
 
 /// A locked intrinsic prototype: a [`BuiltinProto`] family's prototype, one
-/// of the two iterator prototypes or one of the two generator prototypes the
-/// runtime seals.
+/// of the built-in iterator prototypes or one of the two generator prototypes
+/// the runtime seals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LockHolder {
     Proto(BuiltinProto),
@@ -23,6 +23,14 @@ pub enum LockHolder {
     Generator,
     /// `%AsyncGeneratorPrototype%`.
     AsyncGenerator,
+    /// `%MapIteratorPrototype%`.
+    MapIterator,
+    /// `%SetIteratorPrototype%`.
+    SetIterator,
+    /// `%StringIteratorPrototype%`.
+    StringIterator,
+    /// `%RegExpStringIteratorPrototype%`.
+    RegExpStringIterator,
 }
 
 impl LockHolder {
@@ -132,6 +140,10 @@ mod tests {
             LockHolder::ArrayIterator,
             LockHolder::Generator,
             LockHolder::AsyncGenerator,
+            LockHolder::MapIterator,
+            LockHolder::SetIterator,
+            LockHolder::StringIterator,
+            LockHolder::RegExpStringIterator,
         ];
         for h in all {
             for m in [
@@ -162,6 +174,10 @@ mod tests {
             string,
             LockHolder::Generator,
             LockHolder::AsyncGenerator,
+            LockHolder::MapIterator,
+            LockHolder::SetIterator,
+            LockHolder::StringIterator,
+            LockHolder::RegExpStringIterator,
         ] {
             assert!(!refuses(h, LockKey::Absent, LockMutation::Add));
             assert!(!final_on(h, LockKey::Absent));
@@ -170,5 +186,6 @@ mod tests {
         assert!(final_on(object, LockKey::Index));
         assert!(!final_on(string, LockKey::Index));
         assert!(!final_on(LockHolder::Generator, LockKey::Index));
+        assert!(!final_on(LockHolder::MapIterator, LockKey::Index));
     }
 }

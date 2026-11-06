@@ -633,6 +633,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             {
                 ctx.typed_element_locals.insert(*id);
             }
+            crate::expr::snap_env_site::note_let(ctx, *id, init.as_ref());
             // A binding a later loop pushes into births its `[]` with the
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound

@@ -1840,6 +1840,7 @@ mod native_value_call;
 mod proto_own_call;
 mod receiver_param_call;
 mod regexp_results;
+mod string_this;
 mod string_methods;
 mod string_results;
 mod typed_array_methods;

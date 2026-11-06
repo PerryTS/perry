@@ -6,6 +6,7 @@
 //! and the result is ⊤. A missing summary costs precision, never soundness.
 
 use crate::model::*;
+use perry_abi::lock::LockHolder;
 
 mod collections;
 mod constructors;
@@ -607,7 +608,12 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     if let TokKind::Func(f, _) = m.toks[t as usize] {
         let fi = &m.funcs[f as usize];
         if fi.gen_step() {
-            return generator_image_member(m, fi.gen_async, &m.atoms[a as usize]);
+            let holder = if fi.gen_async {
+                ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
+            } else {
+                ("%GeneratorPrototype%", LockHolder::Generator)
+            };
+            return image_member(m, holder, &m.atoms[a as usize]);
         }
     }
     let what = match &m.toks[t as usize] {
@@ -626,19 +632,24 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         }
         _ => None,
     };
+    // A Map or Set iterator: past its own keys the chain reaches
+    // `%MapIteratorPrototype%` / `%SetIteratorPrototype%`, whose declared
+    // image members are locked (DEC 250); every other key may be added
+    // there: not final.
+    if let Some(holder) = what.and_then(members::iterator_prototype) {
+        return image_member(m, holder, &m.atoms[a as usize]);
+    }
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
 }
 
-/// Is `name` an image member of the declared generator prototype (the
-/// realm table's `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`, the
-/// same declaration the runtime seals)? `constructor` stays writable.
-fn generator_image_member(m: &Model, is_async: bool, name: &str) -> bool {
-    use perry_abi::lock::{final_on, LockHolder, LockKey};
-    let (holder, lock) = if is_async {
-        ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
-    } else {
-        ("%GeneratorPrototype%", LockHolder::Generator)
-    };
+/// Is a read of `name` on the declared intrinsic prototype `holder` final?
+/// `holder` is its realm-table name (`%GeneratorPrototype%`,
+/// `%MapIteratorPrototype%` …, the same declaration the runtime seals) and
+/// its lock holder; the lock's one decision (`perry_abi::lock::final_on`)
+/// classes the key: `constructor` stays writable, an image member is locked,
+/// an absent key may be added.
+fn image_member(m: &Model, (holder, lock): (&str, LockHolder), name: &str) -> bool {
+    use perry_abi::lock::{final_on, LockKey};
     let key = if name == "constructor" {
         LockKey::Constructor
     } else if m

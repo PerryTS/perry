@@ -20,11 +20,12 @@ impl ProgramFacts {
     /// dead in this whole-program run: no view of it here, and activation
     /// proved that no body holding it can run. Any fact about it is
     /// vacuously true, so the other run proving it is not stronger. `false`
-    /// when every body was walked.
+    /// when every body was walked or reach is incomplete.
     pub fn dead_site(&self, path: &str, s: &SiteFacts) -> bool {
-        let Some(on) = &self.active_bodies else {
+        if !self.body_reach.complete {
             return false;
-        };
+        }
+        let on = &self.body_reach.bodies;
         !self.sites.iter().any(|w| {
             self.module_paths[w.module as usize] == path
                 && w.byte_offset == s.byte_offset

@@ -330,11 +330,19 @@ pub(crate) fn old_free_take_exact(
     total_size: usize,
     excluded_pages: Option<&crate::fast_hash::PtrHashSet<usize>>,
 ) -> Option<usize> {
-    old_free_take_exact_class(total_size, excluded_pages, false)
+    let user = old_free_take_exact_class(total_size, excluded_pages, false);
+    if let Some(user) = user {
+        crate::snap_census::birth_user(user, total_size);
+    }
+    user
 }
 
 pub(crate) fn old_free_take_exact_collecting_holder(total_size: usize) -> Option<usize> {
-    old_free_take_exact_class(total_size, None, true)
+    let user = old_free_take_exact_class(total_size, None, true);
+    if let Some(user) = user {
+        crate::snap_census::birth_user(user, total_size);
+    }
+    user
 }
 
 fn old_free_take_exact_class(

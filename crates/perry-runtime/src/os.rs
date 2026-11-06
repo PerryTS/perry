@@ -555,6 +555,7 @@ pub extern "C" fn js_process_uptime() -> f64 {
 /// Get the current working directory
 #[no_mangle]
 pub extern "C" fn js_process_cwd() -> *mut StringHeader {
+    crate::effect!(host_read, cwd);
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| String::new());
@@ -579,6 +580,7 @@ pub unsafe extern "C" fn js_set_process_entry_path(ptr: *const u8, len: u32) {
 
 #[no_mangle]
 pub extern "C" fn js_process_argv_value() -> f64 {
+    crate::effect!(host_read, argv);
     if crate::process::worker_restrictions::in_node_worker() {
         if let Some(value) = crate::object::native_namespace_prop_override_get("process", "argv") {
             return value;
@@ -598,6 +600,7 @@ pub(crate) fn allocate_process_argv(capacity: u32) -> *mut ArrayHeader {
 /// Returns: string[] (array of NaN-boxed string pointers)
 #[no_mangle]
 pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
+    crate::effect!(host_read, argv);
     use crate::array::js_array_push_f64;
     use crate::value::js_nanbox_string;
 
@@ -749,6 +752,7 @@ pub extern "C" fn js_process_versions() -> f64 {
 /// process.hrtime.bigint() -> bigint of nanoseconds
 #[no_mangle]
 pub extern "C" fn js_process_hrtime_bigint() -> f64 {
+    crate::effect!(host_read, clock);
     use crate::bigint_hooks::js_bigint_from_u64;
     use crate::value::js_nanbox_bigint;
 
@@ -766,6 +770,7 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
 /// diff is returned (clamped to non-negative).
 #[no_mangle]
 pub extern "C" fn js_process_hrtime(prior: f64) -> f64 {
+    crate::effect!(host_read, clock);
     use crate::value::JSValue;
     // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
     // is supplied but isn't an Array (e.g. `process.hrtime('abc')`).
@@ -1337,6 +1342,7 @@ fn options_request_buffer(opts_bits: i64) -> bool {
 static KEEP_OS_USER_INFO_OPTIONS: extern "C" fn(i64) -> *mut ObjectHeader = js_os_user_info_options;
 
 fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
+    crate::effect!(host_read, ids);
     use crate::value::JSValue;
 
     crate::object::runtime_layouts::runtime_record!(obj, RECORD_F414_0);

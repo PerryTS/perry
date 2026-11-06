@@ -1014,9 +1014,13 @@ pub extern "C" fn js_generator_attach_closure_prototype(
 /// agent; called during its global bootstrap or by the lazy accessors. (#3664)
 pub(crate) fn ensure_generator_intrinsics() {
     if crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_async_function_tower();
     }
     if crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_generator_tower(
             false,
             &crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR,
@@ -1025,6 +1029,8 @@ pub(crate) fn ensure_generator_intrinsics() {
         );
     }
     if crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_generator_tower(
             true,
             &crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
