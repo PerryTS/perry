@@ -813,7 +813,7 @@ fn verification_sites(
             Some(SiteClaim {
                 ordinal,
                 module: module.clone(),
-                byte_offset: site.byte_offset.saturating_sub(1),
+                byte_offset: site.byte_offset.checked_sub(1),
                 key: site.key.clone(),
                 is_call: site.is_call,
                 bodies: site.bodies.clone(),

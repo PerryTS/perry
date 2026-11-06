@@ -20,7 +20,7 @@ pub(crate) use coverage::{emitted, optimized};
 pub struct SiteClaim {
     pub ordinal: usize,
     pub module: String,
-    pub byte_offset: u32,
+    pub byte_offset: Option<u32>,
     pub key: String,
     pub is_call: bool,
     pub bodies: Vec<(u32, String)>,

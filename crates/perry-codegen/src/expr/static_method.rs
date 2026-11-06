@@ -503,13 +503,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 if proven && contracts {
                     crate::verify_facts::covered(
-                        crate::verify_facts::Fact::Static,
+                        crate::verify_facts::Fact::StaticGuard,
                         || serde_json::json!({"class":static_cid,"key":method_name}),
                     );
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
-                        crate::verify_facts::Fact::Static,
+                        crate::verify_facts::Fact::StaticGuard,
                         static_cid.as_slice(),
                     );
                     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

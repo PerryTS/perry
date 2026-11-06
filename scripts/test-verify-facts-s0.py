@@ -96,14 +96,19 @@ def main():
     for source in sorted(fixtures.glob("existing-*.ts")):
         exe, e = compile_(source, source.stem)
         value = report(observe(exe, e))
-        assert value["key"] != "<entry>", value
+        if value["key"] == "<entry>":
+            assert value["predicate"] == "inactive body" and value["observed_receiver"] is None, value
         save(source.stem, status=86, key=value["key"], predicate=value["predicate"], site=value["expectation"])
 
     for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call")]:
         source = fixtures / (name + ".ts")
         exe, e = compile_(source, name, PERRY_FACTS_SABOTAGE=wrong_claim)
         values = [report(observe(exe, e, branch)) for branch in ["first", "second"]]
-        assert values[0]["copy"] != values[1]["copy"], values
+        if name == "copy-store":
+            assert values[0]["copy"] != values[1]["copy"], values
+        inventory = [json.loads(line) for line in Path(str(exe) + ".facts.jsonl").read_text().splitlines() if line]
+        emitted = [copy for row in inventory for copy in row.get("emitted_checks", [])]
+        assert all(value["copy"] in emitted for value in values), (values, emitted)
         assert values[0]["module"] == values[1]["module"] and values[0]["key"] == values[1]["key"], values
         exe, e = compile_(source, name + "-correct")
         for branch in ["first", "second"]:

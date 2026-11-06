@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 pub(crate) enum Fact {
     Receiver,
     Slot,
+    SlotKey,
     Kind,
     Presence,
     HolderClasses,
@@ -14,6 +15,7 @@ pub(crate) enum Fact {
     Bodies,
     ClassAlias,
     Static,
+    StaticGuard,
     FixedLayout,
     InterpreterGuard,
     FunctionBind,
@@ -37,6 +39,7 @@ impl Fact {
         match self {
             Self::Receiver => "receiver set",
             Self::Slot => "field slot",
+            Self::SlotKey => "field slot key",
             Self::Kind => "field kind",
             Self::Presence => "declared/reserved presence",
             Self::HolderClasses => "holder classes",
@@ -44,6 +47,7 @@ impl Fact {
             Self::Bodies => "callee bodies",
             Self::ClassAlias => "class alias",
             Self::Static => "constant static",
+            Self::StaticGuard => "static member guard",
             Self::FixedLayout => "fixed layout",
             Self::InterpreterGuard => "interpreter guard",
             Self::FunctionBind => "function bind",
@@ -85,7 +89,7 @@ pub(crate) fn checked(fact: Fact, operands: Value) {
     record(fact.name(), operands, true);
 }
 
-fn record(predicate: &str, operands: Value, checked: bool) {
+fn record(predicate: &str, operands: Value, checked: bool) -> String {
     let (module, offset, copy, emission) = MODULE.with(|m| {
         let m = m.borrow();
         match m.as_ref() {
@@ -125,6 +129,7 @@ fn record(predicate: &str, operands: Value, checked: bool) {
             emissions.push(json!(emission));
         }
     }
+    identity
 }
 
 pub(crate) fn field(p: &crate::expr::wpfacts_access::FieldProof, key: &str, checked: bool) {
@@ -145,7 +150,10 @@ pub(crate) fn field(p: &crate::expr::wpfacts_access::FieldProof, key: &str, chec
             json!({"classes":p.class_ids,"key":key,"mask":p.kind_mask}),
         ),
     ] {
-        if checked {
+        if checked && matches!(fact, Fact::Slot) {
+            // Key membership does not establish data attributes, address or lane.
+            self::checked(Fact::SlotKey, operands);
+        } else if checked {
             self::checked(fact, operands);
         } else {
             record(fact.name(), operands, false);
@@ -223,11 +231,15 @@ pub(crate) fn normal_call_miss(class: &str, key: &str) {
     if !enabled() {
         return;
     }
-    record(
+    let identity = record(
         "normal-build call-miss",
         json!({"class":class,"key":key}),
         true,
     );
+    let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
+    let row = inventory.claims.get_mut(&identity).unwrap();
+    row["category"] = json!("normal-build site");
+    row["consumed"] = json!(false);
 }
 
 pub(crate) fn reset() {

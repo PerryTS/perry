@@ -123,7 +123,8 @@ impl<const RAW: bool> Witness<RAW> {
             while !rest.is_empty() {
                 let n = libc::write(2, rest.as_ptr().cast(), rest.len());
                 if n > 0 {
-                    rest = &rest[n as usize..];
+                    // write(2) returns at most the supplied byte count.
+                    rest = rest.get_unchecked(n as usize..);
                 } else if n < 0
                     && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
                 {

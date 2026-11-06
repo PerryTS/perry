@@ -95,7 +95,7 @@ fn key_matches(bits: u64, expected: &[u8]) -> bool {
         SHORT_STRING_TAG => {
             let mut buf = [0; crate::value::SHORT_STRING_MAX_LEN];
             let n = crate::JSValue::from_bits(bits).short_string_to_buf(&mut buf);
-            &buf[..n] == expected
+            buf.get(..n).is_some_and(|actual| actual == expected)
         }
         _ => false,
     }
