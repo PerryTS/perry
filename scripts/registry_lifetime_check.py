@@ -150,30 +150,11 @@ ACCESSOR_RETURN = re.compile(
     r"|\bFn(?:Once|Mut)?\s*\("
 )
 
-# Floors: "the extraction still works" assertions, not budgets.
-# Phase A deletes 24 net/HTTP/TLS maps without adding any (main 249 -> 225).
-# Removing perry-ext-streams drops six currently enumerated registries (224 ->
-# 218). Preserve the four-entry parser-liveness margin by lowering the floor
-# from 220 to 214.
-# The objtables lane moves per-object facts onto their owners and deletes 23
-# owner-keyed tables, 21 of them with a removal path (218 -> 195 enumerated,
-# 143 -> 122 removing). The floors keep the four-entry margin below them.
-# Function metadata ownership removes four maps (194 -> 190). Preserve
-# the existing three-entry parser-liveness margin.
-# Submodule slots, clone markers and environment inheritance replace six
-# address-keyed maps with better mechanisms rather than leaving holes:
-# node_submodules/mod.rs loses EXPORT_SINGLETONS, NAMESPACE_SINGLETONS and
-# DEFAULT_OBJECT_SINGLETONS (97e40e8826), and worker_threads.rs loses
-# UNCLONEABLE_OBJECTS and UNTRANSFERABLE_OBJECTS (cc1da0e683) and
-# ENVIRONMENT_DATA (bc1f7ec92e). Nothing was added (190 -> 184 enumerated), so
-# the floor keeps the same three-entry margin below them.
-# The nodemailer binding removal deletes its four send-path maps (both copies'
-# MESSAGE_IDS and the SMTP engine's DRAFTS / CALLBACKS): 183 -> 179
-# enumerated, all four with a removal path (119 -> 115 removing). The floors
-# keep a three-entry margin below each.
-MIN_REGISTRIES = 176
-# Phase A removes 21 maps previously counted as shrinking (167 -> 146).
-MIN_REMOVING = 112
+# Floors assert that extraction still works. The live census has 174
+# registries, 113 with production removal paths; keep the existing one-entry
+# enumeration margin and three-entry removal margin below those counts.
+MIN_REGISTRIES = 173
+MIN_REMOVING = 110
 
 MIN_WHY = 20
 

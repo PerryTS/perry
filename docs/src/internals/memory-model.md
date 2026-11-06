@@ -8,6 +8,20 @@ For the dated source of truth on shipped collection paths, target-specific
 root lowerings, memory pressure, block pooling, supported knobs, and CI, see
 [Garbage collector: current architecture and operations](garbage-collector.md).
 
+## Class evaluation ownership
+
+A computed symbol method or accessor belongs to the prototype or constructor
+created by that class evaluation. Its key, callable, accessor halves and property
+attributes live on that object's shape. Evaluating a class expression again
+creates an independent surface; deleting a configurable symbol property removes
+it from reflection and calls alike.
+
+Immutable class declarations supply method bodies and compile-time symbol keys
+for prototype birth. Runtime keys are retained by their evaluation's existing
+traced computed-member slots until that prototype is materialized. Static symbol
+members are installed directly on the actual constructor. Property reads and
+calls use those objects rather than dispatch data indexed by a declaration id.
+
 ## Value representation: NaN-boxing
 
 The generic JavaScript value ABI is a 64-bit NaN-boxed word. Proven native values and specialized storage can use other representations; boxing is required when crossing a generic value boundary.

@@ -112,8 +112,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
                     .method_index()
                     .and_then(|index| class_method_entry_at(class_id, index))
                     .is_none())
-    }) || !class_table_symbol_member_keys(class_id, false).is_empty()
-    {
+    }) {
         return None;
     }
     // Known-symbol members follow the string members, each at its first

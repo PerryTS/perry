@@ -258,12 +258,6 @@
       "why": "(class_id, static method name) -> .length, written only at codegen static-method registration"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_MEMBER_ORDERS",
-      "verdict": "open_leak",
-      "why": "Key includes the runtime SymbolHeader.id: a re-evaluated class expression with computed [Symbol()] members adds entries each time"
-    },
-    {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
       "name": "PRIVATE_NAME_INTERNER",
       "verdict": "bounded_by_program",

@@ -1027,24 +1027,6 @@ pub(crate) fn class_declared_symbol_members(class_id: u32) -> Vec<DeclaredSymbol
     out
 }
 
-/// The method class `class_id` declares under symbol `sym`, if its last
-/// definition is one.
-pub(crate) fn class_decl_symbol_method(class_id: u32, sym: usize) -> Option<&'static ClassMemberDecl> {
-    let m = class_declared_symbol_members(class_id)
-        .into_iter()
-        .find(|e| e.sym == sym && !e.accessor)?;
-    class_method_decl_at(class_id, m.at.method)
-}
-
-/// The accessor halves class `class_id` declares under symbol `sym`.
-pub(crate) fn class_decl_symbol_accessor(class_id: u32, sym: usize) -> Option<(usize, usize)> {
-    let m = class_declared_symbol_members(class_id)
-        .into_iter()
-        .find(|e| e.sym == sym && e.accessor)?;
-    let d = class_accessor_decl_at(class_id, m.at)?;
-    Some((d.get, d.set))
-}
-
 /// How many members class `class_id`'s declaration lists.
 pub(crate) fn class_member_count(class_id: u32) -> usize {
     class_declaration(class_id).map_or(0, |decl| decl.members().len())

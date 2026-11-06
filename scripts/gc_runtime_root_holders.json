@@ -702,12 +702,6 @@
       "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_MEMBER_ORDERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
-    },
-    {
       "file": "crates/perry-runtime/src/object/field_get_set/exotic_named_read.rs",
       "name": "ORDINARY_PROBES",
       "verdict": "test_only",
@@ -3734,14 +3728,6 @@
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_PROTOTYPE_OBJECTS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_ACCESSORS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_METHODS"
     },
     {
       "file": "crates/perry-runtime/src/object/delete_rest.rs",

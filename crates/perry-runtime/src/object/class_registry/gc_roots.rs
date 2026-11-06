@@ -2,28 +2,10 @@ use super::*;
 
 #[derive(Clone)]
 enum ClassSideTableRootSlot {
-    PrototypeObject {
-        class_id: u32,
-    },
-    ParentClosure {
-        class_id: u32,
-    },
-    DynamicParentValue {
-        class_id: u32,
-    },
-    ClassObjectValue {
-        class_id: u32,
-    },
-    ClassSymbolMethod {
-        class_id: u32,
-        sym_key: usize,
-        is_static: bool,
-    },
-    ClassSymbolAccessor {
-        class_id: u32,
-        sym_key: usize,
-        is_static: bool,
-    },
+    PrototypeObject { class_id: u32 },
+    ParentClosure { class_id: u32 },
+    DynamicParentValue { class_id: u32 },
+    ClassObjectValue { class_id: u32 },
 }
 
 pub(crate) struct ClassSideTableRootScanState {
@@ -117,49 +99,6 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     // so an evacuating minor must visit and forward it — the `super()` leg reads
     // its pinned heritage back after any allocation the body performs.
     super::evaluation_heritage::scan_active_class_evaluations_mut(visitor);
-
-    scan_class_symbol_member_keys_mut(visitor);
-}
-
-fn scan_class_symbol_member_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    CLASS_SYMBOL_METHODS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                let mut rewrites = Vec::new();
-                for key in map.keys().copied().collect::<Vec<_>>() {
-                    let (class_id, sym_key, is_static) = key;
-                    let mut new_sym_key = sym_key;
-                    if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key {
-                        rewrites.push((key, (class_id, new_sym_key, is_static)));
-                    }
-                }
-                for (old_key, new_key) in rewrites {
-                    if let Some(entry) = map.remove(&old_key) {
-                        map.insert(new_key, entry);
-                    }
-                }
-            }
-        }
-    });
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                let mut rewrites = Vec::new();
-                for key in map.keys().copied().collect::<Vec<_>>() {
-                    let (class_id, sym_key, is_static) = key;
-                    let mut new_sym_key = sym_key;
-                    if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key {
-                        rewrites.push((key, (class_id, new_sym_key, is_static)));
-                    }
-                }
-                for (old_key, new_key) in rewrites {
-                    if let Some(entry) = map.remove(&old_key) {
-                        map.insert(new_key, entry);
-                    }
-                }
-            }
-        }
-    });
 }
 
 fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
@@ -212,34 +151,6 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     });
 
-    CLASS_SYMBOL_METHODS.with(|table| {
-        if let Ok(guard) = table.read() {
-            if let Some(map) = guard.as_ref() {
-                for &(class_id, sym_key, is_static) in map.keys() {
-                    slots.push(ClassSideTableRootSlot::ClassSymbolMethod {
-                        class_id,
-                        sym_key,
-                        is_static,
-                    });
-                }
-            }
-        }
-    });
-
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        if let Ok(guard) = table.read() {
-            if let Some(map) = guard.as_ref() {
-                for &(class_id, sym_key, is_static) in map.keys() {
-                    slots.push(ClassSideTableRootSlot::ClassSymbolAccessor {
-                        class_id,
-                        sym_key,
-                        is_static,
-                    });
-                }
-            }
-        }
-    });
-
     slots
 }
 
@@ -287,65 +198,7 @@ fn scan_class_side_table_root_slot(
                 }
             });
         }
-        ClassSideTableRootSlot::ClassSymbolMethod {
-            class_id,
-            sym_key,
-            is_static,
-        } => {
-            rewrite_class_symbol_method_key_if_forwarded(visitor, *class_id, *sym_key, *is_static);
-        }
-        ClassSideTableRootSlot::ClassSymbolAccessor {
-            class_id,
-            sym_key,
-            is_static,
-        } => {
-            rewrite_class_symbol_accessor_key_if_forwarded(
-                visitor, *class_id, *sym_key, *is_static,
-            );
-        }
     }
-}
-
-fn rewrite_class_symbol_method_key_if_forwarded(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-) {
-    let mut new_sym_key = sym_key;
-    if !visitor.visit_usize_slot(&mut new_sym_key) || new_sym_key == sym_key {
-        return;
-    }
-    CLASS_SYMBOL_METHODS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                if let Some(entry) = map.remove(&(class_id, sym_key, is_static)) {
-                    map.insert((class_id, new_sym_key, is_static), entry);
-                }
-            }
-        }
-    });
-}
-
-fn rewrite_class_symbol_accessor_key_if_forwarded(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-) {
-    let mut new_sym_key = sym_key;
-    if !visitor.visit_usize_slot(&mut new_sym_key) || new_sym_key == sym_key {
-        return;
-    }
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                if let Some(entry) = map.remove(&(class_id, sym_key, is_static)) {
-                    map.insert((class_id, new_sym_key, is_static), entry);
-                }
-            }
-        }
-    });
 }
 
 #[cfg(test)]
@@ -362,21 +215,6 @@ pub(crate) fn test_clear_class_side_table_roots() {
     // registry stores: a still-live accessor site must decline its old link.
     crate::object::shapes::clear_class_identity_words();
     CLASS_PARENT_CLOSURES.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
-    CLASS_SYMBOL_METHODS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
-    CLASS_SYMBOL_MEMBER_ORDERS.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
         }
