@@ -244,6 +244,43 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                     .block()
                     .call(DOUBLE, "js_iterator_next_result", &[(DOUBLE, &iter)]));
             }
+            // The counted entry of a for-of source walk (`for_of_guard`):
+            // `arrayRecordNeedsIterator(t, true)` over the walk's own source
+            // temp. One call answers the IteratorRecord's array-mode proof
+            // (bit 0) and the packed-f64 loop admission of the live head it
+            // resolved (bit 1); the walk's counted loop over `t` consumes bit
+            // 1 (`record_packed_admissions`) in place of its own guard call.
+            // `t` is rebound to the resolved head, as the record entry does.
+            "arrayRecordNeedsIterator"
+                if matches!(args, [Expr::LocalGet(_), Expr::Bool(true)]) =>
+            {
+                let Expr::LocalGet(source_id) = &args[0] else {
+                    unreachable!("matched above");
+                };
+                let (values, roots) = super::lower_call_args_rooted(ctx, &args[..1])?;
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
+                let verdict = ctx.block().call(
+                    I32,
+                    "js_array_record_enter_counted",
+                    &[(DOUBLE, &values[0]), (crate::types::PTR, &slot), (I32, &writable)],
+                );
+                let admission = ctx
+                    .record_packed_admissions
+                    .get(source_id)
+                    .cloned()
+                    .unwrap_or_else(|| ctx.func.alloca_entry(crate::types::I1));
+                let bit = ctx.block().and(I32, &verdict, "2");
+                let admitted = ctx.block().icmp_ne(I32, &bit, "0");
+                ctx.block().store(crate::types::I1, &admitted, &admission);
+                ctx.record_packed_admissions.insert(*source_id, admission);
+                let needs = ctx.block().and(I32, &verdict, "1");
+                let source = ctx.block().load(DOUBLE, &slot);
+                roots.release(ctx);
+                crate::expr::invalidate_local_write_facts(ctx, *source_id);
+                crate::expr::bind_lowered_value_to_local(ctx, *source_id, &source, &args[0])?;
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
+            }
             // #10524: the runtime guard of array destructuring over a source
             // with no static array proof — a NaN-boxed boolean, the same shape
             // `Expr::ArrayIterationPatched` produces for the proven arm.

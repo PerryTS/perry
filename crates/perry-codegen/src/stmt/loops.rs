@@ -869,7 +869,9 @@ fn emit_range_loop_accumulator_admission(
 }
 
 /// The live state of a packed clone's accumulator admission: the admitted
-/// ids (they open the clone's Number scope, see `local_is_number`), the
+/// ids and the element bindings
+/// (`stable_packed_accumulator::collect_numeric_element_lets`), which open
+/// the clone's Number scope (see `local_is_number`), the
 /// unboxed subset (id, F64 alloca, real slot) whose reads/writes redirect
 /// through `ctx.numeric_accumulator_f64_slots`, and the side-exit trampoline
 /// that writes the live values back before entering the slow clone.
@@ -1273,7 +1275,10 @@ fn emit_packed_numeric_accumulator_admission(
     masked_reads_validated: bool,
     affine_reads: bool,
 ) -> PackedAccumulatorScope {
-    let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
+    let element_lets = super::stable_packed_accumulator::collect_numeric_element_lets(
+        ctx, body, array_ids, counter_id,
+    );
+    let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators_over(
         ctx,
         body,
         array_ids,
@@ -1281,17 +1286,27 @@ fn emit_packed_numeric_accumulator_admission(
         offset_reads_inlined,
         masked_reads_validated,
         affine_reads,
+        &element_lets,
     );
     // Integer (`c++`) accumulators admit independently of the float set —
     // a pure count loop has no float accumulator at all.
     let scope_deferred_integer =
         admit_integer_update_accumulators(ctx, body, counter_id, slow_pre_label, block_prefix);
+    // The clone's Number scope: the accumulators and the element bindings.
+    let number_scope = || {
+        let mut ids = accumulators.clone();
+        ids.extend(element_lets.iter().copied().filter(|id| !accumulators.contains(id)));
+        ids
+    };
     if accumulators.is_empty() && scope_deferred_integer.is_empty() {
-        return PackedAccumulatorScope::empty();
+        return PackedAccumulatorScope {
+            accumulators: number_scope(),
+            ..PackedAccumulatorScope::empty()
+        };
     }
     if accumulators.is_empty() {
         return PackedAccumulatorScope {
-            accumulators,
+            accumulators: number_scope(),
             unboxed: Vec::new(),
             deferred_integer: scope_deferred_integer,
             side_exit_override: None,
@@ -1378,7 +1393,7 @@ fn emit_packed_numeric_accumulator_admission(
         Some(ctx.block_label(tramp_idx))
     };
     PackedAccumulatorScope {
-        accumulators,
+        accumulators: number_scope(),
         unboxed,
         deferred_integer: scope_deferred_integer,
         side_exit_override,
@@ -1440,7 +1455,15 @@ fn lower_packed_f64_versioned_for_with_protocol(
     // beside its shape proof; an overridden iterator never sets the bit.
     let record_admission = protocol
         .filter(|_| matches!(matched.array_kind, PackedNumericLoopKind::F64))
-        .and_then(|_| ctx.record_packed_admissions.get(&matched.array_id).cloned());
+        .and_then(|_| ctx.record_packed_admissions.get(&matched.array_id).cloned())
+        .or_else(|| {
+            // A for-of source walk's counted entry admitted its source temp
+            // just before this loop (`native_runtime_branch`). One entry, one
+            // loop: the admission is consumed here.
+            (protocol.is_none() && matches!(matched.array_kind, PackedNumericLoopKind::F64))
+                .then(|| ctx.record_packed_admissions.remove(&matched.array_id))
+                .flatten()
+        });
     let guard_ok = if let Some(slot) = record_admission {
         ctx.block().load(I1, &slot)
     } else {

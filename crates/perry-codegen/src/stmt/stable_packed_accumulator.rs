@@ -365,6 +365,75 @@ pub(super) fn collect_numeric_accumulators(
     // `affine_leaf_admissible` is shared for that reason.
     affine_reads: bool,
 ) -> Vec<u32> {
+    collect_numeric_accumulators_over(
+        ctx,
+        body,
+        array_ids,
+        counter_id,
+        offset_reads_inlined,
+        masked_reads_validated,
+        affine_reads,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+/// Element bindings the fast clone may prove numeric: the leading `Let`s of
+/// `body` initialized by exactly `array[counter]` and never written again,
+/// the shape `const x = a[k]` that a for-of walk (`for_of_guard`) and a
+/// hand-written counted read both open with. The init is the same leaf
+/// [`accumulator_rhs_is_numeric`] admits for every tier, and each iteration
+/// runs the binding before anything else in the body, so every read of it
+/// inside the clone sees that iteration's Number. Only a prefix of the body
+/// qualifies: a later binding could be read before it runs.
+pub(super) fn collect_numeric_element_lets(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    array_ids: &std::collections::BTreeSet<u32>,
+    counter_id: u32,
+) -> std::collections::BTreeSet<u32> {
+    let mut lets = std::collections::BTreeSet::new();
+    if !packed_loop_numeric_accumulators_enabled() {
+        return lets;
+    }
+    let mut writes = std::collections::BTreeMap::new();
+    collect_local_writes(body, &mut writes);
+    for stmt in body {
+        let Stmt::Let {
+            id,
+            init: Some(Expr::IndexGet { object, index, .. }),
+            ..
+        } = stmt
+        else {
+            break;
+        };
+        let admitted = matches!(object.as_ref(), Expr::LocalGet(a) if array_ids.contains(a))
+            && matches!(index.as_ref(), Expr::LocalGet(i) if *i == counter_id)
+            && !writes.contains_key(id)
+            && !ctx.boxed_vars.contains(id)
+            && !ctx.closure_captures.contains_key(id)
+            && !ctx.module_globals.contains_key(id);
+        if !admitted {
+            break;
+        }
+        lets.insert(*id);
+    }
+    lets
+}
+
+/// [`collect_numeric_accumulators`] with `element_lets`
+/// ([`collect_numeric_element_lets`]) as additional numeric leaves. The caller
+/// opens the clone's Number scope over them too; they are not accumulators
+/// (no preheader tag test, no write-back).
+pub(super) fn collect_numeric_accumulators_over(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    array_ids: &std::collections::BTreeSet<u32>,
+    counter_id: u32,
+    offset_reads_inlined: bool,
+    masked_reads_validated: bool,
+    affine_reads: bool,
+    element_lets: &std::collections::BTreeSet<u32>,
+) -> Vec<u32> {
     if !packed_loop_numeric_accumulators_enabled() {
         return Vec::new();
     }
@@ -385,6 +454,9 @@ pub(super) fn collect_numeric_accumulators(
         })
         .collect();
     loop {
+        // The induction hypothesis (the candidates) plus the element lets.
+        let leaves: std::collections::BTreeSet<u32> =
+            candidates.union(element_lets).copied().collect();
         let rejected: Vec<u32> = candidates
             .iter()
             .copied()
@@ -398,7 +470,7 @@ pub(super) fn collect_numeric_accumulators(
                         offset_reads_inlined,
                         masked_reads_validated,
                         affine_reads,
-                        &candidates,
+                        &leaves,
                     ),
                     // `Update` (++/--): ToNumeric(Number) ± 1 is a Number.
                     None => true,
