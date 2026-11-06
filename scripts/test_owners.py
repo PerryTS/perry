@@ -73,7 +73,12 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "path.rs", ("path",)),
     (RT + "perf_*", ("perf_hooks",)),
     (RT + "process/*", ("process",)),
-    (RT + "process.rs", ("process",)),
+    (RT + "process.rs", ("process", "worker_threads", "child_process")),
+    (RT + "process/environment*.rs", ("worker_threads", "child_process")),
+    (RT + "process/env_misc.rs", ("worker_threads", "child_process")),
+    (RT + "process/worker_restrictions.rs", ("worker_threads", "child_process")),
+    (RT + "object/descriptors.rs", ("process", "worker_threads", "child_process")),
+    (RT + "object/field_get_set/enumeration.rs", ("process", "worker_threads", "child_process")),
     (RT + "process_startup.rs", ("process",)),
     (RT + "punycode.rs", ("punycode",)),
     (RT + "readline_helpers.rs", ("readline",)),
@@ -216,6 +221,8 @@ def self_test() -> int:
         ("crates/perry-runtime/src/gc/mod.rs",): [],
         ("README.md",): [],
         (case, RT + "path/mod.rs"): ["node-suite/path"],
+        (RT + "process/environment.rs",): ["node-suite/child_process", "node-suite/process", "node-suite/worker_threads"],
+        (RT + "object/field_get_set/enumeration.rs",): ["node-suite/child_process", "node-suite/process", "node-suite/worker_threads"],
     }
     examples[(case,)] = [case]
     examples[("tests/parity/expected/array-generic-copywithin.txt",)] = [

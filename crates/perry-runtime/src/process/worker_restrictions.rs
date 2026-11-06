@@ -9,20 +9,31 @@ crate::perry_thread_local! {
 
 // IPC members are fixed at Worker bootstrap, not by later process.env edits.
 pub struct WorkerProcessState {
+    environment: super::environment::Environment,
     ipc_enabled: bool,
     argv: Option<(Option<String>, Option<crate::thread::SerializedValue>)>,
 }
 
 impl WorkerProcessState {
     pub fn capture(env: Option<&[(String, String)]>) -> Self {
-        let ipc_enabled = match env {
-            Some(env) => env
-                .iter()
-                .find(|(key, _)| key == IPC_CHANNEL_ENV)
-                .is_some_and(|(_, value)| !value.is_empty()),
-            None => std::env::var_os(IPC_CHANNEL_ENV).is_some_and(|value| !value.is_empty()),
-        };
+        let entries = env
+            .map(<[_]>::to_vec)
+            .unwrap_or_else(|| super::environment::current().entries());
+        Self::from_environment(super::environment::Environment::copied(entries))
+    }
+
+    /// SHARE_ENV retains the creating agent's backing, even after it exits.
+    pub fn capture_shared() -> Self {
+        Self::from_environment(super::environment::current())
+    }
+
+    fn from_environment(environment: super::environment::Environment) -> Self {
+        let ipc_enabled = environment
+            .entries()
+            .iter()
+            .any(|(key, value)| key == IPC_CHANNEL_ENV && !value.is_empty());
         Self {
+            environment,
             ipc_enabled,
             argv: None,
         }
@@ -58,6 +69,7 @@ impl WorkerProcessState {
     }
 
     pub fn install(self) {
+        self.environment.install();
         WORKER_IPC_ENABLED.with(|slot| slot.set(self.ipc_enabled));
         let Some((entry, argv)) = self.argv else {
             return;
