@@ -603,7 +603,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method_rest_with_length(
                 proto_obj,
                 "fill",
-                crate::fn_info!(#[realm(Array.prototype.fill)] export native_args crate::object::global_this::array_error::array_prototype_fill_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.fill, effects = { reads(this); coerce(arg(1), ToPrimitive); coerce(arg(2), ToPrimitive); stores(arg(0) -> elems(this)); returns(this) })] export native_args crate::object::global_this::array_error::array_prototype_fill_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
