@@ -308,7 +308,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         },
         TokKind::Builtin(BuiltinNs::GlobalThis) => {
             match name.as_deref() {
-                Some(n) if global_user_key(n) => {
+                Some(n) if global_user_key(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
                     let f = global_field(m, t, a);
                     if native_written(m, t, a) {
@@ -342,6 +342,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     m.edge(f, dst);
                     m.add_prim(dst, prim::UNDEF);
+                    // The global object's [[Prototype]] is `Object.prototype`:
+                    // an own miss reads what was stored there under the key.
+                    let op = m.tok(TokKind::ObjectProto);
+                    tok_load(m, op, key, dst);
                 }
                 Some(n) if ns_by_name(n).is_some() => {
                     let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
@@ -590,7 +594,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     (_, None) => {
                         let bf = builtin_fn(m, "builtin object computed key");
                         m.add_tok(dst, bf);
-                        if what == "Iterator" || what == "IterResult" {
+                        if members::bobj_family(what) == Family::Iterator || what == "IterResult" {
                             m.add_prim(dst, prim::UNDEF);
                         } else {
                             m.add_prim(dst, prim::ALL);

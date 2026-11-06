@@ -38,7 +38,8 @@ fn active(main: &str) -> (Vec<String>, usize) {
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     let list = [("t.ts".to_string(), &hir)];
     let pf = crate::compute(&list, &FactsConfig::default());
-    let on = pf.active_bodies.as_ref().expect("activated");
+    assert!(pf.body_reach.complete, "activated");
+    let on = &pf.body_reach.bodies;
     let id_of = |e: &str| hir.functions.iter().find(|f| f.name == e).map(|f| f.id);
     let runs = |id: u32| on.iter().any(|(_, i, _)| *i == id);
     let exports: Vec<String> = EXPORTS
@@ -76,7 +77,7 @@ fn every_read_that_can_name_any_key_runs_every_getter() {
         // A key walk.
         "for (const k of Object.keys(ns)) console.log(ns[k](1));",
         // An escape to unknown code.
-        "const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(ns); console.log(0);",
+        "import \"unseen-host\"; const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(ns); console.log(0);",
     ] {
         let (exports, getters) = active(main);
         assert_eq!(exports, EXPORTS, "{main}");

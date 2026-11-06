@@ -1244,6 +1244,10 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
 /// `init_addr` is codegen's `ptrtoint` of an `extern "C" fn()` module body.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
+    crate::snap_census::init_part();
+    if crate::snap_census::skip_body() {
+        return;
+    }
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
     let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
     let outcome = crate::exception::catch_thrown(|| {
@@ -1277,6 +1281,8 @@ pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: 
         assert!(registry.register_init(key.clone(), init_addr as usize));
         registry.require_with(&key, &run_path_initializer)
     });
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::init_guard(init_addr as usize, guard_addr as usize);
     match outcome {
         Ok(_) => {}
         Err(error) => {
@@ -1323,11 +1329,14 @@ fn run_path_initializer(addr: usize) -> Result<(), crate::exception::Caught> {
     // SAFETY: `addr` came from codegen's `ptrtoint` of an `extern "C" fn()`
     // module initializer and was accepted once for this canonical path.
     let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
-    crate::exception::catch_thrown(|| {
+    crate::snap_census::init_enter(addr);
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     })
-    .map(|_| ())
+    .map(|_| ());
+    crate::snap_census::init_exit(outcome.is_err());
+    outcome
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
@@ -1340,6 +1349,7 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 /// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    let _require = crate::snap_census::require_scope();
     let path = value_to_string(path_value, "id");
     let key = module_lookup_key(&path);
     match require_path_key(&key) {
@@ -1780,3 +1790,29 @@ mod builtin_allowlist_parity_tests {
 mod init_guard_tests;
 
 pub(crate) mod file_url_text;
+
+/// The SNAP census check run: evaluate the module whose initializer is
+/// `addr` (an imaged init the census entered inside a skipped body of D),
+/// once, through its emitted guard, or for a path-wrapper frame through the
+/// registry, as a `require` of it would.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn snap_evaluate_init(addr: usize, guard: usize) {
+    if guard != 0 {
+        // Static dependencies enter the evaluation directly: their path entry
+        // names the outer wrapper, so an address lookup cannot replay them.
+        unsafe {
+            let done = guard as *mut u8;
+            if *done != 0 {
+                return;
+            }
+            *done = 1;
+            js_run_module_init_guarded(addr as i64, guard as i64);
+        }
+        return;
+    }
+    let Some(key) = path_registry::key_of_init_addr(addr) else {
+        return;
+    };
+    let _require = crate::snap_census::require_scope();
+    let _ = require_path_key(&key);
+}

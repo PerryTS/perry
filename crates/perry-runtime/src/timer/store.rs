@@ -411,6 +411,7 @@ impl AgentTimers {
 
     /// Insert a timers-phase entry.
     pub(super) fn insert_timer(&mut self, entry: Entry) -> usize {
+        crate::effect!(host_write, timer);
         debug_assert!(entry.class.is_timer());
         let index = self.alloc(entry);
         self.heap_push(index);

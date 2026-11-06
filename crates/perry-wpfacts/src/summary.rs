@@ -9,13 +9,15 @@
 //! `D` nodes are marked `obs`, receive every call's arguments, and only
 //! run read rules (read-site facts), never effects.
 //!
-//! Whether a function is summarized follows from its body alone; nothing
-//! depends on a size, count or depth.
+//! The batch planner chooses slices, capture ownership and refusals over
+//! the whole model. The body encoder receives those choices through an
+//! adapter; moving encoding does not make the planner body-local.
 use crate::delta::Tokens;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 use std::rc::Rc;
 
+pub(crate) mod body;
 mod build;
 use build::build_summaries;
 
@@ -332,6 +334,12 @@ impl Model {
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
         self.calls.push(cs);
+        if !self.sum.ready && self.diagnostic.is_some() {
+            // Dump only: a call made before the summaries counts as a
+            // program call (`origin_of` never reads it); the dump still
+            // names the source call it was made for.
+            self.sum.origin.insert(id, by);
+        }
         if self.sum.ready {
             if let Some(o) = self.origin_of(by) {
                 self.sum.origin.insert(id, o);
@@ -630,6 +638,17 @@ impl Model {
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
         };
+        // Widened (`past_work_bound`): no new calling context. The call
+        // runs the function's shared instance, which gets this receiver
+        // and these arguments by the same edges (below): a merge of
+        // callers. A birth's run (5) stays per object: its key is what
+        // it births.
+        let key = match key.0 {
+            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => {
+                (1, LAY_NONE, ft)
+            }
+            _ => key,
+        };
         let inst = self.instance(key);
         let it = self.sum.insts[inst as usize].this;
         if it != NO_NODE {
@@ -675,8 +694,7 @@ impl Model {
         while i < self.sum.pending.len() {
             // Instances queue more instances: the work bound holds here too,
             // not only between worklist pops.
-            if self.max_work != 0 && self.work.get() > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 self.sum.pending.clear();
                 return;
             }
@@ -1310,5 +1328,5 @@ impl Model {
 
 #[path = "summary/compose.rs"]
 mod compose;
+pub use body::compress;
 use compose::compose;
-pub use compose::compress;

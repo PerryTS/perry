@@ -508,6 +508,7 @@ pub extern "C" fn js_queue_microtask(callback: i64) {
 
 #[no_mangle]
 pub extern "C" fn js_queue_next_tick(callback: i64) {
+    crate::effect!(host_write, tick);
     queue_microtask_with_type(callback, "TickObject", Vec::new());
 }
 
@@ -521,6 +522,7 @@ pub extern "C" fn js_queue_next_tick(callback: i64) {
 /// `n_args == 0`.
 #[no_mangle]
 pub unsafe extern "C" fn js_queue_next_tick_args(callback: i64, args_ptr: *const f64, n_args: i32) {
+    crate::effect!(host_write, tick);
     let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
         Vec::new()
     } else {
@@ -588,6 +590,7 @@ pub fn restore_queued_microtask_contexts() {
         let mut stack = stack.borrow_mut();
         while let Some(previous) = stack.pop() {
             crate::async_context::restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }
@@ -635,6 +638,8 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 let callback_handle =
                     scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
                 let arg_handles = scope.root_nanbox_f64_slice(&args);
+                #[cfg(perry_gc_instruments)]
+                crate::snap_census::job_enter(context.snap_init);
                 let previous = crate::async_context::enter_context(&context);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     stack.borrow_mut().push(previous);
@@ -740,6 +745,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     if let Some(previous) = stack.borrow_mut().pop() {
                         crate::async_context::restore_context(previous);
+                        crate::snap_census::job_exit();
                     }
                 });
                 ran += 1;

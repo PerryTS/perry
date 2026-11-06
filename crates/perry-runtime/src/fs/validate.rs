@@ -205,6 +205,7 @@ static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32
 /// `readdirSync`, `unlinkSync`, …). Throws `ERR_INVALID_ARG_TYPE` on any
 /// non path-like value (including numbers). No-op when the value is valid.
 pub(crate) fn validate_path(arg_name: &str, value: f64) {
+    crate::effect!(host_read, fs);
     if !validate_path_like_value(arg_name, value) {
         throw_invalid_path_arg(arg_name, value);
     }
@@ -216,6 +217,7 @@ pub(crate) fn validate_path(arg_name: &str, value: f64) {
 /// throws `EBADF` (matching `fs.readFileSync(123)`); anything else throws
 /// `ERR_INVALID_ARG_TYPE`. `syscall` names the operation for the EBADF error.
 pub(crate) fn validate_path_or_fd(arg_name: &str, value: f64, syscall: &'static str) {
+    crate::effect!(host_read, fs);
     if validate_path_like_value(arg_name, value) {
         return;
     }

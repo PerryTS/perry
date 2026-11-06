@@ -6,6 +6,7 @@
 //! and the result is ⊤. A missing summary costs precision, never soundness.
 
 use crate::model::*;
+use perry_abi::lock::LockHolder;
 
 mod collections;
 mod constructors;
@@ -31,6 +32,10 @@ pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
+/// The template kind of an iterator whose prototype the model does not know.
+pub(crate) const ITERATOR_KIND: &str = members::ANY_ITERATOR;
+/// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
+pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
@@ -603,7 +608,12 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     if let TokKind::Func(f, _) = m.toks[t as usize] {
         let fi = &m.funcs[f as usize];
         if fi.gen_step() {
-            return generator_image_member(m, fi.gen_async, &m.atoms[a as usize]);
+            let holder = if fi.gen_async {
+                ("%AsyncGeneratorPrototype%", LockHolder::AsyncGenerator)
+            } else {
+                ("%GeneratorPrototype%", LockHolder::Generator)
+            };
+            return image_member(m, holder, &m.atoms[a as usize]);
         }
     }
     let what = match &m.toks[t as usize] {
@@ -622,24 +632,36 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         }
         _ => None,
     };
+    // A Map or Set iterator: past its own keys the chain reaches
+    // `%MapIteratorPrototype%` / `%SetIteratorPrototype%`, whose declared
+    // image members are locked (DEC 250); every other key may be added
+    // there: not final.
+    if let Some(holder) = what.and_then(members::iterator_prototype) {
+        return image_member(m, holder, &m.atoms[a as usize]);
+    }
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
 }
 
-/// Is `name` an image member of the declared generator prototype (the
-/// realm table's `%GeneratorPrototype%` / `%AsyncGeneratorPrototype%`, the
-/// same declaration the runtime seals)? `constructor` stays writable.
-fn generator_image_member(m: &Model, is_async: bool, name: &str) -> bool {
-    if name == "constructor" {
-        return false;
-    }
-    let holder = if is_async {
-        "%AsyncGeneratorPrototype%"
-    } else {
-        "%GeneratorPrototype%"
-    };
-    m.declarations
+/// Is a read of `name` on the declared intrinsic prototype `holder` final?
+/// `holder` is its realm-table name (`%GeneratorPrototype%`,
+/// `%MapIteratorPrototype%` …, the same declaration the runtime seals) and
+/// its lock holder; the lock's one decision (`perry_abi::lock::final_on`)
+/// classes the key: `constructor` stays writable, an image member is locked,
+/// an absent key may be added.
+fn image_member(m: &Model, (holder, lock): (&str, LockHolder), name: &str) -> bool {
+    use perry_abi::lock::{final_on, LockKey};
+    let key = if name == "constructor" {
+        LockKey::Constructor
+    } else if m
+        .declarations
         .named(holder, m)
         .is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    {
+        LockKey::Image
+    } else {
+        LockKey::Absent
+    };
+    final_on(lock, key)
 }
 
 /// The family whose intrinsic chain the lock sees on `t`: `seed_family`'s,
@@ -693,6 +715,10 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
     let holder = match what {
         Some("TypedArray") => m.declarations.named("%TypedArray%.prototype", m),
+        // Every iterator kind resolves its members as `Iterator.prototype`'s.
+        Some(w) if members::bobj_family(w) == Family::Iterator => {
+            m.declarations.named("Iterator.prototype", m)
+        }
         Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
         None => m.declarations.family(fam, m),
     }?;

@@ -524,7 +524,12 @@ impl<'a> Gen<'a> {
         self.m.cons(v, Cons::MCall { key: wk, call: pc });
         let na = self.m.atom("next");
         let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
-        let r2 = self.mcall(v, Key::Named(na), vec![], vec![]);
+        // The step of `v` itself: the runtime's (`js_get_iterator` returns a
+        // value it finds no iterator for unchanged), a protocol call as in
+        // `builtins::iterate`.
+        let (sc, r2) = self.new_call(ThisArg::Node(v), vec![], vec![]);
+        self.m.protocol_calls.insert(sc);
+        self.m.cons(v, Cons::MCall { key: Key::Named(na), call: sc });
         // Only results seen not done: `Model::yield_key`.
         let va = self.m.yield_key();
         self.m.cons(r1, Cons::Load { key: va, dst: out });

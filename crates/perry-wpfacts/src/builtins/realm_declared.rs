@@ -154,6 +154,9 @@ fn missing(list: &str) -> Vec<String> {
             // an undescribed namespace (`ns_member` None) keeps every key opaque.
             "ns" => ns_by_name(holder).is_none_or(|ns| members::ns_member(ns, key) != Some(None)),
             "proto" | "fn" => members::member(Family::Function, key).is_some(),
+            // The global object is no R1 holder (`undeclared`); its own keys
+            // decide which globals the program owns (`global_user_key`).
+            "global" => true,
             _ => panic!("bad row kind {line:?}"),
         };
         if !known {

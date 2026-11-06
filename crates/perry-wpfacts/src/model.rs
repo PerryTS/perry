@@ -1512,6 +1512,16 @@ pub struct Model {
     /// sound fallback).
     pub budget: Option<(std::time::Instant, std::time::Duration)>,
     pub aborted: bool,
+    /// Past the work bound (`Model::past_work_bound`): a call that would
+    /// make a new calling context runs the function's shared instance
+    /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
+    pub widened: bool,
+    /// The bound widens instead of aborting (whole program only: a unit
+    /// past its bound publishes nothing, `compute_act`).
+    pub widen: bool,
+    /// The widened solve passed `WIDENED_WORK` times the bound: it
+    /// stopped and claims nothing (`Model::past_work_bound`).
+    pub widened_stop: bool,
     pub pops: u64,
     /// Calls/`new` of a ⊤ callee: with the interpreter linked, one could be
     /// the Function constructor or `vm` (E14).
@@ -1933,7 +1943,7 @@ pub struct Act {
     pub fixed: bool,
     /// The bodies the analysis after the activation pass walked (by
     /// `Model::act_key`): what can run, module bodies and static
-    /// initializers included (`ProgramFacts::active_bodies`).
+    /// initializers included (`ProgramFacts::body_reach`).
     pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
     /// Every function the activation pass generated (by `Model::act_key`).
     /// A body outside it is one a later pass minted: it is walked (sound),

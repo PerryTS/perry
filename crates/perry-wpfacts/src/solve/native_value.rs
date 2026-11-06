@@ -5,6 +5,7 @@
 //! or with none, it is the call of an unknown function value it was before.
 
 use crate::builtins;
+use crate::builtins::Family;
 use crate::model::*;
 use crate::solve::Tokens;
 
@@ -45,11 +46,27 @@ impl Model {
             (None, ThisArg::Undef) => return false,
         };
         if !builtins::native_receiver(self, fam, what, r) {
-            return false;
+            return fam == Family::Str && r != TOP && self.string_this(call, t, r, key);
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
             self.with_b(|m| builtins::native_prototype_call(m, fam, r, key, call));
+        }
+        true
+    }
+
+    /// A `String.prototype` method called with a receiver `r` of another
+    /// kind (`String.prototype.replace.call(o, ...)`): the method starts with
+    /// `ToString(RequireObjectCoercible(this))` (ES 22.1.3), which runs `r`'s
+    /// own ToPrimitive and nothing else on it; the rest is the method on that
+    /// string. `r` is not handed to unknown code. (`toString` and `valueOf`
+    /// throw on such an `r` instead: the model is a superset of that.)
+    fn string_this(&mut self, call: CallId, t: Tok, r: Tok, key: Atom) -> bool {
+        if self.bind_done.insert((call, t, r)) {
+            self.diagnostic_callee(call, t);
+            let why = self.reason("ToString(this) of a String.prototype method");
+            self.implicit(r, why, Protocol::ToPrimitive);
+            self.with_b(|m| builtins::prim_method(m, prim::STR, Key::Named(key), call));
         }
         true
     }

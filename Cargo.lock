@@ -6035,6 +6035,7 @@ dependencies = [
 name = "perry-wpfacts"
 version = "0.5.1663"
 dependencies = [
+ "perry-abi",
  "perry-hir",
  "perry-parser",
  "perry-realm-table",

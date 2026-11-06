@@ -406,6 +406,7 @@ pub(crate) fn module_builtin_modules_array() -> f64 {
 }
 
 fn process_exec_argv_value() -> f64 {
+    crate::effect!(host_read, argv);
     static EXEC_ARGV: OnceLock<Vec<String>> = OnceLock::new();
     let values = crate::once_init::get_or_init(&EXEC_ARGV, || {
         let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());

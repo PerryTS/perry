@@ -410,9 +410,20 @@ fn build_iterator_prototypes() {
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
     WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
     super::iterator_ctor::note_birth_keys(shared);
-    // SAFETY: both are live, fully built ordinary objects (collection is
+    // SAFETY: all are live, fully built ordinary objects (collection is
     // suppressed above).
-    unsafe { super::builtin_proto::seal_iterator_prototypes(shared, array_proto) };
+    unsafe {
+        super::builtin_proto::seal_iterator_prototypes(
+            shared,
+            [
+                array_proto,
+                map_proto,
+                set_proto,
+                string_proto,
+                regexp_string_proto,
+            ],
+        )
+    };
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
@@ -523,6 +534,8 @@ mod override_probe_premise_tests {
 
 pub(crate) fn ensure_iterator_prototypes() {
     if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
+        // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
+        let _realm = crate::snap_census::realm_build();
         build_iterator_prototypes();
     }
 }

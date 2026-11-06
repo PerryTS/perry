@@ -698,6 +698,18 @@ impl<'a> Gen<'a> {
                     .resolved_path
                     .as_ref()
                     .and_then(|p| self.path_index.get(p).copied());
+                // A module outside the program that is no builtin is unseen
+                // code run at load: it may write any key of the global
+                // object (rule G reads an unresolved global as `native_written`
+                // then). In per-unit mode a missing target is another unit.
+                if target.is_none()
+                    && !self.m.unit_mode
+                    && !crate::builtins::is_builtin_module(&imp.source)
+                {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    let what = format!("module {} runs unseen", imp.source);
+                    crate::builtins::note_native_write(&mut self.m, t, None, &what);
+                }
                 for spec in &imp.specifiers {
                     let (local, node) = match (spec, target) {
                         (ImportSpecifier::Named { imported, local }, Some(t)) => {

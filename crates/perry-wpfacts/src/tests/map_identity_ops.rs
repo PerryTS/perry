@@ -148,8 +148,9 @@ run();
 
 #[test]
 fn native_map_unknown_receiver_is_not_decided_by_its_annotation() {
+    // `unknownMap` is an unseen module's global.
     payload_site(
-        r#"
+        &unseen(r#"
 declare const unknownMap: unknown;
 class Payload { n = 1; }
 function run() {
@@ -159,7 +160,7 @@ function run() {
     console.log(payload.n); // PAYLOAD_N
 }
 run();
-"#,
+"#),
         false,
     )
     .unwrap();

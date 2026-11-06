@@ -274,8 +274,12 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted {
+            if s.widened_stop {
+                ", widened past the work bound, then OVER 1000 times it: no facts"
+            } else if s.aborted {
                 ", OVER the work/time bound: no facts"
+            } else if s.widened {
+                ", past the work bound: widened"
             } else {
                 ""
             },

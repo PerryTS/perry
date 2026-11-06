@@ -60,6 +60,9 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(0, Ordering::Release);
         crate::array::forget_object_prototype_intrinsic();
     }
+    // %Object% and %Object.prototype% are the realm's, whichever init first
+    // reads them (SNAP census, design §2.10.20).
+    let _realm = crate::snap_census::realm_build();
     let built = build_object_intrinsics();
     if let Some((ctor, proto)) = built {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
@@ -99,6 +102,8 @@ pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
     // No collection may see the raw object before the intrinsic root is
     // published. Unlike the complete intrinsic this sentinel is not immortal:
     // replacing the root lets the next collection reclaim it.
+    // The stand-in is the realm's as the intrinsic is (SNAP census).
+    let _realm = crate::snap_census::realm_build();
     let _no_move = crate::gc::GcSuppressScope::new();
     let proto = js_object_alloc(0, 0);
     if !proto.is_null() {

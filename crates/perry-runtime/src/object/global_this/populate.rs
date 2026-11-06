@@ -77,6 +77,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     if singleton_at_entry.is_null() {
         return;
     }
+    // The realm is the runtime's, whichever init first asks for it.
+    let _realm = crate::snap_census::runtime_scope();
     // #6982: this function installs several hundred builtins, and nearly every
     // step allocates (name strings, constructor closures, prototype objects).
     // Any of those allocations can trigger a collection, and an *evacuating*
@@ -1064,7 +1066,6 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
         return;
     }
     let ctor_handle = scope.root_raw_mut_ptr(ctor_ptr);
-
     let static_key = super::global_name_key(name);
     let ctor_ptr = ctor_handle.get_raw_mut_ptr::<ObjectHeader>();
     js_object_set_field_by_name(
@@ -1078,7 +1079,6 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
         super::super::PropertyAttrs::new(true, false, true),
     );
 }
-
 crate::perry_thread_local! {
     /// Raw address of THIS thread's `Error` constructor closure, captured at
     /// install. Read by `error::error_prepare_stack_trace_override` so

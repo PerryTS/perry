@@ -68,6 +68,7 @@ use super::ObjectHeader;
 /// Number of [`BuiltinProto`] families.
 pub const FAMILIES: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 
+use perry_abi::lock::{refuses, LockHolder, LockKey, LockMutation};
 pub use perry_abi::BuiltinProto;
 
 /// What a mutation funnel is about to do to the object it reports (DEC 250).
@@ -265,28 +266,51 @@ pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
 /// `build_generator_tower` completes them.
 pub(crate) const GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 3;
 pub(crate) const ASYNC_GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 4;
+/// The meta family fields of `%MapIteratorPrototype%`,
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` and
+/// `%RegExpStringIteratorPrototype%` (DEC 250 as narrowed 2026-11-03, like
+/// the generator prototypes): their image members (`next`,
+/// `@@toStringTag`) are locked, adds stay open. Sealed by
+/// `seal_iterator_prototypes` with the shared and array ones.
+pub(crate) const MAP_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 5;
+pub(crate) const SET_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 6;
+pub(crate) const STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 7;
+pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 8;
 const _: () = assert!(
-    ASYNC_GENERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
+    REGEXP_STRING_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
 );
 
-/// Seal the two iterator prototypes the moment `iterator_prototypes` completes
-/// them, before any program code can reach them.
+/// Seal the built-in iterator prototypes the moment `iterator_prototypes`
+/// completes them, before any program code can reach them: `shared`
+/// (`%IteratorPrototype%`), then the families in `ITERATOR_FAMILIES` order.
 ///
 /// # Safety
-/// Both are live, fully built ordinary objects (or null).
+/// Every one is a live, fully built ordinary object (or null).
 #[inline(never)]
 #[optimize(size)]
 pub(crate) unsafe fn seal_iterator_prototypes(
     shared: *mut ObjectHeader,
-    array_iterator: *mut ObjectHeader,
+    families: [*mut ObjectHeader; 5],
 ) {
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
         seal_object_family(shared, ITERATOR_FAMILY);
-        seal_object_family(array_iterator, ARRAY_ITERATOR_FAMILY);
+        for (proto, family) in families.into_iter().zip(ITERATOR_FAMILIES) {
+            seal_object_family(proto, family);
+        }
     });
 }
+
+/// The family of each built-in iterator prototype `seal_iterator_prototypes`
+/// seals past `%IteratorPrototype%`: Array, Map, Set, String, RegExp String.
+const ITERATOR_FAMILIES: [usize; 5] = [
+    ARRAY_ITERATOR_FAMILY,
+    MAP_ITERATOR_FAMILY,
+    SET_ITERATOR_FAMILY,
+    STRING_ITERATOR_FAMILY,
+    REGEXP_STRING_ITERATOR_FAMILY,
+];
 
 /// Seal `%GeneratorPrototype%` (or `%AsyncGeneratorPrototype%`) the moment
 /// its tower is built, before any program code can reach it.
@@ -310,10 +334,34 @@ pub(crate) unsafe fn seal_generator_prototype(proto: *mut ObjectHeader, is_async
 /// iterable", `IteratorClose` finding no `return`).
 #[inline(always)]
 pub(crate) fn add_locked(family: usize) -> bool {
-    family == BuiltinProto::Object as usize
-        || family == BuiltinProto::Function as usize
-        || family == ITERATOR_FAMILY
-        || family == ARRAY_ITERATOR_FAMILY
+    lock_holder(family).is_some_and(LockHolder::add_locked)
+}
+
+/// The locked holder (`perry_abi::lock`) sealed family `family` is, if the
+/// lock covers it ([`locked_family`]).
+#[inline(always)]
+pub(crate) fn lock_holder(family: usize) -> Option<LockHolder> {
+    if family < super::builtin_namespace::FIRST {
+        BuiltinProto::from_index(family).map(LockHolder::Proto)
+    } else if family == ITERATOR_FAMILY {
+        Some(LockHolder::Iterator)
+    } else if family == ARRAY_ITERATOR_FAMILY {
+        Some(LockHolder::ArrayIterator)
+    } else if family == GENERATOR_FAMILY {
+        Some(LockHolder::Generator)
+    } else if family == ASYNC_GENERATOR_FAMILY {
+        Some(LockHolder::AsyncGenerator)
+    } else if family == MAP_ITERATOR_FAMILY {
+        Some(LockHolder::MapIterator)
+    } else if family == SET_ITERATOR_FAMILY {
+        Some(LockHolder::SetIterator)
+    } else if family == STRING_ITERATOR_FAMILY {
+        Some(LockHolder::StringIterator)
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        Some(LockHolder::RegExpStringIterator)
+    } else {
+        None
+    }
 }
 
 /// DEC 250 (i): an array-index store reached `%Array.prototype%` or
@@ -323,7 +371,8 @@ pub(crate) fn add_locked(family: usize) -> bool {
 #[inline(never)]
 #[optimize(size)]
 pub(crate) fn refuse_index_add(family: BuiltinProto) {
-    if index_add_refused() {
+    if refuses(LockHolder::Proto(family), LockKey::Index, LockMutation::Add) && index_add_refused()
+    {
         throw_locked(family as usize, &Violation::AddIndex);
     }
 }
@@ -575,9 +624,11 @@ unsafe fn note_sealed_write(
         if !super::own_override::in_builtin_definition() {
             super::shadow::set_bit(obj.cast_mut());
         }
-    } else if family == GENERATOR_FAMILY || family == ASYNC_GENERATOR_FAMILY {
-        // Locked above (image members only); an add is the program's own
-        // member and nothing in the runtime answers from its absence.
+    } else if (GENERATOR_FAMILY..=REGEXP_STRING_ITERATOR_FAMILY).contains(&family) {
+        // The generator and the Map/Set/String/RegExp String iterator
+        // prototypes: locked above (image members only); an add is the
+        // program's own member and nothing in the runtime answers from its
+        // absence.
     } else if family == ITERATOR_FAMILY || family == ARRAY_ITERATOR_FAMILY {
         // Locked above (adds included); nothing else models them, so a
         // definition add after the seal has no answer to withdraw: it aborts.
@@ -602,11 +653,7 @@ unsafe fn note_sealed_write(
 /// global, not a runtime prototype (URL, timers, …).
 #[inline(always)]
 pub(crate) fn locked_family(family: usize) -> bool {
-    family < super::builtin_namespace::FIRST
-        || family == ITERATOR_FAMILY
-        || family == ARRAY_ITERATOR_FAMILY
-        || family == GENERATOR_FAMILY
-        || family == ASYNC_GENERATOR_FAMILY
+    lock_holder(family).is_some()
 }
 
 /// The image member `mutation` would write on the locked intrinsic `obj`, if
@@ -623,36 +670,82 @@ unsafe fn locked_violation(
     }
     let keys = own_keys(obj);
     let image = image_key_count(meta, keys);
-    let adds = add_locked(sealed_family((*meta).flags));
-    let violation = match mutation {
-        Mutation::Relink => Some(Violation::Relink),
-        Mutation::Replace(slot) => image_position_of_slot(keys, image, slot)
-            .map(|pos| Violation::Replace(key_display(keys, pos))),
-        Mutation::Delete(key) => image_position_of_key(keys, image, key)
-            .map(|pos| Violation::Delete(key_display(keys, pos))),
+    let Some(holder) = lock_holder(sealed_family((*meta).flags)) else {
+        return None;
+    };
+    // The one decision (`perry_abi::lock::refuses`) with the key's class: an
+    // image position is `Image`, a key that is not own `Absent`, and
+    // `constructor` `Constructor` in either case (owner ruling 2026-11-03).
+    // The key text is built only when the class alone would be refused.
+    let decide = |class: LockKey,
+                  m: LockMutation,
+                  text: &dyn Fn() -> String,
+                  wrap: fn(String) -> Violation| {
+        if !refuses(holder, class, m) {
+            return None;
+        }
+        let k = text();
+        let class = if k == ".constructor" {
+            LockKey::Constructor
+        } else {
+            class
+        };
+        refuses(holder, class, m).then(|| wrap(k))
+    };
+    match mutation {
+        Mutation::Relink => {
+            refuses(holder, LockKey::Absent, LockMutation::Relink).then_some(Violation::Relink)
+        }
+        Mutation::Replace(slot) => {
+            let pos = image_position_of_slot(keys, image, slot)?;
+            decide(
+                LockKey::Image,
+                LockMutation::Replace,
+                &|| key_display(keys, pos),
+                Violation::Replace,
+            )
+        }
+        Mutation::Delete(key) => {
+            let pos = image_position_of_key(keys, image, key)?;
+            decide(
+                LockKey::Image,
+                LockMutation::Delete,
+                &|| key_display(keys, pos),
+                Violation::Delete,
+            )
+        }
         Mutation::Redefine(key) => match image_position_of_key(keys, image, key) {
-            Some(pos) => Some(Violation::Redefine(key_display(keys, pos))),
-            None if adds && image_position_of_key(keys, keys.count(), key).is_none() => {
-                Some(Violation::Add(key_text(key)))
-            }
+            Some(pos) => decide(
+                LockKey::Image,
+                LockMutation::Redefine,
+                &|| key_display(keys, pos),
+                Violation::Redefine,
+            ),
+            // Defining a key that is not own adds it.
+            None if image_position_of_key(keys, keys.count(), key).is_none() => decide(
+                LockKey::Absent,
+                LockMutation::Add,
+                &|| key_text(key),
+                Violation::Add,
+            ),
             None => None,
         },
-        Mutation::Add(key) => adds.then(|| Violation::Add(key_text(key))),
-        Mutation::Stamp(published) if adds => stamped_add(obj, keys, published).map(Violation::Add),
+        Mutation::Add(key) => decide(
+            LockKey::Absent,
+            LockMutation::Add,
+            &|| key_text(key),
+            Violation::Add,
+        ),
+        Mutation::Stamp(published) if refuses(holder, LockKey::Absent, LockMutation::Add) => {
+            let k = stamped_add(obj, keys, published)?;
+            decide(
+                LockKey::Absent,
+                LockMutation::Add,
+                &|| k.clone(),
+                Violation::Add,
+            )
+        }
         Mutation::Stamp(_) | Mutation::Restructure | Mutation::Publication => None,
-    };
-    // Owner ruling 2026-11-03: `constructor` of a built-in prototype stays
-    // patchable (Next.js redefines `Date.prototype.constructor`). The key is
-    // exempt, not one mutation of it: after its (admitted) delete, defining it
-    // again is an add of the same exempt key, never refused.
-    match &violation {
-        Some(
-            Violation::Replace(k)
-            | Violation::Delete(k)
-            | Violation::Redefine(k)
-            | Violation::Add(k),
-        ) if k == ".constructor" => None,
-        _ => violation,
     }
 }
 
@@ -812,6 +905,14 @@ fn locked_object_name(family: usize) -> String {
         String::from("%GeneratorPrototype%")
     } else if family == ASYNC_GENERATOR_FAMILY {
         String::from("%AsyncGeneratorPrototype%")
+    } else if family == MAP_ITERATOR_FAMILY {
+        String::from("%MapIteratorPrototype%")
+    } else if family == SET_ITERATOR_FAMILY {
+        String::from("%SetIteratorPrototype%")
+    } else if family == STRING_ITERATOR_FAMILY {
+        String::from("%StringIteratorPrototype%")
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        String::from("%RegExpStringIteratorPrototype%")
     } else {
         crate::codegen_abi::BUILTIN_NAMESPACES[family - super::builtin_namespace::FIRST].to_string()
     }
@@ -971,7 +1072,11 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
         match header.obj_type {
             crate::gc_object_type_pat!() => {
                 if property_key_is_index(key) && addr == crate::array::object_prototype_addr() {
-                    return index_add_refused();
+                    return refuses(
+                        LockHolder::Proto(BuiltinProto::Object),
+                        LockKey::Index,
+                        LockMutation::Add,
+                    ) && index_add_refused();
                 }
                 sealed_write_refused(addr as *const ObjectHeader, key)
             }
@@ -983,7 +1088,11 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
                 if property_key_is_index(key)
                     && live as usize == crate::array::array_prototype_addr_if_resolved()
                 {
-                    return index_add_refused();
+                    return refuses(
+                        LockHolder::Proto(BuiltinProto::Array),
+                        LockKey::Index,
+                        LockMutation::Add,
+                    ) && index_add_refused();
                 }
                 sealed_write_refused(crate::array::array_property_bag(live), key)
             }
