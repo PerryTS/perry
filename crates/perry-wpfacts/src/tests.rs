@@ -99,6 +99,7 @@ mod own_guarded_read;
 mod own_helper_guard;
 mod own_key_shadow;
 mod own_length;
+mod own_store_read;
 mod parent_value;
 mod plus_string;
 mod prim_result;

@@ -661,6 +661,7 @@ impl<'a> Gen<'a> {
             return;
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
+        self.note_own_stores(f);
         self.stmts(&fx, &f.body);
         self.own_helper_finish(fxi, own);
     }
