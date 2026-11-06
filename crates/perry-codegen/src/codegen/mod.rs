@@ -2194,6 +2194,20 @@ fn lower_module(
     // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
     // below — computed exactly once per module either way.
     let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    {
+        let class_table: std::collections::HashMap<String, &perry_hir::Class> =
+            hir.classes.iter().map(|c| (c.name.clone(), c)).collect();
+        let stable: std::collections::HashSet<String> = hir
+            .classes
+            .iter()
+            .filter(|c| module_dispatch_facts.prototype_is_stable(&class_table, &c.name))
+            .map(|c| c.name.clone())
+            .collect();
+        crate::expr::hoist_dispatch::publish(
+            crate::expr::native_region_slug(&sanitize(&hir.name)),
+            stable,
+        );
+    }
     let imported_return_shapes = opts
         .imported_classes
         .iter()

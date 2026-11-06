@@ -186,6 +186,15 @@ fn comes_from_root_reread(body: &str, value: &str, depth: usize) -> bool {
     if rhs.starts_with("call i64 asm \"\", \"=r,0\"(ptr addrspace(1) ") {
         return true;
     }
+    // `reload_reuse.rs` names an earlier re-read of the same root when nothing
+    // between them can collect; that earlier re-read must itself qualify.
+    if let Some(prev) = rhs
+        .strip_prefix("add i64 ")
+        .and_then(|r| r.strip_suffix(", 0"))
+        .filter(|p| p.ends_with(".rs4o"))
+    {
+        return comes_from_root_reread(body, prev, depth - 1);
+    }
     if ["inttoptr ", "ptrtoint ", "bitcast ", "or ", "and "]
         .iter()
         .any(|op| rhs.starts_with(op))

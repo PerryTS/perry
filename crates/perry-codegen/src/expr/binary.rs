@@ -965,6 +965,17 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
+        // is `l` and `r` is never evaluated. (An in-window read under a
+        // packed-loop index fact, a proven raw-f64 field, a numeric local.)
+        if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
+            && !matches!(
+                std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+        {
+            return lower_expr(ctx, left);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();

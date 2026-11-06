@@ -89,6 +89,8 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
     let defs = defs(fn_ir);
     let mut out: BTreeMap<String, Vec<SlotEvent>> = BTreeMap::new();
     let mut entry_seeds: BTreeMap<String, usize> = BTreeMap::new();
+    // Re-read stem -> (slot, line), for reuse aliases below.
+    let mut reloads: BTreeMap<String, (String, usize)> = BTreeMap::new();
 
     for (line_no, line) in fn_ir.lines().map(str::trim).enumerate() {
         // ---- stores and clears -------------------------------------------
@@ -194,15 +196,118 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
             // the register the rest of the function uses is the stem.
             let into = dst.strip_suffix(".rs4p").unwrap_or(dst).to_string();
             if slot.starts_with('%') {
+                reloads.insert(into.clone(), (slot.clone(), line_no));
                 out.entry(slot).or_default().push(SlotEvent::Load {
                     into,
                     line: line_no,
                 });
             }
         }
+        // `precise_roots/reload_reuse.rs`: `%r9.rs4o = add i64 %r7.rs4o, 0`
+        // names an earlier re-read of the same slot instead of re-reading it.
+        // It is a re-read at THIS line only if nothing between the two could
+        // have collected; otherwise it is not a load at all, so a reuse across
+        // a safepoint still fails every rooting assertion built on this.
+        if let (Some(stem), Some(prev)) = (
+            dst.strip_suffix(".rs4o"),
+            def.strip_prefix("add i64 ")
+                .and_then(|r| r.strip_suffix(", 0"))
+                .and_then(|r| r.strip_suffix(".rs4o")),
+        ) {
+            if let Some((slot, from)) = reloads.get(prev).cloned() {
+                if no_dirty_path(fn_ir, &slot, from, line_no) {
+                    reloads.insert(stem.to_string(), (slot.clone(), line_no));
+                    out.entry(slot).or_default().push(SlotEvent::Load {
+                        into: stem.to_string(),
+                        line: line_no,
+                    });
+                }
+            }
+        }
     }
 
     out
+}
+
+/// A call RS4GC would turn into a safepoint: anything but a call-site
+/// `"gc-leaf-function"` or inline asm.
+fn line_may_collect(line: &str) -> bool {
+    let t = line.trim();
+    (t.starts_with("call ") || t.contains(" = call ") || t.contains("invoke "))
+        && !t.contains("\"gc-leaf-function\"")
+        && !t.contains(" asm ")
+        && !t.contains("@llvm.")
+}
+
+/// Does every CFG path from line `from` to line `to` avoid both a collecting
+/// call and a store to `slot`? Independent of the reuse pass's own analysis:
+/// a forward search that marks a path dirty at the first such line and fails
+/// if it reaches `to` dirty (or never reaches it).
+fn no_dirty_path(fn_ir: &str, slot: &str, from: usize, to: usize) -> bool {
+    let lines: Vec<&str> = fn_ir.lines().collect();
+    let is_label = |l: &str| {
+        !l.starts_with(' ') && l.trim_end().ends_with(':') && !l.trim().is_empty()
+    };
+    // Block start lines, and label name -> start.
+    let mut starts = vec![0usize];
+    let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, l) in lines.iter().enumerate() {
+        if is_label(l) {
+            starts.push(i);
+            by_name.insert(l.trim_end().trim_end_matches(':').to_string(), i);
+        }
+    }
+    let dirty_line = |l: &str| {
+        line_may_collect(l)
+            || (l.trim_start().starts_with("store ") && l.trim_end().ends_with(&format!(", ptr {slot}")))
+    };
+    let mut seen: std::collections::BTreeSet<(usize, bool)> = Default::default();
+    let mut work = vec![(from + 1, false)];
+    let mut reached = false;
+    while let Some((mut i, mut dirty)) = work.pop() {
+        if !seen.insert((i, dirty)) {
+            continue;
+        }
+        loop {
+            if i >= lines.len() {
+                break;
+            }
+            if i == to {
+                if dirty {
+                    return false;
+                }
+                reached = true;
+                break;
+            }
+            let l = lines[i];
+            if i != from + 1 && is_label(l) {
+                // Fell through into the next block: no implicit fallthrough in
+                // LLVM IR, so this only happens past a terminator.
+                break;
+            }
+            dirty |= dirty_line(l);
+            let mut rest = l;
+            let mut any_edge = false;
+            while let Some(at) = rest.find("label %") {
+                let tail = &rest[at + "label %".len()..];
+                let name: String = tail
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$' | '-'))
+                    .collect();
+                if let Some(&start) = by_name.get(&name) {
+                    work.push((start + 1, dirty));
+                    any_edge = true;
+                }
+                rest = tail;
+            }
+            if any_edge {
+                break;
+            }
+            i += 1;
+        }
+    }
+    let _ = starts;
+    reached
 }
 
 /// Does `reg` derive from `ancestor` within `depth` def-use steps?

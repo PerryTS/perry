@@ -2310,6 +2310,13 @@ pub(crate) struct MaskedWindowArrayFact {
     /// the i32 tier's all-slots-i32 materialization proof, and the TA tiers'
     /// hoisted data pointers serve reads only.
     pub allows_stores: bool,
+    /// Plain-array tiers: an entry `i64` slot caching the array's element
+    /// base (`array_elements_addr` of the validated handle). Written once
+    /// after the guard and re-derived from the refreshed handle at every
+    /// fired back-edge poll (`emit_armed_gc_loop_safepoint`), the clone's only
+    /// collection point; nothing in the call-free clone can move the backing.
+    /// `None` keeps the per-read derivation.
+    pub elements_slot: Option<String>,
 }
 
 /// Read-only masked-index window over a plain array of boxed strings.
@@ -3401,6 +3408,7 @@ mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_family_read;
 pub(crate) mod class_field_inline_guard;
+pub(crate) mod hoist_dispatch;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
 mod generator_control_slots;

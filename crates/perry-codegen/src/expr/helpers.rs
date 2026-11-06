@@ -242,6 +242,27 @@ pub(crate) fn emit_string_addref_if_heap_string(ctx: &mut FnCtx<'_>, value: &str
     ctx.current_block = done_idx;
 }
 
+/// `"lit"`, or a conditional choosing between such: every pool literal lowers
+/// to the immortal image string of its handle global. `PERRY_UNBOXED_CLASS_FIELDS=0`
+/// answers false.
+pub(crate) fn expr_is_pool_string_literal(value: &Expr) -> bool {
+    if crate::stmt::this_field_fast_off() {
+        return false;
+    }
+    fn walk(value: &Expr) -> bool {
+        match value {
+            Expr::String(_) => true,
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => walk(then_expr) && walk(else_expr),
+            _ => false,
+        }
+    }
+    walk(value)
+}
+
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     store_needs_string_addref(ctx, value)
 }

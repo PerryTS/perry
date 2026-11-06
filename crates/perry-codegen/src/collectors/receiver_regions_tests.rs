@@ -337,6 +337,7 @@ fn representation_payloads_use_the_common_scope_boundary() {
         values_i32: false,
         elem: crate::expr::MaskedWindowElem::PlainF64,
         allows_stores: false,
+        elements_slot: None,
     });
     assert_eq!(
         table

@@ -896,6 +896,7 @@ pub(super) fn lower_masked_window_region(
                     max_idx_exclusive: array.hi + 1,
                     values_i32: true,
                     allows_stores: false,
+                elements_slot: None,
                     elem: MaskedWindowElem::TaI32 { data_ptr: data_i64 },
                 });
         }
@@ -1013,6 +1014,7 @@ pub(super) fn lower_masked_window_region(
                 max_idx_exclusive: array.hi + 1,
                 values_i32: true,
                 allows_stores: false,
+                elements_slot: None,
                 elem: MaskedWindowElem::TaI32 { data_ptr },
             });
     }
@@ -1048,6 +1050,7 @@ pub(super) fn lower_masked_window_region(
                 max_idx_exclusive: array.hi + 1,
                 values_i32: false,
                 allows_stores: false,
+                elements_slot: None,
                 elem: MaskedWindowElem::PlainF64,
             });
     }

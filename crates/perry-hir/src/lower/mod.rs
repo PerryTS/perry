@@ -153,6 +153,7 @@ mod bun_sql_tests;
 mod collection_view_tests;
 #[cfg(test)]
 mod compound_assign_temp_type_tests;
+mod this_field_loop_tests;
 #[cfg(test)]
 mod for_multi_decl_tests;
 #[cfg(test)]

@@ -1281,6 +1281,13 @@ impl LlFunction {
     /// Every decision that reads compile state (the root backend, which is
     /// per-thread) is made here, on the thread that owns the function; the
     /// returned plan applies on any thread.
+    /// Whether this body's roots lower to native stack maps at text finish
+    /// (`lower_precise_roots_to_native_stack`), which removes its shadow-slot
+    /// bookkeeping calls.
+    pub(crate) fn precise_roots_lowered(&self) -> bool {
+        self.stack_map_requested
+    }
+
     pub(crate) fn text_finish(&self, gc_leaf_callees: &HashSet<String>) -> TextFinish {
         TextFinish {
             name: self.name.clone(),
@@ -1908,6 +1915,15 @@ impl TextFinish {
         // unmarked and therefore remain statepoints.
         let ir = if self.annotate_leaf_calls {
             crate::gc_call_effects::annotate_transitive_leaf_calls(&ir, gc_leaf_callees)
+        } else {
+            ir
+        };
+        // A root re-read with no safepoint since the previous one reuses its
+        // launder output (`precise_roots/reload_reuse.rs`). After the leaf
+        // stamping above, so a direct call the whole-module analysis proved
+        // cannot collect does not end the stretch.
+        let ir = if self.precise_roots.is_some() {
+            precise_roots::reload_reuse::reuse_root_reloads(&ir)
         } else {
             ir
         };
