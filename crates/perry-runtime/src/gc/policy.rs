@@ -4417,17 +4417,15 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
     let low_pause_non_moving = progress_kind.is_budgeted();
-    // #7611: `low_pause_non_moving` is now the ONLY controller of this flag —
-    // the `PERRY_GEN_GC_EVACUATE` conjunct that used to be here was deleted as
-    // an untested configuration, and this arm is the one with a behavioural
-    // test (`budgeted_low_pause_minor_does_not_evacuate`).
-    let evacuation_policy_allowed = !low_pause_non_moving;
-    let force_evacuation = !low_pause_non_moving && gc_force_evacuate_enabled();
-    let evacuation_policy_disabled_reason = if low_pause_non_moving {
-        EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON
-    } else {
-        EVACUATION_POLICY_DISABLED_REASON
-    };
+    // #7611: the `PERRY_GEN_GC_EVACUATE` conjunct that used to be here was
+    // deleted as an untested configuration. The flag's controllers are
+    // `low_pause_non_moving` (behavioural test
+    // `budgeted_low_pause_minor_does_not_evacuate`) and the imprecise-point
+    // veto (`an_imprecise_point_moves_no_object`), both in `evacuation_veto`.
+    let move_veto = evacuation_veto(low_pause_non_moving);
+    let evacuation_policy_allowed = move_veto.is_none();
+    let force_evacuation = evacuation_policy_allowed && gc_force_evacuate_enabled();
+    let evacuation_policy_disabled_reason = move_veto.unwrap_or(EVACUATION_POLICY_DISABLED_REASON);
     let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {

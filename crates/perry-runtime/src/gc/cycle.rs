@@ -1158,10 +1158,7 @@ impl GcCycleState {
         if block_persist_always_enabled() {
             return false;
         }
-        !(matches!(
-            super::roots::conservative_stack_scan_decision(),
-            super::roots::ConservativeStackScanDecision::Scan
-        ) && !super::roots::conservative_scan_is_effective())
+        super::roots::collection_point_is_precise()
     }
 
     fn step_block_persistence<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
