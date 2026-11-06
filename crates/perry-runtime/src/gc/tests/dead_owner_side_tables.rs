@@ -343,9 +343,15 @@ fn test_dead_nursery_owner_descriptors_are_not_inherited_after_copied_minor() {
 /// Both halves are asserted: the census moves, AND the semantic consequence
 /// that makes the premise guard necessary in the first place — a force-marked
 /// owner is not dead, so the death prune correctly leaves its entry alone.
+///
+/// The pass runs only where a conservative scan was requested and cannot run
+/// (`GcCycleState::block_persistence_is_redundant`), so the collection here is
+/// the wasm allocation-point valve shape: a pinned `Scan` with the scan
+/// answering ineffective.
 #[test]
 fn test_block_persistence_census_moves_when_a_block_has_a_live_tenant() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _effective = crate::gc::roots::ConservativeScanEffectiveTestGuard::set(false);
     crate::arena::arena_reset_all_blocks_to_zero();
 
     let (live, _) = unsafe { alloc_nursery_test_object(0) };
@@ -362,7 +368,16 @@ fn test_block_persistence_census_moves_when_a_block_has_a_live_tenant() {
     assert!(crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some());
 
     let force_marks_before = crate::gc::block_persist_force_mark_count();
-    full_gc();
+    {
+        // The test guard pins the scan mode, which makes `force_full_scan` a
+        // no-op; unpin it for this one collection.
+        let previous = roots::set_conservative_stack_scan_override(None);
+        let _scan =
+            roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::NurseryChurnSlackValve);
+        full_gc();
+        drop(_scan);
+        roots::set_conservative_stack_scan_override(previous);
+    }
 
     assert!(
         crate::gc::block_persist_force_mark_count() > force_marks_before,
