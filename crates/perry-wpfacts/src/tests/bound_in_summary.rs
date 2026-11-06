@@ -42,8 +42,9 @@ console.log(h.m);
     )
 }
 
+/// The leak stores into a global an unseen module can read.
 fn leaks(body: &str, call: &str) {
-    let src = program(body, call);
+    let src = unseen(&program(body, call));
     let w = run(&src, false);
     assert!(!proven(&w, "m"), "whole program\n{}", w.dump_text());
     assert!(

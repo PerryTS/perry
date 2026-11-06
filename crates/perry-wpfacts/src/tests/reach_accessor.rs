@@ -71,7 +71,9 @@ export function bindDeep(s: any): any { const host = s.host; return host.get2.bi
 
 /// `key` is proven in neither mode: the value leaves in the whole program,
 /// and per unit is never stronger.
+/// The leaks store into globals an unseen module can read.
 fn leaves(m: &str, key: &str) {
+    let m = &unseen(m);
     assert!(!proven(&run(m, false), key), "whole program .{key}");
     let u = run(m, true);
     assert!(

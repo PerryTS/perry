@@ -90,7 +90,7 @@ fn or_coalesce_and_top_right_keep_the_escape() {
         ("⊤ on the right", "((g as any) && U)(ctx);"),
     ] {
         let pf = facts(&format!(
-            "const U: any = (globalThis as any).u;
+            "import \"unseen-host\"; const U: any = (globalThis as any).u;
             function g(c: {{ qx: number }}): number {{ return 1; }}
             const ctx = {{ qx: 1 }};
             {call}

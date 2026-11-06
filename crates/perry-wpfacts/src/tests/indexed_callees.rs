@@ -126,7 +126,8 @@ console.log(payload.n); // PAYLOAD_N
 #[test]
 fn indexed_callees_later_string_values_keep_named_calls() {
     payload_site(
-        r#"
+        r#"import "unseen-host";
+
 declare function external(x: unknown): void;
 declare const choose: boolean;
 class Payload { n = 1; }

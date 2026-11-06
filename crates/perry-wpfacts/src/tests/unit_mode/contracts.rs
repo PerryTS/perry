@@ -299,7 +299,10 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
     // The rounds include declaration-shape comparisons and native holder
     // walks; unrelated units must still stay out of the later rounds.
-    assert_eq!(pf.round_work, [885, 1237, 1039, 258], "{:?}", pf.units);
+    // Rule G: a global key's ownership is the realm's declaration lookup
+    // (charged per search step) and `%Global%` declares its own keys, so the
+    // same solve is charged more (was [885, 1237, 1039, 258]).
+    assert_eq!(pf.round_work, [889, 1241, 1079, 260], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.
@@ -435,7 +438,7 @@ pub(super) fn what_a_method_does_to_its_receiver_happens_to_the_instance() {
         ("a", b),
         (
             "m",
-            "import { D } from './a'; declare const ext: any; ext(new D().me());",
+            "import \"unseen-host\"; import { D } from './a'; declare const ext: any; ext(new D().me());",
         ),
     ];
     let pf = units_of(&mods);
@@ -530,7 +533,7 @@ pub(super) fn a_given_out_instance_receives_what_other_units_methods_do() {
     // proves `warm`; per-unit facts are whole-program facts, owner
     // 2026-10-23). `set` runs on published receivers (DECISIONS 107) and on
     // the instances given out (DECISIONS 125).
-    let m = "import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
+    let m = "import \"unseen-host\"; import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
     let pf = units_of(&[("t", t), ("m", m)]);
     assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
     assert!(!proven(&whole_of(&[("t", t), ("m", m)]), "warm"));

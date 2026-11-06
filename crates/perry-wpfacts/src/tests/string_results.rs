@@ -151,7 +151,7 @@ fn a_replaced_locked_prototype_method_keeps_its_result() {
 #[test]
 fn receiver_that_may_be_a_host_value_is_unknown() {
     unproven(
-        "function f(v: any) { return v.trim().length; }\n\
+        "import \"unseen-host\"; function f(v: any) { return v.trim().length; }\n\
          console.log(f(\" a \"), f((globalThis as any).hostValue));\n",
         "v.trim()",
         "length",

@@ -196,18 +196,20 @@ fn reflect_construct_helper_keeps_each_calls_allocation_receiver() {
 
 #[test]
 fn escaping_a_class_without_reflect_construction_adds_no_arbitrary_receiver() {
-    let pf = facts(
+    // Unseen code may construct the escaped class.
+    let pf = facts(&unseen(
         r#"
         class Two { body = 1; constructor() { console.log(this.body); } }
         (globalThis as any).target = Two;
     "#,
-    );
+    ));
     receivers(&pf, "body", &["Two"]);
 }
 
 #[test]
 fn reflect_unknown_target_reaches_a_constructor_that_escapes_later() {
-    let pf = facts(
+    // `opaque` is an unseen module's function; `target` is where it may read.
+    let pf = facts(&unseen(
         r#"
         declare function opaque(): any;
         class Two { body = 1; constructor() { console.log(this.body); } }
@@ -215,7 +217,7 @@ fn reflect_unknown_target_reaches_a_constructor_that_escapes_later() {
         const value: any = Reflect.construct(opaque(), [], Other);
         if (value) (globalThis as any).target = Two;
     "#,
-    );
+    ));
     let s = pf
         .sites
         .iter()

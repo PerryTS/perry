@@ -32,16 +32,17 @@ fn v_proven(src: &str, marker: &str) -> (bool, String) {
     (!matches!(s.verdict, Verdict::No(_)), pf.dump_text())
 }
 
-/// `holder` is the receiver of `holder[k](n)`; `store` runs before.
+/// `holder` is the receiver of `holder[k](n)`; `store` runs before. `top`
+/// comes from an unseen module (each program loads one).
 fn program(holder: &str, store: &str, key: &str) -> String {
-    format!(
+    unseen(&format!(
         "class N {{ v = 1; }}
         const tab: any = {holder};
         const top: any = (globalThis as any).someHost;
         {store}
         function run(k: any, n: N): number {{ return tab[k](n); }}
         console.log(run({key}, new N()), run({key}, new N()));"
-    )
+    ))
 }
 
 const TABLE: &str = "{ 0: function (n: N) { return /*A*/ n.v; }, 1: (n: N) => n.v + 1 }";
@@ -80,14 +81,14 @@ fn computed_key_meets_the_exempt_constructor() {
 #[test]
 fn open_chain_still_takes_the_number_key_write() {
     let src = |store: &str| {
-        format!(
+        unseen(&format!(
             "class N {{ v = 1; }}
             const top: any = (globalThis as any).someHost;
             {store}
             const mp: any = new Map();
             function run(k: number, n: N): number {{ try {{ mp[k](n); }} catch {{}} return /*A*/ n.v; }}
             console.log(run(Math.random() > 0.5 ? 1 : 0, new N()));"
-        )
+        ))
     };
     let (p, dump) = v_proven(&src("top[0] = 1;"), "/*A*/");
     assert!(!p, "the Map chain must replay the number-key write\n{dump}");
@@ -107,14 +108,14 @@ fn open_chain_still_takes_the_number_key_write() {
 /// `f.go` throws, `n` stays the program's. The async and generator
 /// function prototypes take adds: there the call may run what was stored.
 fn fn_program(decl: &str, store: &str, call: &str) -> String {
-    format!(
+    unseen(&format!(
         "class N {{ v = 1; }}
         const top: any = (globalThis as any).someHost;
         {store}
         {decl}
         function run(n: N): number {{ try {{ {call}; }} catch {{}} return /*A*/ n.v; }}
         console.log(run(new N()), run(new N()));"
-    )
+    ))
 }
 
 const PLAIN_FNS: [(&str, &str); 5] = [
