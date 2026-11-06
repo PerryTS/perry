@@ -21,7 +21,8 @@
 //!   node is `returned(N)` for the N-th declared call. A callee argument the
 //!   call does not pass is no function: no call, nothing returned.
 //! - `stores(src -> dst)`: the source values flow into the destination node
-//!   (an edge; a spread argument's elements by a load of any key).
+//!   (an edge; a spread argument's values are its elements, an
+//!   argument's `elems` a load of any key on it).
 //! - `stores(fresh)`: nothing beyond the fresh result.
 //! - `returns(v)`: a primitive, the receiver token, a slot's values, a
 //!   fresh array born at the call site (`site_tmpl`) holding its `elems`,
@@ -149,7 +150,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
 }
 
 /// Where a slot's values are: value nodes, and nodes whose elements are
-/// the values (a spread argument, an argument under `elems`).
+/// the values (an argument under `elems`: a load of any key reads them).
 #[derive(Default)]
 struct Vals {
     nodes: Vec<NodeId>,
@@ -178,10 +179,22 @@ impl Run {
         let mut v = Vals::default();
         match r {
             RealmSlotRoot::This => v.nodes.push(self.recv(m)),
+            // Spread positions are not kept: with a spread argument,
+            // argument `i` is a direct argument at index `i` or before, or
+            // an element a spread argument supplies. A spread argument's
+            // values are its elements, and so are the Rest values.
+            RealmSlotRoot::Arg(i) if !self.c.spread.is_empty() => {
+                v.nodes.extend(self.c.args.iter().take(i as usize + 1));
+                for s in self.c.spread.clone() {
+                    v.nodes.push(spread_elems(m, s));
+                }
+            }
             RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.args.get(i as usize)),
             RealmSlotRoot::Rest(i) => {
                 v.nodes.extend(self.c.args.iter().skip(i as usize));
-                v.spread.extend(&self.c.spread);
+                for s in self.c.spread.clone() {
+                    v.nodes.push(spread_elems(m, s));
+                }
             }
             RealmSlotRoot::Result => v.nodes.push(self.c.ret),
             RealmSlotRoot::Returned(n) => v.nodes.extend(self.returned.get(n as usize)),
@@ -202,8 +215,9 @@ impl Run {
                 nodes: vec![],
                 spread: self.root(m, r).nodes,
             },
-            // A field: [[Get]] of the key on each value, which runs its
-            // getter with the value as `this`.
+            // A field: [[Get]] of the key on each value (a spread list's
+            // elements included), which runs its getter with the value as
+            // `this`.
             (r, [RealmSlotStep::Field(k)]) => {
                 let key = Key::Named(m.atom(k));
                 let dst = m.node_l("native-get");
@@ -313,6 +327,16 @@ impl Run {
             RealmOperand::Species { .. } => unreachable!("interpretable() refused species"),
         }
     }
+}
+
+/// The arguments spread argument `s` supplies: its elements (an element
+/// read, as a program callee's parameters read it), never a member a
+/// computed key could name (an array's `indexOf`, its `@@iterator`).
+fn spread_elems(m: &mut Model, s: NodeId) -> NodeId {
+    let n = m.node_l("native-spread-elems");
+    let key = m.elem_key();
+    m.cons(s, Cons::Load { key, dst: n });
+    n
 }
 
 /// `v`'s values flow into `dst`.
