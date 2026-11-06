@@ -15,6 +15,7 @@ mod glue;
 mod native_result;
 mod once;
 mod own_guard;
+mod own_store;
 pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
@@ -363,6 +364,9 @@ pub struct Gen<'a> {
     /// Reads guarded by an own-property test (the `IndexGet`'s address)
     /// and the invalidation node watched by `Cons::OwnGate`.
     pub(crate) own_reads: FxHashMap<usize, NodeId>,
+    /// Reads after a store of the same object and key (`gen/own_store.rs`,
+    /// the `IndexGet`'s address).
+    pub(crate) own_store_reads: crate::pts::FxHashSet<usize>,
     /// The last call's callee (`f(o,k)`), or method receiver (`H` of
     /// `H.call(o,k)`, `o` of `o.hasOwnProperty(k)`).
     pub(crate) own_test_recv: Option<NodeId>,
@@ -624,6 +628,7 @@ impl<'a> Gen<'a> {
             default_args: FxHashMap::default(),
             call_lit_arg: None,
             own_reads: FxHashMap::default(),
+            own_store_reads: Default::default(),
             own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),

@@ -1171,6 +1171,11 @@ impl<'a> Gen<'a> {
                                     },
                                 );
                             }
+                            // After a store of the same object and key
+                            // (`gen/own_store.rs`).
+                            None if self.own_store_reads.contains(&(e as *const Expr as usize)) => {
+                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape })
+                            }
                             None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
                         }
                         dst
