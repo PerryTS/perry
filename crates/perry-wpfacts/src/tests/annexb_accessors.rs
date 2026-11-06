@@ -426,3 +426,40 @@ fn an_installed_native_namespace_member_call_runs_the_getter_result() {
         false,
     );
 }
+
+/// `Object.prototype.__defineSetter__` installs on `Object.prototype` as
+/// `defineProperty` does (E23): the setter a store on a literal runs
+/// writes a string over the literal's field.
+#[test]
+fn object_prototype_setter_install_runs_on_store() {
+    check(
+        r#"
+        class V { n = 1; witness(): number { return this.n; } }
+        (Object.prototype as any).__defineSetter__("constructor", function (this: any, v: any) {
+            this.a = "s";
+        });
+        const o: any = { a: new V() };
+        o.constructor = 5;
+        console.log(o.a.witness());
+    "#,
+        false,
+    );
+}
+
+/// The getter form, run by a read through a literal.
+#[test]
+fn object_prototype_getter_install_runs_on_read() {
+    check(
+        r#"
+        class V { n = 1; witness(): number { return this.n; } }
+        const o: any = { a: new V() };
+        (Object.prototype as any).__defineGetter__("constructor", function (this: any) {
+            this.a = "s";
+            return 1;
+        });
+        o.constructor;
+        console.log(o.a.witness());
+    "#,
+        false,
+    );
+}
