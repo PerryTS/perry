@@ -1304,7 +1304,7 @@ pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
                 channels
                     .borrow_mut()
                     .values_mut()
-                    .find(|state| !state.closed && state.object_bits == port.to_bits())
+                    .find(|state| state.object_bits == port.to_bits())
                     .map(|state| state.inbox.pop_front())
             });
             deserialize_received_message(packet.unwrap_or_else(|| invalid_receive_port()))

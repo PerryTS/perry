@@ -7,7 +7,7 @@ fn broadcast_post_message(channel_id: u64, value: f64) -> f64 {
         channels
             .borrow()
             .get(&channel_id)
-            .and_then(|state| (!state.closed).then(|| state.name.clone()))
+            .map(|state| state.name.clone())
     });
     let Some(channel_name) = channel_name else {
         throw_invalid_state_error("BroadcastChannel is closed");
@@ -15,7 +15,7 @@ fn broadcast_post_message(channel_id: u64, value: f64) -> f64 {
     let serialized = clone_message(value, js_undefined());
     BROADCAST_CHANNELS.with(|channels| {
         for (id, state) in channels.borrow_mut().iter_mut() {
-            if *id != channel_id && !state.closed && state.name == channel_name {
+            if *id != channel_id && state.name == channel_name {
                 state.inbox.push_back(serialized.clone());
             }
         }
@@ -26,10 +26,7 @@ fn broadcast_post_message(channel_id: u64, value: f64) -> f64 {
 
 fn broadcast_close(channel_id: u64) -> f64 {
     BROADCAST_CHANNELS.with(|channels| {
-        if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
-            state.closed = true;
-            state.inbox.clear();
-        }
+        channels.borrow_mut().remove(&channel_id);
     });
     js_undefined()
 }
@@ -99,6 +96,57 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_objects_keep_core_methods_without_a_transport_root() {
+        perry_runtime::feature_hooks::js_runtime_install_event_target();
+        perry_runtime::feature_hooks::js_runtime_install_messaging();
+        perry_runtime::object::js_get_global_this();
+        perry_runtime::messaging::register_broadcast_channel_dispatch(
+            dispatch_broadcast_channel_operation,
+        );
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let channel = scope.root_nanbox_f64(js_worker_threads_broadcast_channel_new(string_value(
+            "closed-owner",
+        )));
+        let id = perry_runtime::messaging::broadcast_channel_id(channel.get_nanbox_f64()).unwrap();
+        for method in ["close", "close", "ref", "unref"] {
+            let result = unsafe {
+                perry_runtime::object::js_native_call_method(
+                    channel.get_nanbox_f64(),
+                    method.as_ptr().cast(),
+                    method.len(),
+                    std::ptr::null(),
+                    0,
+                )
+            };
+            if method == "ref" || method == "unref" {
+                assert_eq!(result.to_bits(), channel.get_nanbox_u64());
+            }
+            assert!(!BROADCAST_CHANNELS.with(|channels| channels.borrow().contains_key(&id)));
+        }
+        let name = js_string_from_bytes(b"name".as_ptr(), 4);
+        let actual = perry_runtime::object::js_object_get_field_by_name_f64(
+            perry_runtime::value::js_nanbox_get_pointer(channel.get_nanbox_f64())
+                as *mut perry_runtime::ObjectHeader,
+            name,
+        );
+        assert_eq!(
+            string_value_to_string(actual).as_deref(),
+            Some("closed-owner")
+        );
+        let message = 1.0;
+        assert!(perry_runtime::exception::catch_thrown(|| unsafe {
+            perry_runtime::object::js_native_call_method(
+                channel.get_nanbox_f64(),
+                b"postMessage".as_ptr().cast(),
+                11,
+                &message,
+                1,
+            )
+        })
+        .is_err());
+    }
 
     #[test]
     fn rejected_names_leave_broadcast_admission_unchanged() {
@@ -195,11 +243,13 @@ mod tests {
         });
         BROADCAST_CHANNELS.with(|channels| {
             let channels = channels.borrow();
-            assert!(!channels.get(&first_id).unwrap().closed);
-            let closed = channels.get(&(first_id + 1)).unwrap();
-            assert!(closed.closed && closed.inbox.is_empty());
+            assert!(channels.contains_key(&first_id));
+            assert!(
+                !channels.contains_key(&(first_id + 1)),
+                "closed transport must not retain the channel object or its listeners"
+            );
         });
-        assert!(unsafe {
+        assert!(!unsafe {
             dispatch_broadcast_channel_operation(
                 Validate,
                 first_id + 1,

@@ -180,12 +180,10 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
 
     loop {
         let next = BROADCAST_CHANNELS.with(|channels| {
-            channels.borrow_mut().values_mut().find_map(|state| {
-                if state.closed {
-                    return None;
-                }
-                state.inbox.pop_front().map(|msg| (state.object_bits, msg))
-            })
+            channels
+                .borrow_mut()
+                .values_mut()
+                .find_map(|state| state.inbox.pop_front().map(|msg| (state.object_bits, msg)))
         });
         let Some((target_bits, msg)) = next else {
             break;
@@ -335,6 +333,6 @@ pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
         channels
             .borrow()
             .values()
-            .any(|state| !state.closed && !state.inbox.is_empty()) as i32
+            .any(|state| !state.inbox.is_empty()) as i32
     })
 }

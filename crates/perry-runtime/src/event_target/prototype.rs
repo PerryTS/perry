@@ -175,13 +175,21 @@ extern "C" fn event_handler_wrapper(
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     let event = scope.root_nanbox_f64(event);
     let name = key(b"handler");
     let handler = closure
         .with_mut_ptr::<ClosureHeader, _>(|ptr| js_object_get_field_by_name_f64(ptr.cast(), name));
     if crate::proxy::is_callable_function(handler) {
         let args = [event.get_nanbox_f64()];
-        unsafe { crate::closure::js_native_call_value(handler, this, args.as_ptr(), 1) }
+        unsafe {
+            crate::closure::js_native_call_value(
+                handler,
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                args.as_ptr(),
+                1,
+            )
+        }
     } else {
         undefined_value()
     }
@@ -191,10 +199,12 @@ extern "C" fn set_onabort(
     this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
     event_handler_set(
         receiver(this, ids::ABORT_SIGNAL, "AbortSignal"),
         b"abort",
-        value,
+        value.get_nanbox_f64(),
     )
 }
 
@@ -242,15 +252,22 @@ macro_rules! message_handler {
             this: crate::closure::JsThis,
             value: f64,
         ) -> f64 {
-            event_handler_set(
-                unsafe { bound_event_target(std::ptr::null(), this) },
-                $event,
-                if crate::proxy::is_callable_function(value) {
-                    value
-                } else {
-                    null_value()
-                },
-            )
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value = scope.root_nanbox_f64(value);
+            let target =
+                scope.root_raw_mut_ptr(unsafe { bound_event_target(std::ptr::null(), this) });
+            let _gc = crate::gc::GcSuppressScope::new();
+            target.with_mut_ptr(|target| {
+                event_handler_set(
+                    target,
+                    $event,
+                    if crate::proxy::is_callable_function(value.get_nanbox_f64()) {
+                        value.get_nanbox_f64()
+                    } else {
+                        null_value()
+                    },
+                )
+            })
         }
     };
 }

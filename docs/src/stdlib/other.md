@@ -111,7 +111,8 @@ ee.emit("data", "hello");
 
 BroadcastChannel uses the shared EventTarget listener and handler machinery,
 including borrowed listener methods, capture matching, `once`, AbortSignal and
-listener objects. See [BroadcastChannel listeners](../threading/overview.md#broadcastchannel-eventtarget-listeners).
+listener objects and callable proxies. Closing releases the provider transport
+without clearing listeners on an accessible object. See [BroadcastChannel listeners](../threading/overview.md#broadcastchannel-eventtarget-listeners).
 
 Perry compiles statically resolvable worker entry files as separate native
 module entry functions. Both the Node `worker_threads` API and the Web/Bun

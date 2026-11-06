@@ -53,6 +53,65 @@ fn recorder(trace: *mut ArrayHeader, code: f64) -> f64 {
     boxed_ptr(closure)
 }
 
+extern "C" fn clear_constructor(_: *const ClosureHeader, this: JsThis, _: f64) -> f64 {
+    js_object_set_field_by_name(
+        value_as_ptr(this.as_f64()).unwrap(),
+        key(b"constructor"),
+        null_value(),
+    );
+    undefined_value()
+}
+
+#[test]
+fn once_removal_uses_validated_record_after_constructor_mutation() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    let target = channel();
+    let ptr = value_as_ptr(target).unwrap();
+    let constructor = js_object_get_field_by_name_f64(ptr, key(b"constructor"));
+    let trace = js_array_alloc(8);
+    let name = string_value(b"message");
+    let mutator = crate::closure::js_closure_alloc(crate::fn_info!(clear_constructor, 1), 0);
+    call(target, "addEventListener", &[name, boxed_ptr(mutator)]);
+    let options = js_object_alloc(0, 0);
+    js_object_set_field_by_name(options, key(b"once"), bool_value(true));
+    call(
+        target,
+        "addEventListener",
+        &[name, recorder(trace, 1.0), boxed_ptr(options)],
+    );
+    for _ in 0..2 {
+        call(
+            target,
+            "dispatchEvent",
+            &[boxed_ptr(js_event_new(name, undefined_value(), 1))],
+        );
+        js_object_set_field_by_name(ptr, key(b"constructor"), constructor);
+    }
+    assert_eq!(
+        js_array_length(trace),
+        1,
+        "once removal must not revalidate the mutable constructor"
+    );
+    assert_eq!(listeners(target, b"message"), 1);
+}
+
+#[test]
+fn callable_proxy_listener_uses_the_target_receiver() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    let target = channel();
+    let trace = js_array_alloc(8);
+    let proxy = crate::proxy::js_proxy_new(recorder(trace, 7.0), boxed_ptr(js_object_alloc(0, 0)));
+    let name = string_value(b"message");
+    call(target, "addEventListener", &[name, proxy]);
+    call(
+        target,
+        "dispatchEvent",
+        &[boxed_ptr(js_event_new(name, undefined_value(), 1))],
+    );
+    assert_eq!(js_array_length(trace), 1);
+    assert_eq!(js_array_get(trace, 0).as_number(), 7.0);
+}
+
 #[test]
 fn broadcast_handlers_share_ordered_listeners_and_survive_close() {
     let _gc = crate::gc::GcSuppressScope::new();
@@ -147,7 +206,13 @@ extern "C" fn recurse(_: *const ClosureHeader, this: JsThis, event: f64) -> f64 
         state::get(ptr, state::TARGET).to_bits(),
         target.get_nanbox_u64()
     );
-    crate::exception::throw_open(error.get_nanbox_f64())
+    let error_key = key(b"recursiveError");
+    js_object_set_field_by_name(
+        value_as_ptr(target.get_nanbox_f64()).unwrap(),
+        error_key,
+        error.get_nanbox_f64(),
+    );
+    undefined_value()
 }
 
 #[test]
@@ -175,14 +240,18 @@ fn shared_dispatch_rejects_recursion_and_restores_state_after_throw() {
         undefined_value(),
         1,
     )));
-    let error = crate::exception::catch_js_throw(|| {
+    assert_eq!(
         call(
             target.get_nanbox_f64(),
             "dispatchEvent",
-            &[event.get_nanbox_f64()],
+            &[event.get_nanbox_f64()]
         )
-    })
-    .unwrap_err();
+        .to_bits(),
+        crate::value::TAG_TRUE
+    );
+    let error_key = key(b"recursiveError");
+    let error =
+        js_object_get_field_by_name_f64(value_as_ptr(target.get_nanbox_f64()).unwrap(), error_key);
     let error = scope.root_nanbox_f64(error);
     for (name, expected) in [
         (b"name".as_slice(), "Error"),

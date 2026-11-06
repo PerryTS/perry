@@ -128,8 +128,11 @@ fn dispatch(operation: BroadcastChannelOperation, this: JsThis, data: f64, suppl
     let target = scope.root_nanbox_f64(resolved_receiver(receiver.get_nanbox_f64()));
     let id = broadcast_channel_id(target.get_nanbox_f64()).unwrap_or_else(|| invalid_receiver());
     let provider = DISPATCH.peek();
+    let closed =
+        CLOSED.read(target.get_nanbox_f64()).map(f64::to_bits) == Some(JSValue::bool(true).bits());
     let mut result = js_undefined();
     if id != 0
+        && !closed
         && !provider.is_some_and(|provider| unsafe {
             provider(
                 Validate,
@@ -153,7 +156,7 @@ fn dispatch(operation: BroadcastChannelOperation, this: JsThis, data: f64, suppl
             .read(target.get_nanbox_f64())
             .unwrap_or_else(|| invalid_receiver());
     }
-    if id != 0 {
+    if id != 0 && !closed {
         if !unsafe {
             provider.unwrap()(
                 operation,
@@ -164,6 +167,14 @@ fn dispatch(operation: BroadcastChannelOperation, this: JsThis, data: f64, suppl
             )
         } {
             invalid_receiver();
+        }
+        if matches!(operation, Close) {
+            // Closed objects own their state; the provider retains only live transports.
+            object::intrinsic_private_add(
+                target.get_nanbox_f64(),
+                "[[BroadcastChannelClosed]]",
+                js_bool(true),
+            );
         }
     } else {
         match operation {
