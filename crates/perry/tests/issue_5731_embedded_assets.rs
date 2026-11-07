@@ -55,19 +55,23 @@ fn runtime_dir() -> PathBuf {
         // optional extensions in this focused integration test.
         let build = Command::new(cargo)
             .current_dir(workspace_root())
+            // `build-perry` is the repository's coherent prebuilt runtime
+            // graph. The wrapper-only package set leaves many runtime exports
+            // out, which the sidecar analyzer must reject. Add the analyzer
+            // binary to the same Cargo graph so its static archive also has
+            // the matching features.
             .args([
-                "build",
+                "build-perry",
                 "--profile",
                 "perry-dev",
                 "-p",
-                "perry",
-                "-p",
-                "perry-runtime-static",
-                "-p",
-                "perry-stdlib-static",
-                "-p",
                 "perry-gc-effects",
             ])
+            // The sidecar analyzer relies on the same unwind-table build
+            // setting as Perry's GC workflow to discover the runtime call
+            // graph. Without it, the archive passes compilation but yields
+            // only one analyzed export.
+            .env("RUSTFLAGS", "-C force-unwind-tables=yes")
             .output()
             .expect("build perry runtime archive");
         assert!(
@@ -209,7 +213,7 @@ import { isSea, getAsset, getAssetKeys, getAssetAsBlob } from "node:sea";
 const bytes = getAsset("assets/message.txt") as ArrayBuffer;
 const decoder = new TextDecoder();
 console.log(isSea(), getAssetKeys().join(","), decoder.decode(bytes));
-console.log("short key and encoding", getAsset("a", "utf8"));
+console.log("full key and encoding", getAsset("assets/a", "utf8"));
 console.log("BOM removed", getAsset("assets/bom", "utf-8"));
 const first = new Uint8Array(getAsset("assets/bin") as ArrayBuffer);
 first[0] = 99;
@@ -261,7 +265,7 @@ catch (error) { console.log((error as any).code); }
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         "true assets/a,assets/bin,assets/bom,assets/message.txt SEA_OK\n\
-short key and encoding A\u{feff}text\n\
+full key and encoding A\u{feff}text\n\
 BOM removed hello\n\
 fresh copy 1\n\
 fresh keys 4\n\
