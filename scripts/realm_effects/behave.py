@@ -286,7 +286,7 @@ if ("__SCENARIO__" === "species") {
     get() { out("trap this get constructor"); return ctor; },
   });
 }
-let F: any = globalThis;
+let F: any = __ROOT__;
 for (const k of __PATH__) F = F[k];
 const before = contents(target);
 const weak: any[] = [];
@@ -355,6 +355,11 @@ def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None =
         f'  if (p === {p}) return "{p}";' for p in shape["protos"]
     )
     path = decl["name"].split(".")
+    # A node module member (`node:fs.existsSync`) hangs from the module value.
+    root = "globalThis"
+    if path[0].startswith("node:"):
+        root = f'require({json.dumps(path[0][len("node:"):])})'
+        path = path[1:]
     lines = []
     npass = shape["nargs"] if npass is None else npass
     for i in range(npass):
@@ -376,6 +381,7 @@ def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None =
     return (
         PRELUDE.replace("__PROTOS__", protos)
         + SCENARIO.replace("__SCENARIO__", scenario)
+        .replace("__ROOT__", root)
         .replace("__PATH__", json.dumps(path))
         .replace("__ARGS__", "\n".join(lines + [f'  out("args {npass}");']))
         .replace("__RETURN__", call if form == "local" else f"return {call}")

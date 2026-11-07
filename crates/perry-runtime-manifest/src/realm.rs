@@ -201,6 +201,11 @@ pub struct RealmDeclaration {
     /// What the body does to its inputs; empty = undeclared (unknown code).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<RealmEffect>,
+    /// The body `effects` describe when it is not `body`: the function a
+    /// `provider = bound_method` member's native_module_dispatch arm calls
+    /// (source symbol, from the effects-only `realm_decl!` above it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects_body: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub throws: Vec<RealmThrowOperand>,
 }

@@ -30,6 +30,7 @@ pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
+pub(crate) use effects::{declared_member, run_native};
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
