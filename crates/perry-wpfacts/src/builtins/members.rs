@@ -1008,6 +1008,25 @@ pub(super) fn is_host(ns: BuiltinNs) -> bool {
     )
 }
 
+/// The statics of a built-in constructor the realm reads by name itself,
+/// in operations the model does not run as loads or calls on the
+/// constructor: V8's stack hooks (`Error.prepareStackTrace`,
+/// `Error.stackTraceLimit`) and the Promise combinators' `C.resolve`
+/// (GetPromiseResolve). `@@species` is no such static: SpeciesConstructor
+/// and ArraySpeciesCreate read `O.constructor` and then its `@@species` as
+/// loads (`collections::species_link`, `typed_array_methods::species`, the
+/// regexp's), and a constructor that owns `@@species` owns a getter without
+/// a setter, which an ordinary store does not change. Operand protocols, a
+/// pattern's symbol methods and the formatter's hook are loads and calls on
+/// the value, which read what the program stored there.
+pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
+    match ns {
+        BuiltinNs::Error | BuiltinNs::AggregateError => &["prepareStackTrace", "stackTraceLimit"],
+        BuiltinNs::Promise => &["resolve"],
+        _ => &[],
+    }
+}
+
 /// The member `name` of a builtin namespace object: its own statics, then
 /// its chain: `Function.prototype` for a constructor, `Object.prototype`
 /// for a namespace object (`Math`, `JSON`, `Reflect`). Outer `None`: the

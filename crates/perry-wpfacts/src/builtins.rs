@@ -26,7 +26,7 @@ mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
-pub use undeclared::{builtin_function, native_may_be, undeclared};
+pub use undeclared::{builtin_function, native_may_be, realm_reads_store, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;

@@ -281,6 +281,50 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
     );
 }
 
+/// `then`, `catch` and `finally` (27.2.5.1, 27.2.5.3, 27.2.5.4) take the
+/// result's constructor with SpeciesConstructor(p, %Promise%): `constructor`
+/// is read from the promise and its `@@species` from that value. A program
+/// species is constructed (NewCapability) with the runtime's executor, an
+/// opaque function that keeps the resolving functions it is given for the
+/// runtime to call; what it makes is the call's result. The realm's own
+/// promise constructors make the call's own promise (the rule below).
+fn promise_species(m: &mut Model, t: Tok, call: CallId) {
+    let recv = m.node_l("promise");
+    m.add_tok(recv, t);
+    let k = m.atom("constructor");
+    let cn = m.node_l("species-constructor");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    let sa = m.atom("@@__perry_wk_species");
+    let sp = m.node_l("species");
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sa),
+            dst: sp,
+        },
+    );
+    let exec = m.node_l("capability-executor");
+    m.add_tok(exec, TOP);
+    let c = m.calls[call as usize].clone();
+    let mc = m.solver_call(
+        call,
+        CallSite {
+            this: ThisArg::Undef,
+            args: vec![exec],
+            spread: vec![],
+            ret: c.ret,
+            site: c.site,
+        },
+    );
+    m.cons(sp, Cons::NewProgram { call: mc });
+}
+
 /// `recv[name](...args)` where the algorithm looks the method up as a
 /// property: a method the program stored on the receiver runs, with the
 /// receiver as `this`.
@@ -1104,6 +1148,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_prim(m, call, prim::UNDEF);
         }
         ("Promise", Some("then" | "catch" | "finally")) => {
+            promise_species(m, t, call);
             let v = promise_value(m, t);
             let out = site_tmpl(m, call, "Promise");
             let ov = promise_value(m, out);
