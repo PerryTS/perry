@@ -199,8 +199,32 @@ fn published_native_keeps_missing_member_open() {
 
 #[test]
 fn native_declared_members_keep_their_models() {
-    natives("f.call(o, { toString() { g(o); return 'x'; } });", false);
-    natives("f.bind(o)({ toString() { g(o); return 'x'; } });", false);
+    let has_own = "const f: any = Object.prototype.hasOwnProperty;";
+    check(
+        &format!("{has_own} f.call(o, {{ toString() {{ g(o); return 'x'; }} }});"),
+        false,
+    );
+    check(
+        &format!("{has_own} f.bind(o)({{ toString() {{ g(o); return 'x'; }} }});"),
+        false,
+    );
+    // `map` is generic over `this`: it runs its callback over the
+    // receiver's elements (one is `o`); on `o` (no `length`: 0) with a
+    // callback that is no function it throws before it runs anything
+    // (ECMA-262 23.1.3.21 step 3).
+    let map = "const f: any = [1].map;";
+    check(
+        &format!("{map} f.call({{ length: 1, 0: o }}, (x: any) => g(x));"),
+        false,
+    );
+    check(
+        &format!("{map} f.bind({{ length: 1, 0: o }})((x: any) => g(x));"),
+        false,
+    );
+    check(
+        &format!("{map} f.call(o, {{ toString() {{ g(o); return 'x'; }} }});"),
+        true,
+    );
     natives(
         "f.hasOwnProperty({ toString() { external(o); return 'x'; } });",
         false,

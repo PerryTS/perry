@@ -95,6 +95,7 @@ mod map_identity_ops;
 mod memo_context;
 mod named_accessors;
 mod native_accessor_get;
+mod native_array_proto;
 mod native_coercion;
 mod native_construct;
 mod native_given_runtime;
