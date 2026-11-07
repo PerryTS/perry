@@ -704,8 +704,12 @@ fn image_member(m: &Model, (holder, lock): (&str, LockHolder), name: &str) -> bo
 /// and for an instance of a parentless class (an object literal's shape
 /// class included) `Object`: past its class prototype the chain is
 /// `Object.prototype`, as for that prototype itself (`TokKind::Proto`).
+/// A class object whose `extends` chain is program classes, down to a root
+/// `seed_family` gives `Function`, has `Function` too: its chain is those
+/// class objects, read through their own keys, then the root's.
 fn lock_family(m: &Model, t: Tok) -> Option<Family> {
     match &m.toks[t as usize] {
+        TokKind::ClassObj(c) => program_class_chain(m, *c).then_some(Family::Function),
         TokKind::Obj(tm, _) if !m.virt_protos.contains_key(&t) => match &m.tmpls[*tm as usize] {
             tm if matches!(tm.kind, TmplKind::Class { .. }) => {
                 (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
@@ -714,6 +718,25 @@ fn lock_family(m: &Model, t: Tok) -> Option<Family> {
             _ => seed_family(m, t),
         },
         _ => seed_family(m, t),
+    }
+}
+
+/// Is every link of class `c`'s `extends` chain a program class, down to a
+/// root that `seed_family` gives `Function`: one that extends nothing or a
+/// native constructor (`Error` ...), whose own chain the lookup reads as it
+/// does for that root alone? A value parent (`parent_value`) ends the chain
+/// in values the lock does not see.
+fn program_class_chain(m: &Model, mut c: TmplId) -> bool {
+    loop {
+        let tp = &m.tmpls[c as usize];
+        if tp.parent_value.is_some() {
+            return false;
+        }
+        match tp.parent {
+            Some(p) if p != c => c = p,
+            Some(_) => return false,
+            None => return true,
+        }
     }
 }
 
