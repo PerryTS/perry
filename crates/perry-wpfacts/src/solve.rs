@@ -781,10 +781,15 @@ impl Model {
                     self.add_tok(n, p);
                 }
                 TmplKind::FnInst { func } => {
-                    // `new f()` takes its prototype from `f.prototype`.
+                    // `new f()` takes its prototype from `f.prototype`,
+                    // which holds `f`'s own prototype object from `f`'s
+                    // creation, read or not (as a `f.prototype` read mints
+                    // it, `builtins::loads`), unless a store replaced it.
                     let ftok = self.funcs[func as usize].token;
                     let a = self.atom("prototype");
                     let fp = self.field(ftok, a);
+                    let p = self.tok(TokKind::Proto(tm));
+                    self.add_tok(fp, p);
                     self.edge(fp, n);
                 }
                 // Object.create / literal prototypes are added by gen. A

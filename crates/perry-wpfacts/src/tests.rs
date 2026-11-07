@@ -74,6 +74,7 @@ mod global_gc;
 mod gopd_key;
 mod fn_intrinsic_proto;
 mod private_method_read;
+mod fn_inst_default_proto;
 mod descriptor_reads;
 mod super_key;
 mod super_home_proto;
