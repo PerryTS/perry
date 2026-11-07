@@ -960,6 +960,24 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         ],
         TypeSpec::Any,
     ),
+    method_sig(
+        "bcrypt",
+        "hashSync",
+        false,
+        None,
+        &[p_str("password"), p_any("saltOrRounds")],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "bcrypt",
+        "compareSync",
+        false,
+        None,
+        &[p_str("plaintext"), p_str("hash")],
+        TypeSpec::Bool,
+    ),
+    method_sig("bcrypt", "genSalt", false, None, &[BCRYPT_ROUNDS], TypeSpec::Any),
+    method_sig("bcrypt", "genSaltSync", false, None, &[BCRYPT_ROUNDS], TypeSpec::String),
     // #5731 — `perry` embedded-asset API for standalone executables.
     // `readEmbedded(path)` returns the bytes of an asset baked in via
     // `perry compile --embed`; `embeddedFiles` / `isStandaloneExecutable`

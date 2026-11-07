@@ -416,8 +416,9 @@ js_await_loop_tick_timers	i32s
 js_bcrypt_compare	ptr	ptr,ptr
 js_bcrypt_compare_sync	f64	ptr,ptr
 js_bcrypt_gen_salt	ptr	f64
+js_bcrypt_gen_salt_sync	ptr	f64
 js_bcrypt_hash	ptr	ptr,f64
-js_bcrypt_hash_sync	i64	ptr,f64
+js_bcrypt_hash_sync	ptr	ptr,f64
 js_bigint_add	ptr	ptr,ptr
 js_bigint_and	ptr	ptr,ptr
 js_bigint_as_int_n	ptr	i32u,ptr

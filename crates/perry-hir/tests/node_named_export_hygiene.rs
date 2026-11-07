@@ -232,22 +232,22 @@ fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
 /// cannot tell a node-core-scoped existence check apart from an
 /// unconditional one. `bcrypt` IS a
 /// recognized `NATIVE_MODULES` entry (a real bundled native wrapper, not a
-/// Node builtin) with manifest rows for `hash`/`compare` only — real
-/// `bcrypt` also exports `genSalt`, `hashSync`, `compareSync`, `getRounds`,
-/// none of which are in the manifest at all, so
-/// `module_has_public_named_export("bcrypt", "genSalt")` is `false`. Before
+/// Node builtin) whose manifest rows cover `hash`/`compare`, the sync forms
+/// and `genSalt`/`genSaltSync` — real `bcrypt` also exports `getRounds`,
+/// which is not in the manifest at all, so
+/// `module_has_public_named_export("bcrypt", "getRounds")` is `false`. Before
 /// this fix, `is_native_module` gated straight into that existence check for
 /// every native module (not just node-core ones), so this exact re-export
-/// hit `lower_bail!` and failed to compile even though `bcrypt.genSalt` is a
-/// real export. Scoping the existence check to `is_node_core_module` — this
+/// hit `lower_bail!` and failed to compile even though `bcrypt.getRounds` is
+/// a real export. Scoping the existence check to `is_node_core_module` — this
 /// PR's only remaining delta from what `origin/main`'s independent #11044
 /// fix (b8c2457e4) already landed — skips that check for `bcrypt` and falls
 /// through to the same permissive synthetic-import treatment `hash` gets.
 #[test]
 fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_import() {
-    let module = lower_result(r#"export { genSalt } from "bcrypt";"#).expect(
-        "bcrypt.genSalt is a real export of the bcrypt package but has no \
-         perry-api-manifest row (only hash/compare are documented); its \
+    let module = lower_result(r#"export { getRounds } from "bcrypt";"#).expect(
+        "bcrypt.getRounds is a real export of the bcrypt package but has no \
+         perry-api-manifest row; its \
          existence cannot be checked from the manifest, so lowering must \
          fall back to the permissive synthetic-import treatment instead of \
          lower_bail!-ing on a false negative",
@@ -259,7 +259,7 @@ fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_
             && matches!(
                 import.specifiers.as_slice(),
                 [perry_hir::ImportSpecifier::Named { imported, local }]
-                    if imported == "genSalt"
+                    if imported == "getRounds"
                         && local.starts_with("__perry_builtin_reexport_")
             )
     }));
@@ -268,7 +268,7 @@ fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_
             export,
             perry_hir::Export::Named { local, exported }
                 if local.starts_with("__perry_builtin_reexport_")
-                    && exported == "genSalt"
+                    && exported == "getRounds"
         )
     }));
 }

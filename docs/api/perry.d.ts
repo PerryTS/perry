@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1970 entries across 105 modules
+// Coverage: 1974 entries across 105 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -261,7 +261,15 @@ declare module "bcrypt" {
   /** stdlib */
   export function compare(plaintext: string, hash: string): any;
   /** stdlib */
+  export function compareSync(plaintext: string, hash: string): boolean;
+  /** stdlib */
+  export function genSalt(rounds?: number): any;
+  /** stdlib */
+  export function genSaltSync(rounds?: number): string;
+  /** stdlib */
   export function hash(password: string, saltOrRounds: any): any;
+  /** stdlib */
+  export function hashSync(password: string, saltOrRounds: any): string;
 }
 
 declare module "better-sqlite3" {

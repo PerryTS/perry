@@ -463,6 +463,13 @@ const fn p_any(name: &'static str) -> ParamSpec {
     }
 }
 
+/// `bcrypt.genSalt` / `genSaltSync`: rounds is optional (node defaults to 10).
+const BCRYPT_ROUNDS: ParamSpec = ParamSpec::Named {
+    name: "rounds",
+    ty: TypeSpec::Number,
+    optional: true,
+};
+
 /// #1843 — every `zlib.create*` Transform-stream factory shares the same
 /// shape: an optional `options` object in, a stream handle (`Any`) out.
 const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
