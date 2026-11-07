@@ -271,7 +271,11 @@ pub enum Cons {
     /// The node holds the prototypes of a `super` access's home object
     /// (its [[GetPrototypeOf]] at the access): continue the lookup at each
     /// (`Cons::Super`), with each token of `recv` as the receiver.
-    SuperFrom { recv: NodeId, key: Key, act: ChainAct },
+    SuperFrom {
+        recv: NodeId,
+        key: Key,
+        act: ChainAct,
+    },
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
     SuperCtor { class: TmplId, call: CallId },
@@ -534,6 +538,20 @@ pub enum Cons {
 }
 
 impl Cons {
+    /// The rule delivers Numbers of its host with the host's interval
+    /// (`model::range`): it re-runs when only that interval grows, so the
+    /// interval it delivered keeps covering the host's.
+    pub fn carries_range(&self) -> bool {
+        matches!(
+            self,
+            Cons::Range { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::NotUndefined { .. }
+                | Cons::Falsy { .. }
+        )
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Load { .. } => "load",

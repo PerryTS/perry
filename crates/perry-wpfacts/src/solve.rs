@@ -779,7 +779,7 @@ impl Model {
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
                 let c = self.nodes[n as usize].cons[i];
-                if range_only && !matches!(c, Cons::Range { .. }) {
+                if range_only && !c.carries_range() {
                     continue;
                 }
                 self.cur_src = n;
@@ -1242,9 +1242,8 @@ impl Model {
     /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
     /// passed to unknown code: it escapes.
     pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
-        let unknown = t == TOP
-            || self.is_marker(t)
-            || matches!(self.toks[t as usize], TokKind::Bound(_));
+        let unknown =
+            t == TOP || self.is_marker(t) || matches!(self.toks[t as usize], TokKind::Bound(_));
         if unknown {
             self.sink_node(lhs, reason);
             match self.toks[t as usize] {
