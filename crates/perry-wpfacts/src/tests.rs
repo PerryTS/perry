@@ -1844,6 +1844,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod array_iter_lock;
+mod cycle_e20_own_field;
 mod collection_entries;
 mod concat_elements;
 mod console_protocol;
