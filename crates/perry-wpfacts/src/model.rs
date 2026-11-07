@@ -1332,6 +1332,9 @@ pub struct Model {
     /// `derive::constant_statics`).
     pub static_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub thrown: NodeId,
+    /// The class objects unknown code can reach (escaped): a `Reflect.construct`
+    /// whose target may be unknown constructs each of them (`Cons::ReflectNew` here).
+    pub escaped_classes: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
     /// The dyn-eval interpreter is linked (the driver's link decision): a
