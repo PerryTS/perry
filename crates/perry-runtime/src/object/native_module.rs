@@ -164,10 +164,7 @@ struct GlobalAgentListener {
 /// (`require('node:timers').setImmediate = fn`). Wins subsequent reads via
 /// `vt_get_own_field`.
 pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, value: f64) {
-    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
-        m.borrow_mut()
-            .insert(format!("{module}\0{prop}"), value.to_bits());
-    });
+    let key = [module, prop].join("\0");
     // `node:tls` is a CommonJS builtin and its default import is the mutable
     // exports object. Codegen currently shares the snapshot-backed property
     // read used by native ESM imports for that default object, so keep the TLS
@@ -180,13 +177,34 @@ pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, val
             "DEFAULT_CIPHERS" | "DEFAULT_MIN_VERSION" | "DEFAULT_MAX_VERSION"
         )
     {
-        let key = format!("{module}\0{prop}");
         NATIVE_ESM_EXPORT_VALUES.with(|values| {
             if let Some(slot) = values.borrow_mut().get_mut(&key) {
                 *slot = value.to_bits();
             }
         });
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow_mut().insert(key, value.to_bits());
+    });
+    // An override of a `console` member (`console.log = f` through a value,
+    // or from interpreted code) replaces a member of the builtin namespace,
+    // and no holder write funnel sees this table: report it as a write to
+    // the namespace, so its guarded sites stop binding the intrinsic. The
+    // holder is live once this thread's realm is populated and sealed (a
+    // program may reach the console object before anything populates its
+    // global): populate it first, so the report is never lost.
+    if module == "console" {
+        crate::object::js_get_global_this();
+        // SAFETY: a namespace family names no object; `note_write` reads none.
+        unsafe {
+            super::builtin_namespace::note_write(
+                std::ptr::null_mut(),
+                super::builtin_namespace::CONSOLE_FAMILY,
+                None,
+                "namespace override",
+            )
+        };
     }
 }
 
@@ -199,7 +217,7 @@ pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Op
         if m.is_empty() {
             return None;
         }
-        m.get(&format!("{module}\0{prop}"))
+        m.get(&[module, prop].join("\0"))
             .map(|bits| f64::from_bits(*bits))
     })
 }
