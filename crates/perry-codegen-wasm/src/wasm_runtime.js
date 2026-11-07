@@ -2106,6 +2106,9 @@ const __memDispatch = {
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
 
+  // A member of the unresolved-global sentinel: `Promise`, `Reflect`, `globalThis.foo`.
+  global_property: (name) => globalThis[name],
+
   // RegExp — args are plain JS values
   regexp_new: (pattern, flags) => { try { return new RegExp(String(pattern), String(flags)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
   regexp_test: (re, str) => { if (!(re instanceof RegExp)) return 0; return re.test(String(str)) ? 1 : 0; },
