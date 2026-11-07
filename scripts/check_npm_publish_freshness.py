@@ -179,7 +179,12 @@ def load_packages(manifest: Path = MANIFEST) -> list[Package]:
 
 # A template whose name holds __TRIPLE__ is published once per triple in this
 # list (npm/packaged-triples.json), under the key named after its directory.
-TRIPLE_LISTS = {"perry-target": "targets", "perry-ext": "ext"}
+TRIPLE_LISTS = {
+    "perry-target": "targets",
+    "perry-ext": "ext",
+    "perry-ui": "ui",
+    "perry-wasm-host": "wasm-host",
+}
 
 
 def npm_package_names(npm_dir: Path = NPM_DIR) -> set[str]:
