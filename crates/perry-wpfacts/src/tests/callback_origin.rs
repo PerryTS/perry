@@ -55,15 +55,16 @@ fn call_and_apply_key_on_their_site() {
         console.log(ra.a, rb.b, pa.a, pb.b);
         "#,
     );
-    // A pure copy through `.call` returns the actual argument at that
-    // site. `.apply` supplies a spread: it retains the conservative
-    // transfer through the shared instance.
+    // A pure copy through `.call` or `.apply` returns the actual argument
+    // at that site: the target's call is the site's run (`site_of_call`),
+    // the spread of `.apply` that site's array. (Was: `.apply` merged both
+    // sites through the shared instance.)
     let d = pf.dump_text();
     for (k, expected) in [("a", "A"), ("b", "B")] {
         let mut v: Vec<_> = pf.sites.iter().filter(|s| s.key == k).collect();
         v.sort_by_key(|s| s.byte_offset);
         assert_eq!(v.len(), 2, "{d}");
         assert_eq!(classes(v[0]), [expected], "{d}");
-        assert_eq!(classes(v[1]), ["A", "B"], "{d}");
+        assert_eq!(classes(v[1]), [expected], "{d}");
     }
 }

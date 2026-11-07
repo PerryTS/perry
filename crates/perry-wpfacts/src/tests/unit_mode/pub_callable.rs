@@ -171,6 +171,8 @@ fn pub_described_results_normalize_escaped_boxes_beside_top() {
                 g.register_all();
                 g.link_exports();
                 g.walk_all();
+                // Native methods run once summaries exist (`Deferred::Native`).
+                g.m.summarize_and_replay();
                 let f =
                     g.m.funcs
                         .iter()

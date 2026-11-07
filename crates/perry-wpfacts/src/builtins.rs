@@ -29,11 +29,9 @@ pub(crate) use native_protocol::{census_native_op_writes, census_native_written}
 pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
+pub(crate) use collections::construct_into;
 use collections::{array_method, bobj_method, function_method, iterate};
-pub(crate) use collections::{array_species, construct_into};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
-/// The template kind of an iterator whose prototype the model does not know.
-pub(crate) const ITERATOR_KIND: &str = members::ANY_ITERATOR;
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
 pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
