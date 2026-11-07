@@ -1427,6 +1427,9 @@ impl Model {
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }
+            Cons::SuperFrom { recv, key, act } => {
+                format!("superfrom {n} {recv} {} {act:?}", self.key_name(*key))
+            }
             Cons::SuperCtor { class, call } => format!("superctor {n} {class} {call}"),
             Cons::SuperCtorParent {
                 class,

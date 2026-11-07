@@ -317,6 +317,15 @@ impl<'a> Gen<'a> {
     /// always holds one (`const k = "name"; o[k]`: `Gen::const_key`, the
     /// resolver constant stores and definitions use). A binding read before
     /// its initialization throws (TDZ) and names no key at all.
+    /// The key of `super[key]` (a read, store or call): the key expression
+    /// runs, then ToPropertyKey, whose `@@toPrimitive`, `toString` or
+    /// `valueOf` of an object key is program code.
+    pub(crate) fn super_key(&mut self, fx: &Fx, key: &Expr) -> Key {
+        let kn = self.expr(fx, key);
+        self.to_property_key(kn);
+        self.key_of(fx.module, key)
+    }
+
     pub(crate) fn key_of(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
@@ -2039,33 +2048,16 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertyGet { property } => {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: Key::Named(a),
-                            act: ChainAct::Load(dst),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, Key::Named(a), ChainAct::Load(dst));
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
-                let _ = self.expr(fx, key);
+                let k = self.super_key(fx, key);
                 let v = self.expr(fx, value);
-                let k = self.key_of(fx.module, key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: k,
-                            act: ChainAct::Store(v),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, k, ChainAct::Store(v));
                 v
             }
 
