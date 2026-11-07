@@ -829,7 +829,28 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // into the copy never reaches the source (`args.slice()` then
         // `copy[i] = v`).
         Some("slice" | "concat" | "toReversed" | "flat" | "with" | "toSpliced") => {
-            let out = site_tmpl(m, call, "Array");
+            // `slice` keeps exactly the receiver's holes (it skips an absent
+            // index, ECMA-262 23.1.3.28 step 15.c); `toReversed`, `with` and
+            // `toSpliced` write every index, reading a hole as `undefined`.
+            // An array-like receiver may lack any index, and `concat` and
+            // `flat` keep the general birth.
+            let dense =
+                matches!(name, Some("slice" | "toReversed" | "with" | "toSpliced")) && m.is_arr(t);
+            let out = if dense {
+                site_dense_arr(m, call)
+            } else {
+                site_tmpl(m, call, "Array")
+            };
+            if dense {
+                let source_holes = m.hole(t);
+                if name == Some("slice") {
+                    let out_holes = m.hole(out);
+                    m.edge(source_holes, out_holes);
+                } else {
+                    let out_elems = m.field_any(out);
+                    m.edge(source_holes, out_elems);
+                }
+            }
             if matches!(name, Some("slice" | "concat" | "flat")) {
                 species_from(m, out, t, call, None);
             }

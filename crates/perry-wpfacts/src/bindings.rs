@@ -133,6 +133,10 @@ pub struct BindingFacts {
     pub class_object: Option<u32>,
     /// Allocation-derived owner kind and minimum extent; no escaped/hard token.
     pub indexed_owner: Option<IndexedOwner>,
+    /// It holds only strings and ordinary Array births: its `length` is a
+    /// Number (a String's code-unit count, an Array's non-configurable
+    /// `length`), whatever its declared type says.
+    pub length_number: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -255,6 +259,8 @@ pub struct ModuleBindings {
 fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     let m = &g.m;
     let node = &m.nodes[n as usize];
+    let mut arrays_only = true;
+    let mut values = node.prim != 0;
     let mut out = BindingFacts {
         prims: node.prim,
         top: m.explain && node.pts.contains_tok(TOP),
@@ -281,14 +287,29 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
             out.prims |= crate::model::prim::ALL;
             continue;
         }
+        values = true;
         match &m.toks[t as usize] {
             TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
-                TmplKind::Class { class_id, .. } => out.class_ids.push(class_id),
-                _ => out.other = true,
+                TmplKind::Class { class_id, .. } => {
+                    arrays_only = false;
+                    out.class_ids.push(class_id)
+                }
+                TmplKind::Arr { .. } => out.other = true,
+                _ => {
+                    arrays_only = false;
+                    out.other = true
+                }
             },
-            _ => out.other = true,
+            _ => {
+                arrays_only = false;
+                out.other = true
+            }
         }
     }
+    out.length_number = values
+        && arrays_only
+        && !node.pts.contains_tok(TOP)
+        && node.prim & !crate::model::prim::STR == 0;
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
     out.indexed_owner = indexed_owner(g, n);

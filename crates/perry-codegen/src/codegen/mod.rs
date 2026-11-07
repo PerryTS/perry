@@ -257,6 +257,9 @@ mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod export_value_wrappers;
+pub(crate) mod facts_number_locals;
+#[cfg(test)]
+mod facts_number_locals_tests;
 pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
