@@ -272,14 +272,16 @@ fn function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
     &ir[start..end]
 }
 
-/// A canonical numeric `+` whose operands have runtime-derived evidence. The
-/// live-bits guard remains useful because NaN payloads still require GC-layout
-/// bookkeeping even though neither operand rests on source metadata.
+/// A canonical numeric `+` whose operands have runtime-derived evidence but
+/// one of which is not numeric *by construction* (a `Math.floor` result), so
+/// the store keeps its live-bits guard. An add of two by-construction
+/// numbers (`j + j`) is proven non-pointer and takes no guard at all
+/// (`expr::helpers::expr_produces_numeric_bits_by_construction`).
 fn numeric_add_push() -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
-        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::MathFloor(Box::new(Expr::LocalGet(COUNTER_ID)))),
     }
 }
 
@@ -864,4 +866,18 @@ fn the_elements_probe_loads_only_behind_the_branch_that_proves_the_address() {
             "no select-guarded probe load:\n{body}"
         );
     }
+}
+
+#[test]
+fn an_add_of_two_counters_is_proven_and_takes_no_guard() {
+    let counters = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+    };
+    let ir = ir_for(push_module(Type::Number, counters, Vec::new()));
+    assert!(
+        !ir.contains("apush.gc_bookkeeping"),
+        "an fadd of two canonical counters needs no live pointer test:\n{ir}"
+    );
 }
