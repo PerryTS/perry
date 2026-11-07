@@ -83,7 +83,7 @@ impl<'a> Gen<'a> {
         &mut self,
         fx: &Fx,
         op: crate::model::RangeOp,
-        operands: &[&Expr],
+        operands: &[&perry_hir::Expr],
     ) -> NodeId {
         let r = self.m.reason("primitive builtin operand");
         let mut nodes = Vec::with_capacity(operands.len());
