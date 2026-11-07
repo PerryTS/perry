@@ -60,3 +60,12 @@ stdout-0/stdout-1, and a live-object census proving GC completed. The abort
 fixture intentionally exits 134 without reaching the boundary. On the old
 recorder the effect GC crashes, pressure fails, and abort rows are absent or
 out of order; a successful process exit alone cannot satisfy these assertions.
+
+Protection consistency regression: compile `fixtures/protection/main.ts` with
+an instrumented cohort, then run `bash scripts/snap_inputs/protection_fixture.sh
+BINARY OUTPUT base|head`. A dynamic child changes a cell born before its import,
+then accesses other pages. On the base the first-write watcher triggers a
+rule-4 conflict, bulk protection closes unrelated pages, and the process faults
+although its page policy is RW. Watch=0 finishes; the fix finishes in both modes.
+The checker requires the nonzero first-write row, exact output, and the native
+mprotect evidence. It also rejects any bulk PROT_NONE in this NOPROTECT fixture.

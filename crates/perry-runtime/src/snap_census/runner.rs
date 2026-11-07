@@ -1853,7 +1853,7 @@ pub(super) fn global_root(slot: usize) {
     }
     let page = slot & !(PAGE - 1);
     if st.d_mode && page_flags(st, page).is_some() {
-        unsafe { libc::mprotect(page as *mut _, PAGE, libc::PROT_NONE) };
+        unsafe { libc::mprotect(page as *mut _, PAGE, policy(st, page)) };
     }
 }
 
@@ -1995,6 +1995,15 @@ unsafe fn apply_protection(st: &mut State) {
     if input_record::watch(st) {
         for_each_tracked_range(st, |b, e| {
             libc::mprotect(b as *mut _, e - b, libc::PROT_READ);
+        });
+        return;
+    }
+    // A conflict can join D while the first-write watcher is running in
+    // the weights run. Ending that watcher restores RW even if d_mode is
+    // still set; bulk protection must agree with policy for every page.
+    if st.noprotect {
+        for_each_tracked_range(st, |b, e| {
+            libc::mprotect(b as *mut _, e - b, libc::PROT_READ | libc::PROT_WRITE);
         });
         return;
     }
