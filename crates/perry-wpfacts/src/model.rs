@@ -774,7 +774,9 @@ pub enum Protocol {
     /// check an Error's `stack` / `message` / `name` / `errors`, an
     /// ArrayBuffer's `byteLength`, a URL's `href`. Each value read is
     /// formatted the same way and ToString'd. No other key is read: own
-    /// values are not shown at depth -1.
+    /// values are not shown at depth -1. To name the value it runs
+    /// `v instanceof C` for the `constructor` data values on its chain
+    /// (`getConstructorName`; `instance_of_reads`).
     ShallowInspect,
     /// StructuredSerialize (HTML 2.7.3), what `structuredClone` runs: a
     /// [[Get]] of every own value (own getters run), each serialized in
@@ -820,6 +822,20 @@ impl Protocol {
                 "byteLength",
                 "href",
             ],
+            _ => &[],
+        }
+    }
+
+    /// The keys whose values on the touched value's chain the touch runs
+    /// InstanceofOperator on, the touched value on the left (a user
+    /// `@@hasInstance` gets it as its argument). Node's `getConstructorName`
+    /// (lib/internal/util/inspect.js) does so for each own data
+    /// `constructor` of the value and its prototypes that is a named
+    /// function, until one holds; the read here is the `[[Get]]`'s values
+    /// on the whole chain, a superset.
+    pub fn instance_of_reads(self) -> &'static [&'static str] {
+        match self {
+            Protocol::ShallowInspect => &["constructor"],
             _ => &[],
         }
     }
