@@ -75,6 +75,7 @@ mod gopd_key;
 mod fn_intrinsic_proto;
 mod private_method_read;
 mod fn_inst_default_proto;
+mod descriptor_reads;
 mod super_key;
 mod super_home_proto;
 mod global_namespace_store;
@@ -96,6 +97,7 @@ mod map_identity_ops;
 mod memo_context;
 mod named_accessors;
 mod native_accessor_get;
+mod native_array_proto;
 mod native_coercion;
 mod native_construct;
 mod native_given_runtime;
@@ -1855,6 +1857,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod array_iter_lock;
+mod cycle_e20_own_field;
 mod cycle_locked_member;
 mod collection_entries;
 mod concat_elements;

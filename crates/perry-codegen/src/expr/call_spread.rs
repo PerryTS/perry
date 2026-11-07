@@ -257,6 +257,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "log" | "info" | "warn" | "error" | "debug"
                     )
                 {
+                    if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {
+                        // The real call: `globalThis.console.<m>(...args)`.
+                        let real = Expr::CallSpread {
+                            byte_offset: 0,
+                            byte_end: 0,
+                            callee: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
+                                byte_offset: 0,
+                                object: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
+                                    byte_offset: 0,
+                                    object: Box::new(Expr::GlobalThisExpr),
+                                    property: "console".to_string(),
+                                }),
+                                property: property.clone(),
+                            }),
+                            args: args.to_vec(),
+                            type_args: Vec::new(),
+                        };
+                        return lower_expr(ctx, &real);
+                    }
                     let runtime_fn = match property.as_str() {
                         "info" => "js_console_info_spread",
                         "debug" => "js_console_debug_spread",

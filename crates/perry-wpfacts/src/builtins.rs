@@ -30,7 +30,7 @@ pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
-use collections::{array_method, bobj_method, function_method, iterate};
+use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
 pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
@@ -804,11 +804,17 @@ pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
 
 /// Does receiver token `r` have the family of native member `(fam, what)`,
 /// so that the member called on it runs `own_method(r, key)`, the model a
-/// call `r.key()` runs: an array for `Array.prototype`'s, a site builtin
-/// object of the same kind, a function value for `Function.prototype`'s.
+/// call `r.key()` runs: a site builtin object of the same kind, a function
+/// value for `Function.prototype`'s. `Array.prototype`'s methods are generic
+/// over `this` (ECMA-262 23.1.3: ToObject(this), its `length` and indices
+/// through [[Get]]/[[Set]], ArraySpeciesCreate): they run on any object,
+/// an array or not (`native_prototype_call`).
 pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>, r: Tok) -> bool {
     if fam == Family::Object {
         return r != TOP;
+    }
+    if fam == Family::Array && what.is_none() {
+        return matches!(m.toks[r as usize], TokKind::Obj(..));
     }
     match &m.toks[r as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
@@ -834,6 +840,11 @@ pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Ato
         Family::Object => {
             let proto = m.tok(TokKind::ObjectProto);
             proto_method(m, proto, r, Key::Named(key), call);
+        }
+        // The method itself, whatever chain the receiver has.
+        Family::Array => {
+            let name = m.atoms[key as usize].clone();
+            array_method_on(m, r, &name, call);
         }
         _ => own_method_inner(m, r, Key::Named(key), call),
     }
