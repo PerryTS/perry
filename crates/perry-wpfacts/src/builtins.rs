@@ -1812,6 +1812,10 @@ fn ns_method_inner(
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
+        // A key the namespace's description (its own keys and its chain)
+        // declares absent is no method (TypeError); one the program added
+        // is the receiver's own field or chain value (`method_on`).
+        (_, n) if members::ns_member(ns, n) == Some(None) => {}
         (_, n) => unknown_method_proto(
             m,
             call,
