@@ -370,9 +370,13 @@ fn another_body_interning_key_shapes_does_not_change_transfer() {
     fn bytes(warm: bool) -> String {
         let mut m = super::marker_model();
         if warm {
-            m.key_shape(&perry_hir::Expr::String("unrelated".into()));
+            m.key_shape(crate::model::KeyShape::of(&perry_hir::Expr::String(
+                "unrelated".into(),
+            )));
         }
-        let shape = m.key_shape(&perry_hir::Expr::String("own".into()));
+        let shape = m.key_shape(crate::model::KeyShape::of(&perry_hir::Expr::String(
+            "own".into(),
+        )));
         begin(&mut m, 0);
         let idx = m.node_l("index");
         let obj = m.node_l("object");

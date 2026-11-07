@@ -214,7 +214,7 @@ impl<'a> Gen<'a> {
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
                     Key::Any(_) => {
-                        let shape = self.m.key_shape(index);
+                        let shape = self.key_shape(fx.module, index);
                         self.m.cons(
                             o,
                             Cons::IdxMCall {

@@ -192,6 +192,12 @@ pub enum BuiltinNs {
     Stdout,
     Stderr,
     Stdin,
+    /// A node module object (`require("fs")`, `import * as fs from "fs"`):
+    /// the realm's namespace declaration of that name (`node:fs`), one object
+    /// per program (node: `require("fs") === require("node:fs")`). Its
+    /// members are the realm's declared natives until a store reaches the
+    /// key; it describes no other key (an undeclared key reads ⊤).
+    Module(&'static str),
     Other,
 }
 

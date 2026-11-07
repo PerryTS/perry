@@ -77,8 +77,26 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "Set" => BuiltinNs::Set,
         "WeakMap" => BuiltinNs::WeakMap,
         "WeakSet" => BuiltinNs::WeakSet,
-        _ => return None,
+        _ => return node_module(name),
     })
+}
+
+/// The node module object the realm declares as `name` (`node:fs`).
+fn node_module(name: &str) -> Option<BuiltinNs> {
+    if !name.starts_with("node:") {
+        return None;
+    }
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == name && e.kind == perry_hir::realm_manifest::RealmKind::Namespace)
+        .map(|e| BuiltinNs::Module(e.name))
+}
+
+/// The node module object `require(m)` or a namespace import of `m` names,
+/// when the realm declares it (`fs` and `node:fs` alike).
+pub(crate) fn node_module_ns(m: &str) -> Option<BuiltinNs> {
+    let bare = m.strip_prefix("node:").unwrap_or(m);
+    node_module(&format!("node:{bare}"))
 }
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.
@@ -848,7 +866,7 @@ pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
 /// Does receiver token `r` have the family of native member `(fam, what)`,
 /// so that the member called on it runs `own_method(r, key)`, the model a
 /// call `r.key()` runs: a site builtin object of the same kind, a function
-/// value for `Function.prototype`'s. `Array.prototype`'s methods are generic
+/// value (a class object too) for `Function.prototype`'s. `Array.prototype`'s methods are generic
 /// over `this` (ECMA-262 23.1.3: ToObject(this), its `length` and indices
 /// through [[Get]]/[[Set]], ArraySpeciesCreate): they run on any object,
 /// an array or not (`native_prototype_call`).
@@ -865,7 +883,9 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
             TmplKind::BObj { what: w, .. } => what == Some(*w) && members::bobj_family(w) == fam,
             _ => false,
         },
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => fam == Family::Function,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::ClassObj(_) => {
+            fam == Family::Function
+        }
         TokKind::Builtin(_) => fam == Family::Function && builtin_function(m, r),
         _ => false,
     }
@@ -1488,6 +1508,18 @@ fn ns_method_inner(
             }
             ret_prim(m, call, prim::UNDEF);
         }
+        // A call of the realm's `eval` function under any spelling that is
+        // not a direct eval (`(0, eval)(s)`, `const e = eval; e(s)`,
+        // `globalThis.eval(s)`, `eval?.(s)`) is an indirect eval: with the
+        // interpreter linked it runs its string argument as global code
+        // (`global_this_eval_thunk`), which reads and calls what the program
+        // stored on the global object (DECISIONS 150/235), as a call of the
+        // Function constructor does. Without the interpreter it runs no
+        // program code.
+        (BuiltinNs::Other, "eval") if m.interp_linked => {
+            set_dyn_eval(m, "E14 indirect eval call");
+            unknown_method(m, call, "E14 dynamic code");
+        }
         // The runtime's `gc([force])`: the argument is ignored.
         (BuiltinNs::Other, "gc") => ret_prim(m, call, prim::UNDEF),
         // A method of the global object named by one of the runtime's global
@@ -1525,14 +1557,10 @@ fn ns_method_inner(
         (BuiltinNs::Object, "values" | "entries") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
+            // Own enumerable values only (EnumerableOwnProperties): no
+            // inherited member is among them.
             if let Some(o) = arg(m, call, 0) {
-                m.cons(
-                    o,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: fa,
-                    },
-                );
+                m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
             if name == "entries" {
