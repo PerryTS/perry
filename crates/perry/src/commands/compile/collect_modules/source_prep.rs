@@ -212,6 +212,7 @@ pub(super) struct PreparedSource {
     pub(super) class_family_syntax: Option<perry_hir::ir::ClassFamilySyntax>,
     pub(super) source: String,
     pub(super) was_cjs_wrapped: bool,
+    pub(super) cjs_worker_filenames: Vec<String>,
     /// Recoverable parse warnings from the CommonJS wrap, printed by the walk.
     pub(super) messages: Vec<String>,
     /// Computed-`require` warnings from the CommonJS wrap, printed by the
@@ -237,6 +238,7 @@ impl PreparedSource {
                 .messages
                 .iter()
                 .chain(&self.computed_require_warnings)
+                .chain(&self.cjs_worker_filenames)
                 .chain(&self.wrap_dump)
                 .map(String::len)
                 .sum::<usize>()
@@ -291,6 +293,11 @@ pub(super) fn prepare_from_raw(
             .and_then(|extension| extension.to_str())
             == Some("cjs");
     let was_cjs_wrapped = class.wrap_eligible && (is_cjs_entry || is_commonjs(&raw_source));
+    let cjs_worker_filenames = if was_cjs_wrapped {
+        super::worker_url::cjs_filenames(&raw_source, canonical)
+    } else {
+        Vec::new()
+    };
     let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();
@@ -384,6 +391,7 @@ pub(super) fn prepare_from_raw(
         class_family_syntax,
         source,
         was_cjs_wrapped,
+        cjs_worker_filenames,
         messages,
         computed_require_warnings,
         wrap_dump,

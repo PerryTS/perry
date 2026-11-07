@@ -499,6 +499,7 @@ fn collect_module_one(
         class_family_syntax,
         source,
         was_cjs_wrapped,
+        cjs_worker_filenames,
         messages,
         computed_require_warnings,
         wrap_dump,
@@ -1280,7 +1281,13 @@ fn collect_module_one(
         ctx.native_module_imports
             .insert("worker_threads".to_string());
     }
-    worker_url::record(&hir_module, entry_path, &canonical, ctx);
+    worker_url::record(
+        &hir_module,
+        &cjs_worker_filenames,
+        entry_path,
+        &canonical,
+        ctx,
+    );
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {

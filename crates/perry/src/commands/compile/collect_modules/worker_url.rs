@@ -1,4 +1,4 @@
-//! Worker entries named by `new URL("<literal>", import.meta.url)`.
+//! Worker entries named by literal URLs or CommonJS Worker constructors.
 //!
 //! A program often builds a worker's URL in one module (upm's `workers.ts`
 //! helpers, a default option) and constructs the Worker in another, through a
@@ -13,7 +13,10 @@
 
 use super::*;
 
-/// One `new URL("<literal>", import.meta.url)` that names a script.
+mod cjs;
+pub(super) use cjs::filenames as cjs_filenames;
+
+/// One source-derived candidate that names a script.
 pub(crate) struct WorkerUrlCandidate {
     /// Canonical path of the module holding the literal.
     importer: PathBuf,
@@ -25,9 +28,10 @@ pub(crate) struct WorkerUrlCandidate {
     lexical: PathBuf,
 }
 
-/// Record the worker_threads use and the URL literals of one module.
+/// Record source-derived entry candidates without changing runtime construction.
 pub(super) fn record(
     hir_module: &perry_hir::Module,
+    cjs_filenames: &[String],
     lexical_path: &Path,
     canonical: &Path,
     ctx: &mut CompilationContext,
@@ -35,6 +39,7 @@ pub(super) fn record(
     if perry_hir::module_uses_worker_threads(hir_module) {
         ctx.uses_worker_threads = true;
     }
+    let mut sources = cjs_filenames.to_vec();
     for url in perry_hir::worker_url_literals(hir_module) {
         // With a `file:` base the URL names an absolute path; resolve that
         // spelling (it keeps the usual `.js` -> `.ts` rule).
@@ -49,6 +54,9 @@ pub(super) fn record(
             },
             None => url.literal,
         };
+        sources.push(source);
+    }
+    for source in sources {
         let Some(resolved) =
             cached_resolve_import_with_lexical_base(&source, lexical_path, canonical, ctx)
         else {

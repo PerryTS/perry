@@ -390,3 +390,18 @@ invoked through `call`, `apply` or spread arguments. These callable values use
 the same environment, clone-marker, `receiveMessageOnPort` and
 `postMessageToThread` implementations as direct calls. Realm movement through
 `moveMessagePortToContext` remains unsupported on this callable path.
+
+### CommonJS worker entry discovery
+
+Perry includes literal file paths passed to immutable CommonJS Worker bindings
+(`const { Worker } = require("node:worker_threads")`, including renamed bindings)
+and immutable namespace bindings (`const threads = require("worker_threads")`).
+These paths are compiled as worker entries, not executed as ordinary imports.
+The constructor and its arguments still evaluate at runtime.
+
+Automatic discovery requires an unshadowed, unreassigned `require`, a literal
+relative or absolute filename, and no options or a plain file-mode options object.
+Eval workers, opaque options, spread arguments, and forwarded or mutable
+constructor bindings are not inferred by this analysis. A literal
+`new URL("./child.cjs", import.meta.url)` can explicitly include an entry when
+the runtime constructor is obtained indirectly.
