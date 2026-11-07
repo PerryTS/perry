@@ -549,6 +549,19 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     attrs.configurable(),
                 );
             }
+            if kind == ExoticKind::Error && name == "cause" {
+                let err = addr as *const crate::error::ErrorHeader;
+                if (*err).flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0 {
+                    let attrs = super::get_property_attrs(addr, &name)
+                        .unwrap_or(PropertyAttrs::new(true, false, true));
+                    return OwnProperty::data(
+                        (*err).cause,
+                        attrs.writable(),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
+                }
+            }
             // Builtin own slots: RegExp `lastIndex` (writable, non-enum,
             // non-config) and Error `message`/`stack` (writable, non-enum,
             // configurable).
