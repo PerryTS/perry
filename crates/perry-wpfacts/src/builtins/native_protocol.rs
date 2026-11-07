@@ -653,9 +653,27 @@ pub(super) fn native_method(
             m.add_prim(fa, prim::STR);
             ret_tok(m, call, arr);
         }
+        // `Array.prototype` taken as a value (`Object.create(Array.prototype)`,
+        // a prototype given to an array): the runtime refuses to replace its
+        // image methods (DEC 250), so the method found is the intrinsic one,
+        // run with the receiver as `this` (`native_receiver`), as the call of
+        // that method's value is.
+        ("Array", n)
+            if array_image_method(n) && native_receiver(m, Family::Array, None, origin) =>
+        {
+            array_method_on(m, origin, n, call)
+        }
         (_, "toString") => ret_prim(m, call, prim::STR),
         _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
     }
+}
+
+/// Is `name` a method `Array.prototype` owns in the image, whose read there
+/// is final (`members::locked_read`)? `constructor`, a data member and an
+/// absent key (`Array.prototype` takes named adds) are not.
+fn array_image_method(name: &str) -> bool {
+    matches!(members::member(Family::Array, name), Some(Mem::Fn))
+        && members::locked_read(Family::Array, None, name)
 }
 
 pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {

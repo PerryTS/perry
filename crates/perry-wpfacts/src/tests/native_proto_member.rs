@@ -4,7 +4,8 @@
 //! given, as a call of the member by name on that receiver does. A value
 //! that may be the program's (a shadowed or reassigned namespace, a
 //! variable), a key the prototype does not hold as its own final method,
-//! or a receiver of another family keeps the unknown callee.
+//! or a receiver of another family keeps the unknown callee (any object
+//! is a receiver of Array.prototype's methods, which are generic).
 
 use super::*;
 
@@ -161,14 +162,15 @@ fn a_member_of_another_family_stays_unknown() {
     assert!(!proven(&v), "{v:?}");
 }
 
-/// node: prints `1`. A foreign receiver of `slice`, a plain array-like:
-/// the model is the array's, so the object keeps today's unknown call.
+/// node: prints `1`. A plain array-like receiver of `slice`: the
+/// Array.prototype methods are generic over `this` (ECMA-262 23.1.3), so
+/// the model runs on it, its numeric fields its elements.
 #[test]
-fn slice_on_an_array_like_stays_unknown() {
+fn slice_on_an_array_like_runs_its_model() {
     let v = sv(r#"
         const like: any = { length: 1, 0: new Sym(1) };
         const out = Array.prototype.slice.call(like);
         console.log(g(out[0]));
     "#);
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }

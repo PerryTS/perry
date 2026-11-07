@@ -642,6 +642,102 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
     n
 }
 
+/// `Array.prototype.<name>` run with `this` = object `t`, an array or not
+/// (`native_receiver`): `array_method`, and for an object that is no array
+/// what the method does with it beyond an array's elements. ECMA-262 23.1.3:
+/// the method touches `this` only through Get, Set, HasProperty,
+/// DeletePropertyOrThrow and CreateDataPropertyOrThrow, under `length` and
+/// the indices, any of which may be an accessor, own or inherited. Each is
+/// the program's own operation on a node holding `t` (`non_array_this`), so
+/// accessors, setters and the chain are the solver's ordinary ones. Its
+/// indices are [[Get]]s under a number: its own fields a number key names
+/// (`num_fields`: numeric names too, `{ 0: v }`) and past them its chain
+/// (`plain_key`: program prototypes' numeric fields; an intrinsic
+/// prototype refuses index adds), all of them its elements here; an
+/// accessor under a numeric name runs through `array_method`'s
+/// `native_index_access`. `concat` makes it one element unless it is
+/// spreadable (IsConcatSpreadable: its `@@isConcatSpreadable`, whose
+/// elements the call already takes).
+pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    if !m.is_arr(t) {
+        let own = m.num_fields(t);
+        let elems = m.field_any(t);
+        m.edge(own, elems);
+        m.plain_key(t, ChainAct::Load(elems));
+        non_array_this(m, t, name, call);
+    }
+    array_method(m, t, Some(name), call);
+    if name == "concat" && !m.is_arr(t) {
+        let out = site_tmpl(m, call, "Array");
+        let ofa = m.field_any(out);
+        m.add_tok(ofa, t);
+    }
+}
+
+/// What `Array.prototype.<name>` does to a receiver `t` that is no array
+/// beyond its indices, each as the program's own operation on `t`:
+/// LengthOfArrayLike (Get `length`, then ToLength: ToPrimitive of what it
+/// read), Set `length` (the methods that store it), DeletePropertyOrThrow
+/// of an index (the program's `delete o[i]`: E7), `toString`'s Invoke of
+/// `join`, `concat`'s Get of `@@isConcatSpreadable`. HasProperty runs
+/// program code only as a Proxy's `has` trap, and a Proxy is ⊤.
+fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    let recv = m.node_l("array-like-this");
+    m.add_tok(recv, t);
+    let length = Key::Named(m.atom("length"));
+    let len = m.node_l("array-like-length");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: length,
+            dst: len,
+        },
+    );
+    to_prim(m, len, "array-like length (ToLength)");
+    if matches!(name, "push" | "pop" | "shift" | "unshift" | "splice") {
+        let num = m.node_l("array-like-new-length");
+        m.add_prim(num, prim::NUM);
+        let site = m.anon_store_site();
+        m.cons(
+            recv,
+            Cons::Store {
+                key: length,
+                src: num,
+                site,
+            },
+        );
+    }
+    if matches!(
+        name,
+        "pop" | "shift" | "splice" | "unshift" | "reverse" | "copyWithin" | "sort"
+    ) {
+        let reason = m.reason("E7 delete of an index by an Array.prototype method");
+        m.cons(
+            recv,
+            Cons::Hard {
+                kind: Hard::E7Delete,
+                reason,
+            },
+        );
+    }
+    match name {
+        "toString" => {
+            let join = Key::Named(m.atom("join"));
+            let f = m.node_l("array-like-join");
+            m.cons(recv, Cons::Load { key: join, dst: f });
+            let r = cb_call(m, call, f, ThisArg::Tok(t), vec![]);
+            let ret = m.calls[call as usize].ret;
+            m.edge(r, ret);
+        }
+        "concat" => {
+            let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
+            let v = m.node_l("array-like-spreadable");
+            m.cons(recv, Cons::Load { key: k, dst: v });
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
