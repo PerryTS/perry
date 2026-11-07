@@ -265,10 +265,14 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // A well-known-symbol method is a named member of the intrinsic chain
     // where the chain is described (a function value, an array, a described
     // builtin object: absent unless the description names it, as the
-    // iteration protocol of the builtin iterables is); on anything else it
-    // is a computed-key method.
+    // iteration protocol of the builtin iterables is; a builtin namespace
+    // whose own keys and chain are described, `Object[Symbol.iterator]`
+    // included); on anything else it is a computed-key method.
     let described = match &m.toks[t as usize] {
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
+        TokKind::Builtin(ns) => name
+            .as_deref()
+            .is_some_and(|n| n.starts_with(WK_PREFIX) && members::ns_member(*ns, n).is_some()),
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {

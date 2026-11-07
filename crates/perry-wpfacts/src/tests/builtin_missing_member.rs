@@ -258,3 +258,51 @@ fn stored_members_keep_the_receiver_as_this() {
         false,
     );
 }
+
+/// SEEDK: `Object[Symbol.iterator]` is a named member of the described
+/// namespace: absent on Object, Function.prototype and Object.prototype, so
+/// iterating the namespace throws (GetIterator) and nothing unknown runs.
+fn sym_iter(setup: &str, iterated: &str, proven: bool) {
+    check_at(
+        &format!(
+            "{setup}\no.result = {{ value: 1 }};
+const original: any = {iterated};
+for (const value of original) {{ o.result = value; }}"
+        ),
+        "o.result.value",
+        "value",
+        proven,
+    );
+}
+
+#[test]
+fn namespace_symbol_iterator_absent_runs_nothing() {
+    for iterated in ["N", "Function", "Object.prototype.hasOwnProperty"] {
+        sym_iter("", iterated, true);
+    }
+}
+
+/// Controls: every way a program adds `@@iterator` to the namespace keeps
+/// the call on what it added (the generator yields an unknown value).
+#[test]
+fn namespace_symbol_iterator_program_added_is_called() {
+    let gen = "function* () { yield unknown(); }";
+    for setup in [
+        format!("(Object as any)[Symbol.iterator] = {gen};"),
+        format!("(Object as any)[process.argv[3]] = {gen};"),
+        format!("unknown()[Symbol.iterator] = {gen};"),
+        format!("Object.defineProperty(Object, Symbol.iterator, {{ get() {{ return {gen}; }} }});"),
+        format!("Object.setPrototypeOf(Object, {{ [Symbol.iterator]: {gen} }});"),
+        "external(N);".to_string(),
+        "eval(process.argv[3]);".to_string(),
+    ] {
+        sym_iter(&setup, "N", false);
+    }
+}
+
+/// Control: a namespace whose own keys are undescribed (the statics of
+/// the `Date` constructor) keeps the any-key path.
+#[test]
+fn undescribed_namespace_symbol_iterator_stays_open() {
+    sym_iter("", "Date", false);
+}
