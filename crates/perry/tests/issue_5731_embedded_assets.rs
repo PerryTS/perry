@@ -278,6 +278,7 @@ fresh keys 4\n\
 blob type text/plain\n\
 blob invalid type \n\
 blob coerces type 42\n\
+blob URL roundtrip 3 application/octet-stream\n\
 encoding type order ERR_INVALID_ARG_TYPE\n\
 key type ERR_INVALID_ARG_TYPE\n\
 missing key before label ERR_SINGLE_EXECUTABLE_APPLICATION_ASSET_NOT_FOUND\n\

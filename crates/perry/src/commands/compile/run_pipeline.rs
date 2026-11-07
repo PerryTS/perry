@@ -8091,6 +8091,7 @@ pub fn run_with_parse_cache(
             &bunfs_text_modules,
             ctx.bun_platform,
             args.sea,
+            target.as_deref(),
         )? {
             obj_cleanup_paths.push(obj.clone());
             obj_paths.push(obj);

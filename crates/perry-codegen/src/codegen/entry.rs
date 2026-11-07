@@ -153,6 +153,8 @@ pub(super) fn compile_module_entry(
     // executable. The variable name stays for diff hygiene with the
     // historical dylib-only branches downstream.
     let is_dylib = output_type == "dylib" || output_type == "staticlib";
+    let has_native_staticlib_anchor =
+        staticlib_asset_anchor_enabled(output_type, &llmod.target_triple);
 
     // A worker evaluates the program entry as a module on its own thread.
     // Share the ordinary initializer (including its per-thread guard and
@@ -236,7 +238,7 @@ pub(super) fn compile_module_entry(
         // A static archive does not extract members that contain only
         // constructors. Keep Perry's generated embedded-asset object in the
         // final host link by making the module entry reference its anchor.
-        if output_type == "staticlib" {
+        if has_native_staticlib_anchor {
             llmod.declare_function("perry_embedded_assets_link_anchor", VOID, &[]);
         }
         // #1178 — bake `[ios] app_group` from perry.toml into a single
@@ -482,7 +484,7 @@ pub(super) fn compile_module_entry(
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
-        if output_type == "staticlib" {
+        if has_native_staticlib_anchor {
             main.block_mut(0)
                 .unwrap()
                 .call_void("perry_embedded_assets_link_anchor", &[]);
@@ -1600,6 +1602,10 @@ pub(super) fn compile_module_entry(
         }
     }
     Ok(())
+}
+
+fn staticlib_asset_anchor_enabled(output_type: &str, target_triple: &str) -> bool {
+    output_type == "staticlib" && !target_triple.starts_with("wasm32")
 }
 
 #[cfg(test)]

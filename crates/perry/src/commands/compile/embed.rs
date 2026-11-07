@@ -369,6 +369,7 @@ pub(super) fn generate_embedded_asset_object(
     text_modules: &std::collections::HashSet<String>,
     bun_platform: bool,
     sea_profile: bool,
+    target: Option<&str>,
 ) -> Result<Option<PathBuf>> {
     // Match the host linker: `cc` emits Mach-O/ELF, while LLVM clang emits
     // MSVC-compatible COFF on Windows. Both integrated assemblers support the
@@ -386,14 +387,24 @@ pub(super) fn generate_embedded_asset_object(
         .iter()
         .any(|payload| payload.original_len.is_some());
 
-    // Mach-O prefixes C symbols with `_` and names its read-only-const section
-    // `__TEXT,__const`; ELF uses the bare symbol and `.rodata`. Perry runs on
-    // the host it targets here (cross-target embedding is a follow-up), so the
-    // host `cfg` picks the right pair.
-    let sym_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
-    let rodata_section = if cfg!(target_os = "macos") {
+    // Select assembly syntax and object format from the output target, not the
+    // compiler host: a cross-target static library's anchor object must match
+    // the architecture and ABI of the generated Perry objects.
+    let target_triple = target
+        .and_then(perry_codegen::resolve_target_triple)
+        .unwrap_or_else(host_target_triple);
+    let is_apple = target_triple.contains("apple-");
+    let is_windows = target_triple.contains("windows");
+    let is_wasm = target_triple.starts_with("wasm32");
+    if is_wasm && (!assets.is_empty() || sea_profile) {
+        return Err(anyhow!(
+            "embedded assets and SEA profiles are not supported for WASI targets"
+        ));
+    }
+    let sym_prefix = if is_apple { "_" } else { "" };
+    let rodata_section = if is_apple {
         "__TEXT,__const"
-    } else if cfg!(windows) {
+    } else if is_windows {
         ".rdata,\"dr\""
     } else {
         ".rodata"
@@ -512,17 +523,22 @@ pub(super) fn generate_embedded_asset_object(
 
     fs::write(&c_path, &c)?;
 
-    let compiler = if cfg!(windows) {
+    let cross_target = target.is_some();
+    let compiler = if is_windows || cross_target {
         perry_codegen::linker::find_clang().ok_or_else(|| {
             anyhow!(
-                "clang is required to embed assets on Windows; install LLVM or set \
+                "clang is required to embed assets for Windows or cross-target builds; install LLVM or set \
                  PERRY_LLVM_CLANG to a clang 22 executable"
             )
         })?
     } else {
         PathBuf::from("cc")
     };
-    let status = Command::new(&compiler)
+    let mut command = Command::new(&compiler);
+    if cross_target {
+        command.arg("--target").arg(&target_triple);
+    }
+    let status = command
         .arg("-c")
         .arg(&c_path)
         .arg("-O0")
@@ -544,6 +560,19 @@ pub(super) fn generate_embedded_asset_object(
         ));
     }
     Ok(Some(obj_path))
+}
+
+fn host_target_triple() -> String {
+    let arch = std::env::consts::ARCH;
+    if cfg!(target_os = "macos") {
+        format!("{arch}-apple-macosx")
+    } else if cfg!(target_os = "windows") {
+        format!("{arch}-pc-windows-msvc")
+    } else if cfg!(target_os = "linux") {
+        format!("{arch}-unknown-linux-gnu")
+    } else {
+        format!("{arch}-unknown-{}", std::env::consts::OS)
+    }
 }
 
 /// Render one line of assembler as a C string literal for a module-level
