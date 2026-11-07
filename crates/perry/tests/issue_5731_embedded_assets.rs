@@ -48,13 +48,26 @@ fn runtime_dir() -> PathBuf {
     }
     BUILD_RUNTIME.call_once(|| {
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        // Build the same coherent archive graph used by Perry's CI. Building
-        // only the two staticlib wrappers can produce archives with an
-        // incomplete export set, which the GC sidecar analyzer correctly
-        // rejects.
+        // Build the compiler and its runtime archives together so Cargo
+        // unifies the runtime features used by Perry. Building only the two
+        // staticlib wrappers leaves an incomplete export set that the GC
+        // sidecar analyzer correctly rejects. Avoid building unrelated
+        // optional extensions in this focused integration test.
         let build = Command::new(cargo)
             .current_dir(workspace_root())
-            .args(["build-perry", "--profile", "perry-dev"])
+            .args([
+                "build",
+                "--profile",
+                "perry-dev",
+                "-p",
+                "perry",
+                "-p",
+                "perry-runtime-static",
+                "-p",
+                "perry-stdlib-static",
+                "-p",
+                "perry-gc-effects",
+            ])
             .output()
             .expect("build perry runtime archive");
         assert!(
