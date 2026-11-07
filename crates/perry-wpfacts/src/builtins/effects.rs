@@ -45,8 +45,8 @@ use super::collections::cb_call;
 use super::*;
 use crate::pts::FxHashMap;
 use perry_hir::realm_manifest::{
-    RealmEffect, RealmEntry, RealmKind, RealmOperand, RealmPrim, RealmProtocol, RealmSlot,
-    RealmSlotRoot, RealmSlotStep,
+    RealmEffect, RealmEntry, RealmField, RealmKind, RealmOperand, RealmPrim, RealmProtocol,
+    RealmSlot, RealmSlotRoot, RealmSlotStep,
 };
 use std::borrow::Cow;
 use std::sync::OnceLock;
@@ -89,6 +89,11 @@ fn index() -> &'static (ByProto, ByName, ByName) {
                 None if e.kind == RealmKind::Constructor => {
                     ctors.insert(e.name, e);
                 }
+                // A host function value no object holds (`%FsStatsPredicate%`,
+                // the closure a body makes): a `native(..)` operand names it.
+                None if e.name.starts_with('%') && e.name.ends_with('%') => {
+                    members.insert(e.name, e);
+                }
                 None => {}
             }
         }
@@ -125,7 +130,10 @@ fn names_this(effects: &[RealmEffect]) -> bool {
         match o {
             RealmOperand::Prim(_) => false,
             RealmOperand::Slot(s) => slot(s),
-            RealmOperand::Fresh { elems, .. } => elems.iter().any(slot),
+            RealmOperand::Fresh { elems, fields, .. } => {
+                elems.iter().any(operand) || fields.iter().any(|f| operand(&f.value))
+            }
+            RealmOperand::Native(_) => false,
             RealmOperand::Species { of, args, elems } => {
                 slot(of) || args.iter().any(operand) || elems.iter().any(slot)
             }
@@ -178,9 +186,20 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
         match o {
             RealmOperand::Prim(_) => true,
             RealmOperand::Slot(s) => slot(s),
-            RealmOperand::Fresh { proto, elems } => {
-                (proto == "Array.prototype" && elems.iter().all(slot)) || elems.is_empty()
-            }
+            // An array of its elements, an ordinary object of its own data
+            // fields, or another prototype's object with neither.
+            RealmOperand::Fresh {
+                proto,
+                elems,
+                fields,
+            } => match (&proto[..], elems.is_empty(), fields.is_empty()) {
+                (_, true, true) => true,
+                ("Array.prototype", _, true) => elems.iter().all(operand),
+                ("Object.prototype", true, _) => fields.iter().all(|f| operand(&f.value)),
+                _ => false,
+            },
+            // A host function value whose own declaration runs.
+            RealmOperand::Native(path) => declared_member(path).is_some(),
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(operand),
         }
@@ -381,10 +400,23 @@ impl Run {
                     n
                 }
             },
-            RealmOperand::Fresh { proto, elems } => {
-                let out = self.fresh(m, proto, elems);
+            RealmOperand::Fresh {
+                proto,
+                elems,
+                fields,
+            } => {
+                let out = self.fresh(m, proto, elems, fields);
                 let n = m.node_l("native-fresh");
                 m.add_tok(n, out);
+                n
+            }
+            RealmOperand::Native(path) => {
+                let identity = declared_member(path)
+                    .expect("interpretable() takes a declared native only")
+                    .name;
+                let f = m.tok(TokKind::BuiltinFn(crate::model::Native::Member { identity }));
+                let n = m.node_l("native-fn");
+                m.add_tok(n, f);
                 n
             }
             RealmOperand::Union(us) => {
@@ -403,19 +435,38 @@ impl Run {
     }
 
     /// A new object born at this call site: an array holding `elems`'
-    /// values, or a built-in object of prototype `proto` (no elements).
-    fn fresh(&mut self, m: &mut Model, proto: &Cow<'static, str>, elems: &[RealmSlot]) -> Tok {
+    /// values, an ordinary object (`hostrecord`: own data fields, then
+    /// `Object.prototype`) holding `fields`, or a built-in object of
+    /// prototype `proto` (neither).
+    fn fresh(
+        &mut self,
+        m: &mut Model,
+        proto: &Cow<'static, str>,
+        elems: &[RealmOperand],
+        fields: &[RealmField],
+    ) -> Tok {
         let what = match proto {
+            _ if !fields.is_empty() => "hostrecord",
             Cow::Borrowed("Array.prototype") => "Array",
+            // The Date object `new Date(t)` makes (constructors.rs).
+            Cow::Borrowed("Date.prototype") => "Date",
             Cow::Borrowed(p) => p,
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
         };
         let out = site_tmpl(m, self.call, what);
-        let ofa = m.field_any(out);
-        for s in elems {
-            let v = self.slot(m, s);
-            flow(m, &v, ofa);
+        if !elems.is_empty() {
+            let ofa = m.field_any(out);
+            for e in elems {
+                let v = self.operand(m, e);
+                m.edge(v, ofa);
+            }
+        }
+        for f in fields {
+            let key = m.atom(&f.key);
+            let at = m.field(out, key);
+            let v = self.operand(m, &f.value);
+            m.edge(v, at);
         }
         out
     }
@@ -444,9 +495,17 @@ impl Run {
                 let v = self.slot(m, s);
                 flow(m, &v, self.c.ret);
             }
-            RealmOperand::Fresh { proto, elems } => {
-                let out = self.fresh(m, proto, elems);
+            RealmOperand::Fresh {
+                proto,
+                elems,
+                fields,
+            } => {
+                let out = self.fresh(m, proto, elems, fields);
                 ret_tok(m, self.call, out);
+            }
+            RealmOperand::Native(_) => {
+                let n = self.operand(m, o);
+                m.edge(n, self.c.ret);
             }
             RealmOperand::Union(us) => {
                 for u in us.iter() {
@@ -465,7 +524,9 @@ impl Run {
             // is constructed with `args` and takes them as well. A species
             // slot names `this`, so a constructor declaration has no t.
             RealmOperand::Species { args, elems, .. } => {
-                let out = self.fresh(m, &Cow::Borrowed("Array.prototype"), elems);
+                let elems: Vec<RealmOperand> =
+                    elems.iter().cloned().map(RealmOperand::Slot).collect();
+                let out = self.fresh(m, &Cow::Borrowed("Array.prototype"), &elems, &[]);
                 if let Some(t) = self.t {
                     let args = args.iter().map(|a| self.operand(m, a)).collect();
                     super::collections::species_from(m, out, t, self.call, Some(args));
