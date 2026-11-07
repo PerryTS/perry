@@ -83,3 +83,62 @@ fn a_function_stored_on_a_host_object_is_called_by_the_runtime() {
         pf.dump_text()
     );
 }
+
+/// The `v` read sites on the `// SITE` line of `src`.
+fn site(pf: &ProgramFacts, src: &str, key: &str) -> Vec<Verdict> {
+    let m = src.find("// SITE").expect("marker");
+    let start = src[..m].rfind('\n').map_or(0, |i| i + 1) as u32;
+    let v: Vec<Verdict> = (pf.sites.iter())
+        .filter(|s| !s.is_call && s.key == key && (start..m as u32).contains(&s.byte_offset))
+        .map(|s| s.verdict.clone())
+        .collect();
+    assert!(!v.is_empty(), "no `{key}` site on the SITE line");
+    v
+}
+
+const WRITE_RESULT: &str = "class A { v = 1; }\n\
+    const a = new A();\n\
+    const r: any = process.stdout.write(\"x\\n\");\n\
+    if (typeof r === \"object\") r.k(a);\n";
+
+/// Red on main (SEEDC): the stream's own `write` returns a boolean; it was
+/// an unknown method whose result was ⊤, so `r.k(a)` handed `a` to unknown
+/// code.
+#[test]
+fn a_host_stream_write_returns_a_boolean() {
+    let src = format!("{WRITE_RESULT}console.log(a.v); // SITE\n");
+    let pf = facts(&src);
+    let v = site(&pf, &src, "v");
+    assert!(v.iter().all(|v| !matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(native(&pf, "write"), "{:?}", calls(&pf, "write"));
+}
+
+/// Control: the stream keeps its chunk where the program can read it back
+/// (and perry's write runs the chunk's `toString`): an object chunk reaches
+/// unknown code, its custom `toString` included.
+#[test]
+fn a_host_stream_write_keeps_its_chunk() {
+    let src = "class C { s = \"c\"; toString() { return this.s; } }\n\
+        const c = new C();\n\
+        process.stdout.write(c as any);\n\
+        console.log(c.s); // SITE\n";
+    let pf = facts(src);
+    let v = site(&pf, src, "s");
+    assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+}
+
+/// Control: `write` reads other members of its receiver (`_write`,
+/// `_writableState`, `emit`): a store under any key of the stream makes the
+/// call the unknown method of the host again.
+#[test]
+fn a_host_stream_write_after_a_store_on_the_stream_stays_open() {
+    for extra in [
+        "(process.stdout as any)._write = function (c: any, e: any, cb: any) { cb(); };\n",
+        "import \"unseen-host\"; const t: any = (globalThis as any).someHost; t._writableState = 3;\n",
+    ] {
+        let src = format!("{extra}{WRITE_RESULT}console.log(a.v); // SITE\n");
+        let pf = facts(&src);
+        let v = site(&pf, &src, "v");
+        assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{extra}: {v:?}\n{}", pf.dump_text());
+    }
+}
