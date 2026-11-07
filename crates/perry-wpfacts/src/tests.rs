@@ -46,6 +46,7 @@ mod class_statics;
 mod closed_marker_load;
 mod closed_world;
 mod closure_context;
+mod computed_table_fn;
 mod const_key_read;
 mod const_key_set_store;
 mod ctor_observed;
