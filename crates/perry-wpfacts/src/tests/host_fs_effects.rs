@@ -28,6 +28,32 @@ fn stat_result_predicates_and_mtime_are_proven() {
     }
 }
 
+/// `readdirSync(p)`: its elements are strings; with `withFileTypes` Dirent
+/// objects whose `name` is a string and whose predicates return booleans.
+#[test]
+fn readdir_elements_are_strings_and_dirents() {
+    let pf = facts(
+        r#"
+        function h(v: any) { return v.length; }
+        function sys(p: string) {
+            const _fs: typeof import("fs") = require("fs");
+            const names: any = _fs.readdirSync(p);
+            let n = 0;
+            for (const s of names) n += h(s);
+            const ents: any = _fs.readdirSync(p, { withFileTypes: true } as any);
+            for (const e of ents) { if (e.isDirectory()) n += 1; n += h(e.name); }
+            return n;
+        }
+        console.log(sys(process.argv[1]));
+    "#,
+    );
+    // `e.name` itself may be read on a Buffer element too (`encoding:
+    // "buffer"` makes Buffers), an opaque object: its values are not checked.
+    for key in ["length", "isDirectory", "name"] {
+        assert!(!site(&pf, key).top, "{key}\n{}", pf.dump_text());
+    }
+}
+
 /// Named control: an options object's getter still runs, as node runs it
 /// (`statSync` [[Get]]s `bigint`): the store it makes is seen.
 #[test]

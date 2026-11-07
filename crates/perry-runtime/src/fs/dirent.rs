@@ -396,6 +396,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
 /// and Node's seven `fs.Dirent` predicate methods),
 /// matching Node's `fs.readdirSync(path, options)` shape (issue #631).
 /// Throws a Node-shaped `scandir` error when the directory cannot be read.
+crate::realm_decl! { "node:fs.readdirSync", effects = { path(arg(0)); reads(field(arg(1), withFileTypes)); reads(field(arg(1), recursive)); reads(field(arg(1), encoding)); stores(fresh); returns(fresh(Array.prototype, elems = [prim(str) | fresh(Buffer.prototype) | fresh(Object.prototype, fields = {name: prim(str), parentPath: prim(str), path: prim(str), isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%")})])) } }
 #[no_mangle]
 pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
