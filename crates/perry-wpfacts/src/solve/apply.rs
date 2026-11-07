@@ -1103,7 +1103,7 @@ impl Model {
                         (prim::NULL, &["null"][..]),
                         (prim::UNDEF, &["undefined"][..]),
                     ] {
-                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit as u8)) {
+                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
                             for k in keys {
                                 let a = self.atom(k);
                                 self.load_program_key(obj, a, dst);
@@ -1118,7 +1118,7 @@ impl Model {
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
                     self.with_b(|m| builtins::prim_plain_key(m, prim, call));
                     let p = prim & !(prim::NULL | prim::UNDEF);
-                    if p != 0 && self.idx_done.insert((idx, TOP, call, 128 | p as u8)) {
+                    if p != 0 && self.idx_done.insert((idx, TOP, call, IDX_MCALL_PRIM | p)) {
                         self.cons(
                             idx,
                             Cons::IdxKeyCall {
@@ -1137,7 +1137,7 @@ impl Model {
                         self.method_on(t, Key::any(), call);
                         continue;
                     }
-                    if self.idx_done.insert((idx, t, call, 0)) {
+                    if self.idx_done.insert((idx, t, call, IDX_MCALL_TOKEN)) {
                         self.mark_use(t, crate::model::MARK_ESCAPE);
                         if self.index_needs_all_own_fields(t) {
                             let own = self.key_fields(t, Key::Any(shape));
@@ -1165,7 +1165,7 @@ impl Model {
                 let named = index_needs_general_key(toks, prim);
                 // One rule per receiver: a token, or (⊤) primitive kinds.
                 let rule = match obj {
-                    TOP => 128 | recv_prim as u8,
+                    TOP => 128 | recv_prim,
                     _ => IDX_CALL_ANY,
                 };
                 if named && self.idx_done.insert((n, obj, call, rule)) {
@@ -1195,7 +1195,7 @@ impl Model {
                         if prim & bit != 0
                             && self
                                 .idx_done
-                                .insert((n, obj, call, IDX_CALL_NAMED + bit as u8))
+                                .insert((n, obj, call, IDX_CALL_NAMED + bit))
                         {
                             for k in keys {
                                 let a = self.atom(k);
