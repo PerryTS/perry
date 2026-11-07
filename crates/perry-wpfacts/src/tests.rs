@@ -1886,6 +1886,7 @@ mod ns_receiver;
 mod proto_own_call;
 mod receiver_param_call;
 mod regexp_results;
+mod primitive_this;
 mod string_this;
 mod string_methods;
 mod string_results;
