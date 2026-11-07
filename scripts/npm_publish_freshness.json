@@ -58,6 +58,20 @@
     { "name": "@perryts/perry-target-aarch64-apple-ios" },
     { "name": "@perryts/perry-target-aarch64-apple-ios-sim" },
     { "name": "@perryts/perry-target-wasm32-wasip2" },
-    { "name": "@perryts/perry-target-wasm32-wasip1" }
+    { "name": "@perryts/perry-target-wasm32-wasip1" },
+    { "name": "@perryts/perry-ui-aarch64-apple-darwin" },
+    { "name": "@perryts/perry-ui-x86_64-apple-darwin" },
+    { "name": "@perryts/perry-ui-x86_64-unknown-linux-gnu" },
+    { "name": "@perryts/perry-ui-aarch64-unknown-linux-gnu" },
+    { "name": "@perryts/perry-ui-x86_64-pc-windows-msvc" },
+    { "name": "@perryts/perry-ui-aarch64-pc-windows-msvc" },
+    { "name": "@perryts/perry-wasm-host-aarch64-apple-darwin" },
+    { "name": "@perryts/perry-wasm-host-x86_64-apple-darwin" },
+    { "name": "@perryts/perry-wasm-host-x86_64-unknown-linux-gnu" },
+    { "name": "@perryts/perry-wasm-host-aarch64-unknown-linux-gnu" },
+    { "name": "@perryts/perry-wasm-host-x86_64-unknown-linux-musl" },
+    { "name": "@perryts/perry-wasm-host-aarch64-unknown-linux-musl" },
+    { "name": "@perryts/perry-wasm-host-x86_64-pc-windows-msvc" },
+    { "name": "@perryts/perry-wasm-host-aarch64-pc-windows-msvc" }
   ]
 }
