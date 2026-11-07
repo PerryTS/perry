@@ -461,6 +461,10 @@ pub enum Cons {
         /// The node is the right operand (`eval`'s second argument).
         right: bool,
     },
+    /// The node holds Arrays an index store writes, with its index in
+    /// `[lo, hi]`: each keeps its birth length only when that interval lies
+    /// inside it (`Model::arr_len_index`).
+    LenIndex { lo: i64, hi: i64 },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -545,6 +549,7 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::StoreIndexed { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }
@@ -620,6 +625,7 @@ impl Cons {
             Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
             Cons::Range { .. } => "range",
+            Cons::LenIndex { .. } => "lenindex",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",

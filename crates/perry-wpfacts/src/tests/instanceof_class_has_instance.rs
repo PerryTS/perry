@@ -53,7 +53,11 @@ console.log("Odd", typeof Odd);"#,
 
 /// The verdict of the one `p.f()` call in `probe`.
 fn probe_call(pf: &crate::ProgramFacts) -> Verdict {
-    let calls: Vec<_> = pf.sites.iter().filter(|s| s.key == "f" && s.is_call).collect();
+    let calls: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "f" && s.is_call)
+        .collect();
     assert_eq!(calls.len(), 1, "{}", pf.dump_text());
     calls[0].verdict.clone()
 }
@@ -101,5 +105,9 @@ fn a_reading_has_instance_hook_keeps_the_call_proven() {
 #[test]
 fn an_unknown_right_hand_side_escapes_the_left_hand_side() {
     let pf = facts(&REPLACES_F.replace("RHS", "(globalThis as any)[process.argv[2]]"));
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }

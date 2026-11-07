@@ -403,9 +403,8 @@ fn lower_proven_super_call(
             let slow_end = ctx.block().label.clone();
             ctx.block().br(&done_l);
             ctx.current_block = done;
-            let undefined = crate::nanbox::double_literal(f64::from_bits(
-                crate::nanbox::TAG_UNDEFINED,
-            ));
+            let undefined =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let f = ctx
                 .block()
                 .phi(DOUBLE, &[(&undefined, &fast_end), (&got, &slow_end)]);
@@ -451,7 +450,12 @@ fn lower_proven_super_call(
         let r2 = ctx.block().call(
             DOUBLE,
             "js_method_call_value",
-            &[(DOUBLE, &callable), (DOUBLE, &recv), (PTR, &ptr), (I64, &len)],
+            &[
+                (DOUBLE, &callable),
+                (DOUBLE, &recv),
+                (PTR, &ptr),
+                (I64, &len),
+            ],
         );
         let generic_end = ctx.block().label.clone();
         ctx.block().br(&merge_l);
@@ -480,14 +484,22 @@ fn emit_callable_or_throw(ctx: &mut FnCtx<'_>, f: &str, method: &str) {
     let label = |ctx: &mut FnCtx<'_>, text: &str| {
         let idx = ctx.strings.intern(text);
         let entry = ctx.strings.entry(idx);
-        (format!("@{}", entry.bytes_global), entry.byte_len.to_string())
+        (
+            format!("@{}", entry.bytes_global),
+            entry.byte_len.to_string(),
+        )
     };
     let (kind, kind_len) = label(ctx, "intermediate value");
     let (name, name_len) = label(ctx, method);
     let blk = ctx.block();
     blk.call_void(
         "js_throw_type_error_not_a_function",
-        &[(PTR, &kind), (I64, &kind_len), (PTR, &name), (I64, &name_len)],
+        &[
+            (PTR, &kind),
+            (I64, &kind_len),
+            (PTR, &name),
+            (I64, &name_len),
+        ],
     );
     blk.unreachable();
     ctx.current_block = call;
@@ -507,7 +519,10 @@ fn record_super_site(ctx: &mut FnCtx<'_>, method: &str, consumer: &str, why: &st
         None,
         false,
         false,
-        vec![format!("super_method={method}"), format!("super_lowering={why}")],
+        vec![
+            format!("super_method={method}"),
+            format!("super_lowering={why}"),
+        ],
     );
 }
 

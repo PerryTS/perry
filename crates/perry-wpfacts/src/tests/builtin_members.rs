@@ -186,8 +186,7 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     };
     let named = "t.inner = function () { return 1; };";
     let elsewhere = "t.unrelated = function () { return 1; };";
-    let computed =
-        "const kk: string = process.argv[3]; t[kk] = function () { return 1; };";
+    let computed = "const kk: string = process.argv[3]; t[kk] = function () { return 1; };";
     for hand in [
         "0",
         "Map",

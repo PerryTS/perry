@@ -34,6 +34,7 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
+        LenIndex { lo, hi } => LenIndex { lo, hi },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,
@@ -149,7 +150,10 @@ pub fn map_cons(
             reason,
         },
         Implicit { reason, proto } => Implicit { reason, proto },
-        HasInstance { reason, arg } => HasInstance { reason, arg: n(arg) },
+        HasInstance { reason, arg } => HasInstance {
+            reason,
+            arg: n(arg),
+        },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion {
             key,

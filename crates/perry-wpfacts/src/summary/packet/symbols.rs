@@ -40,6 +40,7 @@ impl Model {
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
+            Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
             Cons::Store { key, src, site } => format!(
                 "Store key={:?} src={:?} site={:?}",
@@ -409,7 +410,18 @@ impl Model {
                 holder, f, setter
             ),
             Cons::Arith { dst } => format!("Arith dst={:?}", dst),
-            Cons::Range { op, other, dst, right } => format!("Range op={} other={:?} dst={:?} right={}", op.name(), other, dst, right),
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right,
+            } => format!(
+                "Range op={} other={:?} dst={:?} right={}",
+                op.name(),
+                other,
+                dst,
+                right
+            ),
             Cons::Plus { str, num } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::ShareBuffer { ta } => {

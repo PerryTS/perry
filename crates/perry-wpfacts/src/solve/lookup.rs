@@ -554,7 +554,7 @@ impl Model {
         }
         self.builtin_field_use(t, key, ChainAct::Load(dst));
         if self.is_array_length(t, key) {
-            self.add_prim(dst, prim::NUM);
+            self.arr_len_into(t, dst);
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a

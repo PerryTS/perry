@@ -92,7 +92,10 @@ fn a_spread_of_an_unknown_value_stays_unproven() {
 /// may store a function under `cb`: the copy carries that unknown value.
 #[test]
 fn json_data_handed_to_unknown_code_stays_unproven() {
-    let source = format!("((x: any) => {{ (globalThis as any).hook(x); return x; }})({})", json());
+    let source = format!(
+        "((x: any) => {{ (globalThis as any).hook(x); return x; }})({})",
+        json()
+    );
     assert!(!verdicts(&source, "{ a: obj, ...src }").1);
 }
 

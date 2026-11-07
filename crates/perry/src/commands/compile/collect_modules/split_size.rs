@@ -55,7 +55,8 @@ fn exports(
         match e {
             perry_hir::Export::Named { local, exported } => {
                 n += usize::from(
-                    (include_default || exported != "default") && !module.is_type_only_export_binding(local),
+                    (include_default || exported != "default")
+                        && !module.is_type_only_export_binding(local),
                 );
             }
             perry_hir::Export::ReExport { exported, .. } => {

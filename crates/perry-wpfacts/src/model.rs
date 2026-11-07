@@ -1100,6 +1100,9 @@ pub struct Model {
     /// `+` interval rule drops its right operand, a wrong transfer the
     /// int32 witnesses must catch.
     pub range_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
+    /// counts as one inside its array's birth length (`arr_len_index`).
+    pub arr_len_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -1125,6 +1128,15 @@ pub struct Model {
     pub all_fields: FxHashMap<Tok, NodeId>,
     /// `Model::hole`: what an Array's iteration reads at a hole.
     pub holes: FxHashMap<Tok, NodeId>,
+    /// `Model::arr_len`: the node of an Array token's `length`.
+    pub arr_len: FxHashMap<Tok, NodeId>,
+    /// The birth length of an array literal template (`solve::arr_len`).
+    pub arr_birth_len: FxHashMap<TmplId, i64>,
+    /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
+    /// judges against the birth length (`Model::arr_len_store`).
+    pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
+    /// `(site, holder, lo, hi)` index intervals already judged.
+    pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
     /// `builtins::arr_iterated`: what iterating Array `t` yields.
     pub arr_iterated: FxHashMap<Tok, NodeId>,
     /// `builtins::species_from`: the `constructor` ArraySpeciesCreate

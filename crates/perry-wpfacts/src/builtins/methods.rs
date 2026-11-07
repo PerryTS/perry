@@ -544,7 +544,8 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     // Object.prototype is a modeled holder: the define records the accessor
     // there as defineProperty does (an accessor on it is E23), under a
     // computed key too (the AccessorInstall any-key branch).
-    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto) {
+    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto)
+    {
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
         // Spread positions are not retained in CallSite: any direct or

@@ -57,8 +57,8 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Expr, Module as HirModule, Param, Stmt};
 
-pub use pass::group_scope_boxes;
 pub(crate) use analysis::collect_shallow_prealloc_ids;
+pub use pass::group_scope_boxes;
 
 /// Upper bound on one scope object's slot count. Mirrors the runtime's
 /// `SCOPE_MAX_SLOTS`; the pass splits larger groups.

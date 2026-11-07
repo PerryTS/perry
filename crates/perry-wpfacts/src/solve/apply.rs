@@ -38,6 +38,11 @@ impl Model {
                     }
                 }
             }
+            Cons::LenIndex { lo, hi } => {
+                for &t in toks {
+                    self.arr_len_index(t, Iv { lo, hi });
+                }
+            }
             Cons::IndexHole => {
                 for &t in toks {
                     self.mark_hole(t);
@@ -494,6 +499,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
+                        self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
                         self.note_inst(t, true);
@@ -653,7 +659,7 @@ impl Model {
                         continue;
                     }
                     if self.is_array_length(q, key) {
-                        self.add_prim(dst, prim::NUM);
+                        self.arr_len_into(q, dst);
                         continue;
                     }
                     // The same final-read decision as chain_load: the
@@ -1286,6 +1292,20 @@ impl Model {
                 // its ToString, a numeric name, `numeric_key`) writes an
                 // holder's numeric properties, never a nonnumeric name;
                 // every other value alternative retains an Any store.
+                if prim & prim::NUM != 0 {
+                    // Before the element store below reaches the holders.
+                    self.indexed_store_sites.insert(site);
+                    let iv = self.range_input(n);
+                    if self.len_index_done.insert((site, o, iv.lo, iv.hi)) {
+                        self.cons(
+                            o,
+                            Cons::LenIndex {
+                                lo: iv.lo,
+                                hi: iv.hi,
+                            },
+                        );
+                    }
+                }
                 if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
@@ -1452,6 +1472,9 @@ impl Model {
             }
             Cons::SpreadFrom { src, site } => {
                 for &d in toks {
+                    // A copy into an Array (`Object.assign`) may write any
+                    // index, past its end too.
+                    self.arr_len_top(d);
                     self.spread_into(src, d, site);
                 }
             }
