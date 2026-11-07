@@ -536,9 +536,6 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                         out.nonneg_int32_inputs.insert(*id);
                     }
                 }
-                if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
-                    eprintln!("perry: int-range local {id} {:?}", b.int_range);
-                }
             }
             if b.length_number {
                 out.length_number_inputs.insert(*id);

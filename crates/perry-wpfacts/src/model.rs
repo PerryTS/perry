@@ -1096,6 +1096,10 @@ pub struct Model {
     /// The interval a Number arriving through `add_tokens` carries: the
     /// source's, while a value-copy edge delivers; `None` (⊤) otherwise.
     pub cur_range: Option<Iv>,
+    /// Test-only negative control (`FactsConfig::sabotage` = `range`): the
+    /// `+` interval rule drops its right operand, a wrong transfer the
+    /// int32 witnesses must catch.
+    pub range_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,

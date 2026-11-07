@@ -1331,7 +1331,11 @@ impl Model {
                     self.range_input(other)
                 };
                 let (l, r) = if right { (ot, me) } else { (me, ot) };
-                let iv = crate::model::range::eval(op, l, r);
+                let iv = if self.range_sabotage && op == RangeOp::Add {
+                    l
+                } else {
+                    crate::model::range::eval(op, l, r)
+                };
                 if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
                     let d = &mut self.nodes[dst as usize];
                     if !d.in_wl {
