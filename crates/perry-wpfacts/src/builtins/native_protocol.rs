@@ -663,6 +663,29 @@ pub(super) fn native_method(
         {
             array_method_on(m, origin, n, call)
         }
+        // Past `Array.prototype` taken as a value, under a key it does not own
+        // in the image and no write may have added: the lookup continues on
+        // `Object.prototype`, add-locked and image-locked (DEC 250), so what
+        // it finds there is final. Its method runs with the receiver as
+        // `this` (the models `proto_method` gives `Object.prototype`'s own
+        // methods); a key absent on both is no callee (the call throws).
+        // Parked: a later write of the key onto `Array.prototype` (or one that
+        // may reach it) replays the call as the opaque written member.
+        ("Array", n)
+            if members::own(Family::Array, n).is_none() && !native_written(m, np, a) =>
+        {
+            m.native_missing.push((np, a, NativeMiss::Call(origin, call)));
+            match members::member(Family::Object, n) {
+                Some(Mem::Fn) => {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, origin, Key::Named(a), call);
+                }
+                None => {}
+                Some(_) => {
+                    unknown_method(m, call, &format!("argument of native {native}.{name}"))
+                }
+            }
+        }
         (_, "toString") => ret_prim(m, call, prim::STR),
         _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
     }
