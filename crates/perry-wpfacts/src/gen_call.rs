@@ -544,6 +544,17 @@ impl<'a> Gen<'a> {
         self.m.top_val(&format!("unresolved class value {name}"))
     }
 
+    /// The class value of `instanceof Name` when `Name` is a user class
+    /// (local, or imported): codegen tests against that value
+    /// (`js_instanceof_dynamic`), not a class id. `None`: a builtin name.
+    pub(crate) fn instanceof_class(&mut self, mi: u32, name: &str) -> Option<NodeId> {
+        if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
+            let t = self.m.tok(TokKind::ClassObj(tm));
+            return Some(self.tok_node(t));
+        }
+        self.import_value(mi, name)
+    }
+
     /// One captured value of a class body (a slot of the class's capture
     /// environment): each slot is its own node, as each is its own binding.
     pub(crate) fn class_env(&mut self, mi: u32, name: &str, index: usize) -> NodeId {
