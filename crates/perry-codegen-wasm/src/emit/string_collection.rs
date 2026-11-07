@@ -175,6 +175,8 @@ impl WasmModuleEmitter {
             "date_get_milliseconds",
             "error_new",
             "error_message",
+            "global_property",
+            "globalThis",
             "regexp_new",
             "regexp_test",
             "number_coerce",

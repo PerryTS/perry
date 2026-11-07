@@ -2106,6 +2106,9 @@ const __memDispatch = {
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
 
+  // A member of the unresolved-global sentinel: `Promise`, `Reflect`, `globalThis.foo`.
+  global_property: (name) => globalThis[name],
+
   // RegExp — args are plain JS values
   regexp_new: (pattern, flags) => { try { return new RegExp(String(pattern), String(flags)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
   regexp_test: (re, str) => { if (!(re instanceof RegExp)) return 0; return re.test(String(str)) ? 1 : 0; },
@@ -4935,6 +4938,19 @@ function __classDispatch(objVal, mname, rawArgs) {
     if (fn) {
       return fn(objVal, ...rawArgs);
     }
+  }
+  // 3) A host object's own method: Promise#then/catch/finally, Response#json, and the
+  // like, or a static method of a host constructor (`Promise.resolve`), whose receiver
+  // is a function. Without this arm `p.then(cb)` returns undefined and cb never runs,
+  // with no error anywhere. A Perry closure argument is an object, not a function, and
+  // a native method ignores a non-function callback, so each is wrapped before the call.
+  if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')
+      && typeof objVal[mname] === 'function') {
+    const args = rawArgs.map(a =>
+      (a && typeof a === 'object' && typeof a.funcIdx !== 'undefined')
+        ? (...cbArgs) => callWasmClosure(a, ...cbArgs)
+        : a);
+    return objVal[mname](...args);
   }
   return undefined;
 }
