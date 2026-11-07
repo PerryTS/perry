@@ -268,7 +268,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // iteration protocol of the builtin iterables is); on anything else it
     // is a computed-key method.
     let described = match &m.toks[t as usize] {
-        TokKind::Func(..) | TokKind::Bound(_) => true,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {
@@ -320,7 +320,13 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             function_method(m, t, name.as_deref(), call)
         }
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
-        TokKind::Func(_, _) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
+        // A class object is a function value: its chain ends at
+        // `%Function.prototype%`, whose `bind` makes a bound function of
+        // the class (`new` of it constructs the class) and whose
+        // `call`/`apply` call it (a class called without `new` throws).
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::ClassObj(_) => {
+            function_method(m, t, name.as_deref(), call)
+        }
         // A builtin function value's methods are `Function.prototype`'s
         // (and `Object.prototype`'s): what one does with its arguments is
         // unknown (`push.call(o, v)` stores). Any other name is absent.
