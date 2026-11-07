@@ -1517,7 +1517,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_write_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            let rooted_result = double_literal(0.0);
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             rooted_group.release(ctx);
             Ok(rooted_result)
         }
@@ -1541,7 +1541,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_append_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            let rooted_result = double_literal(0.0);
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             rooted_group.release(ctx);
             Ok(rooted_result)
         }

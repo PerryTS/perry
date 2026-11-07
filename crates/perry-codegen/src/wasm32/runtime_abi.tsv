@@ -1585,7 +1585,7 @@ js_fs_lutimes_callback	f64	f64,f64,f64,f64
 js_fs_lutimes_sync	i32s	f64,f64,f64
 js_fs_mkdir_callback	f64	f64,f64,f64
 js_fs_mkdir_sync	i32s	f64
-js_fs_mkdir_sync_options	i32s	f64,f64
+js_fs_mkdir_sync_options	f64	f64,f64
 js_fs_mkdtemp_callback	f64	f64,f64,f64
 js_fs_mkdtemp_dispatch	f64	f64,f64
 js_fs_mkdtemp_disposable_sync	f64	f64,f64
