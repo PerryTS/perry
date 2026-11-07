@@ -225,3 +225,54 @@ fn index_accessor_of_a_non_array_receiver_runs_and_is_an_element() {
         assert_eq!(site_n(&full), Ok(true), "{call}");
     }
 }
+
+/// Past `Array.prototype` taken as a value, a key it does not own and no
+/// write added continues on `Object.prototype` (add-locked, image-locked,
+/// DEC 250): `valueOf` is `%Object.prototype.valueOf%` and returns its
+/// receiver, `"" + p` runs `Array.prototype.toString` (its `join`), and
+/// neither hands `p` to unknown code.
+#[test]
+fn object_prototype_method_past_array_prototype_is_the_intrinsic() {
+    let s = src(
+        "const p: any = Object.create(Array.prototype); p.push(payload);
+         const s = \"\" + p; const v = p.valueOf();",
+        "v[0]",
+    );
+    assert_eq!(site_n(&s), Ok(true));
+}
+
+/// A key absent on `Array.prototype` and on `Object.prototype` is no
+/// callee (the call throws a TypeError): `p.split` runs nothing and the
+/// receiver goes nowhere.
+#[test]
+fn key_absent_past_array_prototype_is_no_callee() {
+    let s = src(
+        "const p: any = Object.create(Array.prototype); p.push(payload);
+         try { p.split(\",\"); } catch (e) {} const s = p.slice();",
+        "s[0]",
+    );
+    assert_eq!(site_n(&s), Ok(true));
+}
+
+const WRITTEN: &str = r#"
+function vWritten() { return 0; }
+function leak(x: any) { (globalThis as any).leaked = x; }
+(Array.prototype as any).valueOf = function (this: any) { vWritten(); leak(this); return this; };
+"#;
+
+/// Control: the program writes `Array.prototype.valueOf` first. The
+/// lookup stops there: the written function runs (it is reached) and the
+/// call is the written member's, so the site stays unproven.
+#[test]
+fn written_array_prototype_key_is_not_object_prototype_s() {
+    let s = format!(
+        "{WRITTEN}\n{}",
+        src(
+            "const p: any = Object.create(Array.prototype); p.push(payload);
+             const v = p.valueOf();",
+            "v[0]",
+        )
+    );
+    assert_eq!(site_n(&s), Ok(false));
+    assert_eq!(runs(&s, &["vWritten"]), ["vWritten"]);
+}
