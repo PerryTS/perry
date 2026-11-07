@@ -47,10 +47,11 @@ pub(crate) const COUNT: usize = crate::codegen_abi::BUILTIN_NAMESPACES.len();
 pub(crate) const GLOBAL_FAMILY: usize = FIRST + COUNT;
 /// `console`'s intrinsic family: the one sealed namespace holder the program
 /// may still patch (DEC 250: it leaves the lock set, keeps its shadow bit).
-/// Only the lock-set test names it: no production code needs the family.
-#[cfg(test)]
+/// It is also the one builtin namespace that is a native-module namespace
+/// object: its member writes land in the override table
+/// (`native_module::native_namespace_prop_override_store`), which reports them
+/// here by this family.
 pub(crate) const CONSOLE_FAMILY: usize = FIRST + console_index();
-#[cfg(test)]
 const fn console_index() -> usize {
     let mut i = 0;
     while i < COUNT {
