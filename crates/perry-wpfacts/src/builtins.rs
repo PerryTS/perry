@@ -327,6 +327,18 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
 
 /// A per-call-site template (solve-time births: promises, arrays …).
 fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
+    site_tmpl_born(m, call, what, false)
+}
+
+/// A per-call-site Array born without holes: the builtin that makes it
+/// writes every index below its length, or exactly the indices of a source
+/// whose holes it carries over (`collections::array_method`). Later stores
+/// mark their own holes as on any array.
+fn site_dense_arr(m: &mut Model, call: CallId) -> Tok {
+    site_tmpl_born(m, call, "DenseArray", true)
+}
+
+fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bool) -> Tok {
     // Keyed by the SOURCE call site: calls derived while solving (bindings
     // through relays, protocol touches) share their origin's template.
     let site = m.calls[call as usize].site;
@@ -337,11 +349,11 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         return m.site_tok(tm, ctx);
     }
     let tm = m.tmpls.len() as TmplId;
-    let kind = if what == "Array" {
+    let kind = if what == "Array" || hole_free {
         TmplKind::Arr {
             module: u32::MAX,
             site,
-            hole_free: false,
+            hole_free,
         }
     } else {
         TmplKind::BObj {

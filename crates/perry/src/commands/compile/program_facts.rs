@@ -527,6 +527,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
                 out.number_inputs.insert(*id);
             }
+            if b.length_number {
+                out.length_number_inputs.insert(*id);
+            }
         }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
