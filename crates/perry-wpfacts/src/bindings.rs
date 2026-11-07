@@ -348,6 +348,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
     }
     let mut out: Vec<ModuleBindings> = (0..g.mods.len()).map(|_| Default::default()).collect();
     for (mi, info) in g.mods.iter().enumerate() {
+        let mut names: Option<std::collections::HashMap<u32, String>> = None;
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
@@ -355,9 +356,27 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
                 let f = facts_of(g, n);
                 if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
                     let nd = &g.m.nodes[n as usize];
+                    let names = names.get_or_insert_with(|| {
+                        let text = format!("{:?}", g.modules[mi].1);
+                        let mut out = std::collections::HashMap::new();
+                        for pat in ["Let { id: ", "Param { id: "] {
+                            let mut rest = text.as_str();
+                            while let Some(i) = rest.find(pat) {
+                                rest = &rest[i + pat.len()..];
+                                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                                if let Some(j) = rest.find("name: \"") {
+                                    let nm: String = rest[j + 7..].chars().take_while(|c| *c != '"').collect();
+                                    if let Ok(k) = num.parse::<u32>() {
+                                        out.entry(k).or_insert(nm);
+                                    }
+                                }
+                            }
+                        }
+                        out
+                    });
                     eprintln!(
                         "perry: int-range node m{mi} local {id} {} prim={} toks={} range={:?} ruled={}",
-                        g.m.node_names.get(n as usize).map(String::as_str).unwrap_or("?"),
+                        names.get(&id).map(String::as_str).unwrap_or("?"),
                         nd.prim,
                         nd.pts.len(),
                         nd.range,
