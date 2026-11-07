@@ -1,11 +1,29 @@
-//! `node:sea` public API surface for normal Perry executables.
-//!
-//! Perry is not currently running from a Node SEA asset blob, so the observable
-//! Node-compatible behavior is module availability, `isSea() === false`, and
-//! asset APIs throwing `ERR_NOT_IN_SINGLE_EXECUTABLE_APPLICATION` after key
-//! validation.
+//! `node:sea` APIs backed by Perry's explicitly enabled embedded-asset profile.
 
-use crate::value::{JSValue, TAG_FALSE};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use crate::value::{JSValue, TAG_FALSE, TAG_TRUE};
+
+static SEA_PROFILE: AtomicBool = AtomicBool::new(false);
+static SEA_BLOB_FACTORY: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the stdlib Blob-handle constructor when its dispatch layer starts.
+#[no_mangle]
+pub extern "C" fn js_sea_install_blob_factory(factory: usize) {
+    SEA_BLOB_FACTORY.store(factory, Ordering::Release);
+}
+
+/// Called only by the generated startup object for an explicit `--sea` build.
+#[no_mangle]
+pub extern "C" fn js_register_sea_profile() {
+    SEA_PROFILE.store(true, Ordering::Release);
+}
+
+// The generated registration object references this function outside Rust's
+// reachability graph; retain it through the release whole-program LTO pass.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_SEA_PROFILE_REGISTRATION: unsafe extern "C" fn() = js_register_sea_profile;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
@@ -27,6 +45,14 @@ fn false_value() -> f64 {
     f64::from_bits(TAG_FALSE)
 }
 
+fn true_value() -> f64 {
+    f64::from_bits(TAG_TRUE)
+}
+
+fn sea_enabled() -> bool {
+    SEA_PROFILE.load(Ordering::Acquire)
+}
+
 fn validate_key(value: f64) {
     if JSValue::from_bits(value.to_bits()).is_any_string() {
         return;
@@ -45,30 +71,158 @@ fn throw_not_in_sea() -> ! {
     )
 }
 
+fn asset_key(value: f64) -> String {
+    crate::value::boxed_text::get_string_content(value)
+}
+
+fn blob_content_type(value: f64) -> String {
+    let value = JSValue::from_bits(value.to_bits());
+    if value.is_undefined() {
+        return String::new();
+    }
+    // Node's Blob constructor applies Web IDL DOMString conversion to `type`,
+    // then keeps printable ASCII and lowercases ASCII letters.
+    let value = f64::from_bits(value.bits());
+    let string = crate::value::js_nanbox_string(crate::value::js_jsvalue_to_string(value) as i64);
+    let raw = crate::value::boxed_text::get_string_content(string);
+    if !raw.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
+        return String::new();
+    }
+    raw.to_ascii_lowercase()
+}
+
+fn asset_bytes(key: &str) -> &'static [u8] {
+    crate::embedded::lookup_sea_asset(key).unwrap_or_else(|| {
+        crate::fs::validate::throw_error_with_code(
+            &format!("No such asset: {key}"),
+            "ERR_SINGLE_EXECUTABLE_APPLICATION_ASSET_NOT_FOUND",
+        )
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_sea_is_sea() -> f64 {
-    false_value()
+    if sea_enabled() {
+        true_value()
+    } else {
+        false_value()
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn js_sea_get_asset(key: f64, _encoding: f64) -> f64 {
+pub extern "C" fn js_sea_get_asset(key: f64, encoding: f64) -> f64 {
+    let encoding_js = JSValue::from_bits(encoding.to_bits());
+    if !encoding_js.is_undefined() && !encoding_js.is_any_string() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"encoding\" argument must be of type string",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
     validate_key(key);
-    throw_not_in_sea()
+    if !sea_enabled() {
+        throw_not_in_sea();
+    }
+    let bytes = asset_bytes(&asset_key(key));
+    if encoding_js.is_undefined() {
+        return crate::node_submodules::consumers::bytes_to_array_buffer_value(bytes);
+    }
+    let encoding = crate::value::boxed_text::get_string_content(encoding);
+    let Some(decoded) = crate::text::decode_bytes_with_label(bytes, &encoding) else {
+        crate::fs::validate::throw_range_error_named(
+            &format!("The \"encoding\" argument is invalid. Received '{encoding}'"),
+            "ERR_ENCODING_NOT_SUPPORTED",
+        );
+    };
+    crate::value::js_nanbox_string(decoded)
 }
 
 #[no_mangle]
-pub extern "C" fn js_sea_get_asset_as_blob(key: f64, _options: f64) -> f64 {
+pub extern "C" fn js_sea_get_asset_as_blob(key: f64, options: f64) -> f64 {
     validate_key(key);
+    if sea_enabled() {
+        let bytes = asset_bytes(&asset_key(key));
+        let options = JSValue::from_bits(options.to_bits());
+        let content_type = if options.is_undefined() || options.is_null() {
+            String::new()
+        } else if options.is_pointer() || options.is_handle() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options = scope.root_nanbox_f64(f64::from_bits(options.bits()));
+            let type_key = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+                crate::string::intern_ascii_literal(b"type") as i64,
+            ));
+            let type_value = unsafe {
+                crate::object::js_object_get_property_key(
+                    options.get_nanbox_f64(),
+                    type_key.get_nanbox_f64(),
+                )
+            };
+            let type_value = scope.root_nanbox_f64(type_value);
+            blob_content_type(type_value.get_nanbox_f64())
+        } else {
+            // Blob's Web IDL dictionary conversion accepts primitive values
+            // (which have no `type` member) and nullish values.
+            String::new()
+        };
+        let factory = SEA_BLOB_FACTORY.load(Ordering::Acquire);
+        if factory != 0 {
+            let factory: unsafe extern "C" fn(*const u8, usize, *const u8, usize) -> f64 =
+                unsafe { std::mem::transmute(factory) };
+            return unsafe {
+                factory(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    content_type.as_ptr(),
+                    content_type.len(),
+                )
+            };
+        }
+        return crate::node_submodules::blob::blob_value_from_bytes_and_type(bytes, &content_type);
+    }
     throw_not_in_sea()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodings_accept_only_labels_known_to_text_decoder() {
+        assert!(crate::text::decode_bytes_with_label(b"hi", "utf-8").is_some());
+        assert!(crate::text::decode_bytes_with_label(b"hi", "this-is-not-an-encoding").is_none());
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_sea_get_raw_asset(key: f64) -> f64 {
     validate_key(key);
+    if sea_enabled() {
+        let _ = asset_bytes(&asset_key(key));
+        crate::fs::validate::throw_error_with_code(
+            "getRawAsset() is not supported because Perry cannot expose read-only executable data as an ArrayBuffer",
+            "ERR_NOT_SUPPORTED",
+        );
+    }
     throw_not_in_sea()
 }
 
 #[no_mangle]
 pub extern "C" fn js_sea_get_asset_keys() -> f64 {
-    throw_not_in_sea()
+    if !sea_enabled() {
+        throw_not_in_sea();
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc(0) as i64,
+    ));
+    for name in crate::embedded::asset_names() {
+        let string = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32) as i64,
+        ));
+        let array_ptr = JSValue::from_bits(array.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::array::ArrayHeader>()
+            .cast_mut();
+        let grown = crate::array::js_array_push_f64(array_ptr, string.get_nanbox_f64());
+        array.set_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
+    }
+    array.get_nanbox_f64()
 }

@@ -60,6 +60,20 @@ pub(crate) fn crate_of(obj: &str) -> Option<&str> {
     if parts.len() < 3 {
         return None;
     }
+    // Newer rustc versions put the crate name and disambiguator before the
+    // first dot (`perry_runtime-<hash>.<codegen-unit>.<hash>.rcgu.o`). Older
+    // archives use `<prefix>.<crate-name>.<hash>.rcgu.o`. Check both layouts;
+    // otherwise codegen-unit IDs are mistaken for crate names and runtime
+    // exports disappear from the GC effects table.
+    if let Some((crate_name, hash)) = parts[0].rsplit_once('-') {
+        if hash.len() == 16
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Some(crate_name);
+        }
+    }
     Some(if let Some((head, hash)) = parts[1].rsplit_once('-') {
         if hash.len() == 16
             && hash
@@ -844,6 +858,28 @@ fn classify_inner(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn crate_of_supports_current_rustc_archive_member_names() {
+        assert_eq!(
+            super::crate_of(
+                "perry_runtime-1e10f4d1c1694ef8.atmkte0qb3a7ttnlq3kuhpw14.1he7acv.rcgu.o"
+            ),
+            Some("perry_runtime")
+        );
+        assert_eq!(
+            super::crate_of("foreign_crate-abcdef0123456789.cgu.0.rcgu.o"),
+            Some("foreign_crate")
+        );
+    }
+
+    #[test]
+    fn crate_of_keeps_support_for_legacy_rustc_archive_member_names() {
+        assert_eq!(
+            super::crate_of("runtime.perry_runtime.hash.rcgu.o"),
+            Some("perry_runtime")
+        );
+    }
+
     #[test]
     fn unicode_symbol_names_survive_llvm_suffix_normalization() {
         let name = "perry_fn_module_ts__gr.uC3.uBC.uC3.u9Fe.u24m.uC3.uA9thode";

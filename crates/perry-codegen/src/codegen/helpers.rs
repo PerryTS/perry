@@ -883,8 +883,8 @@ pub(crate) fn default_target_triple() -> String {
 ///  * `watchos-simulator`              → arm64-apple-watchos10.0-simulator
 ///  * `tvos`, `tvos-simulator`         → aarch64-apple-tvos
 ///  * `android`                        → aarch64-unknown-linux-android
-///  * `linux` (x86_64 alias)           → x86_64-unknown-linux-gnu
-///  * `linux-aarch64`                  → aarch64-unknown-linux-gnu
+///  * `linux` / `linux-x86_64`         → x86_64-unknown-linux-gnu
+///  * `linux-aarch64` / `linux-arm64`  → aarch64-unknown-linux-gnu
 ///  * `linux-musl` (x86_64 alias)      → x86_64-unknown-linux-musl (fully static)
 ///  * `linux-aarch64-musl`             → aarch64-unknown-linux-musl (fully static)
 ///  * `macos` (aarch64 alias)          → arm64-apple-macosx15.0.0
@@ -925,8 +925,8 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "android-x86_64" => Some("x86_64-unknown-linux-android".to_string()),
         // Wear OS is Android-on-a-watch: same arm64 Android object format.
         "wearos" => Some("aarch64-unknown-linux-android".to_string()),
-        "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
-        "linux-aarch64" => Some("aarch64-unknown-linux-gnu".to_string()),
+        "linux" | "linux-x86_64" => Some("x86_64-unknown-linux-gnu".to_string()),
+        "linux-aarch64" | "linux-arm64" => Some("aarch64-unknown-linux-gnu".to_string()),
         // musl targets — fully static binaries that run on Lambda
         // provided.al2023, scratch/distroless containers, Cloud Run, etc.
         // (no glibc loader dependency). See link/platform_cmd.rs for the
@@ -964,7 +964,9 @@ pub const TARGET_NAMES: &[&str] = &[
     "android-x86_64",
     "wearos",
     "linux",
+    "linux-x86_64",
     "linux-aarch64",
+    "linux-arm64",
     "linux-musl",
     "linux-x86_64-musl",
     "linux-aarch64-musl",
@@ -1066,8 +1068,8 @@ mod target_os_tests {
                 "tvos" | "tvos-simulator" => "tvos",
                 "harmonyos" | "harmonyos-simulator" => "ohos",
                 "android" | "android-x86_64" | "wearos" => "android",
-                "linux" | "linux-aarch64" | "linux-musl" | "linux-x86_64-musl"
-                | "linux-aarch64-musl" => "linux",
+                "linux" | "linux-x86_64" | "linux-aarch64" | "linux-arm64" | "linux-musl"
+                | "linux-x86_64-musl" | "linux-aarch64-musl" => "linux",
                 "macos" | "macos-x86_64" => "macos",
                 "windows" | "windows-winui" | "windows-x86_64" | "windows-aarch64"
                 | "windows-arm64" => "windows",
@@ -1082,6 +1084,18 @@ mod target_os_tests {
             };
             assert_eq!(target_os_of(&triple), Some(expected), "{name}: {triple}");
         }
+    }
+
+    #[test]
+    fn linux_architecture_aliases_resolve_to_matching_triples() {
+        assert_eq!(
+            resolve_target_triple("linux-x86_64").as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            resolve_target_triple("linux-arm64").as_deref(),
+            Some("aarch64-unknown-linux-gnu")
+        );
     }
 
     #[test]
