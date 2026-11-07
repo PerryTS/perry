@@ -959,6 +959,30 @@ fn node_api_host_exports_what_its_addons_import() {
     );
 }
 
+#[test]
+fn vfs_c_exports_cover_addon_dependencies_without_expanding_node_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = addon_context(dir.path(), &[], &["napi_create_int32"]);
+    assert_eq!(
+        ctx.perry_c_host_exports(),
+        perry_runtime_manifest::perry_c_host_symbols().collect::<Vec<_>>()
+    );
+    assert_eq!(ctx.node_api_host_exports(), ["napi_create_int32"]);
+
+    ctx.native_addons.clear();
+    assert!(ctx.perry_c_host_exports().is_empty());
+
+    let open = addon_context(
+        dir.path(),
+        &[perry_runtime_manifest::NodeApiReach::World],
+        &[],
+    );
+    assert_eq!(
+        open.perry_c_host_exports(),
+        perry_runtime_manifest::perry_c_host_symbols().collect::<Vec<_>>()
+    );
+}
+
 /// A native addon reaches what its Node-API imports reach. A closed addon
 /// links the Node-API host and the subsystems of the values it creates, not
 /// every global subsystem; an open one links them all.

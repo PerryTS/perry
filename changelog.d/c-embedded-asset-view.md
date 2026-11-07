@@ -1,0 +1,1 @@
+C code can read an embedded file through Perry's `$perryfs` path with the supplemental `perry_vfs_read_file_v1` API. It returns an immutable view that remains valid for the process lifetime without extracting files or intercepting ordinary operating-system file access.
