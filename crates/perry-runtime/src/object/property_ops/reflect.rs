@@ -284,6 +284,11 @@ pub extern "C" fn js_reflect_delete(target: f64, key: f64) -> f64 {
     if lookup(target).is_some() {
         return proxy_delete(target, property_key);
     }
+    // A native namespace's members live in its module tables and the
+    // override table, not in its keys.
+    if let Some(deleted) = unsafe { crate::object::nm_delete_member(target, property_key) } {
+        return nanbox_bool(deleted != 0);
+    }
     reflect_ordinary_delete_property_key(target, property_key)
 }
 

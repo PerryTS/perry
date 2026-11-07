@@ -91,3 +91,52 @@ fn module_value_computed_key_reads_top() {
     );
     assert!(site(&pf, "q").top, "{}", pf.dump_text());
 }
+
+/// A function a module object holds declares own keys the model does not
+/// describe: `http.ServerResponse.prototype` is the object instances
+/// inherit from, where a program store reaches every response (node). The
+/// read is an unknown value, never `Function.prototype`'s absent key read
+/// as `undefined` (test_gap_http_proto_writes: `OM.end` was proven to be
+/// read from a primitive).
+#[test]
+fn module_constructor_prototype_is_not_absent() {
+    let pf = facts(
+        r#"
+        import * as http from "node:http";
+        const SR: any = http.ServerResponse.prototype;
+        const OM: any = http.OutgoingMessage.prototype;
+        function readEnd(o: any): any { return o.end; }
+        function readX(o: any): any { return o.x; }
+        const r: any = new http.ServerResponse({ method: "GET" } as any);
+        SR.x = 1;
+        console.log(readX(r), typeof readEnd(OM), readX(SR));
+    "#,
+    );
+    for k in ["end", "x"] {
+        let s = site(&pf, k);
+        assert!(s.top || !s.receivers.is_empty(), "{k}\n{}", pf.dump_text());
+    }
+}
+
+/// The same for other module functions: `events.EventEmitter.prototype`
+/// (a program store there reaches every emitter) and a static own key,
+/// `stream.Readable.from`, a function, not `undefined`.
+#[test]
+fn module_function_own_keys_are_not_absent() {
+    let pf = facts(
+        r#"
+        import * as events from "node:events";
+        import * as stream from "node:stream";
+        const EP: any = events.EventEmitter.prototype;
+        const from: any = stream.Readable.from;
+        function readQ(o: any): any { return o.q; }
+        function readW(o: any): any { return o.w; }
+        EP.q = 1;
+        console.log(readQ(EP), readW(from));
+    "#,
+    );
+    for k in ["q", "w"] {
+        let s = site(&pf, k);
+        assert!(s.top || !s.receivers.is_empty(), "{k}\n{}", pf.dump_text());
+    }
+}

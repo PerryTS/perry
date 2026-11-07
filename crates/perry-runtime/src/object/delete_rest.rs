@@ -909,6 +909,14 @@ pub extern "C" fn js_object_delete_field_value(
     if !delete_receiver_is_pointer(obj_value) {
         return 1;
     }
+    // A native namespace's members live in its module tables and the
+    // override table, not in its keys.
+    if !key.is_null() {
+        let key_value = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+        if let Some(result) = unsafe { super::nm_delete_member(obj_value, key_value) } {
+            return result;
+        }
+    }
     let obj = crate::value::js_nanbox_get_pointer(obj_value) as *mut ObjectHeader;
     js_object_delete_field(obj, key)
 }
@@ -917,6 +925,18 @@ pub extern "C" fn js_object_delete_field_value(
 /// `js_object_delete_field_value`, delegating real objects to the dynamic path.
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
+    // A native namespace's members live in its module tables and the
+    // override table, not in its keys.
+    if let Some(result) = unsafe { super::nm_delete_member(obj_value, key) } {
+        return result;
+    }
+    delete_dynamic_value(obj_value, key)
+}
+
+/// `js_object_delete_dynamic_value` for the runtime's own deletes, which never
+/// name a namespace member (the program-level entry adds that arm).
+#[inline(never)]
+pub(crate) fn delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
     #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "delete");
     if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
