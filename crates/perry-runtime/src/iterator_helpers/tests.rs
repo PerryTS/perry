@@ -758,7 +758,7 @@ fn helper_methods_are_builtin_properties_with_spec_metadata() {
     unsafe {
         for name in [
             "map", "filter", "take", "drop", "flatMap", "reduce", "toArray", "forEach", "some",
-            "every", "find",
+            "every", "find", "join", "includes",
         ] {
             let f = proto_method(name);
             let m = Method::from_name(name).expect("a helper name");
@@ -776,6 +776,86 @@ fn helper_methods_are_builtin_properties_with_spec_metadata() {
             let expected = if name == "toArray" { 0.0 } else { 1.0 };
             assert_eq!(length, expected, "Iterator.prototype.{name}.length");
         }
+    }
+}
+
+#[test]
+fn iterator_join_formats_values_and_keeps_empty_result_empty() {
+    init();
+    unsafe {
+        let values = [
+            f64::from_bits(JSValue::number(1.0).bits()),
+            f64::from_bits(JSValue::null().bits()),
+            f64::from_bits(JSValue::undefined().bits()),
+            crate::value::js_nanbox_string(
+                crate::string::js_string_from_bytes(b"x".as_ptr(), 1) as i64
+            ),
+        ];
+        let iter = helper_over(&values);
+        let joined = tower(iter, "join", &[]);
+        assert_eq!(
+            crate::string::with_string_value_bytes(joined, |b| b.to_vec()),
+            Some(b"1,,,x".to_vec())
+        );
+
+        let empty = helper_over(&[]);
+        let joined = tower(
+            empty,
+            "join",
+            &[crate::value::js_nanbox_string(
+                crate::string::js_string_from_bytes(b"|".as_ptr(), 1) as i64,
+            )],
+        );
+        assert_eq!(
+            crate::string::with_string_value_bytes(joined, |b| b.to_vec()),
+            Some(Vec::new())
+        );
+    }
+}
+
+#[test]
+fn iterator_includes_uses_same_value_zero_and_consumes_skipped_values() {
+    init();
+    unsafe {
+        let values = [f64::NAN, 1.0, -0.0, 2.0];
+        let iter = helper_over(&values);
+        let includes_nan = tower(iter, "includes", &[f64::NAN]);
+        assert_eq!(
+            JSValue::from_bits(includes_nan.to_bits()).bits(),
+            crate::value::TAG_TRUE
+        );
+
+        let iter = helper_over(&values);
+        let includes_zero_after_skip = tower(
+            iter,
+            "includes",
+            &[0.0, f64::from_bits(JSValue::number(2.0).bits())],
+        );
+        assert_eq!(
+            JSValue::from_bits(includes_zero_after_skip.to_bits()).bits(),
+            crate::value::TAG_TRUE
+        );
+    }
+}
+
+#[test]
+fn iterator_includes_rejects_invalid_skip_counts_and_closes_receiver() {
+    init();
+    unsafe {
+        let iter = closable_iterator();
+        for (skip, expected) in [
+            (f64::NAN, "TypeError"),
+            (1.5, "TypeError"),
+            (-1.0, "RangeError"),
+            (9_007_199_254_740_992.0, "RangeError"),
+        ] {
+            let message = thrown(|| call_with(proto_method("includes"), iter, &[1.0, skip]));
+            assert!(
+                message.starts_with(expected),
+                "expected {expected}, got {message}"
+            );
+        }
+        assert_eq!(RETURNS.load(Ordering::SeqCst), 4);
     }
 }
 
