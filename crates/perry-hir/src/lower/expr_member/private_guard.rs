@@ -22,7 +22,7 @@ pub(crate) fn private_storage_property(ctx: &LoweringContext, field_name: &str) 
             if member.kind == super::super::PrivKind::Field {
                 crate::private_names::private_value_key(class_id, field_name)
             } else {
-                format!("#<perry:private-member:{class_id}:{field_name}>")
+                crate::private_names::private_member_key(class_id, field_name)
             }
         }
         None => field_name.to_string(),

@@ -70,14 +70,22 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             UnaryOp::Not => false,
         },
-        // Non-add arithmetic has already applied its Number/BigInt/coercion
-        // rules. Consume its canonical-result proof, including closed raw
-        // field contracts, rather than requiring both syntax leaves to be
-        // literals or counters. Keep add's existing live-bits bookkeeping;
-        // concatenation can publish a pointer and is not this result contract.
-        Expr::Binary { op, .. } => {
-            !matches!(op, BinaryOp::Add)
-                && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+        // Arithmetic has already applied its Number/BigInt/coercion rules.
+        // Consume its canonical-result proof, including closed raw field
+        // contracts, rather than requiring both syntax leaves to be literals
+        // or counters. An add is admitted only when both operands are
+        // themselves numeric by construction: then it is an `fadd` of two
+        // canonical numbers, never a concatenation, and its NaN is canonical.
+        // `PERRY_NUMERIC_ADD_BITS=0` keeps every add on the live-bits test.
+        Expr::Binary { op, left, right } => {
+            if matches!(op, BinaryOp::Add) {
+                std::env::var("PERRY_NUMERIC_ADD_BITS").as_deref() != Ok("0")
+                    && expr_produces_numeric_bits_by_construction(ctx, left)
+                    && expr_produces_numeric_bits_by_construction(ctx, right)
+                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+            } else {
+                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+            }
         }
         Expr::Conditional {
             then_expr,

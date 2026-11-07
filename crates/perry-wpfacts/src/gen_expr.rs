@@ -396,6 +396,44 @@ impl<'a> Gen<'a> {
         dst
     }
 
+    /// The static blocks of class expression `template` that one
+    /// evaluation runs (`ClassFreshStaticInit::Block`, an index into the
+    /// template's `__perry_static_init_N` functions in source order): a
+    /// call of each with `this` the evaluated class object `cv`.
+    fn fresh_static_blocks(
+        &mut self,
+        fx: &Fx,
+        template: &str,
+        order: &[perry_hir::ClassFreshStaticInit],
+        cv: NodeId,
+    ) {
+        let mi = fx.module;
+        let module = self.modules[mi as usize].1;
+        let Some(c) = module.classes.iter().find(|c| c.name == template) else {
+            return;
+        };
+        let blocks: Vec<u32> = c
+            .static_methods
+            .iter()
+            .filter(|m| m.name.starts_with("__perry_static_init_"))
+            .map(|m| m.id)
+            .collect();
+        for step in order {
+            let perry_hir::ClassFreshStaticInit::Block(i) = step else {
+                continue;
+            };
+            let Some(&f) = blocks
+                .get(*i as usize)
+                .and_then(|id| self.mods[mi as usize].funcs.get(id))
+            else {
+                continue;
+            };
+            let t = self.m.funcs[f as usize].token;
+            let callee = self.tok_node(t);
+            let _ = self.call_value(callee, ThisArg::Node(cv), vec![], vec![]);
+        }
+    }
+
     pub(crate) fn mcall(
         &mut self,
         recv: NodeId,
@@ -1150,6 +1188,20 @@ impl<'a> Gen<'a> {
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                // A for-of walk's element (`Gen::for_of_walks`): the counter
+                // is below the length, so the read is what the iteration of
+                // the array yields (a hole's `undefined` included), as the
+                // IteratorRecord loop's element is, and never the past-the-end
+                // `undefined` of an arbitrary index.
+                let walk = match (object.as_ref(), index.as_ref()) {
+                    (Expr::LocalGet(a), Expr::LocalGet(k)) => {
+                        self.for_of_walks.contains(&(fx.module, *a, *k))
+                    }
+                    _ => false,
+                };
+                if walk {
+                    return self.iterate(o);
+                }
                 match key {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any(_) => {
@@ -1783,6 +1835,7 @@ impl<'a> Gen<'a> {
                 named_statics,
                 computed_keys,
                 computed_statics,
+                static_init_order,
                 captured_args,
                 shared_first_evaluation,
                 evaluated_parent,
@@ -1838,6 +1891,10 @@ impl<'a> Gen<'a> {
                     let vn = self.expr(fx, v);
                     self.store(fx, cv, Key::any(), vn, "static[k]".into(), None, false);
                 }
+                // Each static block runs at this evaluation with `this` the
+                // evaluated class object: codegen calls the template's block
+                // function directly (`js_static_this_arm_value`), no lookup.
+                self.fresh_static_blocks(fx, template, static_init_order, cv);
                 for (i, a) in captured_args.iter().enumerate() {
                     let v = self.snapshot_read(fx, a);
                     let env = self.class_env(mi, template, i);

@@ -664,7 +664,17 @@ impl Model {
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`. An
         // `arguments` object's chain is an ordinary one (`Object.prototype`).
+        // Its own properties are ordinary ones, though: an accessor the
+        // program defines on it after its birth (`defineProperty` on a
+        // `JSON.parse` record) runs with the receiver as `this`, now or
+        // when it is defined later in the solve (as in `own_values_of`).
         if key == Key::any() && self.is_array_like(t) && !self.is_args(t) {
+            let act = ChainAct::Load(dst);
+            self.any_walk_holders
+                .entry(t)
+                .or_default()
+                .push((origin, act));
+            self.accessor_hit(origin, t, Key::any(), act);
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -1206,6 +1216,9 @@ impl Model {
             }
             return;
         }
+        for x in self.class_id_holders(origin, p) {
+            self.accessor_hit(origin, x, key, act);
+        }
         // A class prototype defines its declared members at class creation:
         // the lookup ends there (resumed if the prototype is later mutated).
         if self.stops_at(p, key) {
@@ -1214,6 +1227,45 @@ impl Model {
             return;
         }
         self.chain_from(origin, p, key, act);
+    }
+
+    /// The class-id holders of a lookup on `q` for `of` (the receiver, or
+    /// the prototype the lookup came from): a specialization's instances
+    /// have its origin's prototype object `q` as [[Prototype]], one object
+    /// (`js_register_class_generic_origin`), and a call or accessor access
+    /// there for an instance of the specialization (or of a class derived
+    /// from one) runs the specialization's member by class id (codegen
+    /// `static_prototype::chain`): `Proto` of each such specialization,
+    /// which holds its declared members and is no object's prototype.
+    pub(crate) fn class_id_holders(&mut self, of: Tok, q: Tok) -> Vec<Tok> {
+        let mut out = Vec::new();
+        if self.constructor_origins.is_empty() {
+            return out;
+        }
+        let TokKind::Proto(o) = self.toks[q as usize] else {
+            return out;
+        };
+        let starts: Vec<TmplId> = match self.toks[of as usize] {
+            TokKind::Obj(c, _) if matches!(self.tmpls[c as usize].kind, TmplKind::Class { .. }) => {
+                vec![c]
+            }
+            TokKind::Proto(c) => vec![c],
+            _ => self.virt_protos.get(&of).cloned().unwrap_or_default(),
+        };
+        for c in starts {
+            let mut cur = Some(c);
+            for _ in 0..self.tmpls.len() {
+                let Some(x) = cur else { break };
+                if x != o && self.constructor_origin(x) == o {
+                    let t = self.tok(TokKind::Proto(x));
+                    if !out.contains(&t) {
+                        out.push(t);
+                    }
+                }
+                cur = self.tmpls[x as usize].parent;
+            }
+        }
+        out
     }
 
     /// `super.key` from receiver `origin`: the lookup starts at `start`.

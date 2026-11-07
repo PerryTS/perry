@@ -841,7 +841,7 @@ pub(crate) struct FnCtx<'a> {
     /// Empty-literal bindings a later loop pushes into
     /// (`collectors::loop_pushed_arrays`): their `[]` is born with the larger
     /// append reserve.
-    pub loop_pushed_arrays: &'a std::collections::HashSet<u32>,
+    pub loop_pushed_arrays: &'a crate::collectors::PushedArrays,
     /// Set by `lower_let` while it lowers such a binding's `[]` initializer.
     pub pushed_array_birth: bool,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
