@@ -356,56 +356,12 @@ fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
 }
 
 pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
-    if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
-        for (n, l) in g.m.labels.iter().enumerate() {
-            if matches!(*l, "narrow" | "narrow-end" | "update" | "binary" | "NUMLIT") {
-                let nd = &g.m.nodes[n];
-                eprintln!(
-                    "perry: int-range {l} n{n} prim={} toks={} range={:?} ruled={} obs={} rsteps={} succ={:?}",
-                    nd.prim, nd.pts.len(), nd.range, nd.ruled, nd.obs, nd.rsteps, nd.succ
-                );
-            }
-        }
-    }
     let mut out: Vec<ModuleBindings> = (0..g.mods.len()).map(|_| Default::default()).collect();
     for (mi, info) in g.mods.iter().enumerate() {
-        let mut names: Option<std::collections::HashMap<u32, String>> = None;
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
-            .map(|(&id, &n)| {
-                let f = facts_of(g, n);
-                if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
-                    let nd = &g.m.nodes[n as usize];
-                    let names = names.get_or_insert_with(|| {
-                        let text = format!("{:?}", g.modules[mi].1);
-                        let mut out = std::collections::HashMap::new();
-                        for pat in ["Let { id: ", "Param { id: "] {
-                            let mut rest = text.as_str();
-                            while let Some(i) = rest.find(pat) {
-                                rest = &rest[i + pat.len()..];
-                                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                                if let Some(j) = rest.find("name: \"") {
-                                    let nm: String = rest[j + 7..].chars().take_while(|c| *c != '"').collect();
-                                    if let Ok(k) = num.parse::<u32>() {
-                                        out.entry(k).or_insert(nm);
-                                    }
-                                }
-                            }
-                        }
-                        out
-                    });
-                    eprintln!(
-                        "perry: int-range node m{mi} local {id} {} prim={} toks={} range={:?} ruled={}",
-                        names.get(&id).map(String::as_str).unwrap_or("?"),
-                        nd.prim,
-                        nd.pts.len(),
-                        nd.range,
-                        nd.ruled
-                    );
-                }
-                (id, f)
-            })
+            .map(|(&id, &n)| (id, facts_of(g, n)))
             .collect();
         v.sort_by_key(|(id, _)| *id);
         out[mi].locals = v;
