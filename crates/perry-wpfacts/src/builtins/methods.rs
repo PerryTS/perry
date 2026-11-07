@@ -1,6 +1,7 @@
 //! Method calls on primitives, own objects and prototypes: the summaries a call through a key runs.
 
 use super::*;
+use crate::summary::{Deferred, NativeRecv};
 
 /// An intrinsic prototype on `origin`'s chain read or called under a key
 /// that names none of its members (a number, DECISIONS 217): only a number
@@ -117,7 +118,28 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
 
 // ------------------------------------------------------------- methods
 
+/// Before summaries exist, a native method run waits (`Deferred::Native`).
+fn native_waits(m: &mut Model, r: NativeRecv, key: Key, call: CallId) -> bool {
+    if m.sum.ready {
+        return false;
+    }
+    m.sum.deferred.push(Deferred::Native(r, key, call));
+    true
+}
+
+/// The native method run a `Deferred::Native` names.
+pub(crate) fn native_method_at(m: &mut Model, r: NativeRecv, key: Key, call: CallId) {
+    match r {
+        NativeRecv::Own(t) => own_method(m, t, key, call),
+        NativeRecv::Proto(p, origin) => proto_method(m, p, origin, key, call),
+        NativeRecv::Prim(prim) => prim_method(m, prim, key, call),
+    }
+}
+
 pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
+    if native_waits(m, NativeRecv::Prim(prim), key, call) {
+        return;
+    }
     if let Key::Named(a) = key {
         if matches!(
             members::prim_member(prim, &m.atoms[a as usize]),
@@ -220,6 +242,9 @@ pub(super) fn undescribed_method(
 
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
+    if native_waits(m, NativeRecv::Own(t), key, call) {
+        return;
+    }
     let prev = m.cur_this.replace(t);
     own_method_inner(m, t, key, call);
     m.cur_this = prev;
@@ -345,6 +370,9 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// Builtin methods found on the prototype chain (`Object.prototype` and
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
+    if native_waits(m, NativeRecv::Proto(p, origin), key, call) {
+        return;
+    }
     if matches!(m.toks[p as usize], TokKind::ObjectProto) {
         if let Key::Named(a) = key {
             if matches!(

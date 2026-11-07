@@ -85,6 +85,20 @@ pub enum Deferred {
     NewNamed(Atom, CallId),
     /// A for-in body token run over an object token (`Model::for_in_tok`).
     ForIn(CallId, Tok, Tok),
+    /// A native method run at a call (`builtins::own_method`,
+    /// `proto_method`, `prim_method`): like a birth, it waits for summaries,
+    /// so what the method births and calls at a summary's call is per
+    /// instance, and no node of the method holds a literal of the body.
+    Native(NativeRecv, Key, CallId),
+}
+
+/// The receiver a native method runs on: a token's own builtin behaviour,
+/// a prototype's methods with `this` = the origin token, or a primitive's.
+#[derive(Clone, Copy, Debug)]
+pub enum NativeRecv {
+    Own(Tok),
+    Proto(Tok, Tok),
+    Prim(u16),
 }
 
 #[derive(Default, Clone, Debug)]
@@ -637,7 +651,7 @@ impl Model {
                 let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
                 (7, site, ft)
             }
-            _ if self.sum.site_calls.contains(&call) => (0, call, ft),
+            _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
         };
@@ -681,6 +695,19 @@ impl Model {
     /// distinct call sites are distinct instances (key kind 7). The runs of
     /// one site share one (a loop making memos merges them); a site inside
     /// an instance is its template, so instances never multiply instances.
+    /// The program site whose kind-0 run `call` is: a plain call at a
+    /// program site outside every summary (`site_calls`), or a call the
+    /// solver made for a call at such a site (a native method's callback, a
+    /// bound target): the site's own call of that function would be one run
+    /// per site, and so is this one.
+    fn site_of_call(&self, call: CallId) -> Option<CallId> {
+        if self.sum.site_calls.contains(&call) {
+            return Some(call);
+        }
+        let o = *self.sum.origin.get(&call)?;
+        ((o as usize) < self.sum.n_prog && !self.sum.templates.contains(&o)).then_some(o)
+    }
+
     fn closure_maker(&self, f: FnIdx, x: Option<Tok>) -> bool {
         let Some(s) = self.sum.of.get(&f) else {
             return false;
@@ -1305,6 +1332,11 @@ impl Model {
                 }
                 Deferred::NewNamed(name, call) => self.new_named(name, call),
                 Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
+                // A summary's call: its instances run the method.
+                Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
+                Deferred::Native(r, key, call) => {
+                    self.with_b(|m| crate::builtins::native_method_at(m, r, key, call))
+                }
             }
         }
         // A `this` with values from generation (static blocks, field
