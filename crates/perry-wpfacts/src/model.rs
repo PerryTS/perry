@@ -32,22 +32,30 @@ pub const YIELD_VALUE: &str = "#yield";
 /// prototype read as a value, a number key's chain (read, call), a
 /// computed call's full lookup and numeric own fields, and (plus the primitive bit) a call under
 /// ToPropertyKey of `true`/`null`/`undefined`.
-pub const IDX_PROTO_VALUE: u8 = 32;
-pub const IDX_PLAIN_LOAD: u8 = 33;
-pub const IDX_PLAIN_CALL: u8 = 34;
-pub const IDX_NUM_OWN: u8 = 35;
-pub const IDX_CALL_ANY: u8 = 36;
-pub const IDX_CALL_NUM_OWN: u8 = 37;
-pub const IDX_CALL_NAMED: u8 = 64;
+pub const IDX_PROTO_VALUE: u16 = 32;
+pub const IDX_PLAIN_LOAD: u16 = 33;
+pub const IDX_PLAIN_CALL: u16 = 34;
+pub const IDX_NUM_OWN: u16 = 35;
+pub const IDX_CALL_ANY: u16 = 36;
+pub const IDX_CALL_NUM_OWN: u16 = 37;
+pub const IDX_CALL_NAMED: u16 = 64;
+/// The `IdxMCall` guards: a token receiver's key rule attached
+/// (`Cons::IdxKeyCall` on the key node), and (plus the primitive mask) a
+/// primitive receiver's. Each guarded action has its own tag: the
+/// `IdxKeyCall` run of a primitive receiver is `128 | mask` on the same
+/// (key node, ⊤, call), and `IdxLoad` holds tag 0 with a load's dst in the
+/// call's slot.
+pub const IDX_MCALL_TOKEN: u16 = 38;
+pub const IDX_MCALL_PRIM: u16 = 256;
 /// `idx_done` tags of the own-only read (`Cons::IdxOwnLoad`): its key rule
 /// attached, a token key's full lookup, a string/symbol key, a number key,
 /// the gate fired; 46, 47, 48: a `true`/`false`, `null`, `undefined` key.
-pub const IDX_OWN_KEY: u8 = 41;
-pub const IDX_OWN_ANY: u8 = 42;
-pub const IDX_OWN_STR: u8 = 43;
-pub const IDX_OWN_NUM: u8 = 44;
-pub const IDX_OWN_GATE: u8 = 45;
-pub const IDX_OWN_PRIM: u8 = 46;
+pub const IDX_OWN_KEY: u16 = 41;
+pub const IDX_OWN_ANY: u16 = 42;
+pub const IDX_OWN_STR: u16 = 43;
+pub const IDX_OWN_NUM: u16 = 44;
+pub const IDX_OWN_GATE: u16 = 45;
+pub const IDX_OWN_PRIM: u16 = 46;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -1153,7 +1161,7 @@ pub struct Model {
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
     /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
-    pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
+    pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u16)>,
     /// OWN1 census (PERRY_FACTS_PROFILE): own-only reads generated, gates
     /// that made one ordinary, object/⊤ keys that ran the full lookup.
     pub own_read_census: [u64; 3],

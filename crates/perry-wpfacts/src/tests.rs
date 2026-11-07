@@ -71,6 +71,7 @@ mod global_gc;
 mod global_namespace_store;
 mod host_objects;
 mod hub_tokens;
+mod idx_prim_call;
 mod indexed_callees;
 mod indexed_owner;
 mod inherited_layout;
