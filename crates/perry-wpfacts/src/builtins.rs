@@ -1283,12 +1283,23 @@ pub(crate) fn host_native(m: &Model, h: BuiltinNs, a: Atom, call: bool) -> bool 
 }
 
 /// A call of member `n` of host `h`: the runtime's own method (`native`)
-/// until a store reaches the key, then an unknown method of the host (`this`). A write
-/// later in the solve replays it (`NativeMiss::Call`).
-fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl FnOnce(&mut Model)) {
+/// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
+/// that reads other members of its receiver), then an unknown method of the
+/// host (`this`). A write later in the solve replays it (`NativeMiss::Call`).
+fn host_call(
+    m: &mut Model,
+    h: BuiltinNs,
+    n: &str,
+    gate: &str,
+    call: CallId,
+    native: impl FnOnce(&mut Model),
+) {
     let t = m.tok(TokKind::Builtin(h));
-    let a = m.atom(n);
+    let a = m.atom(gate);
     if host_written(m, h, a) {
+        // Census: the call hangs off the write that opened the gate, as a
+        // replay does.
+        m.census_native_read(t, a, NativeMiss::Call(t, call));
         let prev = m.cur_this.replace(t);
         unknown_method(
             m,
@@ -1300,6 +1311,22 @@ fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl Fn
         m.native_missing.push((t, a, NativeMiss::Call(t, call)));
         native(m);
     }
+}
+
+/// A host stream's own `write(chunk, encoding?, cb?)` (node's Writable,
+/// perry's `process_stdout_write_stub`): it returns a boolean and hands its
+/// receiver to no one. It keeps a binary chunk and the callback in the
+/// stream's state, which the program can read back (`writableBuffer`,
+/// `_writableState`), so the arguments reach unknown code. It reads other
+/// members of its receiver (`_write`, `_writableState`, `emit`, ...): a store
+/// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
+fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let r = m.reason(&format!("argument of host {h:?}.write (kept by the stream)"));
+    for &a in c.args.iter().chain(c.spread.iter()) {
+        m.sink_node(a, r);
+    }
+    ret_prim(m, call, prim::BOOL);
 }
 
 /// A console method formats its arguments (`Protocol::Inspect`); a spread
@@ -1364,12 +1391,15 @@ fn ns_method_inner(
         (BuiltinNs::Other | BuiltinNs::Console, n)
             if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
         {
-            host_call(m, BuiltinNs::Console, n, call, |m| console_args(m, call))
+            host_call(m, BuiltinNs::Console, n, n, call, |m| console_args(m, call))
         }
         // A stream method: the runtime's own, which hands its receiver to no
         // one; a listener it registers is called by the runtime (escaped).
+        (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, "write") => {
+            host_call(m, ns, "write", crate::STAR_KEY, call, |m| stream_write(m, ns, call))
+        }
         (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, n) => {
-            host_call(m, ns, n, call, |m| {
+            host_call(m, ns, n, n, call, |m| {
                 unknown_method_proto(m, call, &format!("argument of host {ns:?}.{n}"), None, true)
             })
         }
