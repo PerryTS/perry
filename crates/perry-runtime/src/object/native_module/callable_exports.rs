@@ -37,8 +37,7 @@ pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> 
 }
 
 pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
-    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, property_name)
-    {
+    if super::native_namespace_member_absent(module_name, property_name) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // Bound-native closures carry (module, method) metadata that the
