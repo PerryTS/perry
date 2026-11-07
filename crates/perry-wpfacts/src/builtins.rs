@@ -39,8 +39,9 @@ pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_parent_ctor,
-    native_parent_keys, native_parent_summarized, native_proto, native_written, native_written_by,
-    note_global_in_top, note_native_write, require_parts, settle_native_given,
+    native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
+    native_written, native_written_by, note_global_in_top, note_native_write, require_parts,
+    settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 

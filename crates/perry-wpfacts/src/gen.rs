@@ -1715,7 +1715,7 @@ impl<'a> Gen<'a> {
     /// no parent value (its `extends` resolved statically, or none) cannot
     /// take one: its instances escape and `v` is sunk, as before.
     pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
-        let native = tm.and_then(|tm| self.native_parent_value(tm));
+        let native = tm.and_then(|tm| crate::builtins::native_parent_value(&mut self.m, tm));
         match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
             Some((tm, (pv, _))) => {
                 self.m.edge(v, pv);
@@ -1748,6 +1748,13 @@ impl<'a> Gen<'a> {
                 self.m.parent_unsettled.insert(tm);
                 let chk = self.m.node_l("native-parent-check");
                 self.m.edge(v, chk);
+                // The class object's [[Prototype]] is the evaluated `extends`
+                // value (ClassDefinitionEvaluation), as for any parent value:
+                // a static read or call on the class (`X.g()`) reaches what
+                // the program stored on that constructor.
+                let c = self.m.tok(TokKind::ClassObj(tm));
+                let cp = self.m.proto_node(c);
+                self.m.edge(v, cp);
                 let reason = self.m.reason(why);
                 self.m.cons(
                     chk,
@@ -1768,19 +1775,6 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-    }
-
-    /// The value of the global object's declared constructor that class `tm`'s
-    /// built-in parent names (`extends Error`: the realm's `Error`); `None`
-    /// when the class has no built-in parent or the global declares none
-    /// under that name (`EventEmitter` is a module export).
-    fn native_parent_value(&mut self, tm: TmplId) -> Option<Tok> {
-        let (_, name) = self.m.tmpls[tm as usize].native_parent.clone()?;
-        let identity = self
-            .m
-            .namespace_property(BuiltinNs::GlobalThis, &name)?
-            .native?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity })))
     }
 
     /// After the bodies: a parent value no evaluated parent fed takes the

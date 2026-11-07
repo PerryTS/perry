@@ -1882,6 +1882,7 @@ mod native_value_call;
 mod declared_constructor;
 mod declared_global_write;
 mod native_parent;
+mod static_native_parent;
 mod ns_receiver;
 mod proto_own_call;
 mod receiver_param_call;
