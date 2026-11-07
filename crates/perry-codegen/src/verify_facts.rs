@@ -547,6 +547,10 @@ pub(crate) fn number_checked(id: u32) {
     coverage::number(id);
 }
 
+pub(crate) fn int32_checked(id: u32) {
+    coverage::int32(id);
+}
+
 pub(crate) fn covered(fact: Fact, operands: impl FnOnce() -> serde_json::Value) {
     if enabled() {
         coverage::checked(fact, operands());

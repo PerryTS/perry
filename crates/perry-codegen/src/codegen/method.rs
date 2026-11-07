@@ -499,6 +499,13 @@ pub(super) fn compile_method(
             .return_shape_method_class(&class.name, &method.name, method.id)
             .is_some(),
     );
+    // Lets the whole-program interval proof shows hold only int32 values.
+    let facts_int32_lets = super::facts_int32_locals::lets(
+        &cross_module.wpfacts,
+        method_body,
+        &method_boxed_vars,
+        module_globals,
+    );
     let mut native_facts = crate::collectors::collect_native_region_fact_graph(
         method_body,
         &[],
@@ -514,6 +521,7 @@ pub(super) fn compile_method(
         &cross_module.module_dispatch,
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        &facts_int32_lets,
     );
     // Closed World 5d: the body's typed locals; the only entry proofs are the
     // facts-proven Number parameters.
@@ -767,6 +775,7 @@ pub(super) fn compile_method(
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
         facts_number_locals: &facts_number_lets,
+        facts_int32_locals: &facts_int32_lets,
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
