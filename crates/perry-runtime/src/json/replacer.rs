@@ -377,6 +377,20 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     depth: usize,
 ) {
     check_stringify_nesting_depth(depth);
+    let (ptr, replacer) =
+        if crate::process::is_process_env_object(crate::value::js_nanbox_pointer(ptr as i64)) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let replacer = scope.root_raw_const_ptr(replacer);
+            let value =
+                crate::process::refresh_process_env(crate::value::js_nanbox_pointer(ptr as i64));
+            (
+                crate::value::js_nanbox_get_pointer(value) as *const u8,
+                replacer.get_raw_const_ptr::<crate::ClosureHeader>(),
+            )
+        } else {
+            (ptr, replacer)
+        };
+
     // Circular-reference detection (mirrors the pretty/array-replacer paths).
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -996,6 +1010,8 @@ pub(crate) unsafe fn stringify_object_pretty(
     depth: usize,
 ) {
     check_stringify_nesting_depth(depth);
+    let ptr = super::stringify_object::refresh_environment_receiver(ptr);
+
     // Same deref-safety gate the plain path applies in `is_object_pointer`: the
     // `field_count` / `keys_array` reads below load straight through `ptr`, so an
     // in-range-but-unmapped garbage address (a denormal double that survived the

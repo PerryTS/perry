@@ -219,16 +219,35 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
     }
 }
 
+// A keyed descriptor reads only that native-backed property. Refreshing the
+// entire mirror here would rebuild every environment string once per key when
+// Object.assign inspects the source's descriptors.
+#[optimize(size)]
+unsafe fn process_env_own_property(key_value: f64) -> Option<OwnProperty> {
+    let key = crate::builtins::js_string_coerce(key_value);
+    let value = crate::process::js_getenv(key);
+    if value.is_null() {
+        None
+    } else {
+        OwnProperty::data(
+            crate::value::js_nanbox_string(value as i64),
+            true,
+            true,
+            true,
+        )
+    }
+}
+
 /// The descriptor authority returns property facts before reflection chooses
 /// to materialize a JavaScript descriptor. Snapshot consumers read these same
 /// facts directly; ordinary data/accessor resolution does not allocate.
 #[optimize(size)]
 pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnProperty> {
-    let scope =
-        crate::process::is_process_env_object(obj_value).then(crate::gc::RuntimeHandleScope::new);
-    let key = scope.as_ref().map(|scope| scope.root_nanbox_f64(key_value));
-    let obj_value = crate::process::refresh_process_env(obj_value);
-    let key_value = key.map_or(key_value, |key| key.get_nanbox_f64());
+    if crate::process::is_process_env_object(obj_value)
+        && crate::symbol::js_is_symbol(key_value) == 0
+    {
+        return process_env_own_property(key_value);
+    }
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());

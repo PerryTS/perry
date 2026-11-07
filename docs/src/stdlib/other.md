@@ -160,6 +160,11 @@ processes inherit that effective environment and executable search `PATH` by
 default. An explicit child `env` still replaces it; `fork()` adds its IPC and
 bootstrap fields after selecting the base environment.
 
+A property descriptor reads the requested key from the live backing. Enumeration
+refreshes the mirrored fields in native backing order and retains strings whose
+values are unchanged. Shared additions, deletion and reinsertion are reflected by
+own-key enumeration, JSON serialization and object spread.
+
 Web Worker module URLs are discovered relative to the importing source file:
 
 ```typescript,no-test
