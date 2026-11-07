@@ -87,3 +87,22 @@ function lengths(): number {
   return total;
 }
 console.log(lengths(), String(lengths()), typeof lengths());
+
+// Destructuring assignment from a literal: the element temps are proven
+// Number bindings that the compiler releases with `undefined` after their
+// last read.
+function swapPair(): string {
+  let a = 0;
+  let b = 0;
+  [a, b] = [3, 4];
+  [a, b] = [b, a];
+  return a + ":" + b;
+}
+class Holder {
+  #v = 1;
+  bump(): number {
+    [this.#v] = [this.#v + 3];
+    return this.#v;
+  }
+}
+console.log(swapPair(), new Holder().bump());
