@@ -886,6 +886,14 @@ pub(super) fn compile_function(
     } else {
         HashSet::new()
     };
+    // Parameters the whole-program facts prove Number on every entry take the
+    // same once-at-entry conversion as a region's Number parameters.
+    let facts_number_params = super::facts_number_locals::facts_number_params(
+        &cross_module.wpfacts,
+        &f.params,
+        &f.body,
+        &boxed_vars,
+    );
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let mut bound_param_slots: HashSet<u32> = HashSet::new();
     // Each parameter's alloca, bound as a root below once the Number-local
@@ -932,18 +940,15 @@ pub(super) fn compile_function(
                 }
                 _ => {}
             }
-            // A split region's Number parameter: its only caller proved a
-            // Number, which may arrive as an int32 box; the body's Number
-            // proof means a plain double, so convert once here.
-            let arg_name = if region_number_params.contains(&p.id) {
-                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
-                let bits = blk.bitcast_double_to_i64(&arg_name);
-                let low = blk.trunc(I64, &bits, I32);
-                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
-                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
-            } else {
-                arg_name
-            };
+            // A split region's Number parameter (its only caller proved a
+            // Number) and a facts-proven one may arrive as an int32 box; the
+            // body's Number proof means a plain double, so convert once here.
+            let arg_name =
+                if region_number_params.contains(&p.id) || facts_number_params.contains(&p.id) {
+                    super::facts_number_locals::emit_entry_number(blk, &arg_name)
+                } else {
+                    arg_name
+                };
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             param_roots.push((p.id, slot.clone()));
             map.insert(p.id, slot);
@@ -1214,6 +1219,13 @@ pub(super) fn compile_function(
             }
         }
     }
+    // Admission already excluded rebound and mutated parameters. A spec
+    // clone's own proof (an `Int32` lane) is the stronger fact and stays.
+    for id in &facts_number_params {
+        body_entry_proofs
+            .entry(*id)
+            .or_insert(perry_hir::types::Type::Number);
+    }
     let typed_locals = crate::collectors::typed_locals::apply(
         &f.body,
         &body_entry_proofs,
@@ -1222,6 +1234,12 @@ pub(super) fn compile_function(
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
         &mut code_unit_locals,
+    );
+    let facts_number_lets = super::facts_number_locals::facts_number_lets(
+        &cross_module.wpfacts,
+        &f.body,
+        &boxed_vars,
+        module_globals,
     );
     // A Number-by-construction local cannot ever hold a GC pointer, so it
     // must not pay the root-slot protocol on every assignment.  The shadow
@@ -1237,6 +1255,8 @@ pub(super) fn compile_function(
     shadow_slot_map.retain(|id, _| {
         boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
     });
+    // A facts-proven Number `let` never holds a pointer either.
+    shadow_slot_map.retain(|id, _| !facts_number_lets.contains(id));
     // A parameter the entry contract proved Number holds a plain double for
     // the whole body when the body never rebinds or mutates it, exactly as in
     // a typed closure body (`codegen/closure.rs`, Closed World 5d): it owns no
@@ -1502,6 +1522,7 @@ pub(super) fn compile_function(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: &facts_number_lets,
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
@@ -1849,6 +1870,7 @@ pub(super) fn compile_function(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;

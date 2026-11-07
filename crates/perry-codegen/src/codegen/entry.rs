@@ -1008,6 +1008,7 @@ pub(super) fn compile_module_entry(
             int_valued_i64_locals: main_native_facts.int_valued_i64_locals(),
             not_bigint_locals: main_native_facts.not_bigint_locals(),
             number_by_construction_locals: main_native_facts.number_by_construction_locals(),
+            facts_number_locals: crate::codegen::facts_number_locals::none(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: main_shadow_slot_map.values().copied().collect(),
             temp_roots: crate::rooting::TempRootPool::default(),

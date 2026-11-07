@@ -180,11 +180,9 @@ fn pub_described_results_normalize_escaped_boxes_beside_top() {
                         .unwrap() as u32;
                 let boxed = (0..g.m.toks.len() as u32)
                     .find(|&t| {
-                        // Not the runtime-made `process.argv` array.
-                        g.m.is_box(t)
-                            && g.m.tmpl_of(t).is_some_and(|tm| {
-                                g.m.tmpls[tm as usize].display != "process.argv"
-                            })
+                        // Not an array the runtime makes for `process`
+                        // (`process.argv`, `process.execArgv`).
+                        g.m.is_box(t) && !g.m.process_arrays.iter().any(|&(_, _, a)| a == t)
                     })
                     .expect("match box");
                 let n = g.m.node(|| "mixed result".into());

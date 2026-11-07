@@ -583,7 +583,7 @@
       "access": "stable_local_type_proof",
       "count": 1,
       "classification": "representation-proven",
-      "reason": "The stable initializer proof establishes a String or StringLiteral runtime value and is invalidated by writes; annotations alone cannot enter this proof branch."
+      "reason": "The stable initializer proof establishes a String, StringLiteral, Array, Tuple, Buffer or numeric typed-array runtime value and is invalidated by writes; the other admitted source is the whole-program facts' strings-and-Arrays-only binding fact. No annotation enters the predicate."
     },
     {
       "path": "crates/perry-codegen/src/type_analysis/predicates.rs",

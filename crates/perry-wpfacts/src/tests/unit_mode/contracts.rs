@@ -306,8 +306,12 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // (`Model::unknown_constructible`): the later rounds build no unknown
     // `new` of it (was [889, 1241, 1079, 260]). A folded
     // builtin call is the method call it folds, and a native method runs
-    // once summaries exist (`Deferred::Native`).
-    assert_eq!(pf.round_work, [832, 1203, 988, 258], "{:?}", pf.units);
+    // once summaries exist (`Deferred::Native`). HOST-P: every model finds
+    // the keys `process` declares as host arrays of strings in the realm's
+    // declarations (charged per search step, as rule G) and holds the
+    // runtime-made `process.execArgv` array beside `process.argv`: 25 work
+    // per unit solve, 9/7/7/2 solves per round (was [832, 1203, 988, 258]).
+    assert_eq!(pf.round_work, [1057, 1378, 1163, 308], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

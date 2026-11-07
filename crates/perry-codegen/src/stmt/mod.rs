@@ -38,7 +38,7 @@ mod element_shape_loop;
 mod element_shape_loop_tests;
 mod element_shape_native;
 mod if_stmt;
-mod indexed_owner_loop;
+pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
 mod let_object_facts;
 mod let_scalar_new;

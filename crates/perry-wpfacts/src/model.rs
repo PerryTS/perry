@@ -1170,6 +1170,10 @@ pub struct Model {
     /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
     pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
+    /// The one argument node of the `@@hasInstance` touch on a token: every
+    /// `instanceof` whose right-hand side holds the token adds its
+    /// left-hand side (`Solver::has_instance`).
+    pub has_instance_arg: crate::pts::FxHashMap<Tok, NodeId>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
     /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
@@ -1520,11 +1524,11 @@ pub struct Model {
     pub cjs_cache: NodeId,
     pub cjs_ext: NodeId,
     pub cjs_main: NodeId,
-    /// `process.argv`: the one array of strings the runtime makes before
-    /// the program runs (`process_argv_tok`, an "arraybox"), and what the
-    /// property holds: that array, or what the program stores there.
-    pub process_argv: NodeId,
-    pub process_argv_tok: Tok,
+    /// The keys of `process` the realm declares as host arrays of strings
+    /// (`argv`, `execArgv`): per key, what the property holds (the one array
+    /// the runtime makes before the program runs, an "arraybox", or what the
+    /// program stores there) and that array.
+    pub process_arrays: Vec<(Atom, NodeId, Tok)>,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or

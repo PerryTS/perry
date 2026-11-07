@@ -424,17 +424,34 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let main = m.cjs_main;
                 m.edge(main, dst);
             }
-            // `process.argv` is the one array the runtime made (or what the
+            // A key the realm declares as a host array of strings (`argv`,
+            // `execArgv`) holds the one array the runtime made (or what the
             // program stored there); a computed key may name it.
-            if m.key_may_name_str(key, "argv") {
-                let a = m.process_argv;
-                m.edge(a, dst);
+            let mut array_key = false;
+            for i in 0..m.process_arrays.len() {
+                let (k, a, _) = m.process_arrays[i];
+                let k = m.atoms[k as usize].clone();
+                if m.key_may_name_str(key, &k) {
+                    m.edge(a, dst);
+                }
+                array_key |= name.as_deref() == Some(k.as_str());
             }
-            if !matches!(name.as_deref(), Some("mainModule") | Some("argv")) {
-                m.add_top(dst, |_| {
-                    format!("process.{}", name.as_deref().unwrap_or("[computed]"))
-                });
-                m.add_prim(dst, prim::ALL);
+            match name.as_deref() {
+                Some("mainModule") => {}
+                _ if array_key => {}
+                // A key the realm declares as a native function reads it.
+                Some(n)
+                    if !m.unit_mode && namespace_native(m, t, BuiltinNs::Process, n).is_some() =>
+                {
+                    let Key::Named(a) = key else { unreachable!() };
+                    ns_load(m, t, BuiltinNs::Process, a, dst);
+                }
+                _ => {
+                    m.add_top(dst, |_| {
+                        format!("process.{}", name.as_deref().unwrap_or("[computed]"))
+                    });
+                    m.add_prim(dst, prim::ALL);
+                }
             }
         }
         // A method has no `prototype`.

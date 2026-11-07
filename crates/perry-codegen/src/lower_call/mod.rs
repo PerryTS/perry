@@ -71,6 +71,7 @@ mod extern_func;
 mod extern_timers;
 mod field_init;
 mod func_ref;
+pub(crate) mod index_split;
 #[cfg(test)]
 mod pipeline_call_tests;
 mod proven_call;
