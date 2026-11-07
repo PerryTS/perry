@@ -968,6 +968,52 @@ pub(crate) fn iterates_indices(what: &str) -> bool {
     members::bobj_family(what) == Family::Box
 }
 
+/// Does the realm give the namespace or constructor `ns` no enumerable own
+/// property, so that a copy of its own enumerable properties (`{...ns}`,
+/// `Object.assign`, `Object.values`) reads only what the program put on it
+/// (`Model::own_props_modelled`)? ECMA-262 18: every property the
+/// specification gives a built-in object is non-enumerable (its methods,
+/// constants, `prototype`, `length`, `name`), and a [[Set]] of such a key
+/// keeps it so. V8 adds one enumerable data property, `Error.stackTraceLimit`.
+/// Host objects have enumerable own properties: `console`'s methods,
+/// `process`'s, the global object's, `require.resolve`/`cache`, the stdio
+/// streams'.
+pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
+    match ns {
+        BuiltinNs::Object
+        | BuiltinNs::Reflect
+        | BuiltinNs::Array
+        | BuiltinNs::Json
+        | BuiltinNs::Math
+        | BuiltinNs::Promise
+        | BuiltinNs::AggregateError
+        | BuiltinNs::Date
+        | BuiltinNs::RegExp
+        | BuiltinNs::TypedArray
+        | BuiltinNs::ArrayBuffer
+        | BuiltinNs::Symbol
+        | BuiltinNs::Number
+        | BuiltinNs::String
+        | BuiltinNs::Boolean
+        | BuiltinNs::Function
+        | BuiltinNs::Map
+        | BuiltinNs::Set
+        | BuiltinNs::WeakMap
+        | BuiltinNs::WeakSet
+        | BuiltinNs::ObjectProtoMethod
+        | BuiltinNs::ObjectProtoOwn(_) => true,
+        BuiltinNs::Error
+        | BuiltinNs::Console
+        | BuiltinNs::GlobalThis
+        | BuiltinNs::Process
+        | BuiltinNs::Require
+        | BuiltinNs::Stdout
+        | BuiltinNs::Stderr
+        | BuiltinNs::Stdin
+        | BuiltinNs::Other => false,
+    }
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property
