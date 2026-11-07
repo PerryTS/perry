@@ -198,8 +198,6 @@ struct BroadcastChannelState {
     object_bits: u64,
     /// Queue of delivered structured clones (oldest first).
     inbox: VecDeque<SerializedValue>,
-    /// Whether `close()` has detached this BroadcastChannel.
-    closed: bool,
 }
 
 #[derive(Clone, Copy)]

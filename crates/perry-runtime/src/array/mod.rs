@@ -121,6 +121,8 @@ mod strict_store_tests;
 #[cfg(test)]
 mod subclass_elements_tests;
 #[cfg(test)]
+mod subclass_stamp_tests;
+#[cfg(test)]
 mod subclass_tests;
 #[cfg(test)]
 mod tests;

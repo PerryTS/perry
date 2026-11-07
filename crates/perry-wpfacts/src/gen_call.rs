@@ -617,31 +617,32 @@ impl<'a> Gen<'a> {
         self.m.tmpls[tm as usize].has_computed_members = true;
     }
 
-    pub(crate) fn super_starts(&mut self, fx: &Fx) -> Vec<Tok> {
+    /// The home objects of a `super` access in a method of `fx`'s class:
+    /// its prototype and its class object (`Fx` does not say whether the
+    /// method is static); ⊤ outside a known class.
+    pub(crate) fn super_homes(&mut self, fx: &Fx) -> NodeId {
+        let n = self.tmp("super.home");
         match fx.class {
-            Some(tm) => self.super_starts_of(tm),
-            None => vec![TOP],
+            Some(tm) => {
+                let p = self.m.tok(TokKind::Proto(tm));
+                self.m.add_tok(n, p);
+                let c = self.m.tok(TokKind::ClassObj(tm));
+                self.m.add_tok(n, c);
+            }
+            None => self.m.add_tok(n, TOP),
         }
+        n
     }
 
-    pub(crate) fn super_starts_of(&mut self, tm: TmplId) -> Vec<Tok> {
-        match self.m.tmpls[tm as usize].parent {
-            Some(p) => vec![
-                self.m.tok(TokKind::Proto(p)),
-                self.m.tok(TokKind::ClassObj(p)),
-            ],
-            None => {
-                // A parent value (§17.2): `super.x` starts at a prototype
-                // the solve computes; unknown here.
-                if self.m.tmpls[tm as usize].native_parent.is_some()
-                    || self.m.tmpls[tm as usize].parent_value.is_some()
-                {
-                    vec![TOP]
-                } else {
-                    vec![self.m.tok(TokKind::ObjectProto)]
-                }
-            }
-        }
+    /// `super[key]` (a read, store or call) in a method whose home object
+    /// is in `homes`: the lookup starts at the home object's
+    /// [[GetPrototypeOf]] at the access (`Cons::ProtoOf`: its declared
+    /// parent and what `Object.setPrototypeOf` of the home wrote), with each
+    /// token of `recv` as the receiver.
+    pub(crate) fn super_access(&mut self, homes: NodeId, recv: NodeId, key: Key, act: ChainAct) {
+        let base = self.tmp("super.base");
+        self.m.cons(homes, Cons::ProtoOf { dst: base });
+        self.m.cons(base, Cons::SuperFrom { recv, key, act });
     }
 
     pub(crate) fn super_ctor(&mut self, fx: &Fx, args: Vec<NodeId>, spread: Vec<NodeId>) -> NodeId {
@@ -673,16 +674,8 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
         let a = self.m.atom(method);
-        for start in self.super_starts(fx) {
-            self.m.cons(
-                fx.this,
-                Cons::Super {
-                    start,
-                    key: Key::Named(a),
-                    act: ChainAct::Call(call),
-                },
-            );
-        }
+        let homes = self.super_homes(fx);
+        self.super_access(homes, fx.this, Key::Named(a), ChainAct::Call(call));
         ret
     }
 

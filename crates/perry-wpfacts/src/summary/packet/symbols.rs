@@ -231,6 +231,12 @@ impl Model {
                 self.packet_key(key),
                 act
             ),
+            Cons::SuperFrom { recv, key, act } => format!(
+                "SuperFrom recv={:?} key={:?} act={:?}",
+                recv,
+                self.packet_key(key),
+                act
+            ),
             Cons::SuperCtor { class, call } => format!(
                 "SuperCtor class={:?} call={:?}",
                 self.tmpls[class as usize].display.clone(),

@@ -716,6 +716,11 @@ impl Model {
                     self.super_lookup(t, start, key, act);
                 }
             }
+            Cons::SuperFrom { recv, key, act } => {
+                for &start in toks {
+                    self.cons(recv, Cons::Super { start, key, act });
+                }
+            }
             Cons::SuperCtor { class, call } => {
                 for &t in toks {
                     let owner_class = self.constructor_origin(class);
