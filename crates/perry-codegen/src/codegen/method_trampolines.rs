@@ -192,6 +192,13 @@ pub(super) fn emit_guarded_nonnegative_index(
 ) {
     debug_assert!(!index_param_ids.is_empty());
     let clone_name = super::typed_abi::nonnegative_index_method_name(public_name, index_param_ids);
+    // The clone's raw-i32 body (`index_entry`), when it has one: the guard
+    // below proves exactly the i32 values it takes, so it is called directly.
+    let raw_body = super::index_entry::raw_body_name(&clone_name);
+    let raw_body = llmod
+        .function_named(&raw_body)
+        .is_some()
+        .then_some(raw_body);
     // The private clone has already been lowered.  Use its real generated IR
     // size—not source statement count—to decide whether this guard plus clone
     // may flatten before statepoint rewriting.  This makes tiny indexed leaves
@@ -201,7 +208,7 @@ pub(super) fn emit_guarded_nonnegative_index(
     let callable_worker = llmod.callable_worker;
     let preinline = !callable_worker
         && llmod
-            .function_estimated_ir_bytes(&clone_name)
+            .function_estimated_ir_bytes(raw_body.as_deref().unwrap_or(&clone_name))
             .is_some_and(|ir_bytes| {
                 super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
             });
@@ -233,12 +240,14 @@ pub(super) fn emit_guarded_nonnegative_index(
     // Build a short-circuiting proof chain so a non-number never reaches it,
     // even in debug runtimes where that precondition is asserted.
     let mut guard_block_idx = 0;
+    let mut raw_index_values: Vec<String> = Vec::with_capacity(index_param_ids.len());
     for (index, param_id) in index_param_ids.iter().enumerate() {
         let arg = format!("%arg{param_id}");
         let (exact_i32, raw_i32) = super::typed_abi::emit_typed_i32_guard_and_raw(
             wf.block_mut(guard_block_idx).unwrap(),
             &arg,
         );
+        raw_index_values.push(raw_i32.clone());
         let admitted_idx = wf.num_blocks();
         let admitted_label = wf
             .create_block(&format!("nonnegative_index_method.arg{index}.i32"))
@@ -277,6 +286,23 @@ pub(super) fn emit_guarded_nonnegative_index(
     }
     let call_args: Vec<(LlvmType, &str)> =
         arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+    // Each guard block dominates the clone call, so its raw i32 is in scope.
+    let index_positions: Vec<usize> = index_param_ids
+        .iter()
+        .map(|id| {
+            method
+                .params
+                .iter()
+                .position(|p| p.id == *id)
+                .expect("index parameter is a method parameter")
+        })
+        .collect();
+    let clone_args =
+        super::index_entry::raw_body_args(&call_args, &index_positions, &raw_index_values);
+    let (clone_target, clone_args) = match raw_body.as_deref() {
+        Some(raw) => (raw, clone_args),
+        None => (clone_name.as_str(), call_args.clone()),
+    };
     if let Some(candidate) = falsy_field_default {
         // The index proof gets us here first. Keep the mutable default proof
         // as a second guarded diamond: exact omitted argument, exact ordinary
@@ -377,7 +403,7 @@ pub(super) fn emit_guarded_nonnegative_index(
         let ordinary_value =
             wf.block_mut(ordinary_idx)
                 .unwrap()
-                .call(DOUBLE, &clone_name, &call_args);
+                .call(DOUBLE, clone_target, &clone_args);
         wf.block_mut(ordinary_idx)
             .unwrap()
             .ret(DOUBLE, &ordinary_value);
@@ -385,7 +411,7 @@ pub(super) fn emit_guarded_nonnegative_index(
         let fast_value = wf
             .block_mut(fast_idx)
             .unwrap()
-            .call(DOUBLE, &clone_name, &call_args);
+            .call(DOUBLE, clone_target, &clone_args);
         wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
     }
     let generic_value =

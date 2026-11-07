@@ -285,7 +285,24 @@ pub(super) fn compile_method(
         public_llvm_name.clone()
     };
 
-    // Build the param list: (this, arg0, arg1, ...). All are doubles.
+    // An indexed clone's index parameters are non-negative i32 values on
+    // every route (`index_entry::clone_args`): they arrive raw.
+    // Exactly the clone named `nonnegative_index_method_name`: the
+    // fast-array and false-default variants keep their own names and ABI.
+    let raw_index_entry = is_index_clone
+        && !fast_array_handle_clone
+        && !(guarded_undefined_clone && guarded_falsy_field_default.is_some())
+        && !generator_owner
+        && super::index_entry::raw_i32_enabled();
+    let raw_index_param_ids: HashSet<u32> = nonnegative_index_params
+        .filter(|_| raw_index_entry)
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .collect();
+
+    // Build the param list: (this, arg0, arg1, ...). All are doubles except
+    // an indexed clone's raw i32 index parameters.
     let mut params: Vec<(LlvmType, String)> =
         Vec::with_capacity(method.params.len() + 1 + fast_array_param_ids.len());
     if generator_owner {
@@ -293,7 +310,11 @@ pub(super) fn compile_method(
     }
     params.push((DOUBLE, "%this_arg".to_string()));
     for p in &method.params {
-        params.push((DOUBLE, format!("%arg{}", p.id)));
+        if raw_index_param_ids.contains(&p.id) {
+            params.push((I32, super::index_entry::raw_param_name(p.id)));
+        } else {
+            params.push((DOUBLE, format!("%arg{}", p.id)));
+        }
     }
     for id in &fast_array_param_ids {
         params.push((I64, format!("%fast_array_handle{id}")));
@@ -302,6 +323,12 @@ pub(super) fn compile_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let lowered_function_index = llmod.function_count();
+    let llvm_name = if raw_index_entry {
+        // The double-ABI symbol every other route names becomes the adapter.
+        super::index_entry::emit_double_adapter(llmod, &llvm_name, method, &raw_index_param_ids)
+    } else {
+        llvm_name
+    };
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     // Plain `$pshape` clones are producer-published capabilities and need
     // external linkage for guarded calls from importing modules. The stricter
@@ -426,7 +453,14 @@ pub(super) fn compile_method(
         }
         let mut map = HashMap::new();
         for p in &method.params {
-            let arg_name = format!("%arg{}", p.id);
+            let raw_index = raw_index_param_ids.contains(&p.id);
+            let arg_name = if raw_index {
+                // The double view of the raw index: the same Number, in its
+                // canonical (plain double) encoding.
+                blk.sitofp(I32, &super::index_entry::raw_param_name(p.id), DOUBLE)
+            } else {
+                format!("%arg{}", p.id)
+            };
             let number = facts_number_params.contains(&p.id);
             let value = if number {
                 super::facts_number_locals::emit_entry_number(blk, &arg_name)
@@ -444,13 +478,17 @@ pub(super) fn compile_method(
             }
             map.insert(p.id, slot);
             if index_param_ids.contains(&p.id) {
-                // A statically proven route normally passes a plain double;
-                // the guarded stable public entry may also pass Perry's
-                // canonical INT32 NaN-box. Both entries prove the exact same
-                // signed-i32 value class before reaching this body, so use the
-                // shared already-guarded conversion rather than `fptosi`
-                // (which cannot consume a tagged INT32 value).
-                let raw_i32 = super::typed_abi::emit_typed_i32_raw_assuming_guarded(blk, &arg_name);
+                // Every route proved the signed-i32 value class before this
+                // body. A raw parameter is that value; otherwise a statically
+                // proven route normally passes a plain double and the guarded
+                // stable public entry may also pass Perry's canonical INT32
+                // NaN-box, so use the shared already-guarded conversion rather
+                // than `fptosi` (which cannot consume a tagged INT32 value).
+                let raw_i32 = if raw_index {
+                    super::index_entry::raw_param_name(p.id)
+                } else {
+                    super::typed_abi::emit_typed_i32_raw_assuming_guarded(blk, &arg_name)
+                };
                 let i32_slot = blk.alloca(I32);
                 blk.store(I32, &raw_i32, &i32_slot);
                 index_i32_param_slots.insert(p.id, i32_slot);
