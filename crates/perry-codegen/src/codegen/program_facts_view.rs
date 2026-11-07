@@ -239,6 +239,12 @@ pub struct ElisionFacts {
     pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
     /// Compiled code cannot replace Function.prototype.call/apply.
     pub fnproto_borrow_unwritten: bool,
+    /// The source offsets (the callee read's, as the solver records a call
+    /// site) of this module's method calls whose verdict is
+    /// `Verdict::NativeMember`: the member they read is proven to be the
+    /// intrinsic. A host-object call (`console.log(...)`) binds to the
+    /// intrinsic only here; every other one reads the property and calls it.
+    pub native_member_calls: std::collections::BTreeSet<u32>,
 }
 
 impl ElisionFacts {
@@ -250,6 +256,7 @@ impl ElisionFacts {
             && self.local_bodies.is_empty()
             && self.local_classes.is_empty()
             && self.class_statics.is_empty()
+            && self.native_member_calls.is_empty()
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {

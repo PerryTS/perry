@@ -80,6 +80,12 @@ pub fn try_lower_console_call(
                     | "assert"
             )
         {
+            // The intrinsic is what `console.<m>` holds only where the facts
+            // prove it; elsewhere read the property and call its value.
+            if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {
+                return crate::builtin_proto::lower_console_generic_call(ctx, property, args)
+                    .map(Some);
+            }
             // Catch-all for the entire console.* surface. Most of
             // them are best-effort: we route the args through
             // js_console_log_dynamic so the user at least sees the

@@ -170,6 +170,48 @@ fn emit_namespace_generic_call(
     ))
 }
 
+thread_local! {
+    /// The callee of the call a namespace guard's intrinsic arm is lowering:
+    /// the shadow bit was tested where that callee is read.
+    static GUARDED_CALLEE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// May `console.<m>(...)` with callee `callee` (`PropertyGet { GlobalGet, m }`)
+/// bind to the runtime's console intrinsic? Only when the whole-program facts
+/// prove the site reads the native member (`ElisionFacts::native_member_calls`,
+/// keyed by the callee read's offset, as the solver records it), or in the
+/// intrinsic arm of a namespace guard that tested the shadow bit for this
+/// very callee. Otherwise a store the program makes through any value may
+/// have replaced the member.
+pub(crate) fn console_intrinsic_proven(
+    ctx: &crate::expr::FnCtx<'_>,
+    callee: &perry_hir::Expr,
+) -> bool {
+    if GUARDED_CALLEE.with(|g| g.get()) == callee as *const perry_hir::Expr as usize {
+        return true;
+    }
+    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
+        return false;
+    };
+    *byte_offset != 0 && !ctx.wpfacts_off && ctx.wpfacts.native_member_calls.contains(byte_offset)
+}
+
+/// `console.<member>(args...)` as the real call: read `globalThis.console`
+/// and its `member` where the callee is read, then call that value with the
+/// console as `this`.
+pub(crate) fn lower_console_generic_call(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    member: &str,
+    args: &[perry_hir::Expr],
+) -> anyhow::Result<String> {
+    let family = crate::runtime_abi::builtin_namespace_family("console")
+        .expect("console is a builtin namespace");
+    // The property read goes through the console dispatch bucket, which is
+    // installed only where console is held as a value.
+    crate::expr::property_get::globalget::emit_global_value_installs(ctx, "console");
+    emit_namespace_generic_call(ctx, family, member, args)
+}
+
 /// A guarded namespace call (#12643):
 /// `NamespacePatched(ns) ? <generic> : <intrinsic>`. The test runs where the
 /// callee would be read, before either arm evaluates the arguments. Contract
@@ -216,7 +258,16 @@ pub(crate) fn lower_namespace_guard(
             );
         }
     }
-    let fast_val = crate::expr::lower_expr(ctx, fast)?;
+    let guarded = match fast {
+        perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::CallSpread { callee, .. } => {
+            callee.as_ref() as *const perry_hir::Expr as usize
+        }
+        _ => 0,
+    };
+    let outer = GUARDED_CALLEE.with(|g| g.replace(guarded));
+    let fast_val = crate::expr::lower_expr(ctx, fast);
+    GUARDED_CALLEE.with(|g| g.set(outer));
+    let fast_val = fast_val?;
     let fast_after = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
