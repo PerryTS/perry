@@ -655,6 +655,13 @@ impl Model {
                         Key::Any(_) => self.key_fields(q, key),
                     };
                     self.edge(f, dst);
+                    for x in self.class_id_holders(of, q) {
+                        let f = match key {
+                            Key::Named(a) => self.field(x, a),
+                            Key::Any(_) => self.key_fields(x, key),
+                        };
+                        self.edge(f, dst);
+                    }
                     self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
                     if self.stops_at(q, key) {
                         let v = self.stopped_shared.entry(q).or_default();
