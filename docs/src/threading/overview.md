@@ -405,3 +405,14 @@ Eval workers, opaque options, spread arguments, and forwarded or mutable
 constructor bindings are not inferred by this analysis. A literal
 `new URL("./child.cjs", import.meta.url)` can explicitly include an entry when
 the runtime constructor is obtained indirectly.
+
+### Error stack accessors
+
+Message cloning reads an Error's `stack` property, including non-enumerable
+accessors. A throwing getter aborts `structuredClone` or `postMessage` with the
+original exception; no message is delivered. An undefined stack remains
+undefined in the recipient rather than exposing a newly captured stack.
+
+Uncaught worker exceptions use best-effort diagnostic delivery: a throwing stack
+getter does not replace the original error or prevent its `error` and `exit`
+events. This does not provide support for custom `Error.prepareStackTrace` hooks.

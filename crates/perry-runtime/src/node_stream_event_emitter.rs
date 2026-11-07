@@ -1313,7 +1313,7 @@ pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64)
         if adjust_events_count(target.get_nanbox_f64(), -1.0) == 0.0 {
             reset_events(target.get_nanbox_f64());
         } else {
-            let _ = crate::object::js_object_delete_dynamic_value(
+            let _ = crate::object::delete_dynamic_value(
                 events.get_nanbox_f64(),
                 event.get_nanbox_f64(),
             );
@@ -1401,7 +1401,7 @@ pub(super) fn remove_all_stream_listeners(stream: f64, event: f64, all: bool) {
             if adjust_events_count(target.get_nanbox_f64(), -1.0) == 0.0 {
                 reset_events(target.get_nanbox_f64());
             } else {
-                let _ = crate::object::js_object_delete_dynamic_value(
+                let _ = crate::object::delete_dynamic_value(
                     events.get_nanbox_f64(),
                     event.get_nanbox_f64(),
                 );

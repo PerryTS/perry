@@ -30,6 +30,7 @@ pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
+pub(crate) use effects::{declared_member, run_native};
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
@@ -38,8 +39,9 @@ pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_parent_ctor,
-    native_parent_keys, native_parent_summarized, native_proto, native_written, native_written_by,
-    note_global_in_top, note_native_write, require_parts, settle_native_given,
+    native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
+    native_written, native_written_by, note_global_in_top, note_native_write, require_parts,
+    settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -708,8 +710,12 @@ fn image_member(m: &Model, (holder, lock): (&str, LockHolder), name: &str) -> bo
 /// and for an instance of a parentless class (an object literal's shape
 /// class included) `Object`: past its class prototype the chain is
 /// `Object.prototype`, as for that prototype itself (`TokKind::Proto`).
+/// A class object whose `extends` chain is program classes, down to a root
+/// `seed_family` gives `Function`, has `Function` too: its chain is those
+/// class objects, read through their own keys, then the root's.
 fn lock_family(m: &Model, t: Tok) -> Option<Family> {
     match &m.toks[t as usize] {
+        TokKind::ClassObj(c) => program_class_chain(m, *c).then_some(Family::Function),
         TokKind::Obj(tm, _) if !m.virt_protos.contains_key(&t) => match &m.tmpls[*tm as usize] {
             tm if matches!(tm.kind, TmplKind::Class { .. }) => {
                 (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
@@ -718,6 +724,25 @@ fn lock_family(m: &Model, t: Tok) -> Option<Family> {
             _ => seed_family(m, t),
         },
         _ => seed_family(m, t),
+    }
+}
+
+/// Is every link of class `c`'s `extends` chain a program class, down to a
+/// root that `seed_family` gives `Function`: one that extends nothing or a
+/// native constructor (`Error` ...), whose own chain the lookup reads as it
+/// does for that root alone? A value parent (`parent_value`) ends the chain
+/// in values the lock does not see.
+fn program_class_chain(m: &Model, mut c: TmplId) -> bool {
+    loop {
+        let tp = &m.tmpls[c as usize];
+        if tp.parent_value.is_some() {
+            return false;
+        }
+        match tp.parent {
+            Some(p) if p != c => c = p,
+            Some(_) => return false,
+            None => return true,
+        }
     }
 }
 
@@ -1289,12 +1314,23 @@ pub(crate) fn host_native(m: &Model, h: BuiltinNs, a: Atom, call: bool) -> bool 
 }
 
 /// A call of member `n` of host `h`: the runtime's own method (`native`)
-/// until a store reaches the key, then an unknown method of the host (`this`). A write
-/// later in the solve replays it (`NativeMiss::Call`).
-fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl FnOnce(&mut Model)) {
+/// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
+/// that reads other members of its receiver), then an unknown method of the
+/// host (`this`). A write later in the solve replays it (`NativeMiss::Call`).
+fn host_call(
+    m: &mut Model,
+    h: BuiltinNs,
+    n: &str,
+    gate: &str,
+    call: CallId,
+    native: impl FnOnce(&mut Model),
+) {
     let t = m.tok(TokKind::Builtin(h));
-    let a = m.atom(n);
+    let a = m.atom(gate);
     if host_written(m, h, a) {
+        // Census: the call hangs off the write that opened the gate, as a
+        // replay does.
+        m.census_native_read(t, a, NativeMiss::Call(t, call));
         let prev = m.cur_this.replace(t);
         unknown_method(
             m,
@@ -1306,6 +1342,22 @@ fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl Fn
         m.native_missing.push((t, a, NativeMiss::Call(t, call)));
         native(m);
     }
+}
+
+/// A host stream's own `write(chunk, encoding?, cb?)` (node's Writable,
+/// perry's `process_stdout_write_stub`): it returns a boolean and hands its
+/// receiver to no one. It keeps a binary chunk and the callback in the
+/// stream's state, which the program can read back (`writableBuffer`,
+/// `_writableState`), so the arguments reach unknown code. It reads other
+/// members of its receiver (`_write`, `_writableState`, `emit`, ...): a store
+/// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
+fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let r = m.reason(&format!("argument of host {h:?}.write (kept by the stream)"));
+    for &a in c.args.iter().chain(c.spread.iter()) {
+        m.sink_node(a, r);
+    }
+    ret_prim(m, call, prim::BOOL);
 }
 
 /// A console method formats its arguments (`Protocol::Inspect`); a spread
@@ -1370,12 +1422,15 @@ fn ns_method_inner(
         (BuiltinNs::Other | BuiltinNs::Console, n)
             if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
         {
-            host_call(m, BuiltinNs::Console, n, call, |m| console_args(m, call))
+            host_call(m, BuiltinNs::Console, n, n, call, |m| console_args(m, call))
         }
         // A stream method: the runtime's own, which hands its receiver to no
         // one; a listener it registers is called by the runtime (escaped).
+        (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, "write") => {
+            host_call(m, ns, "write", crate::STAR_KEY, call, |m| stream_write(m, ns, call))
+        }
         (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, n) => {
-            host_call(m, ns, n, call, |m| {
+            host_call(m, ns, n, n, call, |m| {
                 unknown_method_proto(m, call, &format!("argument of host {ns:?}.{n}"), None, true)
             })
         }
@@ -1804,6 +1859,10 @@ fn ns_method_inner(
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
+        // A key the namespace's description (its own keys and its chain)
+        // declares absent is no method (TypeError); one the program added
+        // is the receiver's own field or chain value (`method_on`).
+        (_, n) if members::ns_member(ns, n) == Some(None) => {}
         (_, n) => unknown_method_proto(
             m,
             call,

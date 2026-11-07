@@ -1327,7 +1327,12 @@ impl Model {
                     self.mark_escape_why(r, &|_| "protocol: on a marker".into());
                 }
                 Some(ks) => {
-                    for &a in ks {
+                    let inst: Vec<Atom> = proto
+                        .instance_of_reads()
+                        .iter()
+                        .map(|k| self.atom(k))
+                        .collect();
+                    for &a in ks.iter().chain(&inst) {
                         let m = self.marker_load(t, Some(a));
                         self.mark_escape_why(m, &|_| "protocol: on a marker".into());
                     }
@@ -1354,9 +1359,25 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            if proto.reads_all() {
+            for &proto in proto.read_touches() {
                 self.cons(dst, Cons::Implicit { reason, proto });
             }
+            self.add_tok(recv, t);
+        }
+        // `t instanceof C` for the constructors on its chain: `C`'s
+        // `@@hasInstance` runs with `t` (`has_instance`).
+        for k in proto.instance_of_reads() {
+            let key = Key::Named(self.atom(k));
+            let recv = self.node_l("implicit-recv");
+            let dst = self.node_l("implicit-ctor");
+            let lhs = self.node_l("implicit-lhs");
+            for n in [recv, dst, lhs] {
+                self.nodes[n as usize].frame = home;
+            }
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst });
+            self.cons(dst, Cons::HasInstance { reason, arg: lhs });
+            self.add_tok(lhs, t);
             self.add_tok(recv, t);
         }
         if !calls {

@@ -27,6 +27,16 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// The value of the global object's declared constructor that class `tm`'s
+/// built-in parent names (`extends Error`: the realm's `Error`); `None`
+/// when the class has no built-in parent or the global declares none
+/// under that name (`EventEmitter` is a module export).
+pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
+    let (_, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let identity = m.namespace_property(BuiltinNs::GlobalThis, &name)?.native?;
+    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity })))
+}
+
 /// `super(...)` into a native parent.
 pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
     let name = m.tmpls[tm as usize]

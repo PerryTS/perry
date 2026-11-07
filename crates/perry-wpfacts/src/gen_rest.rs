@@ -380,7 +380,6 @@ impl<'a> Gen<'a> {
             | Expr::TtyIsAtty(..)
             | Expr::FsReadFileSync(..)
             | Expr::FsWriteFileSync(..)
-            | Expr::FsExistsSync(..)
             | Expr::FsMkdirSync(..)
             | Expr::FsUnlinkSync(..)
             | Expr::FsAppendFileSync(..)
@@ -465,6 +464,14 @@ impl<'a> Gen<'a> {
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::FsExistsSync(path) => {
+                match self.declared_member_call(fx, "node:fs.existsSync", &[path]) {
+                    Some(ret) => ret,
+                    None => {
+                        self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+                    }
+                }
             }
             Expr::MapClear(map) => {
                 let recv = self.expr(fx, map);

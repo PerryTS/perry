@@ -219,6 +219,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("argument of a primitive method")
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
+            || (starts("argument of host ") && w.ends_with(" (kept by the stream)"))
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("Array.prototype method on an array-like")

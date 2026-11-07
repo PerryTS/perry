@@ -57,6 +57,28 @@ impl<'a> Gen<'a> {
         (id, ret)
     }
 
+    /// A call of the module member `member` (`node:fs.existsSync`) the HIR
+    /// names directly (`FsExistsSync`): when the runtime declares the
+    /// member's effects at its body, a call of its function value
+    /// (`Native::Member`) with `args`, whose declaration the solver runs;
+    /// `None` (nothing evaluated): undeclared.
+    pub(crate) fn declared_member_call(
+        &mut self,
+        fx: &Fx,
+        member: &str,
+        args: &[&Expr],
+    ) -> Option<NodeId> {
+        let e = crate::builtins::declared_member(member)?;
+        let args = args.iter().map(|a| self.expr(fx, a)).collect();
+        let t = self
+            .m
+            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name }));
+        let callee = self.tok_node(t);
+        let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
+        self.m.cons(callee, Cons::Call { call });
+        Some(ret)
+    }
+
     /// Operands only ever read as primitives by the runtime: objects get the
     /// protocol touch (ToPrimitive / toString …), functions escape (the
     /// runtime may call them back).

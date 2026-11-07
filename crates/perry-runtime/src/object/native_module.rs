@@ -208,8 +208,39 @@ pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, val
     }
 }
 
-/// Read back a stored native-namespace property override, if any.
+/// `delete ns.prop`: the member reads `undefined` wherever a store would be
+/// seen (the store keeps the TLS defaults and the console holder coherent),
+/// and its override entry becomes [`DELETED`], so every read, `in`, key
+/// enumeration and has-own probe treats it as absent until a store replaces
+/// the entry.
+pub(crate) fn native_namespace_prop_override_delete(module: &str, prop: &str) {
+    // The key first: the store can allocate (and so move `prop`'s string).
+    let key = [module, prop].join("\0");
+    native_namespace_prop_override_store(module, prop, f64::from_bits(crate::value::TAG_UNDEFINED));
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow_mut().insert(key, DELETED);
+    });
+}
+
+/// The override entry of a deleted member: `TAG_HOLE`, never a JS value.
+const DELETED: u64 = crate::value::TAG_HOLE;
+
+/// Read back a stored native-namespace property override, if any. A deleted
+/// member reads `undefined` here (a name-keyed read has no object to continue
+/// at); `vt_get_own_field` continues at the namespace's prototype instead.
+#[inline]
 pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Option<f64> {
+    native_namespace_prop_override_bits(module, prop).map(|bits| {
+        f64::from_bits(if bits == DELETED {
+            crate::value::TAG_UNDEFINED
+        } else {
+            bits
+        })
+    })
+}
+
+/// The raw override entry of a member: a value, [`DELETED`], or none.
+fn native_namespace_prop_override_bits(module: &str, prop: &str) -> Option<u64> {
     NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
         let m = m.borrow();
         // #10523: every native namespace member read lands here and almost no
@@ -217,9 +248,21 @@ pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Op
         if m.is_empty() {
             return None;
         }
-        m.get(&[module, prop].join("\0"))
-            .map(|bits| f64::from_bits(*bits))
+        m.get(&[module, prop].join("\0")).copied()
     })
+}
+
+/// Is member `prop` of namespace `module` absent although the module's
+/// tables describe it: deleted by the program, or (when the program stored
+/// none) hidden in a worker? The one presence predicate of the namespace's
+/// own keys (`in`, has-own, descriptors, key enumeration, export copies,
+/// name-keyed reads).
+#[inline(never)]
+pub(crate) fn native_namespace_member_absent(module: &str, prop: &str) -> bool {
+    match native_namespace_prop_override_bits(module, prop) {
+        Some(bits) => bits == DELETED,
+        None => crate::process::worker_restrictions::worker_process_member_restricted(module, prop),
+    }
 }
 
 /// pi boot blocker: a user write to a builtin namespace member must win every
@@ -655,6 +698,7 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     reflect_has_enumerable: super::reflect_support::nm_reflect_has_enumerable,
     own_keys_array: nm_own_keys_array_opt,
     bind_method: nm_bind_method_ops,
+    member: super::descriptors::nm_member,
 };
 
 static NM_EE_OPS_IMPL: super::NmEeOps = super::NmEeOps {
@@ -963,8 +1007,7 @@ unsafe fn native_module_property_by_name_impl(
     } else {
         module_name
     };
-    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, property_name)
-    {
+    if native_namespace_member_absent(module_name, property_name) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if matches!(module_name, "process" | "process.default") {
@@ -1627,7 +1670,7 @@ pub(crate) unsafe fn copy_native_module_exports(
         .copied()
         .chain(include_permission.then_some(b"permission" as &[u8]))
     {
-        if crate::process::worker_restrictions::worker_process_member_hidden(
+        if native_namespace_member_absent(
             &module_name,
             std::str::from_utf8(key_bytes).unwrap_or(""),
         ) {

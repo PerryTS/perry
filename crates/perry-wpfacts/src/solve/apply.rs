@@ -769,8 +769,13 @@ impl Model {
                         self.mark_hard(origin, Hard::E6SetPrototypeOf, reason);
                     }
                 }
+                // The realm's constructor the built-in parent names runs as
+                // the native summary (`Cons::SuperCtor`); any other value of
+                // the class's [[Prototype]] runs as itself.
+                let native = crate::builtins::native_parent_value(self, class);
                 for &parent in toks {
                     match self.toks[parent as usize] {
+                        _ if Some(parent) == native => {}
                         TokKind::ClassObj(tm) => {
                             // Record the link before the parent's stores
                             // reach the instance (§17.2 item 2).

@@ -61,18 +61,25 @@ fn realm_proto(fam: Family) -> Option<&'static str> {
 }
 
 type ByProto = FxHashMap<&'static str, FxHashMap<&'static str, &'static RealmEntry>>;
+type ByName = FxHashMap<&'static str, &'static RealmEntry>;
 
-/// The realm's declared natives by (owner path, key), and its declared
-/// global constructors by name, once per process: the realm table is a
+/// The realm's declared natives by (owner path, key), its declared global
+/// constructors by name, and its `provider = bound_method` members whose
+/// effects are declared at the function their dispatch arm calls
+/// (`effects_body`), by name; once per process: the realm table is a
 /// static, this only indexes it.
-fn index() -> &'static (ByProto, FxHashMap<&'static str, &'static RealmEntry>) {
-    static INDEX: OnceLock<(ByProto, FxHashMap<&'static str, &'static RealmEntry>)> =
-        OnceLock::new();
+fn index() -> &'static (ByProto, ByName, ByName) {
+    static INDEX: OnceLock<(ByProto, ByName, ByName)> = OnceLock::new();
     INDEX.get_or_init(|| {
         let mut by: ByProto = FxHashMap::default();
         let mut ctors = FxHashMap::default();
+        let mut members = FxHashMap::default();
         for e in crate::native_effects::realm() {
             if e.effects.is_empty() {
+                continue;
+            }
+            if e.facts.contains("\"effects_body\"") {
+                members.insert(e.name, e);
                 continue;
             }
             match e.name.rsplit_once('.') {
@@ -85,8 +92,17 @@ fn index() -> &'static (ByProto, FxHashMap<&'static str, &'static RealmEntry>) {
                 None => {}
             }
         }
-        (by, ctors)
+        (by, ctors, members)
     })
+}
+
+/// The declaration of the bound_method member `name` (`node:fs.existsSync`)
+/// whose effects the runtime declares at its body, in forms `run_native`
+/// runs and without a receiver (a module member is called on its module
+/// object, which no declaration of this form names).
+pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
+    let e = *index().2.get(name)?;
+    (interpretable(e.effects) && !names_this(e.effects)).then_some(e)
 }
 
 fn by_proto() -> &'static ByProto {
@@ -146,22 +162,16 @@ pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry
 /// Every effect is one `run_native` runs: not `open`, fresh objects only
 /// `Array.prototype` arrays (or another prototype's object with no
 /// elements), `bound` and species construction (of the receiver) only as
-/// the result, slots at most one step deep: `elems` over the receiver or
-/// one argument, or one `field` over the receiver, one argument or the
-/// result.
+/// the result, slots: `elems` and `field` steps over the receiver or one
+/// argument (`field(field(arg(0), pathname), length)`), or one `field`
+/// over the result.
 pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
     fn slot(s: &RealmSlot) -> bool {
         matches!(
             (s.root, &s.steps[..]),
             (_, [])
-                | (
-                    RealmSlotRoot::This | RealmSlotRoot::Arg(_),
-                    [RealmSlotStep::Elems]
-                )
-                | (
-                    RealmSlotRoot::This | RealmSlotRoot::Arg(_) | RealmSlotRoot::Result,
-                    [RealmSlotStep::Field(_)]
-                )
+                | (RealmSlotRoot::This | RealmSlotRoot::Arg(_), [_, ..])
+                | (RealmSlotRoot::Result, [RealmSlotStep::Field(_)])
         )
     }
     fn operand(o: &RealmOperand) -> bool {
@@ -219,6 +229,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
         RealmProtocol::Json => Protocol::Json,
         RealmProtocol::HasInstance => Protocol::HasInstance,
         RealmProtocol::OwnKeys => Protocol::OwnKeys,
+        RealmProtocol::ShallowInspect => Protocol::ShallowInspect,
     }
 }
 
@@ -308,6 +319,32 @@ impl Run {
                 Vals {
                     nodes: vec![dst],
                     spread: vec![],
+                }
+            }
+            // A step over a slot more than one deep: the same step on the
+            // values of the slot it is taken in.
+            (r, [inner @ .., last]) if !inner.is_empty() => {
+                let of = RealmSlot {
+                    root: r,
+                    steps: Cow::Owned(inner.to_vec()),
+                };
+                let Some(n) = self.node(m, &of) else {
+                    return Vals::default();
+                };
+                match last {
+                    RealmSlotStep::Elems => Vals {
+                        nodes: vec![],
+                        spread: vec![n],
+                    },
+                    RealmSlotStep::Field(k) => {
+                        let key = Key::Named(m.atom(k));
+                        let dst = m.node_l("native-get");
+                        m.cons(n, Cons::Load { key, dst });
+                        Vals {
+                            nodes: vec![dst],
+                            spread: vec![],
+                        }
+                    }
                 }
             }
             _ => unreachable!("interpretable() refused this slot"),
@@ -469,7 +506,7 @@ fn flow(m: &mut Model, v: &Vals, dst: NodeId) {
 
 /// `call` into declared native `entry` with receiver token `t`: each
 /// declared effect, in declaration order.
-pub(super) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call: CallId) {
+pub(crate) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call: CallId) {
     run(m, entry, Some(t), call)
 }
 
@@ -497,8 +534,25 @@ fn run(m: &mut Model, entry: &'static RealmEntry, t: Option<Tok>, call: CallId) 
         match e {
             RealmEffect::Reads(ss) => {
                 for s in ss.iter() {
-                    if matches!(s.steps[..], [RealmSlotStep::Field(_)]) {
-                        run.slot(m, s);
+                    match &s.steps[..] {
+                        // A field read at any depth: its load runs the getter.
+                        [.., RealmSlotStep::Field(_)] => {
+                            run.slot(m, s);
+                        }
+                        // The elements of a value read off a slot
+                        // (`elems(field(arg(0), pathname))`): a load of any
+                        // key on those values, which runs their getters.
+                        [_, .., RealmSlotStep::Elems] => {
+                            let v = run.slot(m, s);
+                            let ek = m.elem_key();
+                            let dst = m.node_l("native-elems-read");
+                            for n in v.spread {
+                                m.cons(n, Cons::Load { key: ek, dst });
+                            }
+                        }
+                        // A bare slot or its elements: the ordinary chain
+                        // reach of the receiver.
+                        _ => {}
                     }
                 }
             }
