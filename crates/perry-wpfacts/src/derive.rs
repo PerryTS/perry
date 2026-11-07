@@ -644,7 +644,15 @@ fn template_facts(
     let hard = ts
         .iter()
         .find_map(|t| m.hard.get(t))
-        .map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize]));
+        .map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize]))
+        .or_else(|| {
+            ts.iter().find_map(|&t| layout_exit(m, tm, t)).map(|a| {
+                format!(
+                    "accessor defined on the layout key {} (layout exit)",
+                    m.atoms[a as usize]
+                )
+            })
+        });
     // The prototype chain must be stable: no HARD op or escape on any
     // prototype object, no accessor named after a birth key, no computed
     // accessor anywhere.
@@ -944,10 +952,22 @@ fn template_facts(
     }
 }
 
-/// The field holds only typed-array objects, none exposed, transferred,
-/// resized or escaped.
-/// The compiled bodies field `a` holds over every token of a layout, when
-/// it holds nothing else (`bindings::bodies_of`); empty otherwise.
+/// An accessor defined on a key the object's layout holds leaves the layout.
+/// A literal's layout holds its birth keys and every key a program store
+/// writes (an optional slot, the hole until the store runs); the runtime
+/// gives an object that is defined an accessor under such a key its
+/// overflow, and it leaves its layout for good (class id 0:
+/// `layout_desc::prepare_hole_define`, `object_ops::define_property`), so no
+/// layout claim of the template survives it. (An accessor on a birth key is
+/// E5 HARD at the definition already: `Cons::DefineKey`.)
+fn layout_exit(m: &Model, tm: TmplId, t: Tok) -> Option<Atom> {
+    m.accessor_keys.get(&t)?.iter().copied().find(|&a| {
+        m.writers
+            .get(&(tm, a))
+            .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty())
+    })
+}
+
 fn field_bodies(m: &Model, ts: &[Tok], a: Atom) -> Vec<crate::bindings::BodyRef> {
     let mut out = Vec::new();
     for &t in ts {
@@ -1065,6 +1085,7 @@ fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -
     if m.foreign.contains_key(&tf.id)
         || m.is_escaped(t)
         || m.hard.contains_key(&t)
+        || layout_exit(m, tf.id, t).is_some()
         || m.objproto_accessor
         || tf.sabotaged
     {
