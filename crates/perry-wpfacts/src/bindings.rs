@@ -335,6 +335,17 @@ fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
 }
 
 pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
+    if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
+        for (n, l) in g.m.labels.iter().enumerate() {
+            if matches!(*l, "narrow" | "narrow-end" | "update" | "binary" | "NUMLIT") {
+                let nd = &g.m.nodes[n];
+                eprintln!(
+                    "perry: int-range {l} n{n} prim={} toks={} range={:?} ruled={} obs={} rsteps={} succ={:?}",
+                    nd.prim, nd.pts.len(), nd.range, nd.ruled, nd.obs, nd.rsteps, nd.succ
+                );
+            }
+        }
+    }
     let mut out: Vec<ModuleBindings> = (0..g.mods.len()).map(|_| Default::default()).collect();
     for (mi, info) in g.mods.iter().enumerate() {
         let mut v: Vec<(u32, BindingFacts)> = info
