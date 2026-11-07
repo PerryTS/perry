@@ -1,0 +1,1 @@
+On the web/wasm target, `fetch(url)` and other calls of global functions from WASM code now run with `globalThis` as the receiver instead of silently returning `undefined`, so the request is actually sent.
