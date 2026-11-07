@@ -142,3 +142,46 @@ fn a_host_stream_write_after_a_store_on_the_stream_stays_open() {
         assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{extra}: {v:?}\n{}", pf.dump_text());
     }
 }
+
+/// node: `console.log` / `info` / `debug` call `process.stdout.write`,
+/// `console.error` / `warn` call `process.stderr.write`, looked up on the
+/// stream (own or inherited) at each call. A function stored there, on the
+/// stream or on its prototype chain, is called by the runtime with unknown
+/// arguments. Control: unstored, nothing calls it and the site is proven.
+#[test]
+fn a_write_stored_on_a_stream_or_its_prototype_is_called_by_console() {
+    for (store, call, opened) in [
+        ("void w;", "console.log(\"x\");", false),
+        ("(process.stdout as any).write = w;", "console.info(\"x\");", true),
+        ("(process.stderr as any).write = w;", "console.error(\"x\");", true),
+        ("Object.getPrototypeOf(process.stdout).write = w;", "console.log(\"x\");", true),
+        ("Object.getPrototypeOf(process.stderr).write = w;", "console.warn(\"x\");", true),
+        (
+            "Object.getPrototypeOf(Object.getPrototypeOf(process.stdout)).write = w;",
+            "console.debug(\"x\");",
+            true,
+        ),
+    ] {
+        let src = format!(
+            "class A {{ v = 1; }}\nlet seen: any = new A();\n\
+             const w = function (s: any) {{ seen = s; return true; }};\n\
+             {store}\n{call}\nconsole.log(seen.v); // SITE\n"
+        );
+        let pf = facts(&src);
+        let v = site(&pf, &src, "v");
+        let open = v.iter().all(|v| matches!(v, Verdict::No(_)));
+        let proven = v.iter().all(|v| !matches!(v, Verdict::No(_)));
+        assert!(if opened { open } else { proven }, "{store} {call}: {v:?}\n{}", pf.dump_text());
+    }
+}
+
+/// A `write` stored on the stream's prototype is the stream's `write`: the
+/// call is the unknown method again (its result is the stored function's).
+#[test]
+fn a_host_stream_write_after_a_store_on_its_prototype_stays_open() {
+    let extra = "Object.getPrototypeOf(process.stdout).write = function (c: any) { return { k(x: any) { x.v = \"s\"; } }; };\n";
+    let src = format!("{extra}{WRITE_RESULT}console.log(a.v); // SITE\n");
+    let pf = facts(&src);
+    let v = site(&pf, &src, "v");
+    assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+}
