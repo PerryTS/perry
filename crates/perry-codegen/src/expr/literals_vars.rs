@@ -1072,23 +1072,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // in the i32 slot (`load` / `add ±1` / `store`), which post-`-O3`
             // promotes to a clean `phi i32` induction variable. The boxed
             // double views exist only as the expression's value; LLVM DCEs
-            // them when the update is a statement. `++`/`--` on an unsigned
-            // (`>>> 0`-written) local never qualifies for a slot (the
-            // collector disqualifies Update writes), so the rep here is
-            // always `I32` — materialize with `sitofp`.
-            if let Some((i32_slot, _rep)) = crate::expr::canonical_local_i32_slot(ctx, *id) {
+            // them when the update is a statement. A `U32` local updated here
+            // is the for…of record cursor, whose `++` runs only below the
+            // array's u32 length (`collectors/array_record_cursor.rs`), so the
+            // add never wraps and the boxed views materialize with `uitofp`.
+            if let Some((i32_slot, rep)) = crate::expr::canonical_local_i32_slot(ctx, *id) {
                 let blk = ctx.block();
                 let old_i32 = blk.load(I32, &i32_slot);
                 let delta = match op {
                     UpdateOp::Increment => "1",
                     UpdateOp::Decrement => "-1",
                 };
-                let new_i32 = blk.add(I32, &old_i32, delta);
+                // The cursor's `++` is `nuw`: on the indexed head it runs below
+                // the u32 length, and on the protocol head the cursor is never
+                // observed (the record's protocol word makes the runtime ignore
+                // its index word). The flag lets the optimizer widen the
+                // induction variable, so one register carries the cursor and
+                // its zero-extended element offset.
+                let new_i32 = if matches!(rep, crate::expr::SlotRep::U32)
+                    && matches!(op, UpdateOp::Increment)
+                {
+                    blk.add_nuw(I32, &old_i32, delta)
+                } else {
+                    blk.add(I32, &old_i32, delta)
+                };
                 blk.store(I32, &new_i32, &i32_slot);
-                let old = blk.sitofp(I32, &old_i32, DOUBLE);
-                let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                // Only the expression's own value is materialized: the new
+                // view for `++c`, the old one for `c++`.
+                let value = if *prefix { new_i32 } else { old_i32 };
+                let value = if matches!(rep, crate::expr::SlotRep::U32) {
+                    blk.uitofp(I32, &value, DOUBLE)
+                } else {
+                    blk.sitofp(I32, &value, DOUBLE)
+                };
                 super::record_int_facts_for_update(ctx, *id, *op);
-                return Ok(if *prefix { new } else { old });
+                return Ok(value);
             }
             // Packed-clone integer accumulator: touch ONLY the i32 slot —
             // the double slot stays stale until the clone exits re-sync it

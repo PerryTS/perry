@@ -623,7 +623,10 @@ pub(crate) fn collect_type_facts(
             }
         }
     }
-    let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
+    // A u32 by construction: `>>> 0` writes, and the for…of IteratorRecord
+    // cursor (`array_record_cursor`).
+    let mut unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
+    unsigned_i32_locals.extend(super::array_record_cursor::collect_array_record_cursor_locals(stmts));
     // #7110: the monotone loop-induction i32 range proof. Skipped entirely when
     // canonical selection is off, so the `PERRY_CANONICAL_I32_LOCALS=0`
     // bisection arm reproduces the pre-phase model with no analysis run at all.

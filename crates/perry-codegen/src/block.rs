@@ -1173,6 +1173,20 @@ impl LlBlock {
         r
     }
 
+    /// `add nuw`: the caller has proved the unsigned sum fits `ty`.
+    pub fn add_nuw(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "add",
+            pre: "nuw ",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
+        r
+    }
+
     pub fn sub(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Bin {

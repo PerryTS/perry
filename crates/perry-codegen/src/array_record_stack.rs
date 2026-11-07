@@ -432,17 +432,48 @@ pub(crate) fn read(ctx: &mut FnCtx<'_>, object: &Expr, index: &Expr) -> Result<O
     else {
         return Ok(None);
     };
+    if let Some(cursor) = u32_cursor_slot(ctx, index) {
+        // The cursor is a plain u32 slot: no root, no Number view.
+        let value = crate::rooting::with_operands_rooted(ctx, &[object], |ctx, values| {
+            let i = ctx.block().load(crate::types::I32, &cursor);
+            crate::expr::lower_record_index(
+                ctx,
+                &values[0],
+                crate::expr::RecordIndex::U32(&i),
+                &r.base,
+                &r.fields[0],
+                &r.fields[2],
+            )
+        })?;
+        return Ok(Some(value));
+    }
     let value = crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
         crate::expr::lower_record_index(
             ctx,
             &values[0],
-            &values[1],
+            crate::expr::RecordIndex::Number(&values[1]),
             &r.base,
             &r.fields[0],
             &r.fields[2],
         )
     })?;
     Ok(Some(value))
+}
+
+/// The i32 slot of a record cursor `c` (read as `c` or
+/// `arrayRecordIndex(c)`) whose selected representation is the exact u32
+/// (`collectors/array_record_cursor.rs`).
+pub(crate) fn u32_cursor_slot(ctx: &FnCtx<'_>, index: &Expr) -> Option<String> {
+    let index = runtime(index, "arrayRecordIndex")
+        .and_then(|args| args.first())
+        .unwrap_or(index);
+    let Expr::LocalGet(id) = index else {
+        return None;
+    };
+    match crate::expr::canonical_local_i32_slot(ctx, *id)? {
+        (slot, crate::expr::SlotRep::U32) => Some(slot),
+        _ => None,
+    }
 }
 
 // The exact generated loop consumes its value immediately after this test.
@@ -459,12 +490,20 @@ pub(crate) fn next_test(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<Option<Str
     };
     lower_expr(ctx, &args[4])?;
     let array = lower_expr(ctx, &Expr::LocalGet(r.payload))?;
-    let index = lower_expr(ctx, &args[2])?;
+    let (index, native) = match u32_cursor_slot(ctx, &args[2]) {
+        Some(slot) => (ctx.block().load(crate::types::I32, &slot), true),
+        None => (lower_expr(ctx, &args[2])?, false),
+    };
+    let index = if native {
+        crate::expr::RecordIndex::U32(&index)
+    } else {
+        crate::expr::RecordIndex::Number(&index)
+    };
     let protocol = crate::lower_conditional::lower_test(ctx, &args[0])?;
     let (value, ready) = crate::expr::lower_record_next(
         ctx,
         &array,
-        &index,
+        index,
         &protocol,
         &r.base,
         &r.fields[2],

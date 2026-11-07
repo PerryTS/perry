@@ -907,13 +907,38 @@ pub(super) fn lower_packed_f64_loop_index_get(
     value
 }
 
+/// A record read's cursor: a Number, or the u32 cursor slot's value itself
+/// (`collectors/array_record_cursor.rs`). Only a cold arm, which hands the
+/// index to the runtime dispatcher, materializes the u32 as a Number.
+#[derive(Clone, Copy)]
+pub(crate) enum RecordIndex<'a> {
+    Number(&'a str),
+    U32(&'a str),
+}
+
+impl RecordIndex<'_> {
+    fn u32(self, ctx: &mut FnCtx<'_>) -> String {
+        match self {
+            RecordIndex::Number(index) => ctx.block().fptoui(DOUBLE, index, I32),
+            RecordIndex::U32(index) => index.to_owned(),
+        }
+    }
+
+    fn number(self, ctx: &mut FnCtx<'_>) -> String {
+        match self {
+            RecordIndex::Number(index) => index.to_owned(),
+            RecordIndex::U32(index) => ctx.block().uitofp(I32, index, DOUBLE),
+        }
+    }
+}
+
 /// An entry-proven ordinary array and the record's unsigned cursor use the
 /// same header word and slot load as this backend. All non-packed operations
 /// share its established runtime getter through the record's cold ABI.
 pub(crate) fn lower_record_index(
     ctx: &mut FnCtx<'_>,
     array: &str,
-    index: &str,
+    index: RecordIndex<'_>,
     record: &str,
     payload_slot: &str,
     index_slot: &str,
@@ -944,7 +969,7 @@ pub(crate) fn lower_record_index(
     let typed = emit_array_guard_word_typed(ctx.block(), &word);
     ctx.block().cond_br(&typed, &pl, &cl);
     ctx.current_block = prefix;
-    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let i = index.u32(ctx);
     let own_prefix = ctx.block().array_ek_prefix(&handle);
     let own = ctx.block().icmp_ult(I32, &i, &own_prefix);
     ctx.block().cond_br(&own, &hl, &rl);
@@ -990,7 +1015,8 @@ pub(crate) fn lower_record_index(
     ctx.block().br(&ml);
     ctx.current_block = cold;
     ctx.block().store_volatile(DOUBLE, array, payload_slot);
-    ctx.block().store(DOUBLE, index, index_slot);
+    let index = index.number(ctx);
+    ctx.block().store(DOUBLE, &index, index_slot);
     let value_cold = ctx.block().call(
         DOUBLE,
         "js_array_record_stack_dispatch",
@@ -1015,7 +1041,7 @@ pub(crate) fn lower_record_index(
 pub(crate) fn lower_record_next(
     ctx: &mut FnCtx<'_>,
     array: &str,
-    index: &str,
+    index: RecordIndex<'_>,
     protocol: &str,
     record: &str,
     index_slot: &str,
@@ -1050,7 +1076,7 @@ pub(crate) fn lower_record_next(
     let safe = ctx.block().and(I1, &safe, &clear);
     ctx.block().cond_br(&safe, &bl, &cl);
     ctx.current_block = bounds;
-    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let i = index.u32(ctx);
     let ptr = ctx.block().inttoptr(I64, &handle);
     let len = ctx.block().load(I32, &ptr);
     let ready = ctx.block().icmp_ult(I32, &i, &len);
@@ -1073,7 +1099,8 @@ pub(crate) fn lower_record_next(
     let ep = ctx.block().label.clone();
     ctx.block().br(&ml);
     ctx.current_block = cold;
-    ctx.block().store(DOUBLE, index, index_slot);
+    let index = index.number(ctx);
+    ctx.block().store(DOUBLE, &index, index_slot);
     let done = ctx.block().call(
         DOUBLE,
         "js_array_record_stack_dispatch",
