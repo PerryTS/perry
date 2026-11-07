@@ -2,6 +2,7 @@
 
 mod absent_key;
 mod accessor_keys;
+mod accessor_layout_exit;
 mod accessor_reach;
 mod accessor_receiver;
 mod activation_paths;
@@ -124,6 +125,8 @@ mod rest_element;
 mod rest_elements;
 mod run_once_closed;
 mod runtime_helpers;
+mod fresh_static_blocks;
+mod specialized_prototype;
 mod spread_arguments;
 mod spread_elements;
 mod spread_iterable_args;
@@ -1842,6 +1845,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod array_iter_lock;
+mod cycle_locked_member;
 mod collection_entries;
 mod concat_elements;
 mod console_protocol;
