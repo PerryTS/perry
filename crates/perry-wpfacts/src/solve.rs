@@ -201,6 +201,21 @@ impl Model {
                 self.aborted = true;
             }
         }
+        let iv = self.cur_range.unwrap_or(Iv::TOP);
+        if prim & prim::NUM != 0
+            && iv.is_top()
+            && !self.nodes[n as usize].ruled
+            && !self.nodes[n as usize].range.is_top()
+            && std::env::var_os("PERRY_FACTS_INT_TRACE").is_some()
+        {
+            eprintln!(
+                "perry: int-top n{n} ({}) from n{} ({}) via_edge={}",
+                self.labels[n as usize],
+                self.cur_src,
+                self.labels.get(self.cur_src as usize).copied().unwrap_or("-"),
+                self.cur_range.is_some()
+            );
+        }
         let node = &mut self.nodes[n as usize];
         let newp = prim & !node.prim;
         if newp != 0 {
@@ -211,17 +226,6 @@ impl Model {
         // A Number brings its interval: the delivering edge's, else ⊤. A
         // rule's result takes its interval from the rule only.
         if prim & prim::NUM != 0 && !node.ruled {
-            let iv = self.cur_range.unwrap_or(Iv::TOP);
-            if iv.is_top() && !node.range.is_top() && std::env::var_os("PERRY_FACTS_INT_TRACE").is_some() {
-                eprintln!(
-                    "perry: int-top n{n} ({}) from n{} ({}) via_edge={}",
-                    self.labels[n as usize],
-                    self.cur_src,
-                    self.labels.get(self.cur_src as usize).copied().unwrap_or("-"),
-                    self.cur_range.is_some()
-                );
-            }
-            let node = &mut self.nodes[n as usize];
             changed |= grow_range(node, iv);
         }
         if changed && !node.in_wl {
