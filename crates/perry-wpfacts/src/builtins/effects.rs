@@ -229,7 +229,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
         RealmProtocol::Json => Protocol::Json,
         RealmProtocol::HasInstance => Protocol::HasInstance,
         RealmProtocol::OwnKeys => Protocol::OwnKeys,
-        RealmProtocol::Inspect => Protocol::Inspect,
+        RealmProtocol::ShallowInspect => Protocol::ShallowInspect,
     }
 }
 

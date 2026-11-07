@@ -765,6 +765,17 @@ pub enum Protocol {
     /// or `toJSON` returns) is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
     Inspect,
+    /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
+    /// error's message runs on an object without a named constructor
+    /// (lib/internal/errors.js `determineSpecificType`; node 26
+    /// lib/internal/util/inspect.js `formatValue` / `formatRaw`): the
+    /// `[util.inspect.custom]` hook (what it returns is formatted the same
+    /// way), `@@toStringTag`, and for the types it prints before the depth
+    /// check an Error's `stack` / `message` / `name` / `errors`, an
+    /// ArrayBuffer's `byteLength`, a URL's `href`. Each value read is
+    /// formatted the same way and ToString'd. No other key is read: own
+    /// values are not shown at depth -1.
+    ShallowInspect,
     /// StructuredSerialize (HTML 2.7.3), what `structuredClone` runs: a
     /// [[Get]] of every own value (own getters run), each serialized in
     /// turn; it calls nothing else (a function or a Proxy throws).
@@ -790,6 +801,7 @@ impl Protocol {
                 "toString",
                 "toJSON",
             ],
+            Protocol::ShallowInspect => &[INSPECT_CUSTOM_METHOD],
             Protocol::IterResult | Protocol::OwnKeys | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
@@ -799,6 +811,27 @@ impl Protocol {
     pub fn reads(self) -> &'static [&'static str] {
         match self {
             Protocol::IterResult => &["done", "value"],
+            Protocol::ShallowInspect => &[
+                WK_TO_STRING_TAG,
+                "stack",
+                "message",
+                "name",
+                "errors",
+                "byteLength",
+                "href",
+            ],
+            _ => &[],
+        }
+    }
+
+    /// The protocols run on each value the touch reads (`reads`, or every
+    /// own value under `reads_all`).
+    pub fn read_touches(self) -> &'static [Protocol] {
+        match self {
+            Protocol::Json => &[Protocol::Json],
+            Protocol::Inspect => &[Protocol::Inspect],
+            Protocol::Clone => &[Protocol::Clone],
+            Protocol::ShallowInspect => &[Protocol::ShallowInspect, Protocol::ToPrimitive],
             _ => &[],
         }
     }
@@ -819,6 +852,7 @@ impl Protocol {
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
             Protocol::Json
             | Protocol::Inspect
+            | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
             | Protocol::Any => MARK_TOUCH,
@@ -846,6 +880,7 @@ impl Protocol {
             Protocol::IterNext => Some(Protocol::IterResult),
             Protocol::Json => Some(Protocol::Json),
             Protocol::Inspect => Some(Protocol::Inspect),
+            Protocol::ShallowInspect => Some(Protocol::ShallowInspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
             | Protocol::IterResult
@@ -865,6 +900,7 @@ impl Protocol {
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
             Protocol::Inspect => "inspect",
+            Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",
         }
@@ -887,6 +923,7 @@ pub const DESCRIPTOR_KEYS: [&str; 6] = [
 /// (`Gen::read_key`).
 pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
 pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
+pub const WK_TO_STRING_TAG: &str = "@@__perry_wk_toStringTag";
 /// A class's `[util.inspect.custom]()` as HIR names it (perry-hir
 /// lower_decl/class_members.rs); the formatter calls it by that name
 /// (`class_method_slot_target`, perry-runtime builtins/formatting.rs).

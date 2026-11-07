@@ -466,19 +466,10 @@ impl<'a> Gen<'a> {
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
             Expr::FsExistsSync(path) => {
-                let p = self.expr(fx, path);
-                match self.declared_member_call("fs", "existsSync", vec![p]) {
+                match self.declared_member_call(fx, "node:fs.existsSync", &[path]) {
                     Some(ret) => ret,
                     None => {
-                        let r = self.m.reason("primitive builtin operand");
-                        self.m.cons(
-                            p,
-                            Cons::Implicit {
-                                reason: r,
-                                proto: Protocol::Any,
-                            },
-                        );
-                        self.prim_node(prim::ALL)
+                        self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
                     }
                 }
             }

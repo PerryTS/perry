@@ -56,19 +56,19 @@ impl<'a> Gen<'a> {
         (id, ret)
     }
 
-    /// A call of the module member `node:<module>.<key>` the HIR names
-    /// directly (`FsExistsSync`): when
-    /// the runtime declares the member's effects at its body, a call of its
-    /// function value (`Native::Member`), whose declaration the solver runs;
-    /// `None`: undeclared.
+    /// A call of the module member `member` (`node:fs.existsSync`) the HIR
+    /// names directly (`FsExistsSync`): when the runtime declares the
+    /// member's effects at its body, a call of its function value
+    /// (`Native::Member`) with `args`, whose declaration the solver runs;
+    /// `None` (nothing evaluated): undeclared.
     pub(crate) fn declared_member_call(
         &mut self,
-        module: &str,
-        key: &str,
-        args: Vec<NodeId>,
+        fx: &Fx,
+        member: &str,
+        args: &[&Expr],
     ) -> Option<NodeId> {
-        let module = module.strip_prefix("node:").unwrap_or(module);
-        let e = crate::builtins::declared_member(&format!("node:{module}.{key}"))?;
+        let e = crate::builtins::declared_member(member)?;
+        let args = args.iter().map(|a| self.expr(fx, a)).collect();
         let t = self
             .m
             .tok(TokKind::BuiltinFn(Native::Member { identity: e.name }));

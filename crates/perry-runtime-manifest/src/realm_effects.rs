@@ -20,7 +20,7 @@
 //! `path(slot)`: what node does to a PathLike argument (getValidatedPath:
 //! `toPathIfFileURL`, then the type check), as the reads and coercions it
 //! stands for (`path_effects`).
-//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys | Inspect
+//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys | ShallowInspect
 //! kind     := undefined | null | bool | num | str | bigint | symbol
 //! ```
 use super::info;
@@ -227,11 +227,11 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
                 "Json" => "json",
                 "HasInstance" => "has_instance",
                 "OwnKeys" => "own_keys",
-                "Inspect" => "inspect",
+                "ShallowInspect" => "shallow_inspect",
                 "Any" => return Err("coerce(.., Any) is not declarable: name the protocol".into()),
                 p => {
                     return Err(format!(
-                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys, Inspect)"
+                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys, ShallowInspect)"
                     ))
                 }
             };
@@ -318,7 +318,10 @@ fn field(slot: &Value, key: &str) -> Value {
 /// - a value of another type throws ERR_INVALID_ARG_TYPE, whose message
 ///   (`determineSpecificType`) reads `name` of a function, `constructor`
 ///   and its `name` of an object (both ToString in a template), else runs
-///   `util.inspect` on it.
+///   `util.inspect(v, { depth: -1 })` on it (`ShallowInspect`; before the
+///   `[util.inspect.custom]` hook it reads the `prototype` of the
+///   constructor).
+/// A getter under any other key never runs.
 /// The body keeps nothing and calls nothing else.
 fn path_effects(s: &Value) -> Vec<Value> {
     let pathname = field(s, "pathname");
@@ -339,6 +342,7 @@ fn path_effects(s: &Value) -> Vec<Value> {
         field(&pathname, "length"),
         step(&pathname, Value::String("elems".into())),
         field(&constructor, "name"),
+        field(&constructor, "prototype"),
     ])
     .collect();
     let coerce = |slot: Value, protocol: &str| {
@@ -356,7 +360,7 @@ fn path_effects(s: &Value) -> Vec<Value> {
         coerce(field(s, "hostname"), "to_primitive"),
         coerce(field(&constructor, "name"), "to_primitive"),
         coerce(field(s, "name"), "to_primitive"),
-        coerce(s.clone(), "inspect"),
+        coerce(s.clone(), "shallow_inspect"),
     ]
 }
 
@@ -428,8 +432,8 @@ mod tests {
         );
         assert_eq!(parse_text("{ open }").unwrap(), r#"["open"]"#);
         assert_eq!(
-            parse_text("{ coerce(arg(0), Inspect) }").unwrap(),
-            r#"[{"coerce":{"protocol":"inspect","slot":{"root":{"arg":0},"steps":[]}}}]"#
+            parse_text("{ coerce(arg(0), ShallowInspect) }").unwrap(),
+            r#"[{"coerce":{"protocol":"shallow_inspect","slot":{"root":{"arg":0},"steps":[]}}}]"#
         );
         // A slot more than one step deep.
         assert_eq!(
@@ -458,10 +462,11 @@ mod tests {
         let long = "{ reads(field(arg(0), href), field(arg(0), protocol), field(arg(0), auth), \
             field(arg(0), path), field(arg(0), hostname), field(arg(0), pathname), \
             field(arg(0), constructor), field(arg(0), name), field(field(arg(0), pathname), length), \
-            elems(field(arg(0), pathname)), field(field(arg(0), constructor), name)); \
+            elems(field(arg(0), pathname)), field(field(arg(0), constructor), name), \
+            field(field(arg(0), constructor), prototype)); \
             coerce(field(arg(0), pathname), ToPrimitive); coerce(field(arg(0), hostname), ToPrimitive); \
             coerce(field(field(arg(0), constructor), name), ToPrimitive); \
-            coerce(field(arg(0), name), ToPrimitive); coerce(arg(0), Inspect); returns(prim(bool)) }";
+            coerce(field(arg(0), name), ToPrimitive); coerce(arg(0), ShallowInspect); returns(prim(bool)) }";
         assert_eq!(
             parse_text("{ path(arg(0)); returns(prim(bool)) }").unwrap(),
             parse_text(long).unwrap()
