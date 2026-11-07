@@ -549,7 +549,8 @@ pub(in crate::codegen) fn compile_static_method(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
+        program_shadows_buffer_intrinsic_method: cross_module
+            .program_shadows_buffer_intrinsic_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),

@@ -735,6 +735,177 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     )
 }
 
+fn buffer_equals_call(left_id: u32, right_id: u32) -> Expr {
+    call(
+        Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(local(left_id)),
+            property: "equals".to_string(),
+        },
+        vec![local(right_id)],
+    )
+}
+
+#[test]
+fn fixed_buffer_equals_keeps_length_proof_for_memcmp() {
+    let body = vec![
+        buffer_let(1, "left", int(16)),
+        buffer_let(2, "right", int(16)),
+        Stmt::Return(Some(buffer_equals_call(1, 2))),
+    ];
+    let ir = compile_ir("fixed_buffer_equals_memcmp.ts", body);
+    assert!(
+        ir.contains("call i32 @memcmp"),
+        "fixed equal-length buffers should use constant-size memcmp:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_buffer_equals"),
+        "eligible static equals calls should bypass dynamic dispatch:\n{ir}"
+    );
+}
+
+#[test]
+fn fixed_buffer_equals_uses_constants_and_respects_the_size_limit() {
+    let unequal = compile_ir(
+        "unequal_fixed_buffer_equals.ts",
+        vec![
+            buffer_let(1, "left", int(8)),
+            buffer_let(2, "right", int(16)),
+            Stmt::Return(Some(buffer_equals_call(1, 2))),
+        ],
+    );
+    assert!(
+        !unequal.contains("call i32 @memcmp"),
+        "unequal fixed lengths should fold to false:\n{unequal}"
+    );
+    assert!(
+        !unequal.contains("call double @js_method_call_slow"),
+        "unequal fixed lengths should avoid dynamic dispatch:\n{unequal}"
+    );
+    assert!(
+        unequal.contains(perry_codegen::nanbox::TAG_FALSE_I64),
+        "unequal fixed lengths should fold to false:\n{unequal}"
+    );
+
+    let empty = compile_ir(
+        "empty_fixed_buffer_equals.ts",
+        vec![
+            buffer_let(1, "left", int(0)),
+            buffer_let(2, "right", int(0)),
+            Stmt::Return(Some(buffer_equals_call(1, 2))),
+        ],
+    );
+    assert!(
+        !empty.contains("call i32 @memcmp"),
+        "zero-length views should fold to true:\n{empty}"
+    );
+    assert!(
+        !empty.contains("call double @js_method_call_slow"),
+        "zero-length views should avoid dynamic dispatch:\n{empty}"
+    );
+    assert!(
+        empty.contains(perry_codegen::nanbox::TAG_TRUE_I64),
+        "zero-length views should fold to true:\n{empty}"
+    );
+
+    let boundary = compile_ir(
+        "boundary_fixed_buffer_equals.ts",
+        vec![
+            buffer_let(1, "left", int(64)),
+            buffer_let(2, "right", int(64)),
+            Stmt::Return(Some(buffer_equals_call(1, 2))),
+        ],
+    );
+    assert!(
+        boundary.contains("call i32 @memcmp"),
+        "64-byte views should use the intrinsic:\n{boundary}"
+    );
+
+    let too_large = compile_ir(
+        "large_fixed_buffer_equals.ts",
+        vec![
+            buffer_let(1, "left", int(65)),
+            buffer_let(2, "right", int(65)),
+            Stmt::Return(Some(buffer_equals_call(1, 2))),
+        ],
+    );
+    assert!(
+        !too_large.contains("call i32 @memcmp"),
+        "65-byte views should fall back:\n{too_large}"
+    );
+    assert!(
+        too_large.contains("call double @js_method_call_slow"),
+        "65-byte views should retain dynamic dispatch:\n{too_large}"
+    );
+}
+
+#[test]
+fn shadowed_buffer_equals_keeps_dynamic_dispatch() {
+    let body = vec![
+        buffer_let(1, "left", int(16)),
+        buffer_let(2, "right", int(16)),
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(local(1)),
+            property: "equals".to_string(),
+            value: Box::new(int(0)),
+            byte_offset: 0,
+            byte_end: 0,
+        }),
+        Stmt::Return(Some(buffer_equals_call(1, 2))),
+    ];
+    let ir = compile_ir("shadowed_buffer_equals_dispatch.ts", body);
+    assert!(
+        !ir.contains("call i32 @memcmp"),
+        "a shadowed equals method must not use the intrinsic:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_method_call_slow"),
+        "a shadowed equals method must use dynamic method dispatch:\n{ir}"
+    );
+}
+
+#[test]
+fn captured_buffer_equals_keeps_dynamic_dispatch() {
+    let ir = compile_ir(
+        "captured_buffer_equals_dispatch.ts",
+        vec![
+            buffer_let(1, "left", int(16)),
+            buffer_let(2, "right", int(16)),
+            Stmt::Let {
+                id: 3,
+                name: "capture".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 30,
+                    params: Vec::new(),
+                    return_type: Type::Named("Buffer".to_string()),
+                    body: vec![Stmt::Return(Some(local(1)))],
+                    captures: vec![1],
+                    mutable_captures: Vec::new(),
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: false,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                }),
+            },
+            Stmt::Return(Some(buffer_equals_call(1, 2))),
+        ],
+    );
+    assert!(
+        !ir.contains("call i32 @memcmp"),
+        "captured views should not use the intrinsic:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_method_call_slow"),
+        "captured views should retain dynamic dispatch:\n{ir}"
+    );
+}
+
 fn index_get(object_id: u32, index: Expr) -> Expr {
     Expr::synthetic_index_get(Box::new(local(object_id)), Box::new(index))
 }
@@ -1317,18 +1488,29 @@ fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
 /// Replaces `call i32 @js_typed_i32_arg_guard`.
 fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
-        && ir_line_with(ir, &["fcmp oge double %", "-2147483648.0"])
-        && ir_line_with(ir, &["fcmp ole double %", "2147483647.0"])
+    let int32_tag = ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"]);
+    let explicit_range = ir_line_with(ir, &["fcmp oge double %", "-2147483648.0"])
+        && ir_line_with(ir, &["fcmp ole double %", "2147483647.0"]);
+    // LLVM can lower the bounds check to a saturating conversion followed by
+    // an exact round trip. Out-of-range values saturate, so equality rejects
+    // them; NaN also fails equality. Keep the tagged i32 identity test above.
+    let saturating_round_trip = ir_line_with(ir, &["call i32 @llvm.fptosi.sat.i32.f64"])
+        && ir_line_with(ir, &["sitofp i32 %", " to double"])
+        && ir_line_with(ir, &["fcmp oeq double %"])
+        && ir_line_with(ir, &["icmp ne i64 %", ", -9223372036854775808"]);
+    int32_tag && (explicit_range || saturating_round_trip)
 }
 
 /// Int32 unbox: the tagged low lane and the converted double, selected into one
 /// raw `i32`. Replaces `call i32 @js_typed_i32_arg_to_raw`.
 fn unboxes_i32_arg(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
-    ir_line_with(ir, &["fptosi double %", " to i32"])
+    let inline_conversion = ir_line_with(ir, &["fptosi double %", " to i32"])
         && ir_line_with(ir, &["trunc i64 %", " to i32"])
-        && ir_line_with(ir, &["select i1 %", ", i32 %"])
+        && ir_line_with(ir, &["select i1 %", ", i32 %"]);
+    let guarded_runtime_conversion =
+        ir_line_with(ir, &["call i32 @js_typed_i32_arg_to_raw(double %"]);
+    inline_conversion || guarded_runtime_conversion
 }
 
 /// String lane (`emit_typed_string_guard`): heap STRING_TAG or inline
@@ -1420,12 +1602,11 @@ fn births_heap_object(ir: &str) -> bool {
 }
 
 /// Whether `symbol`'s address is materialised (`ptrtoint`) anywhere that could
-/// register it as a callable entry. The function-name metadata (the
-/// `__perry_function_name_descriptors` table and the `<sym>$info` records that
-/// name `$generic` / `$spec_*` clones for `Error.stack`) takes clone addresses
-/// by design: it holds them as names to resolve a return address, never as
-/// entries a caller can reach, so those lines do not count. Matching is exact
-/// (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
+/// register it as a callable entry. The function-name metadata, `$info`
+/// records, and `$fnrec` image records take clone addresses by design; they
+/// support stack and image metadata, not callable runtime entries. Those lines
+/// do not count. Matching is exact (`@sym to`), so `@sym$info` is not mistaken
+/// for `@sym`.
 fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
     let tokens = [
         format!("ptrtoint (ptr @{symbol} to"),
@@ -1433,7 +1614,10 @@ fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
     ];
     ir.lines()
         .filter(|line| {
-            !line.starts_with("@__perry_function_name_descriptors") && !line.contains("$info = ")
+            !line.starts_with("@__perry_function_name_descriptors")
+                && !line.contains("$info = ")
+                && !line.contains("$fnrec\" = ")
+                && !line.contains("$fnrec = ")
         })
         .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
 }
@@ -13715,8 +13899,30 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         let rest = &caller_ir[start..];
         &rest[..rest.find("\n\n").unwrap_or(rest.len())]
     };
-    let success_block = basic_block(success_label);
-    let failure_block = basic_block(failure_label);
+    let reachable_ir_blocks = |start: &str| {
+        let mut pending = vec![start.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        let mut result = String::new();
+        while let Some(label) = pending.pop() {
+            if !seen.insert(label.clone()) {
+                continue;
+            }
+            let block = basic_block(&label);
+            result.push_str(block);
+            result.push('\n');
+            if let Some(terminator) = block.lines().last() {
+                pending.extend(
+                    terminator
+                        .split("label %")
+                        .skip(1)
+                        .map(|part| part.split([',', ' ']).next().unwrap().to_string()),
+                );
+            }
+        }
+        result
+    };
+    let success_block = reachable_ir_blocks(success_label);
+    let failure_block = reachable_ir_blocks(failure_label);
     assert!(
         success_block.contains(&format!("call double @{typed}(i64 ")),
         "the raw-f64 field-guard success edge must call the raw-f64 receiver clone:\n\
@@ -16904,8 +17110,8 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
         deref.contains("load i64")
             && deref.contains("icmp eq i64")
             && deref.contains("icmp ult i32")
-            && deref.contains("label %method_direct.fast.")
-            && deref.contains("label %method_direct.fallback."),
+            && deref.contains("br i1")
+            && deref.contains("label %stack_guard.call."),
         "the canonical receiver word and ShapeId domain must guard the fast arm: {deref}"
     );
     assert!(
@@ -16915,8 +17121,10 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
     );
     let public = function_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
     assert!(
-        public.contains(") noinline"),
-        "the public wrapper stays shared: {public}"
+        public.contains("define double @perry_fn_static_certificate_ts__probe(")
+            && public.contains("$spec_b_i32_i32")
+            && public.contains("$generic"),
+        "the public wrapper keeps both specialized and generic paths: {public}"
     );
     assert!(
         caller.contains("call ptr @perry_class_value_dir_cell("),

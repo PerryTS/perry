@@ -29,7 +29,8 @@ function step2(next: () => void) {
 function step3(next: () => void) {
   const script = path.join(os.tmpdir(), "perry_gap_fork_sock_" + process.pid + ".sh");
   fs.writeFileSync(script, "echo forked\nexit 4\n");
-  const c = fork(script, [], { execPath: "/bin/sh", silent: true });
+  // The child is a shell, so it must not inherit Node type-stripping flags.
+  const c = fork(script, [], { execPath: "/bin/sh", execArgv: [], silent: true });
   const ev: string[] = [];
   console.log("fork stdio", c.stdin instanceof net.Socket, c.stdout instanceof net.Socket, c.stdio.length, c.stdio[3], (c as any)._closesNeeded);
   c.stdout!.on("data", (d) => ev.push("data:" + String(d).trim()));

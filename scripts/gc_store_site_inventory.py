@@ -605,6 +605,7 @@ STEM_EMITTER_ARG_INDEX = {
     # layout notes are gone after ShapeId tracing): 12 args -> 9, and the
     # static-key bookkeeping 8 -> 6. The stems themselves are unchanged.
     "emit_jsvalue_slot_store_pointer_tested": 8,
+    "emit_jsvalue_slot_store_pointer_tested_known": 8,
     "emit_guarded_inbounds_array_store": 4,
     "emit_guarded_inbounds_array_store_keyed": 4,
     # The static-key store IC (`expr/put_value_store_ic.rs`): its bookkeeping
@@ -616,6 +617,7 @@ STEM_EMITTER_ARG_INDEX = {
 # call passes an identifier, and the stem literal lives at THEIR call sites
 # (which the census scans through the same table above).
 STEM_FORWARDERS = {
+    "emit_jsvalue_slot_store_pointer_tested",
     "emit_guarded_inbounds_array_store",
     "emit_guarded_inbounds_array_store_keyed",
 }
@@ -1709,6 +1711,24 @@ def run_self_tests() -> int:
 
     base = synthetic_tree()
     expect_verify("V-P1 green baseline", base, None)
+
+    # The known-pointer variant keeps the same stem position. Its generic
+    # wrapper forwards that stem; a direct caller must still name a witness.
+    t = dict(base)
+    known_path = "crates/perry-codegen/src/expr/known_pointer.rs"
+    t[known_path] = (
+        "fn emit_jsvalue_slot_store_pointer_tested(stem: &str) {\n"
+        "    emit_jsvalue_slot_store_pointer_tested_known(ctx, a, b, c, false, d, e, true, stem, false);\n"
+        "}\n"
+        "fn lower_known(ctx: &mut FnCtx) {\n"
+        '    emit_jsvalue_slot_store_pointer_tested_known(ctx, a, b, c, false, d, e, true, "apush", true);\n'
+        "}\n"
+    )
+    expect_verify("V-P1 known-pointer emitter and forwarder", t, None)
+    t[known_path] = t[known_path].replace('"apush"', '"known.rogue"')
+    expect_verify("V-P1 known-pointer missing witness", t, "has NO IR witness")
+    t[known_path] = t[known_path].replace('"known.rogue"', "some_ident")
+    expect_verify("V-P1 known-pointer non-literal stem", t, "non-literal stem")
 
     # Both arms in a multi-stem binding are required independently.
     for stem in ("l2s", "l2i"):

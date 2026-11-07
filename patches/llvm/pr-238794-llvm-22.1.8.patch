@@ -1,0 +1,838 @@
+diff --git a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+index d8398719a..a1bc4f4bc 100644
+--- a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -26669,0 +26670,114 @@ performVecReduceBitwiseCombine(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
++/// Return \p Op as a \p VecVT vector if it is a constant, a load, a
++/// zero-extended load, or an OR/XOR tree of these, such as those formed by
++/// memcmp expansion.
++static SDValue tryVectorizeMemCmpOperand(SDValue Op, EVT VecVT,
++                                         SelectionDAG &DAG) {
++  if (isa<ConstantSDNode>(Op))
++    return DAG.getBitcast(VecVT, Op);
++  if (!Op.hasOneUse())
++    return SDValue();
++  if (ISD::isNormalLoad(Op.getNode()) && cast<LoadSDNode>(Op)->isSimple())
++    return DAG.getBitcast(VecVT, Op);
++  if (Op.getOpcode() == ISD::ZERO_EXTEND) {
++    SDValue Src = Op.getOperand(0);
++    if (!Src.hasOneUse() || !ISD::isNormalLoad(Src.getNode()) ||
++        !cast<LoadSDNode>(Src)->isSimple())
++      return SDValue();
++    // Inserting into a zero vector selects a single zeroing scalar FP load.
++    EVT SrcVT = Src.getValueType();
++    if (VecVT.is128BitVector() && DAG.getDataLayout().isLittleEndian() &&
++        SrcVT.isSimple() && isPowerOf2_32(SrcVT.getSizeInBits()) &&
++        SrcVT.getSizeInBits() >= 8 && SrcVT.getSizeInBits() <= 64) {
++      EVT InsVT = EVT::getVectorVT(*DAG.getContext(), SrcVT,
++                                   128 / SrcVT.getSizeInBits());
++      SDValue Ins = DAG.getInsertVectorElt(
++          SDLoc(Op), DAG.getConstant(0, SDLoc(Op), InsVT), Src, 0);
++      return DAG.getBitcast(VecVT, Ins);
++    }
++    return DAG.getBitcast(VecVT, Op);
++  }
++  if (Op.getOpcode() != ISD::OR && Op.getOpcode() != ISD::XOR)
++    return SDValue();
++  SDValue LHS = tryVectorizeMemCmpOperand(Op.getOperand(0), VecVT, DAG);
++  SDValue RHS = tryVectorizeMemCmpOperand(Op.getOperand(1), VecVT, DAG);
++  if (!LHS || !RHS)
++    return SDValue();
++  return DAG.getNode(Op.getOpcode(), SDLoc(Op), VecVT, LHS, RHS);
++}
++
++/// Try to map an equality comparison of an integer wider than a GPR, such as
++/// those formed by memcmp expansion, to a vector compare and reduction before
++/// type legalization splits it up into chunks.
++static SDValue combineVectorSizedSetCCEquality(SDNode *N, SelectionDAG &DAG) {
++  SDValue LHS = N->getOperand(0);
++  SDValue RHS = N->getOperand(1);
++  ISD::CondCode Cond = cast<CondCodeSDNode>(N->getOperand(2))->get();
++  EVT OpVT = LHS.getValueType();
++  if (!ISD::isIntEqualitySetCC(Cond) || !OpVT.isScalarInteger() ||
++      OpVT.bitsLE(MVT::i64) || !isPowerOf2_32(OpVT.getSizeInBits()))
++    return SDValue();
++
++  const auto &ST = DAG.getSubtarget<AArch64Subtarget>();
++  if (ST.requiresStrictAlign() ||
++      (!ST.isNeonAvailable() && !ST.isSVEAvailable()) ||
++      DAG.getMachineFunction().getFunction().hasFnAttribute(
++          Attribute::NoImplicitFloat))
++    return SDValue();
++
++  EVT VecVT =
++      EVT::getVectorVT(*DAG.getContext(), MVT::i8, OpVT.getSizeInBits() / 8);
++  if (!DAG.getTargetLoweringInfo().isTypeLegal(VecVT))
++    return SDValue();
++  bool UseSVE = ST.isSVEAvailable() && ST.useSVEForFixedLengthVectors(VecVT);
++  if (!UseSVE && !VecVT.is128BitVector())
++    return SDValue();
++
++  // A load compared with another load or with a constant whose halves are
++  // compare immediates is cheaper as a scalar CMP/CCMP pair.
++  auto IsCheapScalarOperand = [](SDValue V) {
++    if (ISD::isNormalLoad(V.getNode()))
++      return true;
++    auto *C = dyn_cast<ConstantSDNode>(V);
++    if (!C)
++      return false;
++    const APInt &Imm = C->getAPIntValue();
++    unsigned HalfBits = Imm.getBitWidth() / 2;
++    APInt Lo = Imm.trunc(HalfBits);
++    APInt Hi = Imm.extractBits(HalfBits, HalfBits);
++    return isLegalCmpImmed(Lo) && isLegalCmpImmed(Hi);
++  };
++  if (!UseSVE && ISD::isNormalLoad(LHS.getNode()) && IsCheapScalarOperand(RHS))
++    return SDValue();
++
++  SDValue VecLHS = tryVectorizeMemCmpOperand(LHS, VecVT, DAG);
++  SDValue VecRHS = tryVectorizeMemCmpOperand(RHS, VecVT, DAG);
++  if (!VecLHS || !VecRHS)
++    return SDValue();
++
++  SDLoc DL(N);
++  EVT VT = N->getValueType(0);
++  if (UseSVE) {
++    EVT ContainerVT = getContainerForFixedLengthVector(DAG, VecVT);
++    SDValue Pg = getPredicateForVector(DAG, DL, VecVT);
++    VecLHS = convertToScalableVector(DAG, ContainerVT, VecLHS);
++    VecRHS = convertToScalableVector(DAG, ContainerVT, VecRHS);
++    SDValue Cmp =
++        DAG.getNode(AArch64ISD::SETCC_MERGE_ZERO, DL, Pg.getValueType(), Pg,
++                    VecLHS, VecRHS, DAG.getCondCode(ISD::SETNE));
++    return getPTest(DAG, VT, Pg, Cmp,
++                    Cond == ISD::SETEQ ? AArch64CC::NONE_ACTIVE
++                                       : AArch64CC::ANY_ACTIVE);
++  }
++
++  // Fold the differences to 64 bits with a pairwise maximum, which is cheaper
++  // than a full UMAXV reduction, and test them in a GPR.
++  SDValue Diff = DAG.getBitcast(
++      MVT::v4i32, DAG.getNode(ISD::XOR, DL, VecVT, VecLHS, VecRHS));
++  SDValue Max = DAG.getNode(
++      ISD::INTRINSIC_WO_CHAIN, DL, MVT::v4i32,
++      DAG.getConstant(Intrinsic::aarch64_neon_umaxp, DL, MVT::i32), Diff, Diff);
++  SDValue Folded =
++      DAG.getExtractVectorElt(DL, MVT::i64, DAG.getBitcast(MVT::v2i64, Max), 0);
++  return DAG.getSetCC(DL, VT, Folded, DAG.getConstant(0, DL, MVT::i64), Cond);
++}
++
+@@ -26679,0 +26794,4 @@ static SDValue performSETCCCombine(SDNode *N,
++  if (DCI.isBeforeLegalize())
++    if (SDValue V = combineVectorSizedSetCCEquality(N, DAG))
++      return V;
++
+diff --git a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
+index c1c8c861c..1d1b3046c 100644
+--- a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
+@@ -4778 +4778 @@ AArch64TTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
+-  Options.NumLoadsPerBlock = Options.MaxNumLoads;
++  Options.NumLoadsPerBlock = IsZeroCmp ? Options.MaxNumLoads : 1;
+@@ -4780 +4780 @@ AArch64TTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
+-  // they may wake up the FP unit, which raises the power consumption.  Perhaps
++  // they may wake up the FP unit, which raises the power consumption. Perhaps
+@@ -4783,0 +4784,19 @@ AArch64TTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
++
++  // Backport of LLVM PR 238794's AArch64 equality-only vector load sizing.
++  if (!IsZeroCmp || OptSize ||
++      (!ST->isNeonAvailable() && !ST->isSVEAvailable()))
++    return Options;
++  const unsigned ScalarLoadSize = 8;
++  const unsigned MaxSize = Options.MaxNumLoads * ScalarLoadSize;
++  const unsigned VectorSize = 16;
++  SmallVector<unsigned, 4> VectorLoadSizes;
++  for (unsigned LoadSize = llvm::bit_floor(std::min(VectorSize, MaxSize / 2));
++       LoadSize > ScalarLoadSize; LoadSize >>= 1)
++    if (TLI->isTypeLegal(MVT::getVectorVT(MVT::i8, LoadSize)))
++      VectorLoadSizes.push_back(LoadSize);
++  if (VectorLoadSizes.empty())
++    return Options;
++  Options.LoadSizes.insert(Options.LoadSizes.begin(), VectorLoadSizes.begin(),
++                           VectorLoadSizes.end());
++  Options.MaxNumLoads = MaxSize / VectorLoadSizes.front();
++  Options.NumLoadsPerBlock = Options.MaxNumLoads;
+diff --git a/llvm/test/CodeGen/AArch64/bcmp.ll b/llvm/test/CodeGen/AArch64/bcmp.ll
+index e70ddc341..b167d1373 100644
+--- a/llvm/test/CodeGen/AArch64/bcmp.ll
++++ b/llvm/test/CodeGen/AArch64/bcmp.ll
+@@ -266,7 +266,10 @@ define i1 @bcmp20(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldr w12, [x0, #16]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldr w13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x12, x13, #0, eq
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x1]
++; CHECK-NEXT:    ldr s2, [x0, #16]
++; CHECK-NEXT:    ldr s3, [x1, #16]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -283,7 +286,10 @@ define i1 @bcmp24(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldr x12, [x0, #16]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldr x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x12, x13, #0, eq
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x1]
++; CHECK-NEXT:    ldr d2, [x0, #16]
++; CHECK-NEXT:    ldr d3, [x1, #16]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.8b, v2.8b, v3.8b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -300,10 +306,10 @@ define i1 @bcmp28(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldr x12, [x0, #16]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldr x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldr w8, [x0, #24]
+-; CHECK-NEXT:    ldr w9, [x1, #24]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x12, x13, #0, eq
+-; CHECK-NEXT:    ccmp x8, x9, #0, eq
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x1]
++; CHECK-NEXT:    ldur q2, [x0, #12]
++; CHECK-NEXT:    ldur q3, [x1, #12]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -320,11 +326,12 @@ define i1 @bcmp33(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ldrb w10, [x0, #32]
+-; CHECK-NEXT:    ldrb w11, [x1, #32]
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    ldr b2, [x0, #32]
++; CHECK-NEXT:    ldr b3, [x1, #32]
++; CHECK-NEXT:    eor v2.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -341,11 +348,12 @@ define i1 @bcmp38(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ldur x10, [x0, #30]
+-; CHECK-NEXT:    ldur x11, [x1, #30]
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    ldur q2, [x0, #22]
++; CHECK-NEXT:    ldur q3, [x1, #22]
++; CHECK-NEXT:    eor v2.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -362,14 +370,12 @@ define i1 @bcmp45(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ldr x10, [x0, #32]
+-; CHECK-NEXT:    ldr x11, [x1, #32]
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ldur x8, [x0, #37]
+-; CHECK-NEXT:    ldur x12, [x1, #37]
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    ldur q2, [x0, #29]
++; CHECK-NEXT:    ldur q3, [x1, #29]
++; CHECK-NEXT:    eor v2.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -392,16 +398,14 @@ define i1 @bcmp64(ptr %a, ptr %b) {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ldp x8, x11, [x0, #32]
+-; CHECK-NEXT:    ldp x10, x12, [x1, #32]
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ldp x9, x13, [x1, #48]
+-; CHECK-NEXT:    ccmp x8, x10, #0, eq
+-; CHECK-NEXT:    ldp x8, x10, [x0, #48]
+-; CHECK-NEXT:    ccmp x11, x12, #0, eq
+-; CHECK-NEXT:    ccmp x8, x9, #0, eq
+-; CHECK-NEXT:    ccmp x10, x13, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    ldp q4, q5, [x0, #32]
++; CHECK-NEXT:    ldp q6, q7, [x1, #32]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    eor v2.16b, v4.16b, v6.16b
++; CHECK-NEXT:    eor v3.16b, v5.16b, v7.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+diff --git a/llvm/test/CodeGen/AArch64/memcmp.ll b/llvm/test/CodeGen/AArch64/memcmp.ll
+index 98ea86b06..398add54c 100644
+--- a/llvm/test/CodeGen/AArch64/memcmp.ll
++++ b/llvm/test/CodeGen/AArch64/memcmp.ll
+@@ -968,11 +968,7 @@ define i1 @length16_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x8, #14648 // =0x3938
+-; CHECK-NEXT:    movk x8, #12592, lsl #16
+-; CHECK-NEXT:    movk x8, #13106, lsl #32
+-; CHECK-NEXT:    movk x8, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x8, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI51_0
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI51_0]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1025,7 +1021,10 @@ define i1 @length24_eq(ptr %x, ptr %y) nounwind {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldr x12, [x0, #16]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldr x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x12, x13, #0, eq
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x1]
++; CHECK-NEXT:    ldr d2, [x0, #16]
++; CHECK-NEXT:    ldr d3, [x1, #16]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.8b, v2.8b, v3.8b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1118,17 +1117,12 @@ define i1 @length24_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    ldr x11, [x0, #16]
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x8, #14648 // =0x3938
+-; CHECK-NEXT:    movk x8, #12592, lsl #16
+-; CHECK-NEXT:    movk x8, #13106, lsl #32
+-; CHECK-NEXT:    movk x8, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x8, #0, eq
+-; CHECK-NEXT:    mov x8, #14134 // =0x3736
+-; CHECK-NEXT:    movk x8, #14648, lsl #16
+-; CHECK-NEXT:    movk x8, #12592, lsl #32
+-; CHECK-NEXT:    movk x8, #13106, lsl #48
+-; CHECK-NEXT:    ccmp x11, x8, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI56_0
++; CHECK-NEXT:    adrp x9, .LCPI56_1
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI56_0]
++; CHECK-NEXT:    ldr d2, [x0, #16]
++; CHECK-NEXT:    ldr q3, [x9, :lo12:.LCPI56_1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1187,10 +1181,10 @@ define i1 @length31_eq(ptr %x, ptr %y) nounwind {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldr x12, [x0, #16]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldr x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldur x8, [x0, #23]
+-; CHECK-NEXT:    ldur x9, [x1, #23]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x12, x13, #0, eq
+-; CHECK-NEXT:    ccmp x8, x9, #0, eq
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x1]
++; CHECK-NEXT:    ldur q2, [x0, #15]
++; CHECK-NEXT:    ldur q3, [x1, #15]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1297,10 +1291,10 @@ define i1 @length31_eq_prefer128(ptr %x, ptr %y) nounwind "prefer-vector-width"=
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldr x12, [x0, #16]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldr x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldur x8, [x0, #23]
+-; CHECK-NEXT:    ldur x9, [x1, #23]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x12, x13, #0, eq
+-; CHECK-NEXT:    ccmp x8, x9, #0, eq
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x1]
++; CHECK-NEXT:    ldur q2, [x0, #15]
++; CHECK-NEXT:    ldur q3, [x1, #15]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1317,23 +1311,12 @@ define i1 @length31_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    ldr x11, [x0, #16]
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x8, #14648 // =0x3938
+-; CHECK-NEXT:    ldur x9, [x0, #23]
+-; CHECK-NEXT:    movk x8, #12592, lsl #16
+-; CHECK-NEXT:    movk x8, #13106, lsl #32
+-; CHECK-NEXT:    movk x8, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x8, #0, eq
+-; CHECK-NEXT:    mov x8, #14134 // =0x3736
+-; CHECK-NEXT:    movk x8, #14648, lsl #16
+-; CHECK-NEXT:    movk x8, #12592, lsl #32
+-; CHECK-NEXT:    movk x8, #13106, lsl #48
+-; CHECK-NEXT:    ccmp x11, x8, #0, eq
+-; CHECK-NEXT:    mov x8, #13363 // =0x3433
+-; CHECK-NEXT:    movk x8, #13877, lsl #16
+-; CHECK-NEXT:    movk x8, #14391, lsl #32
+-; CHECK-NEXT:    movk x8, #12345, lsl #48
+-; CHECK-NEXT:    ccmp x9, x8, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI62_0
++; CHECK-NEXT:    adrp x9, .LCPI62_1
++; CHECK-NEXT:    ldr q0, [x0]
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI62_0]
++; CHECK-NEXT:    ldur q2, [x0, #15]
++; CHECK-NEXT:    ldr q3, [x9, :lo12:.LCPI62_1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1393,8 +1376,8 @@ define i1 @length32_eq(ptr %x, ptr %y) nounwind {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1501,8 +1484,8 @@ define i1 @length32_eq_prefer128(ptr %x, ptr %y) nounwind "prefer-vector-width"=
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1519,22 +1502,11 @@ define i1 @length32_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x8, #14648 // =0x3938
+-; CHECK-NEXT:    movk x8, #12592, lsl #16
+-; CHECK-NEXT:    ldp x9, x11, [x0, #16]
+-; CHECK-NEXT:    movk x8, #13106, lsl #32
+-; CHECK-NEXT:    movk x8, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x8, #0, eq
+-; CHECK-NEXT:    mov x8, #14134 // =0x3736
+-; CHECK-NEXT:    movk x8, #14648, lsl #16
+-; CHECK-NEXT:    movk x8, #12592, lsl #32
+-; CHECK-NEXT:    movk x8, #13106, lsl #48
+-; CHECK-NEXT:    ccmp x9, x8, #0, eq
+-; CHECK-NEXT:    mov x8, #13620 // =0x3534
+-; CHECK-NEXT:    movk x8, #14134, lsl #16
+-; CHECK-NEXT:    movk x8, #14648, lsl #32
+-; CHECK-NEXT:    movk x8, #12592, lsl #48
+-; CHECK-NEXT:    ccmp x11, x8, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI68_0
++; CHECK-NEXT:    adrp x9, .LCPI68_1
++; CHECK-NEXT:    ldp q1, q2, [x0]
++; CHECK-NEXT:    ldr q0, [x8, :lo12:.LCPI68_0]
++; CHECK-NEXT:    ldr q3, [x9, :lo12:.LCPI68_1]
++; CHECK-NEXT:    eor v0.16b, v1.16b, v0.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1607,12 +1579,12 @@ define i1 @length48_eq(ptr %x, ptr %y) nounwind {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ldp x8, x11, [x0, #32]
+-; CHECK-NEXT:    ldp x10, x12, [x1, #32]
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ccmp x8, x10, #0, eq
+-; CHECK-NEXT:    ccmp x11, x12, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    ldr q2, [x0, #32]
++; CHECK-NEXT:    ldr q3, [x1, #32]
++; CHECK-NEXT:    eor v2.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1747,12 +1719,12 @@ define i1 @length48_eq_prefer128(ptr %x, ptr %y) nounwind "prefer-vector-width"=
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ldp x8, x11, [x0, #32]
+-; CHECK-NEXT:    ldp x10, x12, [x1, #32]
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ccmp x8, x10, #0, eq
+-; CHECK-NEXT:    ccmp x11, x12, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    ldr q2, [x0, #32]
++; CHECK-NEXT:    ldr q3, [x1, #32]
++; CHECK-NEXT:    eor v2.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1769,29 +1741,16 @@ define i1 @length48_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    ldp x11, x12, [x0, #16]
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x9, #14648 // =0x3938
+-; CHECK-NEXT:    movk x9, #12592, lsl #16
+-; CHECK-NEXT:    movk x9, #13106, lsl #32
+-; CHECK-NEXT:    movk x9, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x9, #0, eq
+-; CHECK-NEXT:    mov x9, #14134 // =0x3736
+-; CHECK-NEXT:    movk x9, #14648, lsl #16
+-; CHECK-NEXT:    movk x9, #12592, lsl #32
+-; CHECK-NEXT:    movk x9, #13106, lsl #48
+-; CHECK-NEXT:    ccmp x11, x9, #0, eq
+-; CHECK-NEXT:    mov x9, #13620 // =0x3534
+-; CHECK-NEXT:    movk x9, #14134, lsl #16
+-; CHECK-NEXT:    ldp x10, x11, [x0, #32]
+-; CHECK-NEXT:    movk x9, #14648, lsl #32
+-; CHECK-NEXT:    movk x9, #12592, lsl #48
+-; CHECK-NEXT:    ccmp x12, x9, #0, eq
+-; CHECK-NEXT:    mov x9, #13106 // =0x3332
+-; CHECK-NEXT:    movk x9, #13620, lsl #16
+-; CHECK-NEXT:    movk x9, #14134, lsl #32
+-; CHECK-NEXT:    movk x9, #14648, lsl #48
+-; CHECK-NEXT:    ccmp x10, x9, #0, eq
+-; CHECK-NEXT:    ccmp x11, x8, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI74_0
++; CHECK-NEXT:    ldp q1, q2, [x0]
++; CHECK-NEXT:    ldr q0, [x8, :lo12:.LCPI74_0]
++; CHECK-NEXT:    adrp x8, .LCPI74_1
++; CHECK-NEXT:    ldr q3, [x8, :lo12:.LCPI74_1]
++; CHECK-NEXT:    adrp x8, .LCPI74_2
++; CHECK-NEXT:    eor v0.16b, v1.16b, v0.16b
++; CHECK-NEXT:    eor v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    ldr q2, [x0, #32]
++; CHECK-NEXT:    ldr q3, [x8, :lo12:.LCPI74_2]
++; CHECK-NEXT:    eor v2.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -1878,18 +1837,16 @@ define i1 @length63_eq(ptr %x, ptr %y) nounwind {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ldp x8, x11, [x0, #32]
+-; CHECK-NEXT:    ldp x10, x12, [x1, #32]
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ldr x9, [x0, #48]
+-; CHECK-NEXT:    ldr x13, [x1, #48]
+-; CHECK-NEXT:    ccmp x8, x10, #0, eq
+-; CHECK-NEXT:    ldur x8, [x0, #55]
+-; CHECK-NEXT:    ldur x10, [x1, #55]
+-; CHECK-NEXT:    ccmp x11, x12, #0, eq
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ccmp x8, x10, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldr q4, [x0, #32]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    ldr q5, [x1, #32]
++; CHECK-NEXT:    ldur q6, [x0, #47]
++; CHECK-NEXT:    ldur q7, [x1, #47]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    eor v2.16b, v4.16b, v5.16b
++; CHECK-NEXT:    eor v3.16b, v6.16b, v7.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -2052,37 +2009,21 @@ define i1 @length63_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    ldp x11, x12, [x0, #16]
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x9, #14648 // =0x3938
+-; CHECK-NEXT:    movk x9, #12592, lsl #16
+-; CHECK-NEXT:    movk x9, #13106, lsl #32
+-; CHECK-NEXT:    movk x9, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x9, #0, eq
+-; CHECK-NEXT:    mov x10, #14134 // =0x3736
+-; CHECK-NEXT:    movk x10, #14648, lsl #16
+-; CHECK-NEXT:    movk x10, #12592, lsl #32
+-; CHECK-NEXT:    movk x10, #13106, lsl #48
+-; CHECK-NEXT:    ccmp x11, x10, #0, eq
+-; CHECK-NEXT:    mov x10, #13620 // =0x3534
+-; CHECK-NEXT:    movk x10, #14134, lsl #16
+-; CHECK-NEXT:    ldp x11, x13, [x0, #32]
+-; CHECK-NEXT:    movk x10, #14648, lsl #32
+-; CHECK-NEXT:    movk x10, #12592, lsl #48
+-; CHECK-NEXT:    ccmp x12, x10, #0, eq
+-; CHECK-NEXT:    mov x10, #13106 // =0x3332
+-; CHECK-NEXT:    ldr x12, [x0, #48]
+-; CHECK-NEXT:    movk x10, #13620, lsl #16
+-; CHECK-NEXT:    movk x10, #14134, lsl #32
+-; CHECK-NEXT:    movk x10, #14648, lsl #48
+-; CHECK-NEXT:    ccmp x11, x10, #0, eq
+-; CHECK-NEXT:    ldur x10, [x0, #55]
+-; CHECK-NEXT:    ccmp x13, x8, #0, eq
+-; CHECK-NEXT:    mov x8, #13877 // =0x3635
+-; CHECK-NEXT:    movk x8, #14391, lsl #16
+-; CHECK-NEXT:    ccmp x12, x9, #0, eq
+-; CHECK-NEXT:    movk x8, #12345, lsl #32
+-; CHECK-NEXT:    movk x8, #12849, lsl #48
+-; CHECK-NEXT:    ccmp x10, x8, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI79_0
++; CHECK-NEXT:    ldp q2, q3, [x0]
++; CHECK-NEXT:    ldr q0, [x8, :lo12:.LCPI79_0]
++; CHECK-NEXT:    adrp x8, .LCPI79_1
++; CHECK-NEXT:    ldr q5, [x0, #32]
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI79_1]
++; CHECK-NEXT:    adrp x8, .LCPI79_2
++; CHECK-NEXT:    ldur q6, [x0, #47]
++; CHECK-NEXT:    ldr q4, [x8, :lo12:.LCPI79_2]
++; CHECK-NEXT:    adrp x8, .LCPI79_3
++; CHECK-NEXT:    eor v0.16b, v2.16b, v0.16b
++; CHECK-NEXT:    ldr q7, [x8, :lo12:.LCPI79_3]
++; CHECK-NEXT:    eor v1.16b, v3.16b, v1.16b
++; CHECK-NEXT:    eor v2.16b, v5.16b, v4.16b
++; CHECK-NEXT:    eor v3.16b, v6.16b, v7.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -2169,16 +2110,14 @@ define i1 @length64_eq(ptr %x, ptr %y) nounwind {
+-; CHECK-NEXT:    ldp x8, x11, [x1]
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    ldp x12, x13, [x1, #16]
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    ldp x8, x9, [x0, #16]
+-; CHECK-NEXT:    ccmp x10, x11, #0, eq
+-; CHECK-NEXT:    ccmp x8, x12, #0, eq
+-; CHECK-NEXT:    ldp x8, x11, [x0, #32]
+-; CHECK-NEXT:    ldp x10, x12, [x1, #32]
+-; CHECK-NEXT:    ccmp x9, x13, #0, eq
+-; CHECK-NEXT:    ldp x9, x13, [x1, #48]
+-; CHECK-NEXT:    ccmp x8, x10, #0, eq
+-; CHECK-NEXT:    ldp x8, x10, [x0, #48]
+-; CHECK-NEXT:    ccmp x11, x12, #0, eq
+-; CHECK-NEXT:    ccmp x8, x9, #0, eq
+-; CHECK-NEXT:    ccmp x10, x13, #0, eq
++; CHECK-NEXT:    ldp q0, q1, [x0]
++; CHECK-NEXT:    ldp q2, q3, [x1]
++; CHECK-NEXT:    ldp q4, q5, [x0, #32]
++; CHECK-NEXT:    ldp q6, q7, [x1, #32]
++; CHECK-NEXT:    eor v0.16b, v0.16b, v2.16b
++; CHECK-NEXT:    eor v1.16b, v1.16b, v3.16b
++; CHECK-NEXT:    eor v2.16b, v4.16b, v6.16b
++; CHECK-NEXT:    eor v3.16b, v5.16b, v7.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+@@ -2341,32 +2280,20 @@ define i1 @length64_eq_const(ptr %X) nounwind {
+-; CHECK-NEXT:    mov x8, #12592 // =0x3130
+-; CHECK-NEXT:    ldp x9, x10, [x0]
+-; CHECK-NEXT:    movk x8, #13106, lsl #16
+-; CHECK-NEXT:    ldp x11, x12, [x0, #16]
+-; CHECK-NEXT:    movk x8, #13620, lsl #32
+-; CHECK-NEXT:    ldp x13, x14, [x0, #32]
+-; CHECK-NEXT:    movk x8, #14134, lsl #48
+-; CHECK-NEXT:    cmp x9, x8
+-; CHECK-NEXT:    mov x9, #14648 // =0x3938
+-; CHECK-NEXT:    movk x9, #12592, lsl #16
+-; CHECK-NEXT:    movk x9, #13106, lsl #32
+-; CHECK-NEXT:    movk x9, #13620, lsl #48
+-; CHECK-NEXT:    ccmp x10, x9, #0, eq
+-; CHECK-NEXT:    mov x10, #14134 // =0x3736
+-; CHECK-NEXT:    movk x10, #14648, lsl #16
+-; CHECK-NEXT:    movk x10, #12592, lsl #32
+-; CHECK-NEXT:    movk x10, #13106, lsl #48
+-; CHECK-NEXT:    ccmp x11, x10, #0, eq
+-; CHECK-NEXT:    mov x11, #13620 // =0x3534
+-; CHECK-NEXT:    movk x11, #14134, lsl #16
+-; CHECK-NEXT:    movk x11, #14648, lsl #32
+-; CHECK-NEXT:    movk x11, #12592, lsl #48
+-; CHECK-NEXT:    ccmp x12, x11, #0, eq
+-; CHECK-NEXT:    mov x11, #13106 // =0x3332
+-; CHECK-NEXT:    movk x11, #13620, lsl #16
+-; CHECK-NEXT:    movk x11, #14134, lsl #32
+-; CHECK-NEXT:    movk x11, #14648, lsl #48
+-; CHECK-NEXT:    ccmp x13, x11, #0, eq
+-; CHECK-NEXT:    ldp x11, x12, [x0, #48]
+-; CHECK-NEXT:    ccmp x14, x8, #0, eq
+-; CHECK-NEXT:    ccmp x11, x9, #0, eq
+-; CHECK-NEXT:    ccmp x12, x10, #0, eq
++; CHECK-NEXT:    adrp x8, .LCPI84_0
++; CHECK-NEXT:    ldp q2, q3, [x0]
++; CHECK-NEXT:    ldr q0, [x8, :lo12:.LCPI84_0]
++; CHECK-NEXT:    adrp x8, .LCPI84_1
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI84_1]
++; CHECK-NEXT:    adrp x8, .LCPI84_2
++; CHECK-NEXT:    ldr q4, [x8, :lo12:.LCPI84_2]
++; CHECK-NEXT:    adrp x8, .LCPI84_3
++; CHECK-NEXT:    eor v0.16b, v2.16b, v0.16b
++; CHECK-NEXT:    ldp q5, q6, [x0, #32]
++; CHECK-NEXT:    ldr q7, [x8, :lo12:.LCPI84_3]
++; CHECK-NEXT:    eor v1.16b, v3.16b, v1.16b
++; CHECK-NEXT:    eor v2.16b, v5.16b, v4.16b
++; CHECK-NEXT:    eor v3.16b, v6.16b, v7.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    orr v1.16b, v2.16b, v3.16b
++; CHECK-NEXT:    orr v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    umaxp v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    fmov x8, d0
++; CHECK-NEXT:    cmp x8, #0
+diff --git a/llvm/test/Transforms/ExpandMemCmp/AArch64/memcmp.ll b/llvm/test/Transforms/ExpandMemCmp/AArch64/memcmp.ll
+index 0ed3af535..57275321f 100644
+--- a/llvm/test/Transforms/ExpandMemCmp/AArch64/memcmp.ll
++++ b/llvm/test/Transforms/ExpandMemCmp/AArch64/memcmp.ll
+@@ -837,17 +837,4 @@ define i32 @cmp_eq16(ptr nocapture readonly %x, ptr nocapture readonly %y)  {
+-; CHECK-NEXT:    br label [[LOADBB:%.*]]
+-; CHECK:       res_block:
+-; CHECK-NEXT:    br label [[ENDBLOCK:%.*]]
+-; CHECK:       loadbb:
+-; CHECK-NEXT:    [[TMP1:%.*]] = load i64, ptr [[X]], align 1
+-; CHECK-NEXT:    [[TMP2:%.*]] = load i64, ptr [[Y]], align 1
+-; CHECK-NEXT:    [[TMP3:%.*]] = icmp ne i64 [[TMP1]], [[TMP2]]
+-; CHECK-NEXT:    br i1 [[TMP3]], label [[RES_BLOCK:%.*]], label [[LOADBB1:%.*]]
+-; CHECK:       loadbb1:
+-; CHECK-NEXT:    [[TMP4:%.*]] = getelementptr i8, ptr [[X]], i64 8
+-; CHECK-NEXT:    [[TMP5:%.*]] = getelementptr i8, ptr [[Y]], i64 8
+-; CHECK-NEXT:    [[TMP6:%.*]] = load i64, ptr [[TMP4]], align 1
+-; CHECK-NEXT:    [[TMP7:%.*]] = load i64, ptr [[TMP5]], align 1
+-; CHECK-NEXT:    [[TMP8:%.*]] = icmp ne i64 [[TMP6]], [[TMP7]]
+-; CHECK-NEXT:    br i1 [[TMP8]], label [[RES_BLOCK]], label [[ENDBLOCK]]
+-; CHECK:       endblock:
+-; CHECK-NEXT:    [[PHI_RES:%.*]] = phi i32 [ 0, [[LOADBB1]] ], [ 1, [[RES_BLOCK]] ]
++; CHECK-NEXT:    [[TMP1:%.*]] = load i128, ptr [[X]], align 1
++; CHECK-NEXT:    [[TMP2:%.*]] = load i128, ptr [[Y]], align 1
++; CHECK-NEXT:    [[TMP3:%.*]] = icmp ne i128 [[TMP1]], [[TMP2]]
++; CHECK-NEXT:    [[PHI_RES:%.*]] = zext i1 [[TMP3]] to i32

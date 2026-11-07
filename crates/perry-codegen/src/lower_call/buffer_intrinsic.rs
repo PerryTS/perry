@@ -1,15 +1,16 @@
-//! Issue #92 Buffer numeric-read intrinsics.
+//! Native Buffer method intrinsics.
 //!
 //! Extracted from `lower_call.rs` (#1099, part of #1097) — pure move,
-//! no behavior change. `try_emit_buffer_read_intrinsic` and its
-//! classification helper inline `buf.readInt32BE(offset)`-style reads
-//! as LLVM load + bswap + `LoweredValue` instead of a runtime dispatch.
+//! `try_emit_buffer_read_intrinsic` inlines `buf.readInt32BE(offset)`-style
+//! reads. `try_emit_buffer_equals_intrinsic` emits a fixed-size equality-only
+//! `memcmp` for sealed byte views so LLVM can select its target-specific
+//! lowering.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{access_facts_for_spec, attach_buffer_view_facts, BufferAccessSpec, FnCtx};
-use crate::native_value::{BufferEndian, LoweredValue};
+use crate::native_value::{BufferElem, BufferEndian, LengthSource, LoweredValue};
 use crate::types::{DOUBLE, F32, I1, I32, I64, PTR};
 
 /// Issue #92: inline Buffer numeric reads (`buf.readInt32BE(offset)` etc.)
@@ -125,29 +126,26 @@ pub(crate) fn is_buffer_numeric_read_method(name: &str) -> bool {
     classify_buffer_numeric_read(name).is_some()
 }
 
-/// Issue #6405 — whole-module pre-codegen scan: does this module assign to a
-/// property whose name is a Buffer numeric read-method (`buf.readUInt8 = fn`,
-/// `buf["readInt32BE"] = fn`)?
+fn is_buffer_intrinsic_method(name: &str) -> bool {
+    name == "equals" || is_buffer_numeric_read_method(name)
+}
+
+/// Whole-module pre-codegen scan for own-property shadows of inlined Buffer
+/// methods (`readUInt8`, `readInt32BE`, or `equals`).
 ///
 /// Node's Buffer IS an ordinary `Uint8Array`, so an own property SHADOWS the
 /// same-named prototype method. Every dynamic dispatch path already honors
 /// this (`dispatch_buffer_method` checks own props first), but a statically
-/// provable `buf.readUInt8(0)` folds to the inline byte-load intrinsic below,
-/// which reads the bytes directly and never consults the property table — so
-/// the override was ignored. When any such assignment exists, the intrinsic
-/// bails (returns `Ok(None)`) so the call routes through `js_native_call_method`
-/// and the own-prop shadow wins. Zero runtime cost for the overwhelmingly
-/// common program that never shadows a Buffer method — the fast path is
-/// untouched there.
+/// A statically provable call can bypass runtime dispatch, which must not hide
+/// an own method override. When any such assignment exists, all Buffer method
+/// intrinsics deopt to the own-prop-aware runtime dispatch. This is a
+/// conservative, module-wide check and adds no runtime cost.
 ///
-/// A per-module scan is sufficient: the intrinsic only fires on a buffer local
-/// that `lower_buffer_access_proof` proves non-escaping (a closure-captured or
-/// cross-module-shared/exported buffer is stamped hazardous and never folds),
-/// so any shadow that can reach a folded read lives in this same module. Only
-/// literal property names are matched; a dynamic `buf[computedName] = fn` is
-/// out of scope (that shape already defeats the static buffer proof in
-/// practice — see the issue).
-pub(crate) fn module_shadows_buffer_read_method(module: &perry_hir::Module) -> bool {
+/// The caller aggregates this scan across the program because the intrinsic
+/// fires while modules are compiled separately but prototype changes are
+/// program-wide. Only literal property names are matched; a dynamic `buf[computedName] =
+/// fn` already defeats the static receiver proof used by these intrinsics.
+pub(crate) fn module_shadows_buffer_intrinsic_method(module: &perry_hir::Module) -> bool {
     use perry_hir::{Expr, Stmt};
 
     fn expr_shadows(expr: &Expr, found: &mut bool) {
@@ -155,13 +153,21 @@ pub(crate) fn module_shadows_buffer_read_method(module: &perry_hir::Module) -> b
             return;
         }
         match expr {
-            Expr::PropertySet { property, .. } if is_buffer_numeric_read_method(property) => {
+            Expr::PropertySet { property, .. } if is_buffer_intrinsic_method(property) => {
                 *found = true;
                 return;
             }
             Expr::PutValueSet { key, .. } => {
                 if let Expr::String(name) = key.as_ref() {
-                    if is_buffer_numeric_read_method(name) {
+                    if is_buffer_intrinsic_method(name) {
+                        *found = true;
+                        return;
+                    }
+                }
+            }
+            Expr::ObjectDefineProperty(_, key, _) => {
+                if let Expr::String(name) = key.as_ref() {
+                    if is_buffer_intrinsic_method(name) {
                         *found = true;
                         return;
                     }
@@ -531,7 +537,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     // inline read fold so the call routes through the own-prop-aware runtime
     // dispatch. The flag is module-wide but only set for programs that
     // actually shadow, so the fast path is unaffected everywhere else.
-    if ctx.program_shadows_buffer_read_method {
+    if ctx.program_shadows_buffer_intrinsic_method {
         return Ok(None);
     }
     let spec = match classify_buffer_numeric_read(method) {
@@ -627,6 +633,82 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     Ok(Some(result))
 }
 
+/// Inline `Buffer.equals` only when both operands are sealed, fixed-size byte
+/// views. The fixed length becomes the third constant operand to `memcmp`,
+/// allowing LLVM's equality-only lowering to use vector comparisons.
+pub(super) fn try_emit_buffer_equals_intrinsic(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+) -> Result<Option<LoweredValue>> {
+    if method != "equals"
+        || crate::type_analysis::receiver_class_name(ctx, object).as_deref() != Some("Buffer")
+        || args.len() != 1
+        || ctx.program_shadows_buffer_intrinsic_method
+        || ctx.disable_buffer_fast_path
+    {
+        return Ok(None);
+    }
+    let (Expr::LocalGet(left_id), Expr::LocalGet(right_id)) = (object, &args[0]) else {
+        return Ok(None);
+    };
+    let Some(left) = ctx.receiver_descriptors.buffer_view(*left_id).cloned() else {
+        return Ok(None);
+    };
+    let Some(right) = ctx.receiver_descriptors.buffer_view(*right_id).cloned() else {
+        return Ok(None);
+    };
+    let fixed_len = |view: &crate::native_value::BufferViewSlot| -> Option<i64> {
+        if view.elem != BufferElem::U8
+            || !view.pointer_state.is_stable()
+            || !view.storage_inline_proven
+            || !view.length_fixed
+        {
+            return None;
+        }
+        match view.length_source {
+            Some(LengthSource::Constant(n)) if (0..=64).contains(&n) => Some(n),
+            _ => None,
+        }
+    };
+    if ctx.closure_captures.contains_key(left_id) || ctx.closure_captures.contains_key(right_id) {
+        return Ok(None);
+    }
+    let (Some(left_len), Some(right_len)) = (fixed_len(&left), fixed_len(&right)) else {
+        return Ok(None);
+    };
+
+    let equal = if left_len != right_len {
+        "false".to_string()
+    } else if left_len == 0 {
+        "true".to_string()
+    } else {
+        let left_ptr = ctx.block().load(PTR, &left.data_slot);
+        let right_ptr = ctx.block().load(PTR, &right.data_slot);
+        let cmp = ctx.block().call(
+            I32,
+            "memcmp",
+            &[
+                (PTR, &left_ptr),
+                (PTR, &right_ptr),
+                (I64, &left_len.to_string()),
+            ],
+        );
+        ctx.block().icmp_eq(I32, &cmp, "0")
+    };
+    let boxed = ctx.block().select(
+        I1,
+        &equal,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    Ok(Some(LoweredValue::js_value(
+        ctx.block().bitcast_i64_to_double(&boxed),
+    )))
+}
+
 fn target_endian() -> BufferEndian {
     if cfg!(target_endian = "big") {
         BufferEndian::Big
@@ -637,7 +719,7 @@ fn target_endian() -> BufferEndian {
 
 #[cfg(test)]
 mod shadow_scan_tests {
-    use super::module_shadows_buffer_read_method;
+    use super::module_shadows_buffer_intrinsic_method;
     use perry_hir::{Class, ClassField, Expr, Module, Stmt};
 
     fn filler() -> Box<Expr> {
@@ -724,7 +806,25 @@ mod shadow_scan_tests {
     fn detects_read_method_shadow_in_init() {
         let mut m = Module::new("t");
         m.init = vec![put_value_set("readUInt8")];
-        assert!(module_shadows_buffer_read_method(&m));
+        assert!(module_shadows_buffer_intrinsic_method(&m));
+    }
+
+    #[test]
+    fn detects_equals_method_shadow_in_init() {
+        let mut m = Module::new("t");
+        m.init = vec![put_value_set("equals")];
+        assert!(module_shadows_buffer_intrinsic_method(&m));
+    }
+
+    #[test]
+    fn detects_define_property_shadow_in_init() {
+        let mut m = Module::new("t");
+        m.init = vec![Stmt::Expr(Expr::ObjectDefineProperty(
+            filler(),
+            Box::new(Expr::String("equals".to_string())),
+            filler(),
+        ))];
+        assert!(module_shadows_buffer_intrinsic_method(&m));
     }
 
     #[test]
@@ -735,7 +835,7 @@ mod shadow_scan_tests {
             then_branch: vec![property_set("readInt32BE")],
             else_branch: None,
         }];
-        assert!(module_shadows_buffer_read_method(&m));
+        assert!(module_shadows_buffer_intrinsic_method(&m));
     }
 
     #[test]
@@ -744,12 +844,24 @@ mod shadow_scan_tests {
         // `writeUInt8` is a WRITE method (no read-intrinsic fold to protect),
         // and `foo` is an ordinary expando — neither can shadow a folded read.
         m.init = vec![put_value_set("writeUInt8"), property_set("foo")];
-        assert!(!module_shadows_buffer_read_method(&m));
+        assert!(!module_shadows_buffer_intrinsic_method(&m));
     }
 
     #[test]
     fn empty_module_does_not_shadow() {
-        assert!(!module_shadows_buffer_read_method(&Module::new("t")));
+        assert!(!module_shadows_buffer_intrinsic_method(&Module::new("t")));
+    }
+
+    #[test]
+    fn program_shadow_scan_covers_other_modules() {
+        let caller = Module::new("caller");
+        let mut patch = Module::new("patch");
+        patch.init = vec![put_value_set("equals")];
+
+        assert!(!crate::program_shadows_buffer_intrinsic_method([&caller]));
+        assert!(crate::program_shadows_buffer_intrinsic_method([
+            &caller, &patch
+        ]));
     }
 
     #[test]
@@ -761,7 +873,7 @@ mod shadow_scan_tests {
             "tag",
             put_value_set_expr("readDoubleLE"),
         )]));
-        assert!(module_shadows_buffer_read_method(&m));
+        assert!(module_shadows_buffer_intrinsic_method(&m));
     }
 
     #[test]
@@ -774,6 +886,6 @@ mod shadow_scan_tests {
             "readUInt8",
             Expr::Integer(0),
         )]));
-        assert!(!module_shadows_buffer_read_method(&m));
+        assert!(!module_shadows_buffer_intrinsic_method(&m));
     }
 }

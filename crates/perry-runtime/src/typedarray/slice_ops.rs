@@ -253,6 +253,7 @@ pub extern "C" fn js_typed_array_fill(
                 *base.add(i) = bytes[i];
             }
         } else {
+            // GC_STORE_AUDIT(POINTER_FREE): numeric TypedArray backing bytes contain no GC references.
             let words = total / 8;
             for i in 0..words {
                 (base.add(i * 8) as *mut u64).write_unaligned(word);

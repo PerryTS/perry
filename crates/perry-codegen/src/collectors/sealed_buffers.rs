@@ -50,7 +50,11 @@ pub(crate) struct BufferExposure {
 }
 
 pub(crate) fn buffer_exposure(hir: &Module) -> BufferExposure {
-    let mut scan = Scan::default();
+    let mut scan = Scan {
+        allow_buffer_equals:
+            !crate::lower_call::buffer_intrinsic::module_shadows_buffer_intrinsic_method(hir),
+        ..Scan::default()
+    };
     scan.walk_module(hir);
     let never_string = never_string_locals(hir, &scan);
 
@@ -358,6 +362,9 @@ struct Scan<'a> {
     /// element read through one (with a never-string key) is a Number, a
     /// BigInt or `undefined`, never a string.
     fresh_arrays: HashSet<u32>,
+    /// Immutable locals with a fresh Buffer allocation. Used to restrict the
+    /// Buffer.equals exposure exemption to operands with known Buffer type.
+    fresh_buffers: HashSet<u32>,
     /// `(arg local, callee FuncId, position, body)` for direct module-function
     /// calls.
     call_args: Vec<(u32, u32, usize, u32)>,
@@ -379,6 +386,9 @@ struct Scan<'a> {
     /// `(source, alias, body)` for `const alias = source`: the source stays
     /// sealed only if the alias does.
     aliases: Vec<(u32, u32, u32)>,
+    /// A one-argument `Buffer.equals` call is read-only when the module-wide
+    /// shadow scan proves static dispatch still reaches the built-in method.
+    allow_buffer_equals: bool,
     /// The module function whose own body is being walked (not a closure
     /// inside it), with that body's id.
     cur_fn: Option<(u32, u32)>,
@@ -459,7 +469,13 @@ impl<'a> Scan<'a> {
 
     fn walk_stmt(&mut self, s: &'a Stmt) {
         match s {
-            Stmt::Let { id, init, .. } => {
+            Stmt::Let {
+                id,
+                ty,
+                mutable,
+                init,
+                ..
+            } => {
                 *self.let_counts.entry(*id).or_insert(0) += 1;
                 self.let_home.insert(*id, self.body);
                 if matches!(
@@ -472,6 +488,15 @@ impl<'a> Scan<'a> {
                     )
                 ) {
                     self.fresh_arrays.insert(*id);
+                }
+                if !mutable
+                    && matches!(ty, perry_hir::types::Type::Named(name) if name == "Buffer")
+                    && matches!(
+                        init,
+                        Some(Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_))
+                    )
+                {
+                    self.fresh_buffers.insert(*id);
                 }
                 if let Some(e) = init {
                     self.writes.entry(*id).or_default().push(e);
@@ -710,6 +735,28 @@ impl<'a> Scan<'a> {
                     for arg in args {
                         self.walk_expr(arg);
                     }
+                }
+                Expr::PropertyGet {
+                    object, property, ..
+                } if self.allow_buffer_equals
+                    && property == "equals"
+                    && matches!(object.as_ref(), Expr::LocalGet(_))
+                    && args.len() == 1
+                    && matches!(args[0], Expr::LocalGet(_)) =>
+                {
+                    let (Expr::LocalGet(receiver), Expr::LocalGet(argument)) =
+                        (object.as_ref(), &args[0])
+                    else {
+                        unreachable!()
+                    };
+                    if !self.fresh_buffers.contains(receiver)
+                        || !self.fresh_buffers.contains(argument)
+                    {
+                        self.expose(*receiver);
+                        self.expose(*argument);
+                    }
+                    // Only statically known fresh Buffer views are exempt: the
+                    // intrinsic compares bytes without exposing either store.
                 }
                 _ => self.walk_children(e),
             },
