@@ -73,6 +73,7 @@ pub(crate) fn emit_number_index_split(
     arg_slices: &[(LlvmType, &str)],
 ) -> String {
     let mut admitted: Option<String> = None;
+    let mut raws: Vec<String> = Vec::with_capacity(positions.len());
     for pos in positions {
         let value = arg_slices[pos + 1].1.to_string();
         let blk = ctx.block();
@@ -82,6 +83,7 @@ pub(crate) fn emit_number_index_split(
         let bits = blk.bitcast_double_to_i64(&value);
         let (exact, int) = crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, &value, &bits);
         let nonnegative = blk.icmp_sge(I32, &int, "0");
+        raws.push(int);
         let ok = blk.and(I1, &exact, &nonnegative);
         admitted = Some(match admitted {
             Some(prev) => blk.and(I1, &prev, &ok),
@@ -99,7 +101,14 @@ pub(crate) fn emit_number_index_split(
     let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&admitted, &fast_label, &generic_label);
     ctx.current_block = fast_idx;
-    let fast = ctx.block().call(DOUBLE, &idx_fn, arg_slices);
+    // The clone's raw-i32 body takes the i32 this guard just proved.
+    let fast = if crate::codegen::index_entry::raw_i32_enabled() {
+        let raw_fn = crate::codegen::index_entry::raw_body_name(&idx_fn);
+        let raw_args = crate::codegen::index_entry::raw_body_args(arg_slices, positions, &raws);
+        ctx.block().call(DOUBLE, &raw_fn, &raw_args)
+    } else {
+        ctx.block().call(DOUBLE, &idx_fn, arg_slices)
+    };
     let fast_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = generic_idx;

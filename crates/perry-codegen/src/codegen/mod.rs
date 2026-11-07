@@ -259,6 +259,7 @@ pub mod entry_outline;
 mod export_value_wrappers;
 pub(crate) mod facts_int32_locals;
 pub(crate) mod facts_number_locals;
+pub(crate) mod index_entry;
 #[cfg(test)]
 mod facts_number_locals_tests;
 pub(crate) mod fresh_class_templates;
