@@ -1519,10 +1519,27 @@ impl Model {
         // A runtime object (⊤ may be one; `ObjectProto` stands for
         // every builtin prototype) takes `src` as its prototype:
         // its lookups may reach the keys of `src`'s chain.
+        // Such a lookup of a key `src`'s chain holds reads the opaque member
+        // (`settle_native_given` writes every key of that chain on `t`): the
+        // value it stands for, what `src`'s chain holds under the key, is
+        // handed to code the model does not follow, so each member escapes.
+        // `src` itself does not: a lookup on `t` finds what `src` holds,
+        // never `src`. A builtin function value keeps the `proto_node` link
+        // below, which the model walks.
         if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
             && !self.native_given.contains(&(t, src))
         {
             self.native_given.push((t, src));
+            let members = self.node_l("given-prototype-members");
+            self.cons(
+                src,
+                Cons::Load {
+                    key: Key::Any(0),
+                    dst: members,
+                },
+            );
+            let r = self.reason("E6 member of a prototype given to a runtime object");
+            self.sink_node(members, r);
         }
         // `%Object.prototype%` is an immutable prototype exotic
         // object: setting its [[Prototype]] to anything but its

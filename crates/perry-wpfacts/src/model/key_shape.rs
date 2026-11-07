@@ -66,8 +66,19 @@ fn str_parts(e: &Expr, out: &mut Vec<Part>) -> bool {
 
 impl KeyShape {
     /// The shape of key expression `e`: `None` unless it is a String built
-    /// with at least one non-empty string-literal part.
+    /// with at least one non-empty string-literal part, or a well-known
+    /// symbol. `Symbol.iterator` & co. are HIR's `@@__perry_wk_<name>`
+    /// sentinel (`read_key`), one symbol per name: no String, so the key
+    /// names that sentinel only (never `__proto__`, never a string member).
     pub fn of(e: &Expr) -> Option<KeyShape> {
+        if let Expr::SymbolFor(name) = e {
+            return match name.as_ref() {
+                Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => Some(KeyShape {
+                    pieces: vec![s.clone()],
+                }),
+                _ => None,
+            };
+        }
         let mut parts = Vec::new();
         if !str_parts(e, &mut parts) {
             return None;
