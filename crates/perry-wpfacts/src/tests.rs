@@ -26,6 +26,7 @@ mod birth_site;
 mod body_activation;
 mod body_identity;
 mod body_packets;
+mod bound_class;
 mod bound_in_summary;
 mod box_chain;
 mod builtin_fn_identity;
