@@ -405,6 +405,16 @@ impl<'a> Gen<'a> {
         dst
     }
 
+    /// The values `Object.values` / `Object.entries` read from `recv`:
+    /// EnumerableOwnProperties takes the keys of `[[OwnPropertyKeys]]` and
+    /// `[[Get]]`s each one, so an inherited member (Object.prototype's
+    /// `constructor` and methods) is never among them (`Cons::OwnValues`).
+    pub(crate) fn own_values(&mut self, recv: NodeId) -> NodeId {
+        let dst = self.tmp("ownvalues");
+        self.m.cons(recv, Cons::OwnValues { dst });
+        dst
+    }
+
     /// The static blocks of class expression `template` that one
     /// evaluation runs (`ClassFreshStaticInit::Block`, an index into the
     /// template's `__perry_static_init_N` functions in source order): a

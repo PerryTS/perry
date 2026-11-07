@@ -1464,14 +1464,10 @@ fn ns_method_inner(
         (BuiltinNs::Object, "values" | "entries") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
+            // Own enumerable values only (EnumerableOwnProperties): no
+            // inherited member is among them.
             if let Some(o) = arg(m, call, 0) {
-                m.cons(
-                    o,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: fa,
-                    },
-                );
+                m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
             if name == "entries" {
