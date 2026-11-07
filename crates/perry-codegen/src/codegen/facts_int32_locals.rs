@@ -80,7 +80,7 @@ pub(crate) fn witness(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u32) {
     if !crate::verify_facts::enabled() {
         return;
     }
-    let (exact, _) = super::emit_typed_i32_guard_and_raw(ctx.block(), value);
+    let (exact, _) = super::typed_abi::emit_typed_i32_guard_and_raw(ctx.block(), value);
     crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("int32.input.verify_miss");
     let next = ctx.new_block("int32.input.admitted");
