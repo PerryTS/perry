@@ -94,3 +94,22 @@ fn an_unknown_parent_value_still_escapes() {
     let pf = facts(&src);
     assert!(!proven(&pf, &src), "{}", verdicts(&pf, &src));
 }
+
+/// Red without the fix: the native parent was the realm's `Error`, and the
+/// class was published as statically constructed through a parent
+/// (`super_unrelinked`); codegen then ran `super(...args)` of a per-evaluation
+/// class statically, which never reaches the native constructor (the message
+/// was lost). The construction must follow the live edge.
+#[test]
+fn a_built_in_parent_is_no_static_super_target() {
+    let pf = facts(
+        "function mk(tag: string) {\n\
+           class Tagged extends TypeError { code = 'E_' + tag; }\n\
+           return new Tagged('boom ' + tag);\n\
+         }\n\
+         console.log(mk('x').message);\n",
+    );
+    assert!(!pf
+        .super_unrelinked
+        .contains_key(&tmpl(&pf, "Tagged").class_id.unwrap()));
+}
