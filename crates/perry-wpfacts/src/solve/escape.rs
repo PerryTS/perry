@@ -981,6 +981,9 @@ impl Model {
             TokKind::ClassObj(tm) => {
                 let p = self.tok(TokKind::Proto(tm));
                 self.escape(p, reason);
+                if !self.unknown_constructible(t) {
+                    return;
+                }
                 // Unknown code may construct it with unknown arguments.
                 let ret = self.node_l("top-new");
                 let args_n = self.node_l("top-args");

@@ -2,6 +2,23 @@
 use super::*;
 
 impl Model {
+    /// A class object unknown code can construct once it escapes. The class
+    /// of a closed object literal (`Class::is_literal_shape`) is a layout,
+    /// not a runtime value: no code reaches it as a constructor (the
+    /// literal reads `constructor` from `Object.prototype`), so none constructs it.
+    pub(crate) fn unknown_constructible(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::ClassObj(tm) => !matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Class {
+                    literal_shape: true,
+                    ..
+                }
+            ),
+            _ => false,
+        }
+    }
+
     pub(crate) fn reflect_construct(&mut self, call: CallId, target: Tok, new_target: Tok) {
         if !self.sum.ready {
             self.sum
@@ -18,7 +35,7 @@ impl Model {
                 .escaped
                 .keys()
                 .copied()
-                .filter(|&t| matches!(self.toks[t as usize], TokKind::ClassObj(_)))
+                .filter(|&t| self.unknown_constructible(t))
                 .collect();
             for t in targets {
                 self.reflect_construct(call, t, new_target);
