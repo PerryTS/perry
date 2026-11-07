@@ -187,6 +187,11 @@ pub struct RealmDeclaration {
     pub captures: Vec<RealmValue>,
     #[serde(default)]
     pub header: Option<RealmHeaderFacts>,
+    /// What a dynamic host array declares its elements to be
+    /// (`value = dynamic, elements = string`): the runtime puts only such
+    /// values in the array it makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements: Option<String>,
     #[serde(default)]
     pub native_namespace: Option<String>,
     #[serde(default)]

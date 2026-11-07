@@ -186,6 +186,10 @@ impl Model {
                 self.reasons.get(reason as usize),
                 proto
             ),
+            Cons::HasInstance { reason, arg } => format!(
+                "HasInstance reason={:?} arg={arg}",
+                self.reasons.get(reason as usize)
+            ),
             Cons::CreateProto { reason } => {
                 format!("CreateProto reason={:?}", self.reasons.get(reason as usize))
             }

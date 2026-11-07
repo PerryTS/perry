@@ -225,6 +225,10 @@ pub enum Cons {
     AddsKeys,
     /// Builtin protocol touch: what `proto` reads on every token.
     Implicit { reason: u32, proto: Protocol },
+    /// InstanceofOperator (13.10.2) with the node as its right-hand side:
+    /// `GetMethod(C, @@hasInstance)` on every token, called with `arg`, the
+    /// left-hand side value (`Call(instOfHandler, C, « V »)`).
+    HasInstance { reason: u32, arg: NodeId },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
@@ -569,6 +573,7 @@ impl Cons {
             Cons::DefineAll { .. } => "defineall",
             Cons::DefineDesc { .. } => "definedesc",
             Cons::Implicit { .. } => "implicit",
+            Cons::HasInstance { .. } => "hasinstance",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoGiven { .. } => "protogiven",

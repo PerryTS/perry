@@ -3793,3 +3793,5 @@ proto	Object.prototype	propertyIsEnumerable
 proto	Object.prototype	toLocaleString
 proto	Object.prototype	toString
 proto	Object.prototype	valueOf
+strings	process	argv	process.argv
+strings	process	execArgv	process.execArgv

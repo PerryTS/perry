@@ -1148,6 +1148,11 @@ pub(crate) struct FnCtx<'a> {
     /// `js_number_coerce`. Structural, never a declared type — see
     /// `collectors::collect_number_by_construction_locals`.
     pub number_by_construction_locals: &'a std::collections::HashSet<u32>,
+    /// `let` bindings the whole-program facts prove hold only Numbers
+    /// (`codegen/facts_number_locals.rs`). A read is a Number; unlike
+    /// `number_by_construction_locals` this says nothing about the operands
+    /// of the writes, which keep their own lowering.
+    pub facts_number_locals: &'a std::collections::HashSet<u32>,
 
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty on native statepoint targets.

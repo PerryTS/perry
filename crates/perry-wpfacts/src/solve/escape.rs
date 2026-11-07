@@ -241,13 +241,15 @@ impl Model {
                 self.builtin_fields_sink(t, Some(reason));
             }
             // Unknown code given `process` (or the global object) may write
-            // the array `process.argv` holds.
+            // the arrays `process.argv` and `process.execArgv` hold.
             if matches!(
                 self.toks[t as usize],
                 TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
             ) {
-                let a = self.process_argv_tok;
-                self.escape(a, reason);
+                for i in 0..self.process_arrays.len() {
+                    let a = self.process_arrays[i].2;
+                    self.escape(a, reason);
+                }
             }
             return;
         }

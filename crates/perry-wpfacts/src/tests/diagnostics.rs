@@ -62,13 +62,32 @@ fn diagnostic_capture_is_observational_and_off_by_default() {
         "\"primitiveMask\":",
         "\"raw\":",
         "\"bound\":{",
-        "\"ancestors\":[1]",
     ] {
         assert!(
             lines.iter().any(|l| l.contains(required)),
             "missing {required}"
         );
     }
+    // `Child`'s layout record names `Base`'s layout as its one ancestor. The
+    // id is looked up, not written down: the layouts the realm makes before
+    // the program's own (the host arrays of `process`) come first.
+    let layout = |name: &str| {
+        lines
+            .iter()
+            .find(|l| l.contains("\"record\":\"layout\"") && l.contains(&format!(":{name}\"")))
+            .unwrap_or_else(|| panic!("no layout record for {name}"))
+    };
+    let base = layout("Base");
+    let base_id = base
+        .split("\"id\":")
+        .nth(1)
+        .and_then(|r| r.split(',').next())
+        .expect("layout id");
+    let child = layout("Child");
+    assert!(
+        child.contains(&format!("\"ancestors\":[{base_id}]")),
+        "{child}"
+    );
 }
 
 #[test]

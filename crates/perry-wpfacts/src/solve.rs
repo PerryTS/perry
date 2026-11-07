@@ -1237,9 +1237,43 @@ impl Model {
 
     // ---------------------------------------------------------------- calls
 
+    /// InstanceofOperator on `t` with left-hand side `lhs`: the protocol
+    /// touch, its method called with `lhs`. Where the method is not
+    /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
+    /// passed to unknown code: it escapes.
+    pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
+        let unknown = t == TOP
+            || self.is_marker(t)
+            || matches!(self.toks[t as usize], TokKind::Bound(_));
+        if unknown {
+            self.sink_node(lhs, reason);
+            match self.toks[t as usize] {
+                // `instanceof` a bound function runs its target's.
+                TokKind::Bound(_) => self.escape(t, reason),
+                _ => self.implicit(t, reason, Protocol::HasInstance),
+            }
+            return;
+        }
+        let arg = self.has_instance_node(t);
+        self.edge(lhs, arg);
+        self.implicit(t, reason, Protocol::HasInstance);
+    }
+
+    /// The argument node of the `@@hasInstance` call on `t`, one per token.
+    fn has_instance_node(&mut self, t: Tok) -> NodeId {
+        if let Some(&a) = self.has_instance_arg.get(&t) {
+            return a;
+        }
+        let a = self.node_l("hasinstance-arg");
+        self.nodes[a as usize].frame = self.fam_home(t);
+        self.has_instance_arg.insert(t, a);
+        a
+    }
+
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
     /// inspect …): every function reachable as a property of `t` or its
-    /// chain runs with `this` = `t` and unknown primitive arguments.
+    /// chain runs with `this` = `t` and unknown primitive arguments, or for
+    /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
         // The touch looks up and calls the protocol's keys and reads its
         // values, nothing else.
@@ -1309,18 +1343,27 @@ impl Model {
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
         // Protocol results go back to the runtime only (touched below).
         self.nodes[ret as usize].sink = true;
-        let arg = self.node_l("implicit-arg");
         self.nodes[ret as usize].frame = home;
-        self.nodes[arg as usize].frame = home;
-        self.add_prim(arg, prim::ALL);
-        // Protocol arguments are primitives (hints, keys). The one protocol
-        // that hands user code runtime functions, `then(resolve, reject)`,
-        // is modeled where it happens (`builtins::adopt`): the resolvers
-        // there are synthetic functions whose argument reaches the result.
+        // Protocol arguments are primitives (hints, keys), except
+        // `@@hasInstance`'s, the `instanceof` left-hand sides. The
+        // one protocol that hands user code runtime functions,
+        // `then(resolve, reject)`, is modeled where it happens
+        // (`builtins::adopt`): the resolvers there are synthetic functions
+        // whose argument reaches the result.
+        let args = match proto {
+            Protocol::HasInstance => vec![self.has_instance_node(t)],
+            _ => {
+                let arg = self.node_l("implicit-arg");
+                self.nodes[arg as usize].frame = home;
+                self.add_prim(arg, prim::ALL);
+                vec![arg; 4]
+            }
+        };
+        let arg = args[0];
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
             this: ThisArg::Tok(t),
-            args: vec![arg; 4],
+            args,
             spread: vec![],
             ret,
             site: 0,
@@ -1455,6 +1498,7 @@ impl Model {
             Cons::Implicit { reason, proto } => {
                 format!("implicit {n} {reason} {}", proto.name())
             }
+            Cons::HasInstance { reason, arg } => format!("hasinstance {n} {reason} {arg}"),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion {
                 key,

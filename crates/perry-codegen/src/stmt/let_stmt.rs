@@ -1593,6 +1593,9 @@ pub(crate) fn lower_let(
                     if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
+                    let v = crate::codegen::facts_number_locals::accept_let_value(
+                        ctx, id, init_expr, v,
+                    );
                     ctx.block().store(DOUBLE, &v, &slot);
                     v
                 }
@@ -1616,6 +1619,8 @@ pub(crate) fn lower_let(
                 if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
+                let v =
+                    crate::codegen::facts_number_locals::accept_let_value(ctx, id, init_expr, v);
                 ctx.block().store(DOUBLE, &v, &slot);
                 v
             };

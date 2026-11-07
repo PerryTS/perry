@@ -1389,6 +1389,7 @@ pub(crate) fn bind_lowered_value_to_local(
     v: &str,
     value: &Expr,
 ) -> Result<()> {
+    let v = &crate::codegen::facts_number_locals::accept_let_value(ctx, id, value, v.to_string());
     crate::codegen::arguments::note_arguments_assignment(ctx, id);
     // `target = source` creates the same string-buffer alias as a
     // `let target = source` initializer. The declaration path has

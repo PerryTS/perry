@@ -172,6 +172,7 @@ fn string_method_call_returns_number(ctx: &FnCtx<'_>, object: &Expr, property: &
 /// "raw f64?" or "non-pointer?" about a `LocalGet` asks this.
 pub(crate) fn local_is_number(ctx: &FnCtx<'_>, id: u32) -> bool {
     ctx.number_by_construction_locals.contains(&id)
+        || ctx.facts_number_locals.contains(&id)
         || ctx.receiver_descriptors.local_is_number_in_scope(id)
 }
 

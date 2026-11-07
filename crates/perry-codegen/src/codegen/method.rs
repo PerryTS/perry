@@ -406,6 +406,14 @@ pub(super) fn compile_method(
         .copied()
         .collect();
     let mut index_i32_param_slots: HashMap<u32, String> = HashMap::new();
+    // Parameters the whole-program facts prove Number on every entry hold
+    // their plain double for the whole body and own no root slot.
+    let facts_number_params = super::facts_number_locals::facts_number_params(
+        &cross_module.wpfacts,
+        &method.params,
+        method_body,
+        &method_boxed_vars,
+    );
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
@@ -419,8 +427,16 @@ pub(super) fn compile_method(
         let mut map = HashMap::new();
         for p in &method.params {
             let arg_name = format!("%arg{}", p.id);
-            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
-            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+            let number = facts_number_params.contains(&p.id);
+            let value = if number {
+                super::facts_number_locals::emit_entry_number(blk, &arg_name)
+            } else {
+                arg_name.clone()
+            };
+            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &value);
+            if number {
+                shadow_slot_map.remove(&p.id);
+            } else if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
                 blk.call_void(
                     "js_shadow_slot_bind",
                     &[(I32, &slot_idx.to_string()), (PTR, &slot)],
@@ -499,17 +515,29 @@ pub(super) fn compile_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
-    // Closed World 5d: the body's typed locals (no entry proofs here).
+    // Closed World 5d: the body's typed locals; the only entry proofs are the
+    // facts-proven Number parameters.
     let mut code_unit_locals = std::collections::HashSet::new();
+    let facts_number_proofs: HashMap<u32, perry_hir::types::Type> = facts_number_params
+        .iter()
+        .map(|id| (*id, perry_hir::types::Type::Number))
+        .collect();
     let typed_locals = crate::collectors::typed_locals::apply(
         method_body,
-        &std::collections::HashMap::new(),
+        &facts_number_proofs,
         &outer_proofs,
         &method_boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
         &mut code_unit_locals,
     );
+    let facts_number_lets = super::facts_number_locals::facts_number_lets(
+        &cross_module.wpfacts,
+        method_body,
+        &method_boxed_vars,
+        module_globals,
+    );
+    super::helpers::drop_number_local_root_slots(&mut shadow_slot_map, &facts_number_lets);
     super::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
@@ -738,6 +766,7 @@ pub(super) fn compile_method(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: &facts_number_lets,
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -1157,6 +1186,10 @@ pub(super) fn compile_method(
                         } else {
                             // No callable ctor symbol — bail.
                             crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
+                            super::facts_number_locals::emit_param_witnesses(
+                                &mut ctx,
+                                &facts_number_params,
+                            );
                             stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
                                 format!("lowering body of method '{}::{}'", class.name, method.name)
                             })?;
@@ -1626,6 +1659,7 @@ pub(super) fn compile_method(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
     if !method.is_async && !method.is_generator {
         ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, method_body);
     }
