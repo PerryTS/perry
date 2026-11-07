@@ -768,8 +768,11 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // CHESS4-A: the runtime-made `process.argv` array is one more entry
         // at every n (the growth stays n^2): (956, 2604, 8204) -> (957, 2605, 8205).
         // The escaped class objects are one node (ESCCLASSES) that holds the
-        // escaped class token: one entry more at every n -> the pin.
-        (958, 2606, 8206),
+        // escaped class token: one entry more at every n -> (958, 2606, 8206).
+        // The `{ v }` literals share one literal-shape class, a layout no
+        // unknown code constructs: its escape no longer builds the unknown
+        // `new` (result, arguments, instance), 16 entries fewer at every n.
+        (942, 2590, 8190),
         "entries {e8} {e16} {e32}"
     );
 }
