@@ -13,8 +13,10 @@ asserts them against members.rs. `--check` fails when the checked-in list is
 not the one this realm gives (a runtime change that declares a new key).
 
 Rows: `ns <Name> <key>` own string keys of a global constructor or namespace
-object; `proto <Function.prototype|Object.prototype> <key>` their own string
-keys (the chain of every native function value and namespace); `fn <name>
+object, and of a function a node module object holds (`node:http.ServerResponse`:
+`prototype`; `node:stream.Readable`: `from`): a key the solver does not describe
+there reads an unknown value, never an absent one; `proto
+<Function.prototype|Object.prototype> <key>` their own string keys (the chain of every native function value and namespace); `fn <name>
 <key>` own string keys other than length/name of a native prototype method.
 `global %Global% <key>` own string keys of the global object: the globals
 the realm defines (every other global name is the program's).
@@ -68,6 +70,9 @@ def rows(realm):
     receiver_result = [{"returns": {"slot": {"root": "this", "steps": []}}}]
     callable_names = {d["name"] for d in realm["declarations"]
                       if d["kind"] in FN_KINDS | {"constructor"}}
+    module_values = {p["value"]["value"] for d in realm["declarations"] if node_module(d["name"], d["kind"])
+                     for p in member_properties(declarations, d, True)
+                     if p.get("value", {}).get("kind") == "reference" and p["value"]["value"] in callable_names}
     for d in realm["declarations"]:
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
@@ -92,6 +97,8 @@ def rows(realm):
             out.update(("ns", name, k) for k in keys)
         elif kind in FN_KINDS and ".prototype." in name:
             out.update(("fn", name, k) for k in keys if k not in ("length", "name"))
+        elif name in module_values:
+            out.update(("ns", name, k) for k in keys)
     return sorted(out)
 
 
