@@ -829,11 +829,32 @@ fn iterator_includes_uses_same_value_zero_and_consumes_skipped_values() {
         let includes_zero_after_skip = tower(
             iter,
             "includes",
-            &[0.0, f64::from_bits(JSValue::number(2.0).bits())],
+            &[
+                0.0,
+                f64::from_bits(JSValue::int32(2).bits()),
+            ],
         );
         assert_eq!(
             JSValue::from_bits(includes_zero_after_skip.to_bits()).bits(),
             crate::value::TAG_TRUE
+        );
+    }
+}
+
+#[test]
+fn iterator_join_large_result_uses_linear_builder() {
+    init();
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let single = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"x".as_ptr(), 1) as i64,
+        ));
+        let values = vec![single.get_nanbox_f64(); 100_000];
+        let iter = helper_over(&values);
+        let joined = tower(iter, "join", &[]);
+        assert_eq!(
+            crate::string::with_string_value_bytes(joined, |b| b.len()),
+            Some(199_999)
         );
     }
 }

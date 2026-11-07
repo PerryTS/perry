@@ -235,32 +235,34 @@ unsafe fn join(this: f64, separator: f64) -> f64 {
     };
     let separator = scope.root_nanbox_f64(separator);
     let iterated = scope.root_nanbox_f64(get_iterator_direct(this.get_nanbox_f64()));
-    let result = scope.root_nanbox_f64(crate::js_nanbox_string(
-        crate::string::js_string_from_bytes(b"".as_ptr(), 0) as i64,
-    ));
+    let mut result = Vec::new();
+    let mut separator_bytes = Vec::new();
+    crate::string::with_string_value_bytes(separator.get_nanbox_f64(), |bytes| {
+        separator_bytes.extend_from_slice(bytes)
+    });
     let first = Cell::new(true);
     let close = Cell::new(false);
     let completion = crate::exception::catch_thrown(|| loop {
         close.set(false);
         let Some(value) = helper_step(iterated.get_nanbox_f64()) else {
-            return result.get_nanbox_f64();
+            return crate::js_nanbox_string(crate::string::js_string_from_bytes(
+                result.as_ptr(),
+                result.len() as u32,
+            ) as i64);
         };
         close.set(true);
-        let value = scope.root_nanbox_f64(value);
+        let step_scope = RuntimeHandleScope::new();
+        let value = step_scope.root_nanbox_f64(value);
         if !first.replace(false) {
-            result.set_nanbox_f64(crate::string::js_string_concat_box(
-                result.get_nanbox_f64(),
-                separator.get_nanbox_f64(),
-            ));
+            result.extend_from_slice(&separator_bytes);
         }
         let jsval = JSValue::from_bits(value.get_nanbox_f64().to_bits());
         if !jsval.is_null() && !jsval.is_undefined() {
             let string = crate::value::js_jsvalue_to_string_coerce(value.get_nanbox_f64());
-            let string = scope.root_nanbox_f64(crate::js_nanbox_string(string as i64));
-            result.set_nanbox_f64(crate::string::js_string_concat_box(
-                result.get_nanbox_f64(),
-                string.get_nanbox_f64(),
-            ));
+            let string = step_scope.root_nanbox_f64(crate::js_nanbox_string(string as i64));
+            crate::string::with_string_value_bytes(string.get_nanbox_f64(), |bytes| {
+                result.extend_from_slice(bytes)
+            });
         }
     });
     match completion {
@@ -286,8 +288,12 @@ unsafe fn includes(this: f64, search: f64, skipped_elements: f64) -> f64 {
     let number = JSValue::from_bits(raw.to_bits());
     let to_skip = if number.is_undefined() {
         0.0
-    } else if number.is_number() {
-        let value = raw;
+    } else if number.is_number() || number.is_int32() {
+        let value = if number.is_int32() {
+            f64::from(number.as_int32())
+        } else {
+            raw
+        };
         if !(value.is_infinite() || (value.is_finite() && value.trunc() == value)) {
             close_this_quietly(this.get_nanbox_f64());
             type_error("skippedElements must be an integer or infinity");
@@ -310,7 +316,8 @@ unsafe fn includes(this: f64, search: f64, skipped_elements: f64) -> f64 {
             return f64::from_bits(TAG_FALSE);
         };
         close.set(true);
-        let value = scope.root_nanbox_f64(value);
+        let step_scope = RuntimeHandleScope::new();
+        let value = step_scope.root_nanbox_f64(value);
         if skipped < to_skip {
             skipped += 1.0;
             continue;

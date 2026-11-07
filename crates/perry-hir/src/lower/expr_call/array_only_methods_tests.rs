@@ -80,6 +80,16 @@ fn typed_nested_array_field_keeps_array_map_specialization() {
     );
 }
 
+#[test]
+fn array_iterator_join_is_not_lowered_as_array_join() {
+    let hir = format!("{:?}", lower("const result = [1, 2].values().join();"));
+    assert!(hir.contains("ArrayValues"), "expected Array.values iterator: {hir}");
+    assert!(
+        !hir.contains("ArrayJoin"),
+        "Iterator.prototype.join must consume the iterator, not treat it as an array: {hir}"
+    );
+}
+
 /// #11187: a call result whose static type is `any` is not an Array, so
 /// `.sort(obj)` / `.flat()` / `.toSpliced()` / `.map(f)` on it must reach
 /// the receiver's own method through dynamic dispatch (mongodb's
