@@ -149,6 +149,7 @@ pub fn map_cons(
             reason,
         },
         Implicit { reason, proto } => Implicit { reason, proto },
+        HasInstance { reason, arg } => HasInstance { reason, arg: n(arg) },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion {
             key,
@@ -451,6 +452,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | DefineAll { .. }
             | AddsKeys
             | Implicit { .. }
+            | HasInstance { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }

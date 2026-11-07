@@ -102,14 +102,16 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 m.sink_node(src, r);
             }
             // `process.argv = v`: later reads of the property see `v`.
-            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
-                && match _key {
-                    Key::Named(a) => m.atoms[a as usize] == "argv",
-                    Key::Any(_) => true,
+            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process)) {
+                for i in 0..m.process_arrays.len() {
+                    let (k, a, _) = m.process_arrays[i];
+                    if match _key {
+                        Key::Named(n) => n == k,
+                        Key::Any(_) => true,
+                    } {
+                        m.edge(src, a);
+                    }
                 }
-            {
-                let a = m.process_argv;
-                m.edge(src, a);
             }
         }
         _ => {}

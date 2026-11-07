@@ -206,6 +206,9 @@ pub struct ElisionFacts {
     /// Number bindings whose every value is an int32, never `-0` (the
     /// wpfacts interval proof, `BindingFacts::int_range`).
     pub int32_inputs: std::collections::BTreeSet<u32>,
+    /// Local id → it holds only strings and ordinary Arrays: `x.length` is a
+    /// Number.
+    pub length_number_inputs: std::collections::BTreeSet<u32>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -255,6 +258,7 @@ impl ElisionFacts {
         self.indexed_owners.is_empty()
             && self.number_inputs.is_empty()
             && self.int32_inputs.is_empty()
+            && self.length_number_inputs.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()

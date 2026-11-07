@@ -964,8 +964,13 @@ pub(super) fn emit_guarded_direct_method_call(
             .map(|i| {
                 (cert.arms.contains(&i)
                     && (i == 0
-                        || subclass_layout_clone(ctx, &subclass_arms[i - 1], property, source_args)
-                            .is_some()))
+                        || subclass_layout_clone(
+                            ctx,
+                            &subclass_arms[i - 1],
+                            property,
+                            source_args,
+                        )
+                        .is_some()))
                 .then(|| ctx.new_block("method_direct.layout"))
             })
             .collect();
@@ -1772,7 +1777,32 @@ pub(super) fn emit_guarded_direct_method_call(
                     .or(nonnegative_index_direct_fn)
                     .or(pshape_fn.as_deref())
                     .unwrap_or(direct_fn);
-                let result = ctx.block().call(DOUBLE, target, direct_arg_slices);
+                // An index the site proves a Number takes the clone split
+                // here instead of the public dispatcher's guard.
+                let split = (nonnegative_index_direct_fn.is_none()
+                    && direct_call_fn.is_none()
+                    && (Some(target) == pshape_fn.as_deref() || target == direct_fn))
+                    .then(|| {
+                        crate::lower_call::index_split::number_index_positions(
+                            ctx,
+                            receiver_class_name,
+                            property,
+                            source_args,
+                        )
+                    })
+                    .flatten();
+                let result = match split {
+                    Some((positions, params)) => {
+                        crate::lower_call::index_split::emit_number_index_split(
+                            ctx,
+                            target,
+                            &positions,
+                            &params,
+                            direct_arg_slices,
+                        )
+                    }
+                    None => ctx.block().call(DOUBLE, target, direct_arg_slices),
+                };
                 if nonnegative_index_direct_fn.is_none() {
                     if let Some(pshape) = pshape_fn.as_deref() {
                         let receiver_provenance =

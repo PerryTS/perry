@@ -531,9 +531,7 @@ impl<'a> Gen<'a> {
         // An ESM entry installs no main record: `require.main` is undefined.
         m.cjs_main = m.node_l("CJSMAIN");
         m.add_prim(m.cjs_main, prim::UNDEF);
-        m.process_argv_tok = m.process_argv_array();
-        m.process_argv = m.node_l("PROCESSARGV");
-        m.add_tok(m.process_argv, m.process_argv_tok);
+        m.process_arrays = m.process_string_arrays();
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {

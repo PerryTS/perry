@@ -648,7 +648,7 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
     assert!(
         !public.contains("js_typed_i32_arg_guard")
             && !public.contains("js_typed_i32_arg_to_raw")
-            && public.contains("fptosi double")
+            && public.contains("@llvm.fptosi.sat.i32.f64(double")
             && public.contains("-9223372036854775808")
             && public.contains("icmp sge i32")
             && public.contains("nonnegative_index_method.fast")
@@ -691,7 +691,7 @@ fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback()
             .is_some_and(|line| line.starts_with("define double "))
             && !wrapper.contains("js_typed_i32_arg_guard")
             && !wrapper.contains("js_typed_i32_arg_to_raw")
-            && wrapper.contains("fptosi double")
+            && wrapper.contains("@llvm.fptosi.sat.i32.f64(double")
             && wrapper.contains("-9223372036854775808")
             && wrapper.contains(&format!("call double @{combined}("))
             && wrapper.contains(&format!("call double @{pshape_generic}(")),

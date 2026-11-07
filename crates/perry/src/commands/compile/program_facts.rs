@@ -537,6 +537,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     eprintln!("perry: int-range local {id} {:?}", b.int_range);
                 }
             }
+            if b.length_number {
+                out.length_number_inputs.insert(*id);
+            }
         }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
