@@ -81,8 +81,11 @@ def operand_text(op: dict) -> str:
     if kind == "union":
         return " | ".join(operand_text(o) for o in v)
     if kind == "fresh":
-        elems = ", ".join(slot_text(s) for s in v.get("elems", []))
-        return f"fresh({v['proto']}, elems = [{elems}])"
+        elems = ", ".join(operand_text(e) for e in v.get("elems", []))
+        fields = ", ".join(f"{f['key']}: {operand_text(f['value'])}" for f in v.get("fields", []))
+        return f"fresh({v['proto']}, elems = [{elems}], fields = {{{fields}}})"
+    if kind == "native":
+        return f"native({v})"
     if kind == "species":
         args = ", ".join(operand_text(o) for o in v.get("args", []))
         elems = ", ".join(slot_text(s) for s in v.get("elems", []))
@@ -106,7 +109,10 @@ def all_slots(effects) -> list[str]:
             for m in v:
                 op(m)
         elif kind == "fresh":
-            out.extend(slot_text(s) for s in v.get("elems", []))
+            for e in v.get("elems", []):
+                op(e)
+            for f in v.get("fields", []):
+                op(f["value"])
         elif kind == "species":
             out.append(slot_text(v["of"]))
             for a in v.get("args", []):
@@ -517,7 +523,8 @@ def needs(event: list[str], effects, events) -> str | None:
                     return None
             return f"returns(species({of}, elems = [{slot_of(val) if val else ''}]))"
         if op in ("get", "has", "ownKeys", "getOwnPropertyDescriptor", "getPrototypeOf"):
-            if slot in reads:
+            # `reads(s)`: any key of s; `reads(field(s, k))`: the key k of s.
+            if slot in reads or (op in ("get", "has") and f"field({slot},{key})" in reads):
                 return None
             if key in ("@@toPrimitive", "valueOf", "toString") and (slot, "to_primitive") in coerces:
                 return None
@@ -567,7 +574,9 @@ def needs(event: list[str], effects, events) -> str | None:
             if not covers(o, rid):
                 continue
             ((k, v),) = o.items()
-            if k in ("fresh", "species") and el in {slot_text(s) for s in v.get("elems", [])}:
+            if k == "fresh" and any(covers(e, event[2], absent) for e in v.get("elems", [])):
+                return None
+            if k == "species" and el in {slot_text(s) for s in v.get("elems", [])}:
                 return None
         return f"returns(.. elems = [{el}])"
     if kind == "alive":
