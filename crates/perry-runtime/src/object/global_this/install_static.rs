@@ -597,6 +597,11 @@ pub(crate) fn install_builtin_constructor_statics(
                 crate::fn_info!(#[realm(Array.from, spec = {length = 1}, emit = metadata(realm_array_from_metadata))] export crate::object::global_this::bigint_promise::array_from_thunk, 3; with_declared(3)),
                 realm_array_from_metadata!(length),
             );
+            s.method(
+                "fromAsync",
+                crate::fn_info!(#[realm(Array.fromAsync, spec = {length = 1}, emit = metadata(realm_array_from_async_metadata))] export crate::object::global_this::bigint_promise::array_from_async_thunk, 3; with_declared(3)),
+                realm_array_from_async_metadata!(length),
+            );
             #[rustfmt::skip] s.method("of", crate::fn_info!(#[realm(Array.of)] export crate::object::global_this::bigint_promise::array_of_thunk, 1; with_rest(0)), 0);
         }
         "Promise" => {
@@ -1205,5 +1210,35 @@ pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
             );
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn array_from_async_static_owns_all_three_abi_arguments() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let ctor = crate::closure::js_closure_alloc(
+            super::super::builtin_thunks::ARRAY_CONSTRUCTOR_INFO,
+            0,
+        );
+        install_builtin_constructor_statics("Array", ctor, None);
+        let method = crate::closure::closure_get_dynamic_prop(ctor as usize, "fromAsync");
+        assert!(crate::object::value_is_callable(method));
+        let method =
+            crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader;
+        // JS length 1 must not narrow the thunk ABI: mapper and thisArg
+        // remain operands of reflective and held-reference calls.
+        let info = unsafe { &*(*method).info };
+        assert_eq!(info.params, 3);
+        assert_eq!(info.declared, 3);
+        assert_eq!(
+            info.code,
+            super::super::bigint_promise::array_from_async_thunk as *const u8
+        );
+        assert_eq!(crate::closure::closure_length(method), Some(1));
     }
 }

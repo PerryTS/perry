@@ -263,6 +263,16 @@ pub(crate) extern "C" fn array_from_thunk(
     crate::array::array_from_full(c, value, map_fn, this_arg)
 }
 
+pub(crate) extern "C" fn array_from_async_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+    map_fn: f64,
+    this_arg: f64,
+) -> f64 {
+    crate::promise::js_array_from_async(value, map_fn, this_arg)
+}
+
 pub(crate) extern "C" fn array_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
