@@ -484,20 +484,6 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     }
 }
 
-/// ArraySpeciesCreate (ECMA-262 10.4.2.3) of array template `tm` from the
-/// receivers in node `src`: the receivers' `constructor` is read, and its
-/// `@@species` when it is an object. Both values flow into the template's
-/// species node (`Template::species`): the constructor it is made with is
-/// one of them (or `undefined`). The builtin's own array stays its result
-/// (a constructor other than `%Array%` only takes the verdicts that need an
-/// Array away, `derive::exact_array`); a program constructor among them is
-/// constructed as well (`species_construct`). True when the species node
-/// was made here: the caller then gives it its construct.
-pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) -> bool {
-    let cn = species_ctor(m, src);
-    species_link(m, tm, cn)
-}
-
 /// The result `made` of a call `mc` a builtin makes its array `out` with:
 /// `mc` constructs the program constructors in `ctor` (`Cons::NewProgram`;
 /// `%Array%` is `out` itself), and the builtin defines `out`'s elements on

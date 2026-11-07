@@ -2,6 +2,7 @@
 
 mod absent_key;
 mod accessor_keys;
+mod accessor_layout_exit;
 mod accessor_reach;
 mod accessor_receiver;
 mod activation_paths;
@@ -62,6 +63,7 @@ mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
 mod field_array_push;
+mod folded_call_own;
 mod for_in_keys;
 mod for_of_yield;
 mod function_ctor_without_interp;
@@ -1843,6 +1845,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod array_iter_lock;
+mod cycle_locked_member;
 mod collection_entries;
 mod concat_elements;
 mod console_protocol;
