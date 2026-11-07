@@ -92,8 +92,17 @@ impl<'a> Gen<'a> {
         }
         match e {
             Expr::NativeModuleRef(m) => {
+                let name = m.strip_prefix("node:").unwrap_or(m);
+                // The `process` module is the global process object (node:
+                // `require("process") === globalThis.process`); HIR names
+                // the value of `require("process")` and of a namespace
+                // import `process.namespace`.
+                if matches!(name, "process" | "process.namespace") {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
+                    return self.tok_node(t);
+                }
                 // node:module as a value hands out `Module._cache`.
-                if m.strip_prefix("node:").unwrap_or(m) == "module" {
+                if name == "module" {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
                 }
@@ -243,8 +252,14 @@ impl<'a> Gen<'a> {
             Expr::ProcessArgv => {
                 let n = self.m.node_l("process.argv");
                 self.m.own(n);
-                let a = self.m.process_argv;
-                self.m.edge(a, n);
+                let argv = self.m.atom("argv");
+                match self.m.process_arrays.iter().find(|a| a.0 == argv) {
+                    Some(&(_, a, _)) => self.m.edge(a, n),
+                    None => {
+                        self.m.add_top(n, |_| "process.argv".into());
+                        self.m.add_prim(n, prim::ALL);
+                    }
+                }
                 n
             }
             Expr::ProcessEnv

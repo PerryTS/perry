@@ -19,6 +19,8 @@ keys (the chain of every native function value and namespace); `fn <name>
 `global %Global% <key>` own string keys of the global object: the globals
 the realm defines (every other global name is the program's).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
+`strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
+strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
 `native <owner> <key> <identity>` rows resolve callable property references on global, namespace and prototype holders
 (an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
 """
@@ -72,6 +74,9 @@ def rows(realm):
                 value = prop.get("value", {}).get("value")
                 if prop.get("value", {}).get("kind") == "reference" and value in callable_names:
                     out.add(("native", name, prop["key"], value))
+                if (prop.get("value", {}).get("kind") == "dynamic"
+                        and declarations.get(value, {}).get("elements") == "string"):
+                    out.add(("strings", name, prop["key"], value))
         if name == "%Global%":
             out.update(("global", name, k) for k in keys)
         if name in ("Function.prototype", "Object.prototype"):

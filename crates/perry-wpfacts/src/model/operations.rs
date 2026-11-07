@@ -1714,9 +1714,34 @@ impl Model {
         v
     }
 
-    /// The array `process.argv` holds at startup: made once by the runtime,
-    /// its elements strings.
-    pub(crate) fn process_argv_array(&mut self) -> Tok {
+    /// Per key of `process` the realm declares as a host array of strings
+    /// (`value = dynamic, elements = string`): the property's node, holding
+    /// the array the runtime makes once, its elements strings.
+    pub(crate) fn process_string_arrays(&mut self) -> Vec<(Atom, NodeId, Tok)> {
+        let declared: Vec<(&'static str, &'static str)> = self
+            .declarations
+            .namespace(BuiltinNs::Process, self)
+            .map(|s| {
+                self.declarations
+                    .shape(s)
+                    .properties
+                    .iter()
+                    .filter_map(|p| Some((p.key, p.strings?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        declared
+            .into_iter()
+            .map(|(key, display)| {
+                let t = self.host_string_array(display);
+                let n = self.node_l(display);
+                self.add_tok(n, t);
+                (self.atom(key), n, t)
+            })
+            .collect()
+    }
+
+    fn host_string_array(&mut self, display: &str) -> Tok {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
             kind: TmplKind::BObj {
@@ -1724,7 +1749,7 @@ impl Model {
                 site: u32::MAX - 1,
                 what: "arraybox",
             },
-            display: "process.argv".into(),
+            display: display.into(),
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
