@@ -1003,7 +1003,7 @@ pub(crate) fn iterates_indices(what: &str) -> bool {
 /// keeps it so. V8 adds one enumerable data property, `Error.stackTraceLimit`.
 /// Host objects have enumerable own properties: `console`'s methods,
 /// `process`'s, the global object's, `require.resolve`/`cache`, the stdio
-/// streams'.
+/// streams', and a node module's exports (`{...require("fs")}` copies them).
 pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
     match ns {
         BuiltinNs::Object
@@ -1036,6 +1036,7 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::Stdout
         | BuiltinNs::Stderr
         | BuiltinNs::Stdin
+        | BuiltinNs::Module(_)
         | BuiltinNs::Other => false,
     }
 }
