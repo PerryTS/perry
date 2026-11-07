@@ -75,4 +75,43 @@ impl<'a> Gen<'a> {
             );
         }
     }
+
+    /// A Math builtin with an interval rule over its ToNumber'd operands (as
+    /// `prim_op`: each operand is a ToPrimitive operand, the result a
+    /// Number). A list of operands folds pairwise (`Math.min(a, b, c)`).
+    pub(crate) fn math_range(
+        &mut self,
+        fx: &Fx,
+        op: crate::model::RangeOp,
+        operands: &[&Expr],
+    ) -> NodeId {
+        let r = self.m.reason("primitive builtin operand");
+        let mut nodes = Vec::with_capacity(operands.len());
+        for o in operands {
+            let v = self.expr(fx, o);
+            self.m.cons(
+                v,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
+            nodes.push(v);
+        }
+        let (first, rest) = nodes.split_first().expect("a Math call has an operand");
+        if rest.is_empty() {
+            let out = self.tmp("math");
+            self.range_rule(op, *first, None, out);
+            self.m.add_prim(out, prim::NUM);
+            return out;
+        }
+        let mut acc = *first;
+        for &n in rest {
+            let out = self.tmp("math");
+            self.range_rule(op, acc, Some(n), out);
+            self.m.add_prim(out, prim::NUM);
+            acc = out;
+        }
+        acc
+    }
 }
