@@ -98,6 +98,9 @@ impl<'a> Gen<'a> {
         update: Option<&Expr>,
         body: &[Stmt],
     ) -> bool {
+        if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
+            eprintln!("perry: narrow_for init={:?}\n  cond={:?}", init.map(|s| format!("{s:?}").chars().take(200).collect::<String>()), condition.map(|c| format!("{c:?}").chars().take(300).collect::<String>()));
+        }
         let Some(Stmt::Let { id, .. }) = init else {
             return false;
         };
