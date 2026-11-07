@@ -122,6 +122,7 @@ mod rest_element;
 mod rest_elements;
 mod run_once_closed;
 mod runtime_helpers;
+mod fresh_static_blocks;
 mod specialized_prototype;
 mod spread_arguments;
 mod spread_elements;
