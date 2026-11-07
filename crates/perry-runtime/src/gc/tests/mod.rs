@@ -215,3 +215,5 @@ mod object_descriptor_walk;
 mod inline_birth_bound;
 
 mod leaf_census_coalescing;
+
+mod stamp_guard_tests;

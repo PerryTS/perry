@@ -651,11 +651,7 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         // A function the prototype-kind predicate says is born with
         // `%Function.prototype%`; not a generator's step closure, which
         // stands for the generator object (`FuncInfo::gen_step`).
-        TokKind::Func(f, _) => {
-            let fi = &m.funcs[*f as usize];
-            (fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step())
-                .then_some(members::FN_PROTO_ONLY)
-        }
+        TokKind::Func(f, _) => born_with_function_proto(m, *f).then_some(members::FN_PROTO_ONLY),
         _ => None,
     };
     // A Map or Set iterator: past its own keys the chain reaches
@@ -970,6 +966,17 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
 /// `Function`; a typed array prototype's goes on to `%TypedArray%.prototype`,
 /// which the one `TypedArray` prototype stands for. `None`: the chain's
 /// prototypes are values or a class's, or `t` is no builtin receiver.
+/// Is program function `f` born with `%Function.prototype%` as its
+/// `[[Prototype]]` (the prototype-kind predicate,
+/// `perry_hir::fn_proto::FnProtoKind::Function`)? Not an async, generator
+/// or async-generator function (`%AsyncFunction.prototype%` & co.), and not
+/// a generator's step closure, which stands for the generator object
+/// (`FuncInfo::gen_step`).
+pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
+    let fi = &m.funcs[f as usize];
+    fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
+}
+
 pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
     match &m.toks[t as usize] {
         TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,

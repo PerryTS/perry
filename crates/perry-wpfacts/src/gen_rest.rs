@@ -188,21 +188,12 @@ impl<'a> Gen<'a> {
                 key,
                 receiver,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Load(dst),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Load(dst));
                     dst
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -213,22 +204,13 @@ impl<'a> Gen<'a> {
                 value,
                 receiver,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Store(v),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Store(v));
                     v
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -239,23 +221,14 @@ impl<'a> Gen<'a> {
                 receiver,
                 args,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
                     let (call, ret) = self.new_call(ThisArg::Node(r), a, sp);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Call(call),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Call(call));
                     ret
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
