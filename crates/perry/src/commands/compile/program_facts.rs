@@ -526,6 +526,16 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
             if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
                 out.number_inputs.insert(*id);
+                // A Number binding whose interval proof lies in the int32
+                // range: every value it holds is an int32 (never -0).
+                if b.int_range
+                    .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
+                {
+                    out.int32_inputs.insert(*id);
+                }
+                if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
+                    eprintln!("perry: int-range local {id} {:?}", b.int_range);
+                }
             }
         }
         if let Some(r) = recv(b) {

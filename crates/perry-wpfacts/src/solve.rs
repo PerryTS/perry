@@ -208,6 +208,12 @@ impl Model {
             node.dprim |= newp;
             changed = true;
         }
+        // A Number brings its interval: the delivering edge's, else ⊤. A
+        // rule's result takes its interval from the rule only.
+        if prim & prim::NUM != 0 && !node.ruled {
+            let iv = self.cur_range.unwrap_or(Iv::TOP);
+            changed |= grow_range(node, iv);
+        }
         if changed && !node.in_wl {
             node.in_wl = true;
             self.wl.push_back(n);
@@ -565,6 +571,16 @@ impl Model {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
+        if let Cons::Range { dst, .. } = c {
+            // The rule's result is every Number the node can hold: what
+            // reached it before (an instance's seeds) is subsumed.
+            let d = &mut self.nodes[dst as usize];
+            if !d.ruled {
+                d.ruled = true;
+                d.range = Iv::EMPTY;
+                d.rsteps = 0;
+            }
+        }
         self.nodes[n as usize].cons.push(c);
         if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
             self.cell_woken.push(n);
@@ -647,15 +663,22 @@ impl Model {
                     return;
                 }
             }
-            let dprim = {
+            let (dprim, drange) = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
                 self.pending.take(&mut node.delta, &mut delta);
-                std::mem::take(&mut node.dprim)
+                (
+                    std::mem::take(&mut node.dprim),
+                    std::mem::take(&mut node.drange) && node.prim & prim::NUM != 0,
+                )
             };
-            if delta.is_empty() && dprim == 0 {
+            if delta.is_empty() && dprim == 0 && !drange {
                 continue;
             }
+            // Only the interval grew: re-deliver the Numbers (their interval)
+            // along the edges and re-evaluate the interval rules, nothing else.
+            let range_only = delta.is_empty() && dprim == 0;
+            let dprim = if drange { dprim | prim::NUM } else { dprim };
             // Sets change interned (`SetTable::extend`); one made outside
             // this solve (an earlier solve, whose index is gone) is interned
             // here, so covering below stays a pointer test.
@@ -680,6 +703,9 @@ impl Model {
             if self.past_work_bound() {
                 return;
             }
+            // A value-copy edge delivers the source's Numbers with their
+            // interval (`add_tokens`).
+            self.cur_range = Some(self.nodes[n as usize].range);
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
@@ -732,9 +758,13 @@ impl Model {
                 }
                 i += 1;
             }
+            self.cur_range = None;
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
                 let c = self.nodes[n as usize].cons[i];
+                if range_only && !matches!(c, Cons::Range { .. }) {
+                    continue;
+                }
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), dprim);
@@ -1479,6 +1509,12 @@ impl Model {
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Arith { dst } => format!("arith {n} {dst}"),
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right,
+            } => format!("range {n} {} {other} {dst} {}", op.name(), *right as u8),
             Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
@@ -1557,4 +1593,36 @@ impl Model {
 /// is safe: such a key reads the elements as well.
 pub(crate) fn numeric_key(name: &str) -> bool {
     name.parse::<f64>().is_ok() || matches!(name, "NaN" | "Infinity" | "-Infinity")
+}
+
+impl Model {
+    /// An operand's interval for `range::eval`: its own while it holds only
+    /// Numbers (nothing to coerce), empty while it holds nothing, else ⊤.
+    pub(crate) fn range_input(&self, x: NodeId) -> Iv {
+        let nd = &self.nodes[x as usize];
+        if nd.pts.is_empty() && nd.prim == 0 {
+            Iv::EMPTY
+        } else if nd.pts.is_empty() && nd.prim == prim::NUM {
+            nd.range
+        } else {
+            Iv::TOP
+        }
+    }
+}
+
+/// Join `iv` into the node's interval; widen to ⊤ past `WIDEN_STEPS`
+/// growths. Whether it grew.
+pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
+    let joined = node.range.join(iv);
+    if joined == node.range {
+        return false;
+    }
+    node.rsteps = node.rsteps.saturating_add(1);
+    node.range = if node.rsteps > crate::model::range::WIDEN_STEPS {
+        Iv::TOP
+    } else {
+        joined
+    };
+    node.drange = true;
+    true
 }

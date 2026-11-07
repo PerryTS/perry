@@ -631,7 +631,8 @@ impl<'a> Gen<'a> {
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
             Expr::Bool(_) => self.prim_node(prim::BOOL),
-            Expr::Number(_) | Expr::Integer(_) => self.prim_node(prim::NUM),
+            Expr::Number(v) => self.num_literal(*v),
+            Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
             Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
@@ -752,7 +753,7 @@ impl<'a> Gen<'a> {
                 }
                 v
             }
-            Expr::Update { id, .. } => {
+            Expr::Update { id, op, .. } => {
                 let l = self.local(mi, *id);
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
@@ -763,6 +764,11 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let out = self.tmp("update");
+                let step = match op {
+                    perry_hir::UpdateOp::Increment => 1,
+                    perry_hir::UpdateOp::Decrement => -1,
+                };
+                self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
                 self.m.cons(l, Cons::Arith { dst: out });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
@@ -774,6 +780,28 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason("ToPrimitive operand");
                 let l = self.expr(fx, left);
                 let rv = self.expr(fx, right);
+                {
+                    use crate::model::RangeOp as R;
+                    use perry_hir::BinaryOp as B;
+                    let rop = match op {
+                        B::Add => Some(R::Add),
+                        B::Sub => Some(R::Sub),
+                        B::Mul => Some(R::Mul),
+                        B::Mod => Some(R::Mod),
+                        B::BitAnd => Some(R::BitAnd),
+                        B::BitOr => Some(R::BitOr),
+                        B::BitXor => Some(R::BitXor),
+                        B::Shl => Some(R::Shl),
+                        B::Shr => Some(R::Shr),
+                        B::UShr => Some(R::UShr),
+                        B::Div | B::Pow => None,
+                    };
+                    // Every Number `out` holds is the operator's: without a
+                    // rule (`/`, `**`) it is ⊤ by the fail-closed default.
+                    if let Some(rop) = rop {
+                        self.range_rule(rop, l, Some(rv), out);
+                    }
+                }
                 for v in [l, rv] {
                     self.m.cons(
                         v,
@@ -839,6 +867,11 @@ impl<'a> Gen<'a> {
                         },
                     );
                     let out = self.tmp("unary");
+                    let rop = match op {
+                        UnaryOp::Neg => crate::model::RangeOp::Neg,
+                        _ => crate::model::RangeOp::BitNot,
+                    };
+                    self.range_rule(rop, v, None, out);
                     self.m.cons(v, Cons::Arith { dst: out });
                     out
                 }
