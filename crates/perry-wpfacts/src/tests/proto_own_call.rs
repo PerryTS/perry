@@ -60,16 +60,17 @@ fn is_prototype_of_call_reads_only() {
     assert!(proven(&v), "{v:?}");
 }
 
-/// node (the replacement keeps `map`): prints `3`. Replaced, the method is
-/// whatever was stored: `map` reaches it.
+/// node (the replacement keeps `map`): prints `3`. Perry: DEC 250 refuses
+/// the replacement (an image member of the locked `Object.prototype`, a
+/// TypeError at the store), so the method read after it is the builtin.
 #[test]
-fn a_replaced_has_own_property_is_not_the_builtin() {
+fn a_refused_has_own_property_replacement_leaves_the_builtin() {
     let v = verdict(
         "(Object.prototype as any).hasOwnProperty = function (this: any, k: any) { (globalThis as any).kept = this; return true; };
          const hasOwnProperty = Object.prototype.hasOwnProperty;",
         r#"hasOwnProperty.call(map, "s")"#,
     );
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }
 
 /// node: prints `3`. A key with its own `toString` is converted (it runs).

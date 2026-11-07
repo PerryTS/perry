@@ -147,12 +147,7 @@ pub(crate) fn proto_own_native(
         return None;
     }
     m.native_missing.push((g, ga, NativeMiss::Load(dst)));
-    let unwritten = if fam == Family::Object {
-        intrinsic_miss(m, a, NativeMiss::Load(dst))
-    } else {
-        intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst))
-    };
-    if !unwritten {
+    if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
         opaque_member(m, dst);
     }
     Some(native)
@@ -273,8 +268,11 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
         }
         None => {}
     }
-    // Described or not: a key written onto the chain reads what was stored.
-    if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+    // Described or not: a key written onto the chain reads what was stored,
+    // unless the read is final on every kind of the mask (DEC 250), as for
+    // a call (`prim_method`).
+    let locked = members::prim_families(prim).all(|f| members::locked_read(f, None, &name));
+    if !locked && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
         opaque_member(m, dst);
     }
 }
