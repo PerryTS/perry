@@ -31,28 +31,23 @@
 //! passing vacuously, which is CLAUDE.md hazard 4 ("the gate runs but its
 //! subject never did"). Pinning them made them assert their subject again.
 //!
-//! ATTRIBUTION (#7504): pinning then exposed a second defect one layer down.
-//! The measurement was a WHOLE-MODULE counter — `ir.matches("call void
-//! @js_shadow_slot_bind(").count()` — and since #7487 a pooled temp root emits
-//! the identical call. Every fixture in this file ends in
-//! `console.log(o.a, o.b)`, whose argument accumulator contributes three binds
-//! naming an alloca that has nothing to do with any scalar-replaced field. So
-//! `== 0` was a claim about the accumulator and `== 1` a coincidence.
+//! Root counters must distinguish scalar-replaced value slots from temporary
+//! roots used while evaluating calls. Both emit `js_shadow_slot_bind`, so a
+//! whole-module count cannot prove whether a numeric field pays for rooting.
 //!
 //! Every count here now goes through `perry_codegen::testing::root_slots`,
 //! which keys each bind and each root-shading barrier by the entry alloca it
-//! names and refuses to classify an unfamiliar one. Where a fixture's temp-root
-//! traffic is non-zero the tests SAY so, because that is what proves the reader
-//! was looking at a module in which binds exist at all.
+//! names and refuses to classify an unfamiliar one. Numeric-only fixtures also
+//! compile an otherwise identical heap-valued control and require a value-slot
+//! bind there. This proves the zero counts are meaningful without depending
+//! on temporary roots in the lowering of `console.log`.
 //!
 //! The native-roots side of this contract — that a scalar-replaced field
 //! holding a heap value becomes a relocatable `addrspace(1)` slot, and a
 //! numeric one does not — is covered by
 //! `perry_codegen::native_root_coverage::mechanics` since #7653.
 
-use perry_codegen::testing::root_slots::{
-    frame_slot_count, temp_root_slot_binds, value_slot_barriers, value_slot_binds,
-};
+use perry_codegen::testing::root_slots::{frame_slot_count, value_slot_barriers, value_slot_binds};
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -176,6 +171,17 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
 fn ir_for(name: &str, init: Vec<Stmt>) -> String {
     String::from_utf8(compile_module(&module_with_init(name, init), entry_opts()).unwrap())
         .expect("LLVM IR should be UTF-8")
+}
+
+/// Keep each zero-root assertion paired with the same fixture holding a heap
+/// value, so disabling shadow roots cannot make the numeric case pass vacuously.
+fn numeric_ir_with_heap_control(name: &str, init: impl Fn(Expr) -> Vec<Stmt>) -> String {
+    let control = ir_for(name, init(heap_value()));
+    assert!(
+        value_slot_binds(main_ir(&control)) > 0,
+        "the heap-valued control must bind a scalar-replaced value slot:\n{control}"
+    );
+    ir_for(name, init(Expr::Number(1.0)))
 }
 
 fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
@@ -304,20 +310,19 @@ fn scalar_replaced_object_field_holding_a_heap_value_is_bound() {
 #[test]
 fn numeric_only_scalar_replaced_object_emits_no_rooting() {
     let _pin = NativeRootsPin::shadow();
-    let ir = ir_for(
-        "scalar_object_numeric.ts",
+    let ir = numeric_ir_with_heap_control("scalar_object_numeric.ts", |value| {
         vec![
             let_stmt(
                 1,
                 "p",
                 Expr::Object(vec![
-                    ("x".to_string(), Expr::Number(1.0)),
+                    ("x".to_string(), value),
                     ("y".to_string(), Expr::Number(2.0)),
                 ]),
             ),
             console_log(vec![field_get(1, "x"), field_get(1, "y")]),
-        ],
-    );
+        ]
+    });
 
     let main = main_ir(&ir);
     assert_eq!(
@@ -325,18 +330,6 @@ fn numeric_only_scalar_replaced_object_emits_no_rooting() {
         0,
         "a scalar-replaced literal with only numeric fields must not pay for \
          GC rooting:\n{main}"
-    );
-    // Non-vacuity, in the same test: this module DOES bind — three times, for
-    // the `console.log` argument accumulator. Before #7504 those three were
-    // counted as the literal's, which is what made `== 0` fail; before #7493
-    // the count was zero for every program under the native default, which is
-    // what made it pass for nothing. Assert the witness so neither can recur
-    // silently.
-    assert!(
-        temp_root_slot_binds(main) > 0,
-        "this fixture's `console.log` must still bind its pooled argument \
-         accumulator — with no bind anywhere in the module, `zero value-slot \
-         binds` is a claim about an empty set (#7504):\n{main}"
     );
 }
 
@@ -371,31 +364,21 @@ fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
 #[test]
 fn numeric_only_scalar_replaced_array_emits_no_rooting() {
     let _pin = NativeRootsPin::shadow();
-    let ir = ir_for(
-        "scalar_array_numeric.ts",
+    let ir = numeric_ir_with_heap_control("scalar_array_numeric.ts", |value| {
         vec![
-            let_stmt(
-                1,
-                "a",
-                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
-            ),
+            let_stmt(1, "a", Expr::Array(vec![value, Expr::Number(2.0)], None)),
             console_log(vec![Expr::synthetic_index_get(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Integer(0)),
             )]),
-        ],
-    );
+        ]
+    });
 
     let main = main_ir(&ir);
     assert_eq!(
         value_slot_binds(main),
         0,
         "a scalar-replaced numeric array literal must not pay for GC rooting:\n{main}"
-    );
-    assert!(
-        temp_root_slot_binds(main) > 0,
-        "the `console.log` accumulator must still bind, so `zero value-slot \
-         binds` is a claim about a module in which binds exist (#7504):\n{main}"
     );
 }
 
@@ -741,20 +724,19 @@ fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
 #[test]
 fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
     let _pin = NativeRootsPin::shadow();
-    let ir = ir_for(
-        "scalar_numeric_no_entry_rooting.ts",
+    let ir = numeric_ir_with_heap_control("scalar_numeric_no_entry_rooting.ts", |value| {
         vec![
             let_stmt(
                 1,
                 "p",
                 Expr::Object(vec![
-                    ("x".to_string(), Expr::Number(1.0)),
+                    ("x".to_string(), value),
                     ("y".to_string(), Expr::Number(2.0)),
                 ]),
             ),
             console_log(vec![field_get(1, "x"), field_get(1, "y")]),
-        ],
-    );
+        ]
+    });
 
     let main = main_ir(&ir);
     assert_eq!(
@@ -769,10 +751,5 @@ fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
         "a proven-numeric literal must not emit a store-site shading barrier \
          (#7013). Barriers by slot: {:?}\n{main}",
         perry_codegen::testing::root_slots::barriers_by_slot(main),
-    );
-    assert!(
-        temp_root_slot_binds(main) > 0,
-        "the `console.log` accumulator must still bind, so both zeroes above \
-         are claims about a module in which rooting exists (#7504):\n{main}"
     );
 }

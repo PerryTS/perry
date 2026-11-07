@@ -20,7 +20,7 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 # comments OK; `--update` rewrites it).
 ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
-crates/perry/src/commands/compile/run_pipeline.rs	6191
+crates/perry/src/commands/compile/run_pipeline.rs	6192
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2063
 # Representation-aware codegen core; further decomposition is tracked in #1435.
@@ -40,7 +40,7 @@ crates/perry-runtime/src/typed_feedback.rs	2437
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	3572
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	15680
+crates/perry-codegen/tests/native_proof_regressions.rs	15878
 # Representation feedback regression cases; test organization is a separate follow-up.
 crates/perry-runtime/src/typed_feedback/tests.rs	2304
 # Lowering report schema and its emitters; split emitters in a follow-up.
@@ -51,6 +51,8 @@ crates/perry-transform/src/inline/call_inliner.rs	2120
 crates/perry-stdlib/src/streams.rs	2409
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2860
+# Linux SNAP census signal handling, page tracking and report state share private instrumentation structures; retain until a scoped subsystem split is designed.
+crates/perry-runtime/src/snap_census/runner.rs	3572
 # Shape registry table and publication invariants require a coordinated split.
 crates/perry-runtime/src/object/shapes.rs	4926
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.

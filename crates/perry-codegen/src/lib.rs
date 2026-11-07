@@ -28,6 +28,19 @@ pub mod function_order;
 pub(crate) mod gc_call_effects;
 pub mod verify_facts;
 pub use gc_call_effects::GcEffects;
+
+/// Returns whether any module may replace an inlined Buffer method.
+///
+/// Buffer intrinsics are compiled one module at a time, but prototype changes
+/// affect the whole program. Callers use this to disable those fast paths
+/// consistently across the module graph.
+pub fn program_shadows_buffer_intrinsic_method<'a>(
+    modules: impl IntoIterator<Item = &'a perry_hir::Module>,
+) -> bool {
+    modules
+        .into_iter()
+        .any(crate::lower_call::buffer_intrinsic::module_shadows_buffer_intrinsic_method)
+}
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
 pub mod inprocess;
@@ -119,8 +132,7 @@ pub use codegen::{
     AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
     CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsBody,
     FactsClass, FactsElementRead, FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsSignature,
-    FactsNumericExpr,
-    FactsNumericFunction, FactsRecv, FactsRep, FpContractMode, ImportedClass,
+    FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep, FpContractMode, ImportedClass,
     ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,

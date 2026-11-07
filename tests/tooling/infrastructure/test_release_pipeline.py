@@ -212,15 +212,20 @@ npm() { printf '%s\n' "$*" >> "$CALLS"; }
             lines = source[start:].splitlines()
             cached = 'install_online() {' in source
             if cached:
-                end = lines.index(
-                    'if [ "$mirror_ok" -ne 1 ]; then install_offline; fi'
-                )
+                if 'if [ "$mirror_ok" -eq 1 ] && ! install_online; then' in source:
+                    cleanup = source.index('sudo rm -rf "$LLVM_DEBS/partial"', start)
+                    fragment = source[start:cleanup]
+                else:
+                    end = lines.index(
+                        'if [ "$mirror_ok" -ne 1 ]; then install_offline; fi'
+                    )
+                    fragment = '\n'.join(lines[:end + 1])
             else:
                 end = next(i for i, line in enumerate(lines)
                            if 'apt-get install' in line and 'sudo' in line)
                 while lines[end].rstrip().endswith('\\'):
                     end += 1
-            fragment = '\n'.join(lines[:end + 1])
+                fragment = '\n'.join(lines[:end + 1])
             # online rc, offline rc, populated cache, expected final rc
             cases = [(0, 0, False, 0), (42, 42, cached, 42)]
             if cached:

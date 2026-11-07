@@ -1875,7 +1875,7 @@ pub(crate) struct FnCtx<'a> {
     /// prototype method. When set, `try_emit_buffer_read_intrinsic` deopts the
     /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
     /// every program that never shadows a Buffer method (the common case).
-    pub program_shadows_buffer_read_method: bool,
+    pub program_shadows_buffer_intrinsic_method: bool,
     /// This module contains a shape barrier such as `Object.defineProperty`.
     /// Native Buffer/TypedArray views normally read `.length` straight from
     /// their header, but a barrier can install an own `length` property that

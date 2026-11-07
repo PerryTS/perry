@@ -22,6 +22,20 @@ fn fresh(id: u32) -> Stmt {
     )
 }
 
+fn fresh_buffer(id: u32) -> Stmt {
+    Stmt::Let {
+        id,
+        name: format!("v{id}"),
+        ty: Type::Named("Buffer".to_string()),
+        mutable: false,
+        init: Some(Expr::BufferAlloc {
+            size: Box::new(Expr::Integer(8)),
+            fill: None,
+            encoding: None,
+        }),
+    }
+}
+
 fn call(fid: u32, args: Vec<Expr>) -> Expr {
     Expr::Call {
         byte_end: 0,
@@ -48,6 +62,16 @@ fn prop(recv: u32, name: &str) -> Expr {
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(recv)),
         property: name.to_string(),
+    }
+}
+
+fn method_call(recv: u32, name: &str, args: Vec<Expr>) -> Expr {
+    Expr::Call {
+        byte_end: 0,
+        callee: Box::new(prop(recv, name)),
+        args,
+        type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -114,6 +138,32 @@ fn element_reads_length_and_a_sealed_callee_keep_the_seal() {
 fn reading_buffer_exposes_the_binding() {
     let m = module(vec![fresh(10), Stmt::Expr(prop(10, "buffer"))], vec![]);
     assert!(buffer_exposure(&m).exposed.contains(&10));
+}
+
+#[test]
+fn equals_exemption_requires_both_operands_to_be_known_fresh_buffers() {
+    // A user object's equals method can observe and detach the second value.
+    let user_equals = module(
+        vec![
+            fresh(10),
+            Stmt::Expr(method_call(99, "equals", vec![Expr::LocalGet(10)])),
+        ],
+        vec![],
+    );
+    let exposed = buffer_exposure(&user_equals).exposed;
+    assert!(exposed.contains(&10));
+
+    let buffer_equals = module(
+        vec![
+            fresh_buffer(20),
+            fresh_buffer(21),
+            Stmt::Expr(method_call(20, "equals", vec![Expr::LocalGet(21)])),
+        ],
+        vec![],
+    );
+    let exposed = buffer_exposure(&buffer_equals).exposed;
+    assert!(!exposed.contains(&20));
+    assert!(!exposed.contains(&21));
 }
 
 #[test]

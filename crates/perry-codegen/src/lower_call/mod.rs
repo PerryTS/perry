@@ -34,7 +34,6 @@ use crate::expr::{variant_name, FnCtx};
 #[cfg(test)]
 mod alloc_hot_tests;
 mod atomics;
-pub(crate) mod field_read_call;
 pub(crate) mod birth_lanes;
 #[cfg(test)]
 mod birth_lanes_tests;
@@ -48,6 +47,7 @@ mod closure_analysis;
 #[cfg(test)]
 mod closure_call_arity_tests;
 mod console_promise;
+pub(crate) mod field_read_call;
 pub(crate) use console_promise::{
     emit_method_args_buffer, emit_native_method_str_dispatch, lower_split_method_call,
     try_lower_optional_method_call,
@@ -143,7 +143,7 @@ mod ui_styling;
 mod ui_tables;
 mod web_storage;
 
-use buffer_intrinsic::try_emit_buffer_read_intrinsic;
+use buffer_intrinsic::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 use builtin::lower_builtin_new;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
 // `options/` (#1099): the options-object-literal lowering family,

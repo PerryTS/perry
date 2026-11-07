@@ -2958,7 +2958,10 @@ pub fn run_with_parse_cache(
         || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
             .ok()
             .as_deref()
-            == Some("1");
+            == Some("1")
+        // A shadow in any module changes Buffer's program-wide prototype.
+        // Every module must preserve dynamic dispatch for its Buffer calls.
+        || perry_codegen::program_shadows_buffer_intrinsic_method(ctx.native_modules.values());
     let cache_enabled = std::env::var_os("PERRY_REACH_REPORT").is_none()
         && std::env::var_os(super::source_need::KNOB).is_none()
         && !args.no_cache
