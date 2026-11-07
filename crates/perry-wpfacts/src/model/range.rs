@@ -19,8 +19,52 @@
 /// a bound past ±2^53 widens to ⊤.
 const SAFE: i64 = 1 << 53;
 
-/// Growths of one node's interval before it widens to ⊤.
-pub const WIDEN_STEPS: u8 = 4;
+/// Growths of one node's interval before its bounds widen to the next
+/// threshold ([`widen`]); past `WIDEN_LIMIT` growths it is ⊤.
+pub const WIDEN_STEPS: u8 = 3;
+pub const WIDEN_LIMIT: u8 = 80;
+
+/// The next threshold at or above an upper bound: `2^k - 1`, the uint32
+/// maximum, 2^53. A growing bound jumps to it, so a cycle meets a finite
+/// ladder of bounds (and a test bound below a threshold stops the climb).
+fn hi_threshold(h: i64) -> i64 {
+    if h < 0 {
+        -1
+    } else if h <= u32::MAX as i64 {
+        mask_above(h)
+    } else {
+        SAFE
+    }
+}
+
+fn lo_threshold(l: i64) -> i64 {
+    if l >= 0 {
+        0
+    } else if l >= -(1i64 << 32) {
+        -(mask_above(-l - 1) + 1)
+    } else {
+        -SAFE
+    }
+}
+
+/// `next` widened against `old`: each bound that grew jumps to its
+/// threshold.
+pub fn widen(old: Iv, next: Iv) -> Iv {
+    if old.is_empty() || next.is_top() {
+        return next;
+    }
+    let hi = if next.hi > old.hi {
+        hi_threshold(next.hi)
+    } else {
+        next.hi
+    };
+    let lo = if next.lo < old.lo {
+        lo_threshold(next.lo)
+    } else {
+        next.lo
+    };
+    Iv::int(lo, hi)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Iv {
@@ -125,7 +169,15 @@ pub enum RangeOp {
     /// `++` / `--`: the update's value node carries both the old and the
     /// new value (prefix and postfix), so it is their hull.
     Step(i8),
+    /// The values of the left operand that pass a loop test against the
+    /// right one (`CLIP_LT` ...): the reads the test dominates.
+    Clip(u8),
 }
+
+pub const CLIP_LT: u8 = 0;
+pub const CLIP_LE: u8 = 1;
+pub const CLIP_GT: u8 = 2;
+pub const CLIP_GE: u8 = 3;
 
 impl RangeOp {
     pub fn name(self) -> &'static str {
@@ -144,6 +196,10 @@ impl RangeOp {
             RangeOp::BitNot => "bitnot",
             RangeOp::Step(1) => "inc",
             RangeOp::Step(_) => "dec",
+            RangeOp::Clip(CLIP_LT) => "clip-lt",
+            RangeOp::Clip(CLIP_LE) => "clip-le",
+            RangeOp::Clip(CLIP_GT) => "clip-gt",
+            RangeOp::Clip(_) => "clip-ge",
         }
     }
 
@@ -261,6 +317,19 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
             }
             _ => Iv::U32,
         },
+        // An integer that passes `x < e` is at most `e.hi - 1` (and so on);
+        // an unbounded test bound keeps the interval.
+        RangeOp::Clip(k) if !l.is_top() => {
+            if r.is_top() {
+                return l;
+            }
+            match k {
+                CLIP_LT => Iv::int(l.lo, l.hi.min(r.hi - 1)),
+                CLIP_LE => Iv::int(l.lo, l.hi.min(r.hi)),
+                CLIP_GT => Iv::int(l.lo.max(r.lo + 1), l.hi),
+                _ => Iv::int(l.lo.max(r.lo), l.hi),
+            }
+        }
         RangeOp::Shl => Iv::I32,
         RangeOp::BitNot => {
             let a = to_int32(l);
@@ -343,6 +412,35 @@ mod tests {
             eval(RangeOp::BitNot, Iv::int(0, 3), Iv::EMPTY),
             Iv::int(-4, -1)
         );
+    }
+
+    #[test]
+    fn a_loop_test_clips_the_counter() {
+        assert_eq!(
+            eval(RangeOp::Clip(CLIP_LT), Iv::int(0, 200), Iv::int(128, 128)),
+            Iv::int(0, 127)
+        );
+        assert_eq!(
+            eval(RangeOp::Clip(CLIP_GE), Iv::int(-5, 9), Iv::int(0, 0)),
+            Iv::int(0, 9)
+        );
+        assert!(eval(RangeOp::Clip(CLIP_LT), Iv::TOP, Iv::int(8, 8)).is_top());
+        assert_eq!(
+            eval(RangeOp::Clip(CLIP_LT), Iv::int(0, 9), Iv::TOP),
+            Iv::int(0, 9)
+        );
+    }
+
+    #[test]
+    fn widening_climbs_a_finite_ladder() {
+        assert_eq!(widen(Iv::int(0, 3), Iv::int(0, 4)), Iv::int(0, 7));
+        assert_eq!(widen(Iv::int(0, 7), Iv::int(-1, 7)), Iv::int(-1, 7));
+        assert_eq!(widen(Iv::int(-1, 7), Iv::int(-2, 7)), Iv::int(-2, 7));
+        assert_eq!(
+            widen(Iv::int(0, 1 << 33), Iv::int(0, (1 << 33) + 1)),
+            Iv::int(0, 1 << 53)
+        );
+        assert!(widen(Iv::int(0, 1 << 53), Iv::TOP).is_top());
     }
 
     #[test]

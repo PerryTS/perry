@@ -1617,9 +1617,12 @@ pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
     if joined == node.range {
         return false;
     }
+    use crate::model::range::{widen, WIDEN_LIMIT, WIDEN_STEPS};
     node.rsteps = node.rsteps.saturating_add(1);
-    node.range = if node.rsteps > crate::model::range::WIDEN_STEPS {
+    node.range = if node.rsteps > WIDEN_LIMIT {
         Iv::TOP
+    } else if node.rsteps > WIDEN_STEPS {
+        widen(node.range, joined)
     } else {
         joined
     };

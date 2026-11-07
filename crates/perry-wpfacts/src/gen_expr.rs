@@ -641,7 +641,10 @@ impl<'a> Gen<'a> {
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
-                _ => self.local(mi, *id),
+                _ => match self.narrowed_read(mi, *id) {
+                    Some(n) => n,
+                    None => self.local(mi, *id),
+                },
             },
             // Program code never writes a `const` (lowering throws
             // `Assignment to constant variable`): `undefined` written into
@@ -668,6 +671,7 @@ impl<'a> Gen<'a> {
                     ),
                     None => self.m.edge(vn, l),
                 }
+                self.narrowed_write(mi, *id, vn);
                 vn
             }
             Expr::ScopedTemp { id, value, body } => {
@@ -754,7 +758,10 @@ impl<'a> Gen<'a> {
                 v
             }
             Expr::Update { id, op, .. } => {
-                let l = self.local(mi, *id);
+                let l = match self.narrowed_read(mi, *id) {
+                    Some(n) => n,
+                    None => self.local(mi, *id),
+                };
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
                     l,
@@ -772,6 +779,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(l, Cons::Arith { dst: out });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
+                self.narrowed_write(mi, *id, out);
                 out
             }
             Expr::Binary { op, left, right } => {
