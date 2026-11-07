@@ -405,7 +405,7 @@ pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: Lay
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: LayoutWord) {
     if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type)
         || !receiver_carries_numeric_proof(obj)
