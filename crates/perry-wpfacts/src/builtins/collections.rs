@@ -1351,7 +1351,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "mapGroups",
+            | "fromEntries" | "mapGroups" | "hostrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

@@ -357,6 +357,7 @@ mod tests {
         let fresh = [RealmEffect::Returns(RealmOperand::Fresh {
             proto: Cow::Borrowed("Array.prototype"),
             elems: Cow::Borrowed(&[]),
+            fields: Cow::Borrowed(&[]),
         })];
         assert!(violations(&fresh, false, true).is_empty());
         let stores = [RealmEffect::Stores {
