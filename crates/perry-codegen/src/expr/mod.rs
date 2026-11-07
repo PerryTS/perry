@@ -228,16 +228,16 @@ pub(crate) use v8_interop::{
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_gated_root_nanbox_store,
     emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_pointer_tested,
-    emit_jsvalue_slot_store_pointer_tested_known,
-    emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
-    emit_may_carry_heap_pointer_check, emit_root_nanbox_store_for_expr,
-    emit_root_nanbox_store_on_block, emit_scalar_aware_store_gated_on_pointerness,
-    emit_write_barrier, emit_write_barrier_birth_slots_generation_tested,
-    emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
-    emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
-    lower_event_emitter_async_resource_subclass_init, lower_event_emitter_subclass_init,
-    lower_node_stream_super_init, lower_stream_super_init, EVENT_EMITTER_INIT_KEYS,
+    emit_jsvalue_slot_store_pointer_tested_known, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
+    emit_root_nanbox_store_for_expr, emit_root_nanbox_store_on_block,
+    emit_scalar_aware_store_gated_on_pointerness, emit_write_barrier,
+    emit_write_barrier_birth_slots_generation_tested, emit_write_barrier_slot_generation_tested,
+    emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
+    lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
+    lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
+    EVENT_EMITTER_INIT_KEYS,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
@@ -1861,7 +1861,7 @@ pub(crate) struct FnCtx<'a> {
     /// prototype method. When set, `try_emit_buffer_read_intrinsic` deopts the
     /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
     /// every program that never shadows a Buffer method (the common case).
-    pub program_shadows_buffer_read_method: bool,
+    pub program_shadows_buffer_intrinsic_method: bool,
     /// This module contains a shape barrier such as `Object.defineProperty`.
     /// Native Buffer/TypedArray views normally read `.length` straight from
     /// their header, but a barrier can install an own `length` property that

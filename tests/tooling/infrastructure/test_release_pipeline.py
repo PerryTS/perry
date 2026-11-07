@@ -209,11 +209,17 @@ npm() { printf '%s\n' "$*" >> "$CALLS"; }
         self.assertEqual(len(sources), 10, 'exercise every changed apt site')
         for source in sources:
             start = source.index('if _bad=')
-            lines = source[start:].splitlines()
-            end = next(i for i, line in enumerate(lines) if 'apt-get install' in line and 'sudo' in line)
-            while lines[end].rstrip().endswith('\\'):
-                end += 1
-            fragment = '\n'.join(lines[:end + 1])
+            if 'if [ "$mirror_ok" -eq 1 ] && ! install_online; then' in source:
+                cleanup = source.index('sudo rm -rf "$LLVM_DEBS/partial"', start)
+                end = source.rfind('\n', start, cleanup)
+                fragment = source[start:end]
+            else:
+                lines = source[start:].splitlines()
+                end = next(i for i, line in enumerate(lines)
+                           if 'apt-get install' in line and 'sudo' in line)
+                while lines[end].rstrip().endswith('\\'):
+                    end += 1
+                fragment = '\n'.join(lines[:end + 1])
             for install_rc in [0, 42]:
                 with self.subTest(fragment=fragment, install_rc=install_rc):
                     stub = r'''
@@ -228,9 +234,18 @@ sudo() {
 apt-cache() { echo 'Candidate: 22.1.4'; }
 sleep() { :; }
 '''
-                    result = shell(stub + fragment, env={'INSTALL_RC': str(install_rc)})
-                    self.assertEqual(result.returncode, install_rc, result.stdout + result.stderr)
-                    self.assertIn('INSTALL_REACHED', result.stdout)
+                    with tempfile.TemporaryDirectory() as tmp:
+                        debs = Path(tmp) / 'llvm22-debs'
+                        debs.mkdir()
+                        for package in ['llvm-22-dev', 'llvm-22-tools', 'libpolly-22-dev', 'clang-22']:
+                            (debs / f'{package}_test.deb').touch()
+                        result = shell(stub + fragment, env={
+                            'INSTALL_RC': str(install_rc),
+                            'LLVM_DEBS': str(debs),
+                            'LLVM_DEBS_EXACT_HIT': 'true',
+                        })
+                        self.assertEqual(result.returncode, install_rc, result.stdout + result.stderr)
+                        self.assertIn('INSTALL_REACHED', result.stdout)
 
     def test_release_notes_cap_preserves_unicode_and_bounds(self):
         source = step('create-release', 'Create tag')

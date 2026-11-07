@@ -80,6 +80,7 @@ PATH_EXEMPT_PREFIXES = ("changelog.d/", "changelog/v")
 
 INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 LINE_CITATION_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<line>\d+)$")
+PATH_PLACEHOLDER_RE = re.compile(r"<[a-z][a-z0-9_-]*>")
 
 # Rule 2.  `<!-- gc-fact: NAME = VALUE in PATH -->` binds a documented number to
 # the constant it came from; `<!-- gc-symbol: NAME in PATH -->` binds a
@@ -166,7 +167,12 @@ def path_problems(rel: str, text: str, root: Path) -> list[str]:
                 "name the file and the symbol instead."
             )
             continue
-        if not (root / target).exists():
+        # A documented path template must match a real path, just as a literal
+        # reference must exist. Preserve fixed components so a renamed parent
+        # directory still invalidates the claim.
+        pattern = PATH_PLACEHOLDER_RE.sub("*", target)
+        exists = any(root.glob(pattern)) if pattern != target else (root / target).exists()
+        if not exists:
             problems.append(f"{rel}: `{target}` does not exist")
     return problems
 
@@ -291,6 +297,17 @@ def self_test() -> int:
     exempt = path_problems("doc.md", "see `changelog.d/0000-not-a-real-fragment.md`", root)
     if exempt:
         failures.append("rule 1 failed an intentionally ephemeral changelog fragment")
+
+    for template in (
+        "tests/parity/<root>/<subject>/",
+        "tests/parity/snapshots/<platform>-<mode>/<subject>.json",
+    ):
+        if path_problems("doc.md", f"see `{template}`", root):
+            failures.append(f"rule 1 failed a path template with real matches: {template}")
+    if not path_problems("doc.md", "see `crates/no-such-crate/<module>.rs`", root):
+        failures.append("rule 1 passed a path template with no real matches")
+    if not path_problems("doc.md", "see `scripts/<script>.py:1`", root):
+        failures.append("rule 1 passed a path-template line-number citation")
 
     # Rule 2: the marker must fail on a drifted value, a renamed const, and a
     # dead file -- and pass when it agrees with the source.

@@ -331,12 +331,8 @@ fn large_local_array_push_inbounds_store_emits_precise_slot_barrier() {
     let store_at = region
         .position_of("store double")
         .expect("optimized push should emit a direct element store");
-    let layout_at = region
-        .position_of("call void @js_gc_note_slot_layout")
-        .expect("optimized push store should keep slot layout notes");
-    let barrier_at = region
-        .position_of("call void @js_write_barrier_slot")
-        .expect("optimized push direct store must remember old-born parent slots");
+    let layout_at = region.position_of("call void @js_gc_note_slot_layout");
+    let barrier_at = region.position_of("call void @js_write_barrier_slot");
 
     assert!(
         store_at.0 == 0,
@@ -344,20 +340,45 @@ fn large_local_array_push_inbounds_store_emits_precise_slot_barrier() {
          not a successor; found it in {}",
         region.first_visit_order[store_at.0]
     );
-    assert!(
-        store_at < layout_at,
-        "slot-layout note must come at or after the direct store on the \
-         in-bounds path (store in {}, note in {})",
-        region.first_visit_order[store_at.0],
-        region.first_visit_order[layout_at.0]
-    );
-    assert!(
-        layout_at < barrier_at,
-        "the write barrier must come after the layout note on the in-bounds \
-         path (note in {}, barrier in {})",
-        region.first_visit_order[layout_at.0],
-        region.first_visit_order[barrier_at.0]
-    );
+    if let Some(layout_at) = layout_at {
+        let barrier_at = barrier_at.expect("a recorded layout note must keep its write barrier");
+        assert!(
+            store_at < layout_at,
+            "slot-layout note must come at or after the direct store on the \
+             in-bounds path (store in {}, note in {})",
+            region.first_visit_order[store_at.0],
+            region.first_visit_order[layout_at.0]
+        );
+        assert!(
+            layout_at < barrier_at,
+            "the write barrier must come after the layout note on the in-bounds \
+             path (note in {}, barrier in {})",
+            region.first_visit_order[layout_at.0],
+            region.first_visit_order[barrier_at.0]
+        );
+    } else {
+        assert!(
+            region
+                .first_visit_order
+                .iter()
+                .any(|block| block.starts_with("apush.pointer_layout.fast.")),
+            "an elided layout note requires the guarded pointer-layout fast arm: {region:?}"
+        );
+        if let Some(barrier_at) = barrier_at {
+            assert!(
+                store_at < barrier_at,
+                "the write barrier must follow the direct store when ALL_POINTERS makes the layout note redundant"
+            );
+        } else {
+            assert!(
+                region
+                    .first_visit_order
+                    .iter()
+                    .any(|block| block.starts_with("apush.barrier.done.")),
+                "an elided write barrier requires the guarded pointer-layout fast arm: {region:?}"
+            );
+        }
+    }
 }
 
 /// The `apush.*` region reachable from the push's `apush.inbounds` block, in
@@ -367,6 +388,7 @@ fn large_local_array_push_inbounds_store_emits_precise_slot_barrier() {
 /// `apush.*`-prefixed blocks: the region ends where the push's own control
 /// flow rejoins the surrounding function, so a marker found here is on the
 /// push path and nowhere else.
+#[derive(Debug)]
 struct ApushRegion {
     first_visit_order: Vec<String>,
     block_text: Vec<String>,

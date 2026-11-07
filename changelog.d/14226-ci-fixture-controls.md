@@ -1,0 +1,1 @@
+Keep GC rooting tests independent of console lowering, validate documentation path templates against real files, and make child-process parity cases check supported shell options and guaranteed event ordering.

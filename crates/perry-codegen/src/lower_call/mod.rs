@@ -142,7 +142,7 @@ mod ui_styling;
 mod ui_tables;
 mod web_storage;
 
-use buffer_intrinsic::try_emit_buffer_read_intrinsic;
+use buffer_intrinsic::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 use builtin::lower_builtin_new;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
 // `options/` (#1099): the options-object-literal lowering family,
