@@ -532,6 +532,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
                 {
                     out.int32_inputs.insert(*id);
+                    if b.int_range.is_some_and(|(lo, _)| lo >= 0) {
+                        out.nonneg_int32_inputs.insert(*id);
+                    }
                 }
                 if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
                     eprintln!("perry: int-range local {id} {:?}", b.int_range);
