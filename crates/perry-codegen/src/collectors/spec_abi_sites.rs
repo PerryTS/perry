@@ -1054,7 +1054,8 @@ fn judge_sites_in_body(
     // Use the same transitive, all-writes range proof as canonical i32 slots.
     // Empty auxiliary sets only under-approximate clamp/flat-array cases; they
     // cannot admit a local the integer-local provenance judge would reject.
-    let integer_locals = body_integer_locals(stmts, params);
+    let mut integer_locals = body_integer_locals(stmts, params);
+    integer_locals.extend(env.proven_int32.iter().copied());
     let mut ready: HashSet<u32> = ta_ready_at_entry(env.ta, env.definite, body);
     for s in stmts {
         judge_stmt(s, env, env.number_arrays, &integer_locals, &ready, out);
@@ -1071,6 +1072,10 @@ pub(crate) struct JudgeEnv<'a> {
     ta: &'a HashMap<u32, SpecTaBinding>,
     number_arrays: &'a HashSet<u32>,
     definite: &'a super::DefiniteInit,
+    /// Bindings the whole-program interval proof shows hold only int32
+    /// values (`ElisionFacts::int32_inputs`): integer locals beside the
+    /// body's own proof, as codegen admits them (`collectors::hir_facts`).
+    proven_int32: &'a std::collections::BTreeSet<u32>,
 }
 
 /// The `TaPtr` bindings ready when `body` (`None` = module init, else the
@@ -1268,7 +1273,11 @@ fn judge_expr(
 /// [`collect_spec_abi_facts_with`] over the module's own definite-init facts.
 #[cfg(test)]
 pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
-    collect_spec_abi_facts_with(hir, &super::definite_init::collect(hir))
+    collect_spec_abi_facts_with(
+        hir,
+        &super::definite_init::collect(hir),
+        &Default::default(),
+    )
 }
 
 /// Run the whole pre-pass on a module. `definite` is the module's
@@ -1277,6 +1286,7 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
 pub fn collect_spec_abi_facts_with(
     hir: &Module,
     definite: &super::DefiniteInit,
+    proven_int32: &std::collections::BTreeSet<u32>,
 ) -> SpecAbiModuleFacts {
     let mut scan = scan_whole_module(hir);
 
@@ -1444,6 +1454,7 @@ pub fn collect_spec_abi_facts_with(
         ta: &ta_bindings,
         number_arrays: &number_array_bindings,
         definite,
+        proven_int32,
     };
     judge_sites_in_body(&hir.init, &[], None, &env, &mut call_sites);
     for f in &hir.functions {
