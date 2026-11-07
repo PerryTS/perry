@@ -1367,6 +1367,7 @@ pub(super) fn init_enter(addr: usize) {
         init: id,
         kind: FrameKind::Init,
     });
+    crate::object::shapes::snap22::snapshot("init_enter", addr as u64);
     input_record::event(st, "init_enter", format!("{addr:x}"));
     set_mode_for_top(st);
 }
