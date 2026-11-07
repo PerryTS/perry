@@ -79,11 +79,11 @@ fn runtime_dir() -> PathBuf {
             "runtime archive build failed\n{}",
             String::from_utf8_lossy(&build.stderr)
         );
-        let sidecars = Command::new("bash")
+        let profile_target = target.join("perry-dev");
+        let sidecars = Command::new(profile_target.join("perry-gc-effects"))
             .current_dir(workspace_root())
-            .arg("scripts/gc_call_effects/sidecars.sh")
-            .arg(target.join("perry-dev"))
-            .env("GC_EFFECTS_BIN", target.join("perry-dev/perry-gc-effects"))
+            .arg("sidecars")
+            .arg(&profile_target)
             .output()
             .expect("generate runtime GC sidecar");
         assert!(
@@ -210,6 +210,8 @@ fn sea_profile_supports_relocated_assets_and_zero_asset_builds() {
         &entry,
         r#"
 import { isSea, getAsset, getAssetKeys, getAssetAsBlob } from "node:sea";
+import { resolveObjectURL } from "node:buffer";
+import { createObjectURL } from "node:url";
 const bytes = getAsset("assets/message.txt") as ArrayBuffer;
 const decoder = new TextDecoder();
 console.log(isSea(), getAssetKeys().join(","), decoder.decode(bytes));
@@ -222,6 +224,10 @@ const keys = getAssetKeys(); keys.pop(); console.log("fresh keys", getAssetKeys(
 console.log("blob type", getAssetAsBlob("assets/a", { type: "TEXT/PLAIN" }).type);
 console.log("blob invalid type", getAssetAsBlob("assets/a", { type: "x\u0001y" }).type);
 console.log("blob coerces type", getAssetAsBlob("assets/a", { type: 42 }).type);
+const seaBlob = getAssetAsBlob("assets/bin", { type: "application/octet-stream" });
+const seaBlobUrl = createObjectURL(seaBlob);
+const resolvedSeaBlob = resolveObjectURL(seaBlobUrl)!;
+console.log("blob URL roundtrip", resolvedSeaBlob.size, resolvedSeaBlob.type);
 function errorCode(fn: () => unknown): string { try { fn(); return "none"; } catch (e) { return (e as any).code; } }
 console.log("encoding type order", errorCode(() => getAsset(1 as any, 1 as any)));
 console.log("key type", errorCode(() => getAsset(1 as any)));

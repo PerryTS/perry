@@ -1,10 +1,17 @@
 //! `node:sea` APIs backed by Perry's explicitly enabled embedded-asset profile.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::value::{JSValue, TAG_FALSE, TAG_TRUE};
 
 static SEA_PROFILE: AtomicBool = AtomicBool::new(false);
+static SEA_BLOB_FACTORY: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the stdlib Blob-handle constructor when its dispatch layer starts.
+#[no_mangle]
+pub extern "C" fn js_sea_install_blob_factory(factory: usize) {
+    SEA_BLOB_FACTORY.store(factory, Ordering::Release);
+}
 
 /// Called only by the generated startup object for an explicit `--sea` build.
 #[no_mangle]
@@ -137,16 +144,38 @@ pub extern "C" fn js_sea_get_asset_as_blob(key: f64, options: f64) -> f64 {
         let options = JSValue::from_bits(options.to_bits());
         let content_type = if options.is_undefined() || options.is_null() {
             String::new()
-        } else if options.is_pointer() {
-            let obj = options.as_pointer::<crate::object::ObjectHeader>();
-            let type_key = crate::string::intern_ascii_literal(b"type");
-            let type_value = crate::object::js_object_get_field_by_name_f64(obj, type_key);
-            blob_content_type(type_value)
+        } else if options.is_pointer() || options.is_handle() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options = scope.root_nanbox_f64(f64::from_bits(options.bits()));
+            let type_key = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+                crate::string::intern_ascii_literal(b"type") as i64,
+            ));
+            let type_value = unsafe {
+                crate::object::js_object_get_property_key(
+                    options.get_nanbox_f64(),
+                    type_key.get_nanbox_f64(),
+                )
+            };
+            let type_value = scope.root_nanbox_f64(type_value);
+            blob_content_type(type_value.get_nanbox_f64())
         } else {
             // Blob's Web IDL dictionary conversion accepts primitive values
             // (which have no `type` member) and nullish values.
             String::new()
         };
+        let factory = SEA_BLOB_FACTORY.load(Ordering::Acquire);
+        if factory != 0 {
+            let factory: unsafe extern "C" fn(*const u8, usize, *const u8, usize) -> f64 =
+                unsafe { std::mem::transmute(factory) };
+            return unsafe {
+                factory(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    content_type.as_ptr(),
+                    content_type.len(),
+                )
+            };
+        }
         return crate::node_submodules::blob::blob_value_from_bytes_and_type(bytes, &content_type);
     }
     throw_not_in_sea()

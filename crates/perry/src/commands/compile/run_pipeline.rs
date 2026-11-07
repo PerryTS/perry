@@ -8084,7 +8084,7 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
-    if !embedded_assets.is_empty() || args.sea {
+    if !embedded_assets.is_empty() || args.sea || args.output_type == "staticlib" {
         if let Some(obj) = embed::generate_embedded_asset_object(
             &embedded_assets,
             &object_output_dir,

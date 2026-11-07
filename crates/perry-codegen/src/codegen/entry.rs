@@ -233,6 +233,12 @@ pub(super) fn compile_module_entry(
         if cross_module.needs_geisterhand && !is_dylib {
             llmod.declare_function("perry_geisterhand_start", VOID, &[I32]);
         }
+        // A static archive does not extract members that contain only
+        // constructors. Keep Perry's generated embedded-asset object in the
+        // final host link by making the module entry reference its anchor.
+        if output_type == "staticlib" {
+            llmod.declare_function("perry_embedded_assets_link_anchor", VOID, &[]);
+        }
         // #1178 — bake `[ios] app_group` from perry.toml into a single
         // `perry_app_group_init(ptr, len)` call at the top of `main`,
         // before any user code runs (and before any `appGroupSet/Get/
@@ -476,6 +482,11 @@ pub(super) fn compile_module_entry(
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
+        if output_type == "staticlib" {
+            main.block_mut(0)
+                .unwrap()
+                .call_void("perry_embedded_assets_link_anchor", &[]);
+        }
         if crate::verify_facts::enabled() {
             main.block_mut(0)
                 .unwrap()
