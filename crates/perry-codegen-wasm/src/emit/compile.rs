@@ -875,6 +875,16 @@ impl WasmModuleEmitter {
             }
         }
 
+        // Register globals from all modules. This precedes the async JS generation below,
+        // which reads `global_map` to tell a declared global from the unresolved-global
+        // sentinel.
+        for (_, module) in modules {
+            for global in &module.globals {
+                self.global_map.insert(global.id, self.num_globals);
+                self.num_globals += 1;
+            }
+        }
+
         // Async function JS generation (Phase 2): now that per-module func_maps are complete,
         // generate the JS code for async functions with correct FuncRef resolution.
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
@@ -892,14 +902,6 @@ impl WasmModuleEmitter {
         // reads the counter.
         let start_idx = user_func_idx;
         let start_type = t_void;
-
-        // Register globals from all modules
-        for (_, module) in modules {
-            for global in &module.globals {
-                self.global_map.insert(global.id, self.num_globals);
-                self.num_globals += 1;
-            }
-        }
 
         // Promote module-level Let bindings to WASM globals so cross-function
         // references work and so different modules' identical LocalIds don't collide.

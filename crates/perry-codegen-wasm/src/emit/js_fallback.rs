@@ -260,6 +260,13 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(val, locals);
                 format!("({} = {})", name, v)
             }
+            // An id with no WASM global is the HIR's unresolved-global sentinel (the receiver
+            // of `Promise.resolve`, `fetch`, `JSON.parse`); in JS that receiver is globalThis.
+            // The WASM arm reads the same id as undefined, but here a bare `__g{id}` would be
+            // an undeclared name and throw ReferenceError on entry to the async body.
+            Expr::GlobalGet(id) if !self.global_map.contains_key(id) => {
+                "fromJsValue(globalThis)".to_string()
+            }
             Expr::GlobalGet(id) => format!("__g{}", id),
             Expr::GlobalSet(id, val) => {
                 let v = self.emit_js_expr(val, locals);
@@ -359,6 +366,25 @@ impl WasmModuleEmitter {
                         } else {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
+                    }
+                    // `console.log(x)` lowers to `GlobalGet(0).log(x)`: a known global
+                    // in member position is the bare sentinel and codegen routes by the
+                    // method name, as the WASM arm does. Without this the call reads
+                    // `globalThis.log`, which is not a function.
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
+                        && matches!(property.as_str(), "log" | "warn" | "error") =>
+                    {
+                        let args_js: Vec<String> = args_js
+                            .iter()
+                            .map(|a| format!("toJsValue({})", a))
+                            .collect();
+                        format!(
+                            "(console.{}({}), u64ToF64(TAG_UNDEFINED))",
+                            property,
+                            args_js.join(", ")
+                        )
                     }
                     Expr::PropertyGet {
                         object, property, ..
