@@ -139,10 +139,19 @@ pub(crate) fn emit_param_witnesses(ctx: &mut crate::expr::FnCtx<'_>, params: &Ha
 pub(crate) fn accept_let_value(
     ctx: &mut crate::expr::FnCtx<'_>,
     id: u32,
-    _source: &perry_hir::Expr,
+    source: &perry_hir::Expr,
     value: String,
 ) -> String {
     if !ctx.facts_number_locals.contains(&id) {
+        return value;
+    }
+    // The HIR's release of an initialized const (`IteratorRecordPlan::release`
+    // clears a destructuring temp with `x = undefined` after its last read)
+    // is not a value of the binding: wpfacts skips exactly this write
+    // (`gen_expr.rs`, `LocalSet` of `Undefined` into an initialized const).
+    // Any other `undefined` write would have put UNDEF in the binding's node,
+    // so a proven binding meets a literal `undefined` only here.
+    if matches!(source, perry_hir::Expr::Undefined) {
         return value;
     }
     note_consumed(id);
