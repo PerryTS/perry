@@ -6,6 +6,29 @@ use perry_hir::Expr;
 impl<'a> Gen<'a> {
     // ----------------------------------------------------------- walking
 
+    #[cfg(test)]
+    pub(crate) fn packet_reads(&mut self, start: usize) {
+        let Some(scope) = &self.m.packet_scope else {
+            return;
+        };
+        let f = scope.f;
+        let reads: Vec<_> = self.read_sites[start..]
+            .iter()
+            .filter(|s| s.func == f)
+            .cloned()
+            .collect();
+        for site in reads {
+            let key = self.m.atoms[site.key as usize].clone();
+            self.m.packet_observe(
+                site.byte_offset,
+                format!("read call={} value={}", site.is_call, site.value_call),
+                key,
+                site.recv,
+                None,
+            );
+        }
+    }
+
     pub fn walk_all(&mut self) {
         let modules = self.modules.clone();
         // RPG1b: the once closures and the evaluation order (`derive`'s
@@ -189,6 +212,17 @@ impl<'a> Gen<'a> {
     /// and classes. A module it loads statically, by an import or a
     /// re-export, loads with it (`dynamic_only_modules` counts both).
     pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(init_fn);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
+        #[cfg(test)]
+        {
+            let body = self.init_of(mi as usize);
+            for stmt in body {
+                self.m.packet_declarations(std::slice::from_ref(stmt));
+            }
+        }
         if !self.dynamic_only.is_empty() {
             for i in self.imports_of(mi as usize) {
                 if i.is_dynamic || i.type_only || i.runtime_erased {
@@ -264,6 +298,11 @@ impl<'a> Gen<'a> {
                 return;
             }
             self.walk_class(mi, c, &fx);
+        }
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
         }
     }
 
@@ -504,6 +543,11 @@ impl<'a> Gen<'a> {
     /// DECISIONS 225: whether the body of `f` waits (it is not active):
     /// kept for `walk_activated`, or, with the set final, never walked.
     pub(crate) fn defer_walk(&mut self, f: FnIdx, w: PendingWalk<'a>) -> bool {
+        #[cfg(test)]
+        if self.m.packets_inert && self.m.packet_scope.as_ref().is_some_and(|b| b.f != f) {
+            self.pending_walk.entry(f).or_default().push(w);
+            return true;
+        }
         if self.m.body_active(f) {
             return false;
         }
@@ -534,6 +578,8 @@ impl<'a> Gen<'a> {
                         }
                         PendingWalk::Fields(mi, c) => self.walk_fields_body(mi, c),
                         PendingWalk::Closure(cfx, e) => self.walk_closure_body(&cfx, e),
+                        #[cfg(test)]
+                        PendingWalk::OwnedClosure(cfx, e) => self.walk_closure_body(&cfx, &e),
                         PendingWalk::Module(mi) => {
                             let f = self.init_fn_of[&mi];
                             self.walk_module(mi, f);
@@ -556,7 +602,18 @@ impl<'a> Gen<'a> {
     ) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(fxi);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
+        #[cfg(test)]
+        self.m.packet_declarations(&f.body);
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         (self.order_ok, self.loop_depth) = saved;
     }
 
@@ -604,6 +661,7 @@ impl<'a> Gen<'a> {
             return;
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
+        self.note_own_stores(f);
         self.stmts(&fx, &f.body);
         self.own_helper_finish(fxi, own);
     }
@@ -659,7 +717,18 @@ impl<'a> Gen<'a> {
     fn walk_fields_body(&mut self, mi: u32, c: &'a Class) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        #[cfg(test)]
+        let packet_prior = self
+            .m
+            .packet_body(self.field_init_fn[&self.mods[mi as usize].classes[&c.name]]);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
         self.walk_fields_body_inner(mi, c);
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         (self.order_ok, self.loop_depth) = saved;
     }
 
@@ -751,6 +820,10 @@ impl<'a> Gen<'a> {
         // Static fields and static blocks: `this` is the class object.
         let si = self.static_init_fn[&tm];
         self.m.note_walked(si);
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(si);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
         let sfx = Fx {
             guard: None,
             module: mi,
@@ -797,6 +870,11 @@ impl<'a> Gen<'a> {
                 None => self.m.field(cobj, named),
             };
             self.m.edge(v, fl);
+        }
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
         }
         for d in &c.decorators {
             for a in &d.args {
@@ -895,7 +973,9 @@ impl<'a> Gen<'a> {
                 // the binding reads the value just written, not every write
                 // of the value local (its `undefined` initializer and
                 // release, the step's output).
-                let Stmt::Expr(set) = &ss[i] else { unreachable!() };
+                let Stmt::Expr(set) = &ss[i] else {
+                    unreachable!()
+                };
                 let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
                 let n = self.expr(fx, set);
                 self.m.cur_fn = prev;

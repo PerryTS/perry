@@ -1,7 +1,10 @@
 //! `Stmt::For`, `Stmt::While`, `Stmt::DoWhile` lowering and supporting helpers.
 
+mod accumulator_scope;
 mod i32_counter;
 mod iterator_record;
+pub(crate) use accumulator_scope::flush_packed_accumulator_locals;
+use accumulator_scope::{emit_packed_numeric_accumulator_admission, PackedAccumulatorScope};
 
 use super::*;
 
@@ -868,24 +871,6 @@ fn emit_range_loop_accumulator_admission(
     )
 }
 
-/// The live state of a packed clone's accumulator admission: the admitted
-/// ids (they open the clone's Number scope, see `local_is_number`), the
-/// unboxed subset (id, F64 alloca, real slot) whose reads/writes redirect
-/// through `ctx.numeric_accumulator_f64_slots`, and the side-exit trampoline
-/// that writes the live values back before entering the slow clone.
-struct PackedAccumulatorScope {
-    accumulators: Vec<u32>,
-    unboxed: Vec<(u32, String, String)>,
-    /// Update-only integer accumulators deferred to the i32 slot for the
-    /// clone: (id, i32 slot, double slot) — exits re-sync the double.
-    deferred_integer: Vec<(u32, String, String)>,
-    side_exit_override: Option<String>,
-    /// Receiver ids this scope materialised in the shared descriptor table;
-    /// cleared by `finish`. An inner scope reusing an outer descriptor does
-    /// not record that receiver here.
-    hoisted_receivers: Vec<u32>,
-}
-
 /// Materialize the address half shared by packed clones and phase 3 ordinary
 /// counted loops. The returned box is a precise root, while the handle slot is
 /// refreshed from it after every fired loop poll.
@@ -999,393 +984,6 @@ fn materialize_ordinary_counted_array_descriptor(
         .expect("region analysis admitted only poll-refreshable boundaries")
 }
 
-impl PackedAccumulatorScope {
-    fn empty() -> Self {
-        Self {
-            accumulators: Vec::new(),
-            unboxed: Vec::new(),
-            deferred_integer: Vec::new(),
-            side_exit_override: None,
-            hoisted_receivers: Vec::new(),
-        }
-    }
-}
-
-/// Admit Update-only INTEGER accumulators (`c++`) for i32-slot deferral:
-/// writes all Updates, an integer local with a live i32 slot (the
-/// authoritative in-clone storage — reads already prefer it), not the
-/// loop counter, plain-local storage. An entry range test
-/// (|value| < 2^30) branches to the slow clone so `bound <= 16M`
-/// iterations of `add i32` cannot wrap; the i32 and double slots are in
-/// sync at entry by the Update/LocalSet mirror invariant, so the i32
-/// value IS the number.
-fn admit_integer_update_accumulators(
-    ctx: &mut FnCtx<'_>,
-    body: &[Stmt],
-    counter_id: u32,
-    slow_pre_label: &str,
-    block_prefix: &str,
-) -> Vec<(u32, String, String)> {
-    let mut writes = std::collections::BTreeMap::new();
-    super::stable_packed_accumulator::collect_local_writes(body, &mut writes);
-    let mut in_range: Option<String> = None;
-    let mut admitted: Vec<(u32, String, String)> = Vec::new();
-    for (id, ws) in &writes {
-        if *id == counter_id
-            || ws.is_empty()
-            || !ws.iter().all(|w| w.is_none())
-            || !ctx.integer_locals.contains(id)
-            || ctx.boxed_vars.contains(id)
-            || ctx.closure_captures.contains_key(id)
-            || ctx.module_globals.contains_key(id)
-        {
-            continue;
-        }
-        let Some(dbl_slot) = ctx.locals.get(id).cloned() else {
-            continue;
-        };
-        // Count accumulators are rarely index-used, so most have no i32
-        // slot yet — create a scope-local one here: range-test the (integer
-        // by `integer_locals` invariant) double value, seed the slot with
-        // its exact `fptosi`, and REGISTER it so every in-clone read takes
-        // the i32-first `LocalGet` arm. `finish`/the trampoline unregister
-        // it and sync the double back.
-        let created_slot = if ctx.i32_counter_slots.contains_key(id) {
-            None
-        } else {
-            Some(ctx.func.alloca_entry(I32))
-        };
-        let existing_slot = ctx.i32_counter_slots.get(id).cloned();
-        let blk = ctx.block();
-        let (value_i32, ok) = if let Some(new_slot) = &created_slot {
-            let dbl = blk.load(DOUBLE, &dbl_slot);
-            let below = blk.fcmp("olt", &dbl, "1073741824.0");
-            let above = blk.fcmp("ogt", &dbl, "-1073741824.0");
-            let ok = blk.and(I1, &below, &above);
-            let as_i32 = blk.fptosi(DOUBLE, &dbl, I32);
-            blk.store(I32, &as_i32, new_slot);
-            (new_slot.clone(), ok)
-        } else {
-            let slot = existing_slot.expect("checked contains_key above");
-            let value = blk.load(I32, &slot);
-            let below = blk.icmp_slt(I32, &value, "1073741824");
-            let above = blk.icmp_sgt(I32, &value, "-1073741824");
-            (slot, blk.and(I1, &below, &above))
-        };
-        in_range = Some(match in_range {
-            Some(prev) => ctx.block().and(I1, &prev, &ok),
-            None => ok,
-        });
-        if let Some(new_slot) = created_slot {
-            ctx.i32_counter_slots.insert(*id, new_slot);
-        }
-        admitted.push((*id, value_i32, dbl_slot));
-    }
-    if admitted.is_empty() {
-        return admitted;
-    }
-    let ok_idx = ctx.new_block(&format!("{block_prefix}.intacc.ok"));
-    let ok_label = ctx.block_label(ok_idx);
-    let in_range = in_range.expect("at least one admitted");
-    ctx.block().cond_br(&in_range, &ok_label, slow_pre_label);
-    ctx.current_block = ok_idx;
-    for (id, _, _) in &admitted {
-        ctx.deferred_integer_update_accumulators.insert(*id);
-    }
-    admitted
-}
-
-impl PackedAccumulatorScope {
-    /// Cache each receiver's box in a promotable precise-root alloca for this
-    /// fast clone. Receivers here are matcher-validated plain locals or module
-    /// globals (never captures/boxes), and the clone body is call-free, so the
-    /// only collection point is the loop poll — whose armed arm asks the
-    /// shared receiver-descriptor table for every admitted refresh recipe.
-    fn hoist_receivers(&mut self, ctx: &mut FnCtx<'_>, array_ids: &[u32]) {
-        for arr_id in array_ids {
-            if ctx.receiver_descriptors.contains(*arr_id) {
-                continue;
-            }
-            let Some((rooted_box_slot, base_handle_slot, source_ref)) =
-                create_poll_refreshed_receiver_cache(ctx, *arr_id)
-            else {
-                continue;
-            };
-            let installed = ctx.receiver_descriptors.materialize_poll_refreshed_address(
-                *arr_id,
-                rooted_box_slot,
-                base_handle_slot,
-                source_ref,
-                // Packed loop admission rejects Stmt::Try. A throw may
-                // leave the clone, but no descriptor is live in the
-                // handler reached outside this dynamic extent.
-                true,
-            );
-            debug_assert!(installed, "duplicate receiver checked above");
-            self.hoisted_receivers.push(*arr_id);
-        }
-    }
-
-    /// Integer-only scopes still need the side-exit write-back trampoline
-    /// (the double slot is stale mid-clone); build it and set the override.
-    fn with_deferred_trampoline(
-        mut self,
-        ctx: &mut FnCtx<'_>,
-        slow_pre_label: &str,
-        block_prefix: &str,
-    ) -> Self {
-        if self.deferred_integer.is_empty() {
-            return self;
-        }
-        let tramp_idx = ctx.new_block(&format!("{block_prefix}.intacc.writeback_exit"));
-        let saved = ctx.current_block;
-        ctx.current_block = tramp_idx;
-        for (_, i32_slot, dbl_slot) in &self.deferred_integer {
-            let blk = ctx.block();
-            let value = blk.load(I32, i32_slot);
-            let as_double = blk.sitofp(I32, &value, DOUBLE);
-            blk.store(DOUBLE, &as_double, dbl_slot);
-        }
-        ctx.block().br(slow_pre_label);
-        ctx.current_block = saved;
-        self.side_exit_override = Some(ctx.block_label(tramp_idx));
-        self
-    }
-
-    /// The label packed facts should carry as their side exit: the
-    /// write-back trampoline when unboxed accumulators exist, else the slow
-    /// preheader itself.
-    fn fact_side_exit(&self, slow_pre_label: &str) -> String {
-        self.side_exit_override
-            .clone()
-            .unwrap_or_else(|| slow_pre_label.to_string())
-    }
-
-    /// Fall-through exit: write the live values back to the real slots and
-    /// end the redirect scope. Must run right after the fast clone's
-    /// lowering, BEFORE the slow clone is lowered (the slow clone reads and
-    /// writes the real slots).
-    fn finish(self, ctx: &mut FnCtx<'_>) {
-        let emit_writeback = !ctx.block().is_terminated();
-        for (id, alloca, real_slot) in &self.unboxed {
-            if emit_writeback {
-                let value = ctx.block().load(DOUBLE, alloca);
-                // A genuine double's bits are its nanbox; numbers carry no
-                // heap edge, so no barrier. Leaving the shadow state
-                // conservative is always safe — shadow slots only license
-                // SKIPPING a root scan, and scanning a number nanbox is
-                // harmless.
-                ctx.block().store(DOUBLE, &value, real_slot);
-            }
-            ctx.numeric_accumulator_f64_slots.remove(id);
-        }
-        for (id, i32_slot, dbl_slot) in &self.deferred_integer {
-            if emit_writeback {
-                let blk = ctx.block();
-                let value = blk.load(I32, i32_slot);
-                let as_double = blk.sitofp(I32, &value, DOUBLE);
-                blk.store(DOUBLE, &as_double, dbl_slot);
-            }
-            ctx.deferred_integer_update_accumulators.remove(id);
-            // A slot this scope created is scope-local: unregister it so
-            // post-loop reads go back to the (now re-synced) double slot.
-            if ctx.i32_counter_slots.get(id) == Some(i32_slot) {
-                ctx.i32_counter_slots.remove(id);
-            }
-        }
-        for arr_id in &self.hoisted_receivers {
-            let removed = ctx.receiver_descriptors.dematerialize(*arr_id);
-            debug_assert!(removed, "scope owns every receiver it materialised");
-        }
-    }
-}
-
-/// Write the fast clone's promoted accumulators back to their real slots
-/// WITHOUT ending the redirect scope.
-///
-/// `PackedAccumulatorScope::finish` covers the fall-through exit and the
-/// side-exit trampolines cover a mid-iteration deopt, but both are blocks the
-/// clone BRANCHES to, and `break`/`continue` reach them the same way. An
-/// unwind edge reaches neither: under invoke-EH `js_throw` leaves for the
-/// landing pad from inside the call itself, so a `catch` observes whatever is
-/// in the real slot at that moment. Emitting the stores at the throw site is
-/// the only point that works, which is what #9185 was missing.
-///
-/// Unlike `finish` this does NOT unregister the redirects: lowering continues
-/// inside the clone afterwards, and later statements must keep reading the
-/// promoted values.
-pub(crate) fn flush_packed_accumulator_locals(ctx: &mut FnCtx<'_>) {
-    if ctx.numeric_accumulator_f64_slots.is_empty()
-        && ctx.deferred_integer_update_accumulators.is_empty()
-    {
-        return;
-    }
-    if ctx.block().is_terminated() {
-        return;
-    }
-
-    // The side tables are hash-keyed, so collect and sort before emitting —
-    // IR order must not depend on hash iteration order.
-    let mut unboxed: Vec<(u32, String, String)> = ctx
-        .numeric_accumulator_f64_slots
-        .iter()
-        .filter_map(|(id, alloca)| {
-            ctx.locals
-                .get(id)
-                .map(|real_slot| (*id, alloca.clone(), real_slot.clone()))
-        })
-        .collect();
-    unboxed.sort_by_key(|(id, _, _)| *id);
-    for (_, alloca, real_slot) in &unboxed {
-        // Same argument as `finish`: a genuine double's bits are its nanbox,
-        // numbers carry no heap edge so no barrier, and leaving the shadow
-        // state conservative only ever costs an extra root scan.
-        let value = ctx.block().load(DOUBLE, alloca);
-        ctx.block().store(DOUBLE, &value, real_slot);
-    }
-
-    let mut deferred: Vec<(u32, String, String)> = ctx
-        .deferred_integer_update_accumulators
-        .iter()
-        .filter_map(|id| {
-            let i32_slot = ctx.i32_counter_slots.get(id)?;
-            let dbl_slot = ctx.locals.get(id)?;
-            Some((*id, i32_slot.clone(), dbl_slot.clone()))
-        })
-        .collect();
-    deferred.sort_by_key(|(id, _, _)| *id);
-    for (_, i32_slot, dbl_slot) in &deferred {
-        let blk = ctx.block();
-        let value = blk.load(I32, i32_slot);
-        let as_double = blk.sitofp(I32, &value, DOUBLE);
-        blk.store(DOUBLE, &as_double, dbl_slot);
-    }
-}
-
-fn emit_packed_numeric_accumulator_admission(
-    ctx: &mut FnCtx<'_>,
-    body: &[Stmt],
-    array_ids: &std::collections::BTreeSet<u32>,
-    counter_id: u32,
-    slow_pre_label: &str,
-    block_prefix: &str,
-    offset_reads_inlined: bool,
-    masked_reads_validated: bool,
-    affine_reads: bool,
-) -> PackedAccumulatorScope {
-    let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
-        ctx,
-        body,
-        array_ids,
-        counter_id,
-        offset_reads_inlined,
-        masked_reads_validated,
-        affine_reads,
-    );
-    // Integer (`c++`) accumulators admit independently of the float set —
-    // a pure count loop has no float accumulator at all.
-    let scope_deferred_integer =
-        admit_integer_update_accumulators(ctx, body, counter_id, slow_pre_label, block_prefix);
-    if accumulators.is_empty() && scope_deferred_integer.is_empty() {
-        return PackedAccumulatorScope::empty();
-    }
-    if accumulators.is_empty() {
-        return PackedAccumulatorScope {
-            accumulators,
-            unboxed: Vec::new(),
-            deferred_integer: scope_deferred_integer,
-            side_exit_override: None,
-            hoisted_receivers: Vec::new(),
-        }
-        .with_deferred_trampoline(ctx, slow_pre_label, block_prefix);
-    }
-    let mut loaded: Vec<(u32, String, String)> = Vec::new();
-    let mut all_numbers: Option<String> = None;
-    for id in &accumulators {
-        let Some(slot) = ctx.locals.get(id).cloned() else {
-            return PackedAccumulatorScope::empty();
-        };
-        let value = ctx.block().load(DOUBLE, &slot);
-        // `emit_js_value_is_number` IS the strict genuine-double window:
-        // SHORT_STRING (0x7FF9) .. STRING (0x7FFF) is the ENTIRE boxed tag
-        // band (INT32/POINTER/BIGINT/singletons included), so
-        // `tag < SHORT_STRING || tag > STRING` accepts exactly non-boxed
-        // doubles. That strictness is required here — the fact these ids
-        // ride lets consumers use bare fadd/fcmp on the value, and an
-        // INT32-boxed number's bits are not a valid double; it takes the
-        // slow clone instead. Shared with the stable clone's admission so
-        // the two cannot drift.
-        let is_number = emit_js_value_is_number(ctx, &value);
-        all_numbers = Some(match all_numbers {
-            Some(prev) => ctx.block().and(I1, &prev, &is_number),
-            None => is_number,
-        });
-        loaded.push((*id, slot, value));
-    }
-    let all_numbers = all_numbers.expect("at least one accumulator");
-    let acc_ok_idx = ctx.new_block(&format!("{block_prefix}.acc.ok"));
-    let acc_ok_label = ctx.block_label(acc_ok_idx);
-    // A non-Number accumulator (a string total, a BigInt) takes the slow
-    // clone before the first fast iteration; nothing has run yet, so the
-    // slow clone sees pristine state.
-    ctx.block()
-        .cond_br(&all_numbers, &acc_ok_label, slow_pre_label);
-    ctx.current_block = acc_ok_idx;
-
-    // Unbox LocalSet-only accumulators into plain F64 allocas (mem2reg
-    // promotes them to registers — the GC-root slot's per-iteration
-    // store-to-load-forward chain was the reduce rows' latency floor).
-    // Update-written accumulators (`c++`) keep the slot: the Update lowering
-    // does not consult the redirect, and the int-slot machinery already
-    // serves counters well.
-    let mut writes = std::collections::BTreeMap::new();
-    super::stable_packed_accumulator::collect_local_writes(body, &mut writes);
-    let mut unboxed: Vec<(u32, String, String)> = Vec::new();
-    for (id, slot, value) in loaded {
-        let localset_only = writes
-            .get(&id)
-            .is_some_and(|ws| ws.iter().all(|w| w.is_some()));
-        if !localset_only {
-            continue;
-        }
-        let alloca = ctx.func.alloca_entry(DOUBLE);
-        ctx.block().store(DOUBLE, &value, &alloca);
-        ctx.numeric_accumulator_f64_slots.insert(id, alloca.clone());
-        unboxed.push((id, alloca, slot));
-    }
-    let side_exit_override = if unboxed.is_empty() && scope_deferred_integer.is_empty() {
-        None
-    } else {
-        // Side-exit trampoline: any mid-iteration exit (a hole-checked load,
-        // a masked store's value check) lands here, writes the live values
-        // back, and only then enters the slow clone — which re-executes the
-        // current iteration against correct slot state.
-        let tramp_idx = ctx.new_block(&format!("{block_prefix}.acc.writeback_exit"));
-        let saved = ctx.current_block;
-        ctx.current_block = tramp_idx;
-        for (_, alloca, real_slot) in &unboxed {
-            let value = ctx.block().load(DOUBLE, alloca);
-            ctx.block().store(DOUBLE, &value, real_slot);
-        }
-        for (_, i32_slot, dbl_slot) in &scope_deferred_integer {
-            let blk = ctx.block();
-            let value = blk.load(I32, i32_slot);
-            let as_double = blk.sitofp(I32, &value, DOUBLE);
-            blk.store(DOUBLE, &as_double, dbl_slot);
-        }
-        ctx.block().br(slow_pre_label);
-        ctx.current_block = saved;
-        Some(ctx.block_label(tramp_idx))
-    };
-    PackedAccumulatorScope {
-        accumulators,
-        unboxed,
-        deferred_integer: scope_deferred_integer,
-        side_exit_override,
-        hoisted_receivers: Vec::new(),
-    }
-}
-
 fn lower_packed_f64_versioned_for(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
@@ -1440,7 +1038,15 @@ fn lower_packed_f64_versioned_for_with_protocol(
     // beside its shape proof; an overridden iterator never sets the bit.
     let record_admission = protocol
         .filter(|_| matches!(matched.array_kind, PackedNumericLoopKind::F64))
-        .and_then(|_| ctx.record_packed_admissions.get(&matched.array_id).cloned());
+        .and_then(|_| ctx.record_packed_admissions.get(&matched.array_id).cloned())
+        .or_else(|| {
+            // A for-of source walk's counted entry admitted its source temp
+            // just before this loop (`native_runtime_branch`). One entry, one
+            // loop: the admission is consumed here.
+            (protocol.is_none() && matches!(matched.array_kind, PackedNumericLoopKind::F64))
+                .then(|| ctx.record_packed_admissions.remove(&matched.array_id))
+                .flatten()
+        });
     let guard_ok = if let Some(slot) = record_admission {
         ctx.block().load(I1, &slot)
     } else {
@@ -1967,6 +1573,12 @@ fn match_packed_f64_range_loop(
         }
         true
     };
+    // The walkers admit `this.P` reads structurally. Only a proven raw-f64
+    // lane is a plain load; anything else could run a getter, which in the
+    // classic tier would re-run when a hole side-exits to the slow copy.
+    if !body_this_reads_are_raw_f64(ctx, fast_body.as_deref().unwrap_or(body)) {
+        return range_loop_reject("this_read_not_raw_f64");
+    }
     if accesses.is_empty() {
         // No tracked array access — nothing for the versioned loop to win.
         return range_loop_reject("no_tracked_array_access");
@@ -2773,6 +2385,37 @@ fn packed_f64_range_loop_dense_stmts_collect(
                 }
                 written.insert(*id);
             }
+            // `this.P = <int32>` on a raw-f64 lane of a proven `this`: the
+            // value is a finite int32 by construction, so `property_set` emits
+            // the plain store with no finite check and no fallback call, and
+            // the store has no side exit — an iteration still runs entirely
+            // in one copy.
+            Stmt::Expr(Expr::PropertySet {
+                object,
+                property,
+                value,
+                ..
+            }) if matches!(object.as_ref(), Expr::This) => {
+                let lane = this_raw_f64_field(ctx, property);
+                let i32_value = crate::expr::is_known_i32_range(ctx, value);
+                let proof = masked_window_expression_proof(ctx, value, None)
+                    .is_some_and(|p| p.inert && p.numeric);
+                if !lane || !i32_value || !proof {
+                    range_loop_reject(if !lane {
+                        "this_field_not_raw_f64"
+                    } else if !i32_value {
+                        "this_field_store_not_i32"
+                    } else {
+                        "this_field_store_not_inert"
+                    });
+                    return false;
+                }
+                if !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses, None)
+                {
+                    range_loop_reject("this_field_store_not_pure");
+                    return false;
+                }
+            }
             Stmt::Expr(expr) => {
                 // Masked STORE: `a[e & K] = <RHS>` where the RHS provably
                 // materializes a genuine (unboxed) double — dense mode has no
@@ -2983,6 +2626,71 @@ struct MaskedWindowExpressionProof {
 /// two result facts its parents need. This is deliberately an allowlist:
 /// `None` is the conservative answer for forms the masked structural walkers
 /// do not admit.
+/// `this.P` where `this` is a proven `Ptr<Shape>` and `P`'s lane holds a raw
+/// f64: the read is a plain load of a genuine double and the store of a
+/// finite double is a plain store (`property_set`'s raw-f64 route), so both
+/// are inert, call-free and numeric. `PERRY_UNBOXED_CLASS_FIELDS=0` keeps
+/// `this.P` out of the packed tiers.
+/// Every `this.P` read in `stmts` is a proven raw-f64 lane
+/// ([`this_raw_f64_field`]).
+fn body_this_reads_are_raw_f64(ctx: &FnCtx<'_>, stmts: &[Stmt]) -> bool {
+    let mut ok = true;
+    crate::collectors::for_each_expr_in_stmts(stmts, &mut |e| {
+        if let perry_hir::Expr::PropertyGet {
+            object, property, ..
+        } = e
+        {
+            if ok
+                && matches!(object.as_ref(), perry_hir::Expr::This)
+                && !this_raw_f64_field(ctx, property)
+            {
+                ok = false;
+            }
+        }
+    });
+    ok
+}
+
+/// `PERRY_UNBOXED_CLASS_FIELDS=0`.
+pub(crate) fn this_field_fast_off() -> bool {
+    matches!(
+        std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+pub(super) fn this_raw_f64_field(ctx: &FnCtx<'_>, property: &str) -> bool {
+    if matches!(
+        std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    ) {
+        return false;
+    }
+    // The class proof regardless of the representation-selection context: the
+    // matcher runs outside statement lowering. Each access still lowers by its
+    // own route, and the clone's call-free scan discards the copy if any of
+    // them took a call.
+    let Some(class_name) = ctx.ptr_shape_region_class(&perry_hir::Expr::This) else {
+        range_loop_reject("this_not_ptr_shape");
+        return false;
+    };
+    let Some(index) = crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+    else {
+        range_loop_reject("this_field_no_index");
+        return false;
+    };
+    let raw = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+        ctx,
+        &class_name,
+        property,
+        index,
+    );
+    if !raw {
+        range_loop_reject("this_field_lane_not_raw_f64");
+    }
+    raw
+}
+
 fn masked_window_expression_proof(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
@@ -3003,6 +2711,11 @@ fn masked_window_expression_proof(
             Some(proof(true, true))
         }
         Expr::Number(_) | Expr::Integer(_) => Some(proof(true, true)),
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) && this_raw_f64_field(ctx, property) => {
+            Some(proof(true, true))
+        }
         Expr::Bool(_) | Expr::Null | Expr::Undefined => Some(proof(true, false)),
         Expr::LocalGet(id) => {
             // A pending accumulator is numeric BY CONTRACT, not by static
@@ -3188,6 +2901,11 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Undefined => true,
+        // A read of a field of `this`: effect-free only on a raw-f64 lane,
+        // which every caller that admits it also proves through
+        // `masked_window_expression_proof` (dense mode) — and the clone's
+        // call-free scan discards any copy where it lowered to a call.
+        Expr::PropertyGet { object, .. } if matches!(object.as_ref(), Expr::This) => true,
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
@@ -3569,6 +3287,24 @@ fn push_packed_f64_range_facts(
                 });
         }
         if let Some((lo, hi)) = access.stat {
+            // The guard has passed: the array behind the poll-refreshed
+            // handle cache is a validated plain array, so its element base
+            // can be derived once here (and again after every fired poll).
+            let elements_slot = (!crate::stmt::loops::this_field_fast_off())
+                .then(|| {
+                    ctx.receiver_descriptors
+                        .base_handle_slot(access.array_id)
+                        .map(str::to_owned)
+                })
+                .flatten()
+                .map(|handle_slot| {
+                    let slot = ctx.func.alloca_entry(I64);
+                    let blk = ctx.block();
+                    let handle = blk.load(I64, &handle_slot);
+                    let elements = blk.array_elements_addr(&handle);
+                    blk.store(I64, &elements, &slot);
+                    slot
+                });
             ctx.receiver_descriptors.materialize_masked_window_array(
                 crate::expr::MaskedWindowArrayFact {
                     array_local_id: access.array_id,
@@ -3579,6 +3315,7 @@ fn push_packed_f64_range_facts(
                     values_i32,
                     elem: crate::expr::MaskedWindowElem::PlainF64,
                     allows_stores: allow_masked_stores,
+                    elements_slot,
                 },
             );
         }
@@ -3682,6 +3419,7 @@ fn lower_masked_window_ta_tier(
                 values_i32,
                 elem,
                 allows_stores: false,
+                elements_slot: None,
             },
         );
     }
@@ -8087,6 +7825,27 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             let bits = blk.bitcast_double_to_i64(&fresh);
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
             blk.store(I64, &handle, &recipe.base_handle_slot);
+        }
+    }
+    // Cached element bases of validated windows, from their refreshed handles.
+    let element_refresh: Vec<(String, String)> = ctx
+        .receiver_descriptors
+        .masked_window_array_facts()
+        .filter_map(|fact| {
+            let slot = fact.elements_slot.clone()?;
+            let handle = ctx
+                .receiver_descriptors
+                .base_handle_slot(fact.array_local_id)?
+                .to_owned();
+            Some((handle, slot))
+        })
+        .collect();
+    {
+        let blk = ctx.block();
+        for (handle_slot, elements_slot) in &element_refresh {
+            let handle = blk.load(I64, handle_slot);
+            let elements = blk.array_elements_addr(&handle);
+            blk.store(I64, &elements, elements_slot);
         }
     }
     // Loop regions' array bases (S3), from the same GC-updated roots.

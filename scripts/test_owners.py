@@ -49,6 +49,9 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "node_submodules/diagnostics*", ("diagnostics_channel",)),
     (RT + "dns*", ("dns",)),
     (RT + "event_target*", ("events",)),
+    (RT + "event_target.rs", ("worker_threads",)),
+    (RT + "event_target/prototype.rs", ("worker_threads",)),
+    (RT + "event_target/broadcast_channel_tests.rs", ("worker_threads",)),
     (RT + "event_target/message_event*.rs", ("worker_threads",)),
     (RT + "event_target_hook_slots.rs", ("worker_threads",)),
     (RT + "event_emitter_error.rs", ("events",)),
@@ -70,7 +73,12 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "path.rs", ("path",)),
     (RT + "perf_*", ("perf_hooks",)),
     (RT + "process/*", ("process",)),
-    (RT + "process.rs", ("process",)),
+    (RT + "process.rs", ("process", "worker_threads", "child_process")),
+    (RT + "process/environment*.rs", ("worker_threads", "child_process")),
+    (RT + "process/env_misc.rs", ("worker_threads", "child_process")),
+    (RT + "process/worker_restrictions.rs", ("worker_threads", "child_process")),
+    (RT + "object/descriptors.rs", ("process", "worker_threads", "child_process")),
+    (RT + "object/field_get_set/enumeration.rs", ("process", "worker_threads", "child_process")),
     (RT + "process_startup.rs", ("process",)),
     (RT + "punycode.rs", ("punycode",)),
     (RT + "readline_helpers.rs", ("readline",)),
@@ -213,6 +221,8 @@ def self_test() -> int:
         ("crates/perry-runtime/src/gc/mod.rs",): [],
         ("README.md",): [],
         (case, RT + "path/mod.rs"): ["node-suite/path"],
+        (RT + "process/environment.rs",): ["node-suite/child_process", "node-suite/process", "node-suite/worker_threads"],
+        (RT + "object/field_get_set/enumeration.rs",): ["node-suite/child_process", "node-suite/process", "node-suite/worker_threads"],
     }
     examples[(case,)] = [case]
     examples[("tests/parity/expected/array-generic-copywithin.txt",)] = [

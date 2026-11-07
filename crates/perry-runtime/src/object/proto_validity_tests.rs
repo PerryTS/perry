@@ -142,3 +142,50 @@ fn the_generator_and_iterator_prototypes_keep_their_born_lineage() {
         }
     }
 }
+
+/// The constructor loop births the prototypes the realm seals at startup
+/// (`builtin_proto::realm_seals_constructor_prototype`) on the born-prototype
+/// lineage, so their seal takes no private-lineage transition. Red without the
+/// loop's stamp: `seal_realm` moves each one to a fresh generation. Controls: a
+/// constructor prototype the realm does not seal stays on the ordinary lineage
+/// and unmarked, and an ordinary object marked later still mints its own
+/// private lineage, never the born one.
+#[test]
+fn the_realm_sealed_constructor_prototypes_keep_their_born_lineage() {
+    use crate::object::shapes::{object_on_born_prototype_lineage, object_shape_descriptor};
+    let _scope = Scope::new();
+    let _ = crate::object::js_get_global_this();
+    let proto_of = |name: &str| {
+        let bits = crate::object::builtin_prototype_value(name).to_bits();
+        (bits & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader
+    };
+    for name in ["String", "Number", "Map", "Set", "Promise", "WeakSet", "Error"] {
+        let holder = proto_of(name);
+        assert!(!holder.is_null(), "{name}.prototype");
+        unsafe {
+            assert!(object_is_marked_prototype(holder as usize), "{name}.prototype is marked");
+            assert!(
+                object_on_born_prototype_lineage(holder),
+                "{name}.prototype: its seal took no private-lineage transition"
+            );
+        }
+    }
+    let unsealed = proto_of("TextDecoder");
+    assert!(!unsealed.is_null());
+    unsafe {
+        assert!(!object_is_marked_prototype(unsealed as usize), "TextDecoder.prototype is not sealed");
+        assert!(!object_on_born_prototype_lineage(unsealed), "an unsealed prototype keeps the ordinary lineage");
+    }
+    let ordinary = crate::object::js_object_alloc(0, 0);
+    set(ordinary, "a", 1.0);
+    unsafe {
+        assert!(!object_on_born_prototype_lineage(ordinary));
+        let _ = mark_object_as_prototype(ordinary as usize);
+        assert!(object_is_marked_prototype(ordinary as usize));
+        let d = object_shape_descriptor(ordinary).expect("shape");
+        assert!(
+            d.semantic_generation > crate::object::shapes::BORN_PROTOTYPE_GENERATION,
+            "a program-marked object mints its own private lineage"
+        );
+    }
+}

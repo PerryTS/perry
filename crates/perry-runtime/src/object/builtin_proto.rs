@@ -281,6 +281,19 @@ const _: () = assert!(
     "the meta family field holds every sealed family"
 );
 
+/// Does the realm seal the prototype the constructor loop
+/// (`global_this::populate`) births for `declaration`? A family prototype is
+/// sealed by [`seal_realm`] before any program code can reach it, so it is
+/// born on the born-prototype lineage (`shapes::stamp_born_prototype_root`)
+/// and that seal's mark mints no shape. Every other one keeps the ordinary
+/// lineage until something marks it (a runtime prototype with a declared
+/// class or layout word is restamped onto that word's lineage first).
+pub(crate) fn realm_seals_constructor_prototype(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) -> bool {
+    BuiltinProto::ALL.iter().any(|(_, ctor)| *ctor == declaration.name)
+}
+
 /// Seal the built-in iterator prototypes the moment `iterator_prototypes`
 /// completes them, before any program code can reach them: `shared`
 /// (`%IteratorPrototype%`), then the families in `ITERATOR_FAMILIES` order.

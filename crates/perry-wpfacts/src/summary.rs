@@ -19,6 +19,8 @@ use std::rc::Rc;
 
 pub(crate) mod body;
 mod build;
+#[cfg(test)]
+pub(crate) mod packet;
 use build::build_summaries;
 
 /// A summary term: a slot index with this bit, else an absolute node.
@@ -273,6 +275,7 @@ impl Model {
             | Cons::CallThis { call, .. }
             | Cons::NativeThis { call, .. }
             | Cons::New { call }
+            | Cons::NewProgram { call }
             | Cons::ReflectNew { call, .. }
             | Cons::ReflectNewTarget { call, .. }
             | Cons::NewNamed { call, .. }
@@ -644,9 +647,7 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => {
-                (1, LAY_NONE, ft)
-            }
+            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => (1, LAY_NONE, ft),
             _ => key,
         };
         let inst = self.instance(key);
@@ -721,6 +722,13 @@ impl Model {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
+            // The copy is the template's operation in this context: a
+            // runtime protocol's call (`Model::protocol_calls`: the step of
+            // an iterated value, ToPrimitive ...) stays one, so every rule
+            // that asks gets the template's answer.
+            if self.protocol_calls.contains(t) {
+                self.protocol_calls.insert(id);
+            }
             if lay != LAY_NONE {
                 self.sum.call_lay.insert(id, lay);
             }

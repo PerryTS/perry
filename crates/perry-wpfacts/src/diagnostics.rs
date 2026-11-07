@@ -68,6 +68,8 @@ pub(crate) struct BirthCensus {
     pub sinks: BTreeSet<(NodeId, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
     pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok)>,
     pub reads: BTreeSet<(Tok, Atom, bool, u32)>,
+    /// The receiver a missed intrinsic method call was looked up on, by call.
+    pub read_origins: BTreeMap<u32, Tok>,
     pub pending_gate: Option<(Tok, Atom, bool, u32)>,
     pub active_gate: Option<(Tok, Atom)>,
     pub injecting: bool,
@@ -140,8 +142,11 @@ impl Model {
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
             NativeMiss::Load(n) | NativeMiss::Lookup(n) | NativeMiss::Global(n, _) => (false, n),
-            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
+            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) | NativeMiss::New(n) => (true, n),
         };
+        if let NativeMiss::Call(origin, n) = miss {
+            c.read_origins.insert(n, origin);
+        }
         c.reads.insert((t, a, call, id));
         c.pending_gate = written.then_some((t, a, call, id));
     }
@@ -1284,7 +1289,14 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 opt((o.cause != NO_NODE).then_some(o.cause)), opt((o.call != u32::MAX).then_some(o.call)), o.parent, quote(&fname(o.func))));
         }
         for (t, k, call, id) in &c.reads {
-            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
+            let origin = if *call {
+                c.read_origins.get(id).map_or(String::from("null"), |o| {
+                    format!("{o},\"originName\":{}", quote(&m.tok_name(*o)))
+                })
+            } else {
+                String::from("null")
+            };
+            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"origin\":{origin},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
         }
     }
     let roots: Vec<_> = nodes.iter().map(|&n| m.diagnostic_root(n).0).collect();

@@ -111,6 +111,24 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// builtin prototype), `.1` a write onto `np` itself (for the global object
 /// or a global's native prototype, onto `Object.prototype` too).
 pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
+    written_by(m, np, a, false)
+}
+
+/// May the global object's key `a` (`np` the global object or the HIR
+/// global sentinel) hold a value its field ([`global_field`]) does not
+/// carry? A program store under the named key puts its value in that
+/// field, so a read that takes the field sees it; every other writer
+/// counts as [`native_written`] does: an accessor installed on the global
+/// object, a prototype given to it, a write under any key (an unseen
+/// module, interpreted code, the object handed to unknown code), a store
+/// into ⊤ once the global object reached unmodeled code, a write onto
+/// `Object.prototype`.
+pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, true);
+    top || own
+}
+
+fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool, bool) {
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
     let num = m
@@ -126,9 +144,20 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     // A read under a number (`NUM_KEY`, DECISIONS 217 c) names a numeric key
     // only: an element store's, a computed one's, or a numeric name's.
     let num_read = m.atoms[a as usize] == crate::model::NUM_KEY;
+    // A named write onto the global object that only a program store made:
+    // its value is in the global's field.
+    let stored = |t: Tok| {
+        field_carries_stores
+            && matches!(
+                m.toks[t as usize],
+                TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
+            )
+            && !m.accessors.contains_key(&(t, a))
+            && !m.native_given.iter().any(|&(w, _)| w == t)
+    };
     let hit = |t: Tok| {
         m.native_writes.contains_key(&(t, None))
-            || m.native_writes.contains_key(&(t, Some(a)))
+            || (m.native_writes.contains_key(&(t, Some(a))) && !stored(t))
             || num.is_some_and(|n| m.native_writes.contains_key(&(t, Some(n))))
             || (any && m.native_writes.keys().any(|&(w, _)| w == t))
             || (num_read
@@ -136,12 +165,27 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
                     w == t && k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
                 }))
     };
+    // The HIR global sentinel (`Other`, what a bare global name is read
+    // off) is the global object: a write through either token is a write
+    // of the one object.
+    let is_global = matches!(
+        m.toks[np as usize],
+        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
+    );
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
-        _ => false,
+        _ => is_global,
     };
-    let is_global = matches!(m.toks[np as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+    let other_global = |t: Tok| {
+        is_global
+            && [BuiltinNs::GlobalThis, BuiltinNs::Other]
+                .into_iter()
+                .any(|ns| {
+                    m.tok_index
+                        .get(&TokKind::Builtin(ns))
+                        .is_some_and(|&g| g != t && hit(g))
+                })
+    };
     // A store into ⊤ writes the global object only once it reached
     // unmodeled code. It may always write a builtin prototype: unknown code
     // reaches every one of them without being handed one (the chain of any
@@ -150,6 +194,7 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     (
         hit(TOP) && (!is_global || m.global_in_top),
         hit(np)
+            || other_global(np)
             // A prototype write is a chain contribution, separate from
             // the namespace's own hit above and its TOP reachability.
             || (global
@@ -368,7 +413,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
     m.with_b(|m| {
         for (np, a, miss) in pending {
             m.census_native_read(np, a, miss.clone());
-            if !native_written(m, np, a) {
+            let written = match miss {
+                NativeMiss::Global(..) => global_value_written(m, np, a),
+                _ => native_written(m, np, a),
+            };
+            if !written {
                 keep.push((np, a, miss));
                 continue;
             }
@@ -432,11 +481,17 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                 }
                 NativeMiss::PrimCall(_, call) => {
                     let name = m.atoms[a as usize].clone();
-                    unknown_method(
+                    unknown_prim_method(
                         m,
                         call,
                         &format!("argument of a written primitive method {name}"),
                     );
+                }
+                NativeMiss::New(call) => {
+                    let name = m.atoms[a as usize].clone();
+                    let prev = m.cur_this.take();
+                    unknown_method(m, call, &format!("argument of written constructor {name}"));
+                    m.cur_this = prev;
                 }
             }
             if let Some(old) = saved_gate {

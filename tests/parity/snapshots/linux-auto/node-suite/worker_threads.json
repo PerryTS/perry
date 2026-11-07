@@ -582,13 +582,6 @@
       "reason": "",
       "status": "parity_fail"
     },
-    "node-suite/worker_threads/worker-lifecycle/thread-name-defaults": {
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "issue": null,
-      "reason": "",
-      "status": "parity_fail"
-    },
     "node-suite/worker_threads/worker-lifecycle/worker-created-port-after-exit": {
       "added": "2026-11-03",
       "category": "untriaged",

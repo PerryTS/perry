@@ -681,6 +681,12 @@ impl LlModule {
     /// bodies.  They use this lookup to decide whether flattening that body
     /// before statepoint rewriting stays inside the explicit native-roots
     /// code-size budget.
+    pub(crate) fn function_named_mut(&mut self, name: &str) -> Option<&mut LlFunction> {
+        self.functions
+            .iter_mut()
+            .find(|function| function.name == name)
+    }
+
     pub(crate) fn function_estimated_ir_bytes(&self, name: &str) -> Option<usize> {
         self.functions
             .iter()

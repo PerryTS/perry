@@ -12,7 +12,11 @@ pub(crate) use fixed::{compact_slots, fixed_class};
 /// A codegen ABI fact, shared by definitions, split declarations and calls.
 /// PreserveMost moves register saves into the shared slow/color routine.
 pub(crate) fn calling_convention(name: &str) -> Option<&'static str> {
-    matches!(name, "perry_birth_class" | "perry_birth_empty_array").then_some("preserve_mostcc")
+    matches!(
+        name,
+        "perry_birth_class" | "perry_birth_empty_array" | shared::PUSHED
+    )
+    .then_some("preserve_mostcc")
 }
 
 pub(super) const BIRTH_FLAGS_OFFSET: &str = "24";

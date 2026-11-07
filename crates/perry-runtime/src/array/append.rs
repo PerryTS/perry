@@ -116,12 +116,25 @@ unsafe fn admitted_append(receiver: f64, index: f64) -> Option<*mut ArrayHeader>
 #[cold]
 #[inline(never)]
 pub(super) unsafe fn grow(arr: *mut ArrayHeader, length: u32, value: f64) -> *mut ArrayHeader {
+    // Most growth is served by the open nursery block (in place, or a young
+    // copy) and cannot collect, so neither operand needs a root. Only a grow
+    // that might collect pays for the handle scope below.
+    let grown = super::push_pop::grow_backing::<false>(arr, length + 1);
+    if !grown.is_null() {
+        return store_after_grow(grown, length, value);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
     let value_handle = scope.root_nanbox_f64(value);
 
     let (arr, value) = value_handle.across_nanbox(|| js_array_grow(arr, length + 1));
-    // SAFETY: `js_array_grow` returns the resolved live array head and no
+    store_after_grow(arr, length, value)
+}
+
+/// The append half of [`grow`]: `arr` is the grown, resolved live head.
+#[inline]
+unsafe fn store_after_grow(arr: *mut ArrayHeader, length: u32, value: f64) -> *mut ArrayHeader {
+    // SAFETY: the grow returned the resolved live array head and no
     // safepoint intervenes before the flag read/store.
     let flags = array_object_flags_resolved(arr);
     // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout note

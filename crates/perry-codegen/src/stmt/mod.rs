@@ -47,6 +47,7 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
+pub(crate) use loops::this_field_fast_off;
 mod masked_window_region;
 mod number_local_loop;
 pub(crate) use number_local_loop::numeric_callbacks;
@@ -633,7 +634,15 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.typed_element_locals.insert(*id);
             }
             crate::expr::snap_env_site::note_let(ctx, *id, init.as_ref());
-            lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
+            // A binding a later loop pushes into births its `[]` with the
+            // larger append reserve (`collectors::loop_pushed_arrays`). The
+            // flag is taken by that birth; clear it if another path bound
+            // the value without one.
+            ctx.pushed_array_birth = ctx.loop_pushed_arrays.contains(id)
+                && matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty());
+            let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
+            ctx.pushed_array_birth = false;
+            lowered?;
             // Object model step 1: a family prototype's birth.
             crate::layout_desc::create_families::lower_binding(ctx, *id)?;
             crate::codegen::global_transfer::emit_publish(ctx, *id);

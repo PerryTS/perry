@@ -113,7 +113,11 @@ pub(crate) fn literal_descriptor_worker_ir() -> String {
 }
 #[cfg(test)]
 mod map_entry_at_tests;
+#[cfg(test)]
+mod member_update_class_field_tests;
 pub(crate) mod stack_guard;
+#[cfg(test)]
+mod stack_guard_leaf_tests;
 pub(crate) mod tdz_module_check;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
@@ -224,6 +228,7 @@ pub(crate) use v8_interop::{
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_gated_root_nanbox_store,
     emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_pointer_tested,
+    emit_jsvalue_slot_store_pointer_tested_known,
     emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
     emit_may_carry_heap_pointer_check, emit_root_nanbox_store_for_expr,
@@ -252,7 +257,7 @@ mod bounded_array_hole_tests;
 #[cfg(test)]
 mod class_evaluation_owner_tests;
 #[cfg(test)]
-mod class_field_barrier_tests;
+pub(crate) mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
 mod dispatch;
@@ -833,6 +838,12 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::contents_stable_bindings`): the only bindings that may
     /// keep a proof about their object's contents (`admits_contents_proof`).
     pub contents_stable_bindings: &'a std::collections::HashSet<u32>,
+    /// Empty-literal bindings a later loop pushes into
+    /// (`collectors::loop_pushed_arrays`): their `[]` is born with the larger
+    /// append reserve.
+    pub loop_pushed_arrays: &'a std::collections::HashSet<u32>,
+    /// Set by `lower_let` while it lowers such a binding's `[]` initializer.
+    pub pushed_array_birth: bool,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,
@@ -2301,6 +2312,13 @@ pub(crate) struct MaskedWindowArrayFact {
     /// the i32 tier's all-slots-i32 materialization proof, and the TA tiers'
     /// hoisted data pointers serve reads only.
     pub allows_stores: bool,
+    /// Plain-array tiers: an entry `i64` slot caching the array's element
+    /// base (`array_elements_addr` of the validated handle). Written once
+    /// after the guard and re-derived from the refreshed handle at every
+    /// fired back-edge poll (`emit_armed_gc_loop_safepoint`), the clone's only
+    /// collection point; nothing in the call-free clone can move the backing.
+    /// `None` keeps the per-read derivation.
+    pub elements_slot: Option<String>,
 }
 
 /// Read-only masked-index window over a plain array of boxed strings.

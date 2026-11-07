@@ -33,6 +33,9 @@ mod integer_locals;
 mod literal_method_home;
 mod local_refs;
 mod loop_bounded_i32;
+mod loop_pushed_arrays;
+#[cfg(test)]
+mod loop_pushed_arrays_tests;
 mod mutation;
 mod not_bigint_locals;
 mod number_by_construction;
@@ -111,6 +114,7 @@ pub(crate) use integer_locals::{
 };
 pub(crate) use literal_method_home::literal_method_home_classes;
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
+pub(crate) use loop_pushed_arrays::loop_pushed_arrays;
 pub(crate) use mutation::{
     body_contains_closure, flat_const_array_uses_are_read_only, has_any_mutation,
 };

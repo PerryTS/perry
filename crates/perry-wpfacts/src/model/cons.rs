@@ -71,6 +71,12 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// The node holds the constructor a built-in makes its result with
+    /// (the `this` of `Array.from`/`Array.of`, an array's species): a
+    /// program constructor (a class or function of the program's code) is
+    /// constructed by `call`. The realm's own constructors, `%Array%` among
+    /// them, make the built-in's own array, which the built-in's rule makes.
+    NewProgram { call: CallId },
     /// The target of Reflect.construct; allocation is selected by new_target.
     ReflectNew { call: CallId, new_target: NodeId },
     /// New-target values paired with one target, rebuilt from ReflectNew.
@@ -248,6 +254,10 @@ pub enum Cons {
     /// The node is the prototype closure of `origin`: accessors of every
     /// holder on it run for a computed-key lookup with `origin` as `this`.
     AnyAccessors { origin: Tok, act: ChainAct },
+    /// The node is a copy source's unnamed-key field (`field_any`): once it
+    /// holds a value the source has an own key the model does not name, a
+    /// [[Set]] of some key on `target` (Object.assign, `spread_into`).
+    UnnamedSet { target: Tok },
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
     StoreTopProto { origin: Tok, src: NodeId },
@@ -300,8 +310,24 @@ pub enum Cons {
     PlainKey { origin: Tok, act: ChainAct },
     /// dst ⊇ the `next` method of each iterator in the node.
     IterNext { dst: NodeId },
+    /// The node holds the source of `Array.from`: a program object whose
+    /// `@@iterator` may be nullish is read as an array-like (ECMA-262
+    /// 23.1.2.1 step 5: `length`, then each index), its elements into
+    /// `dst`. Iteration is `Gen::iterate`'s.
+    FromArrayLike { dst: NodeId },
     /// The node holds `Reflect.construct` new-targets (E11).
     NewTargetHard { reason: u32 },
+    /// The node is the evaluated `extends` value of class `tm`, linked by
+    /// name to a built-in parent whose summary `super()` runs: any value
+    /// other than `expected`, the global object's declared constructor
+    /// (⊤, a program-written global, `null`), runs as the parent
+    /// constructor with `this` = the instance: it escapes, and the instance
+    /// escapes with hard E11.
+    NativeParent {
+        tm: TmplId,
+        expected: Tok,
+        reason: u32,
+    },
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
@@ -500,6 +526,8 @@ impl Cons {
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::NewProgram { .. } => "newprogram",
+            Cons::FromArrayLike { .. } => "fromarraylike",
             Cons::ReflectNew { .. } => "reflectnew",
             Cons::ReflectNewTarget { .. } => "reflectnewtarget",
             Cons::NewNamed { .. } => "newnamed",
@@ -533,6 +561,7 @@ impl Cons {
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
+            Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::Super { .. } => "super",
             Cons::SuperCtor { .. } => "superctor",
@@ -549,6 +578,7 @@ impl Cons {
             Cons::PlainKey { .. } => "plainkey",
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
+            Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",

@@ -40,21 +40,15 @@ const P: &str = r#"
 "#;
 
 /// The migrated methods are declared in forms the interpreter runs.
-/// forEach keeps its hand arm; species map/filter declarations are refused
-/// by the interpreter (see `builtins/collections.rs`).
+/// forEach keeps its hand arm; map and filter construct their species
+/// through the interpreter.
 #[test]
 fn the_array_declarations_are_interpretable() {
     for n in [
         "push", "reverse", "every", "some", "find", "indexOf", "includes", "join", "sort",
-        "forEach",
+        "forEach", "map", "filter",
     ] {
         assert!(declared_array_method(n), "Array.prototype.{n}");
-    }
-    for n in ["map", "filter"] {
-        assert!(
-            !declared_array_method(n),
-            "Array.prototype.{n} constructs species"
-        );
     }
     for n in ["slice", "concat", "pop", "splice"] {
         assert!(
@@ -64,22 +58,30 @@ fn the_array_declarations_are_interpretable() {
     }
 }
 
-/// `open`, an empty declaration, and a species construction keep today's
-/// arm: the interpreter refuses them.
+/// `open` and an empty declaration keep today's arm: the interpreter
+/// refuses them. A species construction runs as the result, of the
+/// receiver only.
 #[test]
-fn open_and_species_keep_the_hand_arm() {
+fn open_keeps_the_hand_arm_species_of_the_receiver_runs() {
     let this = RealmSlot {
         root: RealmSlotRoot::This,
         steps: Cow::Borrowed(&[]),
     };
     assert!(!interpretable(&[RealmEffect::Open]));
     assert!(!interpretable(&[]));
-    let species = RealmEffect::Returns(RealmOperand::Species {
-        of: this.clone(),
-        args: Cow::Borrowed(&[]),
-        elems: Cow::Borrowed(&[]),
-    });
-    assert!(!interpretable(&[species]));
+    let species = |of: RealmSlot| {
+        RealmEffect::Returns(RealmOperand::Species {
+            of,
+            args: Cow::Borrowed(&[]),
+            elems: Cow::Borrowed(&[]),
+        })
+    };
+    assert!(interpretable(&[species(this.clone())]));
+    let arg = RealmSlot {
+        root: RealmSlotRoot::Arg(0),
+        steps: Cow::Borrowed(&[]),
+    };
+    assert!(!interpretable(&[species(arg)]));
     assert!(interpretable(&[RealmEffect::Returns(RealmOperand::Slot(
         this
     ))]));
@@ -98,11 +100,11 @@ fn calls_passes_this_and_arguments() {
     holds(&pf, "t", &["T"]);
 }
 
-/// `map` keeps its hand arm (its result is the species construction's):
+/// `map` runs its declaration (its result is the species construction's):
 /// the callback receives the elements and `this`, the result holds what
 /// the callback returned.
 #[test]
-fn map_keeps_its_hand_arm() {
+fn map_runs_its_declaration() {
     let pf = facts(&format!(
         "{P}
         const a = arr();
@@ -143,11 +145,11 @@ fn stores_rest_into_the_receivers_elements() {
     );
 }
 
-/// `filter` keeps its hand arm (its result is the species construction's):
-/// a new array holding the receiver's elements; a store into it does not
-/// reach the receiver.
+/// `filter` runs its declaration (its result is the species
+/// construction's): a new array holding the receiver's elements; a store
+/// into it does not reach the receiver.
 #[test]
-fn filter_keeps_its_hand_arm() {
+fn filter_runs_its_declaration() {
     let pf = facts(&format!(
         "{P}
         const a = arr();

@@ -4,6 +4,73 @@
 use super::effects;
 use super::*;
 
+/// BoundFunctionCreate(target `t`, `arg(0)`, `rest(1)`) for `call`, into
+/// its result (the declared `bound` operand of `Function.prototype.bind`).
+pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    // One bound value per (birth site, target): a bound value is a
+    // birth, so every instance's copy of the bind call makes the
+    // same one. Every bound target of a site shares one (`f =
+    // f.bind(x)` in a loop rebinds its own result: per target that
+    // would mint a new value each round). Its parts (target, bound
+    // `this`, bound arguments) are its own nodes, and every bind
+    // call that makes it copies its operands into them: the first
+    // maker may be a summarized body's shared observation node,
+    // which feeds no effect, while each instance's call carries
+    // its caller's values.
+    let key = (
+        m.birth_ctx(call),
+        if matches!(m.toks[t as usize], TokKind::Bound(_)) {
+            u32::MAX
+        } else {
+            t
+        },
+    );
+    let b = match m.bound_index.get(&key) {
+        Some(&b) => b,
+        None => {
+            let target = m.node_l("bind-target");
+            let bthis = m.node_l("bind-this");
+            let bargs: Vec<NodeId> = (1..c.args.len().max(1))
+                .map(|_| m.node_l("bind-arg"))
+                .collect();
+            let b = m.bound.len() as u32;
+            m.bound.push((target, bthis, bargs));
+            if let Some(source) = m.diagnostic_source_call(call) {
+                m.diagnostic
+                    .as_mut()
+                    .unwrap()
+                    .bound_origins
+                    .insert(b, source);
+            }
+            m.bound_index.insert(key, b);
+            b
+        }
+    };
+    let (target, bthis, bargs) = m.bound[b as usize].clone();
+    m.add_tok(target, t);
+    match c.args.first() {
+        Some(&n) => m.edge(n, bthis),
+        None => m.add_prim(bthis, prim::UNDEF),
+    }
+    let mut extra = Vec::new();
+    for (i, &a) in c.args.iter().skip(1).enumerate() {
+        match bargs.get(i) {
+            Some(&p) => m.edge(a, p),
+            None => extra.push(a),
+        }
+    }
+    let bt = m.tok(TokKind::Bound(b));
+    m.add_tok(c.ret, bt);
+    // bind(...spread), or more bound args than the bound value's
+    // first maker had (a call the solver made for the site): the
+    // extra bound args land anywhere.
+    for s in c.spread.iter().copied().chain(extra) {
+        let r = m.reason("bind with spread arguments");
+        m.sink_node(s, r);
+    }
+}
+
 // ------------------------------------------------- function protocol
 
 pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
@@ -61,68 +128,11 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             );
             m.call_tok(call2, t, None);
         }
-        Some("bind") => {
-            // One bound value per (birth site, target): a bound value is a
-            // birth, so every instance's copy of the bind call makes the
-            // same one. Every bound target of a site shares one (`f =
-            // f.bind(x)` in a loop rebinds its own result: per target that
-            // would mint a new value each round). Its parts (target, bound
-            // `this`, bound arguments) are its own nodes, and every bind
-            // call that makes it copies its operands into them: the first
-            // maker may be a summarized body's shared observation node,
-            // which feeds no effect, while each instance's call carries
-            // its caller's values.
-            let key = (
-                m.birth_ctx(call),
-                if matches!(m.toks[t as usize], TokKind::Bound(_)) {
-                    u32::MAX
-                } else {
-                    t
-                },
-            );
-            let b = match m.bound_index.get(&key) {
-                Some(&b) => b,
-                None => {
-                    let target = m.node_l("bind-target");
-                    let bthis = m.node_l("bind-this");
-                    let bargs: Vec<NodeId> = (1..c.args.len().max(1))
-                        .map(|_| m.node_l("bind-arg"))
-                        .collect();
-                    let b = m.bound.len() as u32;
-                    m.bound.push((target, bthis, bargs));
-                    if let Some(source) = m.diagnostic_source_call(call) {
-                        m.diagnostic
-                            .as_mut()
-                            .unwrap()
-                            .bound_origins
-                            .insert(b, source);
-                    }
-                    m.bound_index.insert(key, b);
-                    b
-                }
-            };
-            let (target, bthis, bargs) = m.bound[b as usize].clone();
-            m.add_tok(target, t);
-            match c.args.first() {
-                Some(&n) => m.edge(n, bthis),
-                None => m.add_prim(bthis, prim::UNDEF),
-            }
-            let mut extra = Vec::new();
-            for (i, &a) in c.args.iter().skip(1).enumerate() {
-                match bargs.get(i) {
-                    Some(&p) => m.edge(a, p),
-                    None => extra.push(a),
-                }
-            }
-            let bt = m.tok(TokKind::Bound(b));
-            m.add_tok(c.ret, bt);
-            // bind(...spread), or more bound args than the bound value's
-            // first maker had (a call the solver made for the site): the
-            // extra bound args land anywhere.
-            for s in c.spread.iter().copied().chain(extra) {
-                let r = m.reason("bind with spread arguments");
-                m.sink_node(s, r);
-            }
+        // A `Function.prototype` method the runtime declares (`bind`): its
+        // declaration runs.
+        Some(n) if effects::declared_at("Function.prototype", n).is_some() => {
+            let e = effects::declared_at("Function.prototype", n).expect("declared");
+            effects::run_native(m, e, t, call);
         }
         // Generator protocol (a generator object is its step closure): the
         // step closure only; any other function value has no such methods
@@ -433,15 +443,9 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     ret_tok(m, call, it);
                 }
                 Some("flatMap") => {
-                    // The callback's results are iterated in turn.
-                    let inner = m.node_l("flatmap-inner");
-                    m.cons(
-                        r,
-                        Cons::Load {
-                            key: Key::any(),
-                            dst: inner,
-                        },
-                    );
+                    // The callback's results are iterated in turn
+                    // (GetIteratorFlattenable): what iterating them yields.
+                    let inner = iterate(m, call, r);
                     let it = iter_over(m, call, members::ANY_ITERATOR, inner);
                     ret_tok(m, call, it);
                 }
@@ -484,12 +488,78 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
 /// receivers in node `src`: the receivers' `constructor` is read, and its
 /// `@@species` when it is an object. Both values flow into the template's
 /// species node (`Template::species`): the constructor it is made with is
-/// one of them (or `undefined`). Neither is called here: the array stays
-/// the builtin's result (a constructor other than `%Array%` only takes the
-/// verdicts that need an Array away, `derive::exact_array`).
-pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) {
+/// one of them (or `undefined`). The builtin's own array stays its result
+/// (a constructor other than `%Array%` only takes the verdicts that need an
+/// Array away, `derive::exact_array`); a program constructor among them is
+/// constructed as well (`species_construct`). True when the species node
+/// was made here: the caller then gives it its construct.
+pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) -> bool {
     let cn = species_ctor(m, src);
-    species_link(m, tm, cn);
+    species_link(m, tm, cn)
+}
+
+/// The result `made` of a call `mc` a builtin makes its array `out` with:
+/// `mc` constructs the program constructors in `ctor` (`Cons::NewProgram`;
+/// `%Array%` is `out` itself), and the builtin defines `out`'s elements on
+/// what it makes and sets its `length` (ECMA-262 23.1.2.1, 23.1.3.21: the
+/// elements by CreateDataPropertyOrThrow, the length by Set). `made` flows
+/// into the builtin's result `ret`.
+pub(crate) fn construct_into(
+    m: &mut Model,
+    ctor: NodeId,
+    mc: CallId,
+    out: Tok,
+    made: NodeId,
+    ret: NodeId,
+) {
+    m.cons(ctor, Cons::NewProgram { call: mc });
+    let site = m.anon_post_site("elements of an array a program constructor made");
+    let elems = m.field_any(out);
+    let ek = m.elem_key();
+    m.cons(
+        made,
+        Cons::Store {
+            key: ek,
+            src: elems,
+            site,
+        },
+    );
+    let la = m.atom("length");
+    let len = m.node_l("constructed-length");
+    m.add_prim(len, prim::NUM);
+    m.cons(
+        made,
+        Cons::Store {
+            key: Key::Named(la),
+            src: len,
+            site,
+        },
+    );
+    m.edge(made, ret);
+}
+
+/// ArraySpeciesCreate's construct for template `out` of `call`
+/// (`array_species`): `new C(...args)` of a program species `C` (`None`:
+/// `new C(length)`), a call of its own, its result one of `call`'s.
+fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Option<Vec<NodeId>>) {
+    let c = m.calls[call as usize].clone();
+    let args = args.unwrap_or_else(|| {
+        let num = m.node_l("species-length");
+        m.add_prim(num, prim::NUM);
+        vec![num]
+    });
+    let made = m.node_l("species-constructed");
+    let mc = m.solver_call(
+        call,
+        CallSite {
+            this: ThisArg::Undef,
+            args,
+            spread: vec![],
+            ret: made,
+            site: c.site,
+        },
+    );
+    construct_into(m, sc, mc, out, made, c.ret);
 }
 
 /// The receivers' `constructor`, read off the receivers in `src`.
@@ -509,13 +579,14 @@ fn species_ctor(m: &mut Model, src: NodeId) -> NodeId {
 /// Template `tm`'s species node takes constructor node `cn` and its
 /// `@@species`. Only this links out of a constructor node, so an edge
 /// already there means the link is made (the same load twice adds nothing).
-fn species_link(m: &mut Model, tm: TmplId, cn: NodeId) {
-    let sc = match m.tmpls[tm as usize].species {
-        Some(n) => n,
+/// True when the species node is made here.
+fn species_link(m: &mut Model, tm: TmplId, cn: NodeId) -> bool {
+    let (sc, made) = match m.tmpls[tm as usize].species {
+        Some(n) => (n, false),
         None => {
             let n = m.node_l("array-species");
             m.tmpls[tm as usize].species = Some(n);
-            n
+            (n, true)
         }
     };
     let node = &m.nodes[cn as usize];
@@ -524,7 +595,7 @@ fn species_link(m: &mut Model, tm: TmplId, cn: NodeId) {
         None => node.succ.contains(&sc),
     };
     if linked {
-        return;
+        return made;
     }
     m.edge(cn, sc);
     let sp = m.atom("@@__perry_wk_species");
@@ -535,13 +606,20 @@ fn species_link(m: &mut Model, tm: TmplId, cn: NodeId) {
             dst: sc,
         },
     );
+    made
 }
 
 /// `out` (a call's array) is made from receiver `t` with ArraySpeciesCreate
 /// (`array_species`). What `t.constructor` reads depends on `t` alone: one
 /// constructor node per receiver token, made on first use, linked to each
-/// call's template.
-fn species_from(m: &mut Model, out: Tok, t: Tok) {
+/// call's template. `args`: what the construct passes (`species_construct`).
+pub(super) fn species_from(
+    m: &mut Model,
+    out: Tok,
+    t: Tok,
+    call: CallId,
+    args: Option<Vec<NodeId>>,
+) {
     let tm = m.tmpl_of(out).expect("site template");
     let cn = match m.species_ctor.get(&t) {
         Some(&n) => n,
@@ -553,7 +631,10 @@ fn species_from(m: &mut Model, out: Tok, t: Tok) {
             cn
         }
     };
-    species_link(m, tm, cn);
+    if species_link(m, tm, cn) {
+        let sc = m.tmpls[tm as usize].species.expect("species node");
+        species_construct(m, out, sc, call, args);
+    }
 }
 
 /// What iterating `t` yields: each index below the length, `undefined` at
@@ -589,6 +670,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
+    // Every method here reads or writes the receiver's indices through its
+    // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
+    // program's accessors under those keys run.
+    m.native_index_access(t, elems);
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
@@ -620,25 +705,22 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
-            species_from(m, out, t);
+            species_from(m, out, t, call, None);
             ret_tok(m, call, out);
         }
         // Arrays and strings are iterables, not iterators: no `next`,
         // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
         // on every iterable).
         Some("next" | "return" | "throw") => {}
+        // A spread argument supplies its elements, never a member a
+        // computed key could name.
         Some("unshift") => {
             for &a in &c.args {
                 m.edge(a, elems);
             }
+            let key = m.elem_key();
             for &s in &c.spread {
-                m.cons(
-                    s,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: elems,
-                    },
-                );
+                m.cons(s, Cons::Load { key, dst: elems });
             }
             ret_prim(m, call, prim::NUM);
         }
@@ -655,14 +737,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
-            species_from(m, out, t);
+            species_from(m, out, t, call, None);
             ret_tok(m, call, out);
-        }
-        Some("fill") => {
-            if let Some(&a) = c.args.first() {
-                m.edge(a, elems);
-            }
-            ret_tok(m, call, t);
         }
         // In place: the receiver itself.
         Some("copyWithin") => ret_tok(m, call, t),
@@ -673,7 +749,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         Some("slice" | "concat" | "toReversed" | "flat" | "with" | "toSpliced") => {
             let out = site_tmpl(m, call, "Array");
             if matches!(name, Some("slice" | "concat" | "flat")) {
-                species_from(m, out, t);
+                species_from(m, out, t, call, None);
             }
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
@@ -726,40 +802,25 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `forEach` is declared, kept here: its declaration passes the
         // callback a Map/Set receiver's key as the second argument
         // (`prim(num) | elems(this)`), an array's is a number. `map` and
-        // `filter` are declared, kept here: the runtime builds their result
-        // by ArraySpeciesCreate (`js_array_map` / `js_array_filter` read
-        // the receiver's `constructor` and `@@species`); the interpreter
-        // refuses their species declarations.
-        Some(
-            "forEach" | "map" | "filter" | "findIndex" | "findLast" | "findLastIndex" | "flatMap",
-        ) => {
+        // `filter` run their declarations (`species(this, ...)`).
+        Some("forEach" | "findIndex" | "findLast" | "findLastIndex" | "flatMap") => {
             let Some(&cb) = c.args.first() else {
                 return;
             };
             let r = cb_call(m, call, cb, this_arg(1), vec![elems, num, recv]);
             match name {
-                Some("map" | "flatMap") => {
+                Some("flatMap") => {
                     let out = site_tmpl(m, call, "Array");
-                    species_from(m, out, t);
+                    species_from(m, out, t, call, None);
                     let ofa = m.field_any(out);
                     m.edge(r, ofa);
-                    if name == Some("flatMap") {
-                        m.cons(
-                            r,
-                            Cons::Load {
-                                key: Key::any(),
-                                dst: ofa,
-                            },
-                        );
-                    }
-                    ret_tok(m, call, out);
-                }
-                // A new array of some of the receiver's elements.
-                Some("filter") => {
-                    let out = site_tmpl(m, call, "Array");
-                    species_from(m, out, t);
-                    let ofa = m.field_any(out);
-                    m.edge(elems, ofa);
+                    m.cons(
+                        r,
+                        Cons::Load {
+                            key: Key::any(),
+                            dst: ofa,
+                        },
+                    );
                     ret_tok(m, call, out);
                 }
                 Some("findLast") => {
@@ -786,7 +847,41 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         Some("lastIndexOf" | "findIndexOf") => {
             ret_prim(m, call, prim::NUM | prim::BOOL);
         }
-        Some("toString" | "toLocaleString") => {
+        // Each element's own `toLocaleString(locales, options)` is invoked
+        // (ECMA-402 19.5.1), its result made a string; a hole or a nullish
+        // element is skipped.
+        Some("toLocaleString") => {
+            let a = m.atom("toLocaleString");
+            let nested = m.calls.len() as CallId;
+            let r = m.node_l("array-locale-result");
+            m.solver_call(
+                call,
+                CallSite {
+                    this: ThisArg::Node(elems),
+                    args: c.args.iter().take(2).copied().collect(),
+                    spread: vec![],
+                    ret: r,
+                    site: nested,
+                },
+            );
+            m.cons(
+                elems,
+                Cons::MCall {
+                    key: Key::Named(a),
+                    call: nested,
+                },
+            );
+            let why = m.reason("array join (locale element ToString)");
+            m.cons(
+                r,
+                Cons::Implicit {
+                    reason: why,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
+            ret_prim(m, call, prim::STR);
+        }
+        Some("toString") => {
             let why = m.reason("array join (element ToString)");
             m.cons(
                 elems,
@@ -1153,9 +1248,27 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries",
+            | "fromEntries" | "mapGroups",
             Some(n),
-        ) => array_method(m, t, Some(n), call),
+        ) => match members::box_chain(kind) {
+            members::BoxChain::Array | members::BoxChain::Unknown => {
+                array_method(m, t, Some(n), call)
+            }
+            // No `Array.prototype` on the chain (`box_chain`): past the own
+            // values (never callable) an ordinary object finds
+            // `Object.prototype`'s methods, run through the chain, and any
+            // other key absent (final, `locked_read`); a null-prototype
+            // object finds nothing (a TypeError).
+            members::BoxChain::Object => undescribed_method(
+                m,
+                Family::Object,
+                t,
+                n,
+                call,
+                &format!("argument of {kind}.{n}"),
+            ),
+            members::BoxChain::Null => {}
+        },
         (_, Some(n)) => undescribed_method(m, fam, t, n, call, &format!("argument of {kind}.{n}")),
     }
 }

@@ -73,13 +73,11 @@ pub(super) fn try_lower_scalar_replaced_new(
                 } else {
                     all_fields.clone()
                 };
+                let existing = ctx.scalar_replaced.get(&id).cloned();
                 let mut field_slots: std::collections::HashMap<String, String> =
                     std::collections::HashMap::new();
                 for fname in &stored_fields {
-                    let slot = ctx.func.alloca_entry(DOUBLE);
-                    let undef =
-                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                    let slot = scalar_slot(ctx, existing.as_ref().and_then(|m| m.get(fname)));
                     field_slots.insert(fname.clone(), slot);
                 }
 
@@ -87,8 +85,10 @@ pub(super) fn try_lower_scalar_replaced_new(
 
                 // Register type + dummy slot so LocalGet doesn't fail
                 ctx.local_types.insert(id, refined_ty.clone());
-                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.locals.insert(id, dummy_slot);
+                if !ctx.locals.contains_key(&id) {
+                    let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                    ctx.locals.insert(id, dummy_slot);
+                }
 
                 // Anonymous-shape classes are synthesized for object
                 // literals. Their constructor is a straight field-assigner,
@@ -320,4 +320,65 @@ pub(super) fn try_lower_scalar_replaced_new(
         }
     }
     Ok(false)
+}
+
+/// Is this declaration a second lowering of a binding that is already
+/// scalar-replaced, whose initializer takes the same scalar path again?
+/// A loop region lowers its body twice (F-body, then G-body), and the
+/// first lowering leaves a dummy `ctx.locals` entry that would otherwise
+/// route the second one through the `var`-redeclaration `LocalSet`.
+pub(super) fn scalar_rebind(ctx: &FnCtx<'_>, id: u32, init: Option<&perry_hir::Expr>) -> bool {
+    match init {
+        Some(perry_hir::Expr::Object(_)) => {
+            ctx.scalar_replaced.contains_key(&id)
+                && ctx.non_escaping_object_literals.contains_key(&id)
+        }
+        Some(perry_hir::Expr::New { class_name, .. }) => {
+            ctx.scalar_replaced.contains_key(&id)
+                && ctx.non_escaping_news.contains_key(&id)
+                && !ctx.imported_class_ctors.contains_key(class_name)
+        }
+        Some(perry_hir::Expr::Array(..)) => {
+            ctx.scalar_replaced_arrays.contains_key(&id)
+                && ctx.non_escaping_arrays.contains_key(&id)
+        }
+        // Only the split the scalar path takes: any other call initializes
+        // ordinary storage, so it must take the redeclaration store.
+        Some(perry_hir::Expr::Call { callee, args, .. }) => {
+            ctx.scalar_replaced_arrays.contains_key(&id)
+                && ctx.non_escaping_arrays.contains_key(&id)
+                && is_scalar_split(ctx, callee, args)
+        }
+        _ => false,
+    }
+}
+
+/// The field slot of a scalar-replaced binding: the existing one when the
+/// binding was already scalar-replaced (see [`scalar_rebind`]), else a fresh
+/// entry alloca initialized to `undefined`.
+pub(super) fn scalar_slot(ctx: &mut FnCtx<'_>, existing: Option<&String>) -> String {
+    if let Some(slot) = existing {
+        return slot.clone();
+    }
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let slot = ctx.func.alloca_entry(DOUBLE);
+    ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+    slot
+}
+
+/// `s.split("sep")` on a string local with a non-empty literal separator: the
+/// call shape `lower_let` scalar-replaces when its result does not escape.
+pub(super) fn is_scalar_split(
+    ctx: &FnCtx<'_>,
+    callee: &perry_hir::Expr,
+    args: &[perry_hir::Expr],
+) -> bool {
+    matches!(args, [perry_hir::Expr::String(s)] if !s.is_empty())
+        && matches!(
+            callee,
+            perry_hir::Expr::PropertyGet { object, property, .. }
+                if crate::type_analysis::is_string_expr(ctx, object)
+                    && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
+                    && property == "split"
+        )
 }

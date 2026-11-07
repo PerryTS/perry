@@ -55,14 +55,29 @@ impl<'a> Gen<'a> {
                     }
                     None => self.expr(fx, seed),
                 };
-                let tm = self.m.nodes[lit as usize]
-                    .pts
-                    .to_sorted()
-                    .into_iter()
-                    .find_map(|t| self.m.tmpl_of(t));
+                #[cfg(test)]
+                let direct_birth = self
+                    .m
+                    .packet_scope
+                    .as_ref()
+                    .map(|_| self.m.packet_direct_template(lit));
+                #[cfg(not(test))]
+                let direct_birth: Option<Option<TmplId>> = None;
+                let tm = direct_birth.unwrap_or_else(|| {
+                    self.m.nodes[lit as usize]
+                        .pts
+                        .to_sorted()
+                        .into_iter()
+                        .find_map(|t| self.m.tmpl_of(t))
+                });
                 if let Some(tm) = tm {
                     let pn = self.local(fx.module, params[0].id);
                     self.iife_birth.insert(pn, tm);
+                }
+                #[cfg(test)]
+                if let Expr::Closure { func_id, .. } = callee {
+                    self.m
+                        .packet_shared_birth(self.modules[fx.module as usize].0, *func_id, lit);
                 }
                 let c = self.expr(fx, callee);
                 if let Expr::Closure { func_id, .. } = callee {
@@ -178,14 +193,14 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = self.read_key(index);
+                let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
-                match self.read_key(index) {
+                match self.read_key(fx.module, index) {
                     Key::Named(a) => {
                         self.m.cons(
                             o,
@@ -363,7 +378,26 @@ impl<'a> Gen<'a> {
             // DECISIONS 225: its body is walked once the closure can run.
             let deferred = match self.emitted_closure(mi, *func_id) {
                 Some(c) => self.defer_walk(f, crate::gen::PendingWalk::Closure(cfx.clone(), c)),
-                None => false,
+                None => {
+                    #[cfg(test)]
+                    {
+                        if self.m.packets_inert {
+                            self.pending_walk.entry(f).or_default().push(
+                                crate::gen::PendingWalk::OwnedClosure(
+                                    cfx.clone(),
+                                    Box::new(canonical.clone()),
+                                ),
+                            );
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    #[cfg(not(test))]
+                    {
+                        false
+                    }
+                }
             };
             if !deferred {
                 self.walk_closure_body(&cfx, canonical);
@@ -394,6 +428,12 @@ impl<'a> Gen<'a> {
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(f);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
+        #[cfg(test)]
+        self.m.packet_declarations(body);
         self.params(cfx, params);
         if *is_async || *is_generator {
             self.m
@@ -403,6 +443,11 @@ impl<'a> Gen<'a> {
         let own = self.own_helper_shape(params, body, *is_async || *is_generator);
         self.stmts(cfx, body);
         self.own_helper_finish(f, own);
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }
@@ -418,7 +463,19 @@ impl<'a> Gen<'a> {
         let mi = fx.module;
         let callee = if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
             let t = self.m.tok(TokKind::ClassObj(tm));
-            Some(self.tok_node(t))
+            let c = self.tok_node(t);
+            // A default-derived specialization may be constructed as the
+            // class it was specialized from (codegen `super_constructor::new`
+            // constructs that class value when the heritage is live): the
+            // program then builds an instance of the class as written and
+            // runs its default constructor and field initializers. Which of
+            // the two the program builds is decided by facts about the
+            // heritage, so the callee holds both.
+            for origin in self.written_classes(mi, name) {
+                let o = self.m.tok(TokKind::ClassObj(origin));
+                self.m.add_tok(c, o);
+            }
+            Some(c)
         } else if let Some(n) = self.import_value(mi, name) {
             Some(n)
         } else {
@@ -432,6 +489,28 @@ impl<'a> Gen<'a> {
             }
             None => self.new_builtin(fx, name, args, spread),
         }
+    }
+
+    /// The classes a default-derived specialization `name` of module `mi`
+    /// was specialized from, nearest first (`Class::is_default_derived`).
+    fn written_classes(&self, mi: u32, name: &str) -> Vec<TmplId> {
+        let module = self.modules[mi as usize].1;
+        let mut out = Vec::new();
+        let mut cur = module.classes.iter().find(|c| c.name == name);
+        for _ in 0..module.classes.len() {
+            let Some(c) = cur.filter(|c| c.is_default_derived()) else {
+                break;
+            };
+            let Some(origin) = c.specialized_from.as_deref() else {
+                break;
+            };
+            let Some(&tm) = self.mods[mi as usize].classes.get(origin) else {
+                break;
+            };
+            out.push(tm);
+            cur = module.classes.iter().find(|k| k.name == origin);
+        }
+        out
     }
 
     /// `new Name(...)` of a name that is not a program class: a builtin.
@@ -957,9 +1036,7 @@ impl<'a> Gen<'a> {
             // `typeof` = "undefined"), as the load `globalThis.NAME` is.
             // Whole-program mode only: in per-unit mode another unit's
             // stores are unseen, so the read stays unknown.
-            "js_global_get_or_throw_unresolved" | "js_global_get_optional"
-                if !self.m.unit_mode =>
-            {
+            "js_global_get_or_throw_unresolved" | "js_global_get_optional" if !self.m.unit_mode => {
                 let Some(k) = lit(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };

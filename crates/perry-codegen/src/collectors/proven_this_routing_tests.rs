@@ -1048,7 +1048,10 @@ fn guarded_pshape_call_site_is_preceded_by_a_shape_id_guard() {
                 bs.iter().any(|(_, body)| {
                     body.iter().any(|line| {
                         line.starts_with("  br i1 ")
-                            && line.contains(&format!("label %{call_block}"))
+                            && line.split("label %").skip(1).any(|part| {
+                                let to = part.split([',', ' ']).next().unwrap();
+                                through_stack_check(&probe, to) == *call_block
+                            })
                     }) && body.iter().any(|line| line.contains("icmp eq i64"))
                 })
             };
@@ -1473,6 +1476,41 @@ fn indexed_tower_site_module() -> Module {
 
 /// Split rendered IR into `(label, body_lines)` — block labels render
 /// unindented and colon-terminated, every instruction is indented.
+/// The block an edge into `label` really enters: a body's moved stack check
+/// (`stack_guard::move_check_to_call_sites`) sits in front of a calling block
+/// as `stack_guard.*` blocks, which this follows to the one block they lead to.
+fn through_stack_check(ir: &str, label: &str) -> String {
+    let mut work = vec![label.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    let mut exits = std::collections::BTreeSet::new();
+    while let Some(l) = work.pop() {
+        if !l.starts_with("stack_guard.") {
+            exits.insert(l);
+            continue;
+        }
+        if !seen.insert(l.clone()) {
+            continue;
+        }
+        let start = format!("{l}:");
+        for line in ir
+            .lines()
+            .skip_while(|line| *line != start)
+            .skip(1)
+            .take_while(|line| !line.ends_with(':'))
+        {
+            if line.trim_start().starts_with("br ") {
+                for part in line.split("label %").skip(1) {
+                    work.push(part.split([',', ' ']).next().unwrap().to_string());
+                }
+            }
+        }
+    }
+    match exits.len() {
+        1 => exits.into_iter().next().unwrap(),
+        _ => label.to_string(),
+    }
+}
+
 fn blocks(ir: &str) -> Vec<(String, Vec<&str>)> {
     let mut out: Vec<(String, Vec<&str>)> = Vec::new();
     for line in ir.lines() {

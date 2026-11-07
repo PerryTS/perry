@@ -679,6 +679,8 @@ pub(super) fn compile_method(
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: false,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1623,7 +1625,7 @@ pub(super) fn compile_method(
     };
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if !method.is_async && !method.is_generator {
         ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, method_body);
     }
@@ -1698,6 +1700,7 @@ pub(super) fn compile_method(
             ctx.block().ret(DOUBLE, &return_value);
         }
     }
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let artifacts = take_lowered_fn_artifacts(&mut ctx);
     drop(ctx);
 

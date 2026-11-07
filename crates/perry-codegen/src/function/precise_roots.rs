@@ -7,6 +7,7 @@
 //! `LlFunction::serialize`.
 
 mod decode_fold;
+pub(super) mod reload_reuse;
 mod remat;
 
 fn parse_shadow_bind(line: &str) -> Option<(usize, String)> {

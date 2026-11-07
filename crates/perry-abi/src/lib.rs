@@ -310,6 +310,17 @@ pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
 pub const GC_TYPE_CLOSURE: u8 = 4;
 /// `gc::GC_TYPE_OBJECT`: an ordinary object, e.g. a byte cell's property bag.
 pub const GC_TYPE_OBJECT: u8 = 2;
+/// `gc::GC_TYPE_ARRAY`: an ordinary array head (`ArrayHeader`).
+pub const GC_TYPE_ARRAY: u8 = 1;
+/// `gc::GC_ARRAY_RAW_F64_LAYOUT`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying
+/// its slots are canonical raw `f64` values.
+pub const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+/// `gc::GC_ARRAY_CUSTOM_PROTO`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying its
+/// `[[Prototype]]` was retargeted.
+pub const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+/// The largest capacity the packed-f64 counted loop admits
+/// (`typed_feedback::packed_f64_loop_admits_live_array`).
+pub const PACKED_F64_LOOP_MAX_CAPACITY: u32 = 16_000_000;
 /// `gc::GC_TYPE_BUFFER` and `gc::GC_TYPE_BUFFER_UINT8ARRAY`: the GcHeader type
 /// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
 /// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type

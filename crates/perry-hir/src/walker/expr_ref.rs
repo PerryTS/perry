@@ -717,7 +717,7 @@ where
             f(property);
             f(object);
         }
-        Expr::PrivateLexicalBrandPop => {}
+        Expr::PrivateLexicalBrandPop | Expr::ThisProvenClass(_) => {}
         Expr::PrivateLexicalBrand(object) | Expr::PrivateLexicalBrandPush(object) => {
             f(object);
         }

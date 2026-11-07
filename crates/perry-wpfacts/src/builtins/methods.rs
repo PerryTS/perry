@@ -39,7 +39,7 @@ pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
     }
     let num = m.atom(NUM_KEY);
     if !intrinsic_miss(m, num, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(m, call, "argument of a written primitive method");
+        unknown_prim_method(m, call, "argument of a written primitive method");
     }
 }
 
@@ -142,7 +142,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     // read is final on every kind of the mask (DEC 250).
     let locked = members::prim_families(prim).all(|f| members::locked_read(f, None, &name));
     if !locked && !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(
+        unknown_prim_method(
             m,
             call,
             &format!("argument of a written primitive method {name}"),
@@ -329,6 +329,10 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             }
         },
         TokKind::NativeProto(_) => {}
+        // `Object.prototype`'s own members are its methods: called on it
+        // they run with it as the receiver (the chain walk starts past it,
+        // at its null prototype, and finds none of them).
+        TokKind::ObjectProto => proto_method(m, t, t, key, call),
         TokKind::Obj(tm, _) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => array_method(m, t, name.as_deref(), call),
             TmplKind::BObj { what, .. } => bobj_method(m, t, what, name.as_deref(), call),
@@ -501,7 +505,10 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         .then(|| m.call_lit.get(&call).copied())
         .flatten()
         .unwrap_or_else(|| m.atom(crate::STAR_KEY));
-    if accessor_receiver(m, origin, key) {
+    // Object.prototype is a modeled holder: the define records the accessor
+    // there as defineProperty does (an accessor on it is E23), under a
+    // computed key too (the AccessorInstall any-key branch).
+    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto) {
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
         // Spread positions are not retained in CallSite: any direct or

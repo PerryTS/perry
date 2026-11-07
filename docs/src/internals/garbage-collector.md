@@ -56,6 +56,25 @@ ladder and fail on a mismatch (`crates/perry-runtime/src/gc/trigger_watermark.rs
 <!-- gc-symbol: repeated_gc_malloc_is_answered_by_the_fast_path in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 <!-- gc-symbol: a_watermark_the_ladder_disagrees_with_trips_the_verifier in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 
+**Batching young-leaf pressure.** Dedicated young pointer-free leaves can be
+collected without moving small cells, but deciding their liveness requires a
+census of young small cells. A leaf service is due only when Eden plus young
+leaves reaches the existing Eden allocation window and leaves occupy at least
+one quarter of that window. This prevents a nearly full Eden from buying a
+whole census for each small leaf birth. The small-cell copying cap remains
+independent: reaching it requires a tracing minor, even below the leaf floor.
+Suppressed allocation checks remain owed and run at the outermost scope exit.
+
+For small occupancy below cap `C`, survivor occupancy `S`, and Eden window `W`,
+a quiet young trigger bounds total young occupancy below
+`max(S + W, C + ceil(W / 4))`, before the existing allocation and safepoint
+slack. The first term is the survivor-credit policy's bound; the second bounds
+the additional batching allowance. Since `S <= small < C` and `W <= C`, quiet
+occupancy is below `2 * C`. The due answer and the inline allocation residual
+bound come from the same predicate; a leaf birth invalidates that bound.
+<!-- gc-symbol: near_full_eden_coalesces_repeated_leaf_censuses_from_owed_checks in crates/perry-runtime/src/gc/tests/leaf_census_coalescing.rs -->
+<!-- gc-symbol: coalescing_cannot_grow_small_or_leaf_occupancy_past_the_bound in crates/perry-runtime/src/gc/tests/leaf_census_coalescing.rs -->
+
 **Per-live-object cost of a synchronous full.** Three parts of a full scale
 with the live set, and each has a cheaper exact form:
 

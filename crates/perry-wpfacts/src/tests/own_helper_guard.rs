@@ -391,6 +391,8 @@ fn helper_tdz_early_reference_site_proven() {
 fn helper_tdz_exported_site_proven() {
     // An import makes the exported body reachable through an import cycle,
     // as in compiler/core.ts, even with the binding's declaration above it.
+    // The imported module is in the program: an unseen one could replace
+    // the global `Object` the helper reads (`declared_global_write`).
     let src = format!(
         "import {{ peer }} from './peer';\n{}",
         source(
@@ -398,7 +400,14 @@ fn helper_tdz_exported_site_proven() {
             "total += guard(dict, k) ? dict[k].size() : 0;"
         )
     );
-    tdz_verdict(&lower_tdz(&src), true);
+    let mut hir = lower_tdz(&src);
+    for i in &mut hir.imports {
+        i.resolved_path = Some("peer.ts".into());
+    }
+    let ast = perry_parser::parse_typescript("export const peer = 1;", "peer.ts").unwrap();
+    let peer = perry_hir::lower_module(&ast, "peer", "peer.ts").unwrap();
+    let list = [("t.ts".to_string(), &hir), ("peer.ts".to_string(), &peer)];
+    verdict_facts(compute(&list, &FactsConfig::default()), true);
 }
 
 #[test]

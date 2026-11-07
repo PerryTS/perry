@@ -5537,10 +5537,9 @@ pub(crate) fn byte_store_test_external_live_bytes() -> usize {
 
 #[cold]
 fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
+    // The caller's occupancy reading already excludes the leaf-free case;
+    // leaf_window_due also answers zero leaves through its batching floor.
     let leaf_bytes = crate::arena::young_large_in_use_bytes();
-    if leaf_bytes == 0 {
-        return (false, usize::MAX);
-    }
     leaf_window_due(
         cap,
         small_bytes,
@@ -5554,7 +5553,9 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
 /// false. `small_bytes` is the from-space occupancy (Eden plus the active
 /// survivor space); the window already credits the survivor space against the
 /// cap (`eden_allocation_window_bytes`, the budget the copying minor reads),
-/// so the survivor bytes come out of the reading before the comparison.
+/// so the survivor bytes come out of the reading before the comparison. Leaves
+/// must also fill a quarter of that window to amortize the small-cell census;
+/// below that floor only the unchanged small-copying cap can make young due.
 /// Counting them on both sides made the arm due up to one survivor credit
 /// before the copying cap with no leaf to retire, and every young leaf born
 /// in that band ran a leaf service that could not make the arm false.
@@ -5565,6 +5566,22 @@ pub(super) fn leaf_window_due(
     leaf_bytes: usize,
 ) -> (bool, usize) {
     let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    // A leaf service censuses all young small cells. Near a full Eden, pricing
+    // even one tiny leaf against the remaining window repeats that census for
+    // almost no recovery, including at correctly recovered owed checks. Batch
+    // leaves until they occupy a quarter-window; small occupancy still reaches
+    // the unchanged copying cap and forces a tracing minor there.
+    //
+    // When this arm is quiet, either Eden + leaves is below the window, or
+    // leaves are below a quarter-window. With small < cap the quiet bound is
+    // max(survivor + window, cap + ceil(window / 4)): the first term is the
+    // existing survivor-credit bound, the second is the new batching slack.
+    // Quiet occupancy is therefore below 2 * cap for survivor <= small < cap,
+    // before the existing allocation-point/safepoint slack. No prior service
+    // decision is retained.
+    if leaf_bytes < window.div_ceil(4) {
+        return (false, usize::MAX);
+    }
     let eden = small_bytes.saturating_sub(survivor_bytes);
     (
         eden.saturating_add(leaf_bytes) >= window,

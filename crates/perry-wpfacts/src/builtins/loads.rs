@@ -279,6 +279,34 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     }
 }
 
+/// Global `n`, which the realm declares as namespace `ns` (`Error`, `Math`),
+/// read off the global object `t` (`globalThis.Error`, or the bare name off
+/// the HIR sentinel, the same object): what the program stored under the
+/// key (the global's field, as for a program-owned global), and the
+/// realm's value. A key some other writer may have written
+/// (`global_value_written`: unmodeled code, an accessor, a write under any
+/// key) also reads ⊤, and what the program stored there reaches unmodeled
+/// code; a later such write replays the read (`NativeMiss::Global`) to the
+/// same result.
+fn declared_global_load(m: &mut Model, t: Tok, ns: BuiltinNs, n: &str, dst: NodeId) {
+    if !m.unit_mode {
+        let a = m.atom(n);
+        let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let f = global_field(m, g, a);
+        m.edge(f, dst);
+        if global_value_written(m, t, a) {
+            m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
+            m.add_prim(dst, prim::ALL);
+            let r = m.reason(&format!("globalThis.{n} reaches unmodeled code"));
+            m.sink_node(f, r);
+        } else {
+            m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
+        }
+    }
+    let bt = m.tok(TokKind::Builtin(ns));
+    m.add_tok(dst, bt);
+}
+
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
@@ -288,8 +316,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
             Some(n) => {
                 if let Some(ns) = ns_by_name(n) {
-                    let bt = m.tok(TokKind::Builtin(ns));
-                    m.add_tok(dst, bt);
+                    declared_global_load(m, t, ns, n, dst);
                 } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
@@ -311,7 +338,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some(n) if global_user_key(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
                     let f = global_field(m, t, a);
-                    if native_written(m, t, a) {
+                    if global_value_written(m, t, a) {
                         if m.explain {
                             let op = m.tok_index.get(&TokKind::ObjectProto).copied();
                             let hits: Vec<String> = m
@@ -348,8 +375,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     tok_load(m, op, key, dst);
                 }
                 Some(n) if ns_by_name(n).is_some() => {
-                    let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
-                    m.add_tok(dst, bt);
+                    declared_global_load(m, t, ns_by_name(n).unwrap(), n, dst);
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
@@ -626,6 +652,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             m.add_prim(dst, prim::UNDEF);
             if name.is_none() {
+                // A computed key reads each of `Object.prototype`'s methods
+                // its shape can spell (`t["__define" + s]`), as `family_any`
+                // reads them under a key that may name any member.
+                if members::object_proto_methods().any(|n| m.key_may_name_str(key, n)) {
+                    let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+                    m.add_tok(dst, f);
+                }
                 any_written(m, dst);
             }
         }
@@ -634,6 +667,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ObjectProto => {
             m.add_prim(dst, prim::UNDEF);
             let Key::Named(a) = key else { unreachable!() };
+            object_proto_method_value(m, a, dst);
             if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
             }
@@ -666,6 +700,25 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
         TokKind::Top => {}
     }
+}
+
+/// A method `Object.prototype` holds under `a` (the three no builtin
+/// prototype overrides are `ObjectProtoOwn`, `chain_load`), read as a value
+/// through a chain: that method's native. A call of the value runs the
+/// method on the call's receiver (`native_call`), as a named call does:
+/// `box.m = plain.__defineGetter__; box.m(k, f)` installs on `box`.
+fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
+    let name = m.atoms[a as usize].clone();
+    if ProtoOwn::of_name(&name).is_some()
+        || !matches!(members::member(Family::Object, &name), Some(Mem::Fn))
+    {
+        return;
+    }
+    let f = match member_native(m, Family::Object, None, &name) {
+        Some(n) => m.tok(TokKind::BuiltinFn(n)),
+        None => builtin_fn(m, "described member"),
+    };
+    m.add_tok(dst, f);
 }
 
 /// `tok_load` of prototype `q` on the chain of `of` (`Cons::ChainUnion`).
@@ -707,6 +760,7 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
             && locked_chain_read(m, of, a)
         {
             m.add_prim(dst, prim::UNDEF);
+            object_proto_method_value(m, a, dst);
             return;
         }
     }

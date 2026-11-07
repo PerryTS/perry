@@ -46,6 +46,8 @@ pub fn map_cons(
             this,
         },
         New { call } => New { call: k(call) },
+        NewProgram { call } => NewProgram { call: k(call) },
+        FromArrayLike { dst } => FromArrayLike { dst: n(dst) },
         ReflectNew { call, new_target } => ReflectNew {
             call: k(call),
             new_target: n(new_target),
@@ -171,6 +173,7 @@ pub fn map_cons(
             origin,
             act: act_map(act, &mut n, &mut k),
         },
+        UnnamedSet { target } => UnnamedSet { target },
         PlainKey { origin, act } => PlainKey {
             origin,
             act: act_map(act, &mut n, &mut k),
@@ -222,6 +225,15 @@ pub fn map_cons(
         ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
+        NativeParent {
+            tm,
+            expected,
+            reason,
+        } => NativeParent {
+            tm,
+            expected,
+            reason,
+        },
         IdxLoad { idx, dst, shape } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
@@ -400,6 +412,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Store { .. }
             | Call { .. }
             | New { .. }
+            | NewProgram { .. }
+            | FromArrayLike { .. }
             | ReflectNew { .. }
             | NewNamed { .. }
             | SuperCtor { .. }
@@ -443,6 +457,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | BirthField { .. }
             | CreateProto { .. }
             | NewTargetHard { .. }
+            | NativeParent { .. }
             | ShareBuffer { .. }
             | AnnexBDefine { .. }
             | AnnexBLookup { .. }
@@ -469,6 +484,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | Arith { dst }
         | ArrayLenArg { dst }
         | IterNext { dst }
+        | FromArrayLike { dst }
         | ProtoOf { dst }
         | ProtoValues { dst } => Some(dst),
         _ => None,

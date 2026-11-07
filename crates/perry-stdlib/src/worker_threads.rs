@@ -82,7 +82,7 @@ pub(crate) use message_port::register_codec as register_message_port_codec;
 use worker_pump::deliver_parent_port_message;
 use worker_pump::start_stdin_reader;
 
-use worker_options::{apply_worker_env, restore_worker_env, WorkerOptions, WorkerResourceLimits};
+use worker_options::{WorkerOptions, WorkerResourceLimits};
 use worker_surface::{
     empty_object, js_worker_threads_worker_off, js_worker_threads_worker_on,
     js_worker_threads_worker_once, js_worker_threads_worker_post_message,
@@ -198,8 +198,6 @@ struct BroadcastChannelState {
     object_bits: u64,
     /// Queue of delivered structured clones (oldest first).
     inbox: VecDeque<SerializedValue>,
-    /// `message` listeners registered through addEventListener().
-    message_event_cbs: Vec<EventListener>,
     /// Whether `close()` has detached this BroadcastChannel.
     closed: bool,
 }
@@ -444,9 +442,6 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
     BROADCAST_CHANNELS.with(|channels| {
         for state in channels.borrow_mut().values_mut() {
             visitor.visit_nanbox_u64_slot(&mut state.object_bits);
-            for listener in state.message_event_cbs.iter_mut() {
-                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
-            }
         }
     });
 }
@@ -1309,7 +1304,7 @@ pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
                 channels
                     .borrow_mut()
                     .values_mut()
-                    .find(|state| !state.closed && state.object_bits == port.to_bits())
+                    .find(|state| state.object_bits == port.to_bits())
                     .map(|state| state.inbox.pop_front())
             });
             deserialize_received_message(packet.unwrap_or_else(|| invalid_receive_port()))
@@ -1410,9 +1405,11 @@ fn worker_new_started(
     worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 
-    let process_state =
-        perry_runtime::process::WorkerProcessState::capture(options_state.env.as_deref())
-            .with_worker_argv(source, options_state.argv.take());
+    let process_state = options_state
+        .process_state
+        .take()
+        .expect("prepared Worker process state")
+        .with_worker_argv(source, options_state.argv.take());
     let payload =
         match perry_runtime::exception::catch_thrown(|| environment_data::prepare(options)) {
             Ok(payload) => payload,
@@ -1525,7 +1522,6 @@ fn worker_new_started(
             perry_runtime::event_pump::claim_agent_loop_route();
             published_agent.store(worker_agent, Ordering::SeqCst);
             perry_runtime::loop_interrupt::install_current(termination);
-            let previous_env = apply_worker_env(&thread_options.env);
             parent_port::install(&worker_ticket);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
@@ -1615,7 +1611,6 @@ fn worker_new_started(
             let terminated = perry_runtime::loop_interrupt::take_terminated();
             let controlled_exit_code = perry_runtime::process::js_process_pending_exit_code();
             perry_runtime::loop_interrupt::clear_current();
-            restore_worker_env(previous_env);
             // This arena is about to go away; purge any queue entry still tagged
             // with this agent rather than leave it for a drain that can never
             // legally run it.

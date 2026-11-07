@@ -132,6 +132,7 @@ pub(super) unsafe fn native_module_enum(
 /// dereferenced as an `ObjectHeader` → SIGSEGV.
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
+    let value = crate::process::refresh_process_env(value);
     let jv = JSValue::from_bits(value.to_bits());
     // #2818: ToObject(null/undefined) throws TypeError, matching Node.
     if jv.is_null() || jv.is_undefined() {
@@ -1177,6 +1178,7 @@ pub(crate) use buffers::registered_buffer_own_keys;
 /// Ordinary shapes bulk-copy their bounded key list into a fresh result.
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    let obj = refresh_env_receiver(obj);
     if let Some(keys) = ordinary_keys::try_keys(obj) {
         return keys;
     }
@@ -1201,6 +1203,16 @@ fn object_keys_fallback(obj: *const ObjectHeader) -> *mut ArrayHeader {
         return shape_keys;
     }
     js_object_keys_shape(obj)
+}
+
+fn refresh_env_receiver(obj: *const ObjectHeader) -> *const ObjectHeader {
+    if crate::process::is_process_env_ptr(obj as usize) {
+        let value =
+            crate::process::refresh_process_env(crate::value::js_nanbox_pointer(obj as i64));
+        crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader
+    } else {
+        obj
+    }
 }
 
 /// [`js_object_keys`] over the shape alone.
@@ -1679,6 +1691,7 @@ pub(crate) unsafe fn descriptor_marks_non_enumerable(
 /// Returns an array of the object's field values
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    let obj = refresh_env_receiver(obj);
     // An elements-backed Array-subclass instance: its present elements come
     // first (ascending), then the shape's own enumerable properties.
     if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {
@@ -1875,6 +1888,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
 /// Returns an array where each element is a 2-element array [key, value]
 #[no_mangle]
 pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    let obj = refresh_env_receiver(obj);
     // An elements-backed Array-subclass instance: its present elements come
     // first (ascending), then the shape's own enumerable properties.
     if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {

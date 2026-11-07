@@ -347,6 +347,29 @@ For Node-compatible DOM-style delivery on BroadcastChannel and MessagePort
 Perry-only Worker web-style and worker-global delivery keep their existing
 lossless data behavior.
 
+### BroadcastChannel EventTarget listeners
+
+BroadcastChannel inherits EventTarget. Borrowed `addEventListener` and
+`removeEventListener` use the actual receiver, including its prototype, derived
+objects and transparent proxies; invalid receivers throw `ERR_INVALID_THIS`.
+Listeners share EventTarget's capture matching, `once`, AbortSignal removal and
+listener-object `handleEvent` dispatch. `events.getEventListeners` observes the
+same registrations used by delivery and manual `dispatchEvent`.
+
+`onmessage` and `onmessageerror` occupy stable positions in that listener list.
+Replacing a handler keeps its position; assigning `null` silences the wrapper
+without removing it. Closing a channel discards its transport inbox, not its
+EventTarget listeners: manual dispatch remains available after close. The provider
+releases the closed transport immediately; only ordinary references to the channel
+retain its listeners.
+
+Dispatch supports callable Proxy listeners and removes `once` records before
+invocation, even if another callback changes the receiver's constructor. A listener
+removed and re-added during dispatch does not run from the old snapshot. Persistent
+listener traversal is linear in the listener count. Exceptions from callbacks or
+`handleEvent` getters are reported asynchronously through `uncaughtException`;
+they do not skip later listeners or property handlers.
+
 ### Messaging constructor errors
 
 `MessageChannel` requires `new` (`ERR_CONSTRUCT_CALL_REQUIRED`). `MessagePort`

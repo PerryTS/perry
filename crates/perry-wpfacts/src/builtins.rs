@@ -29,8 +29,8 @@ pub(crate) use native_protocol::{census_native_op_writes, census_native_written}
 pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
-pub(crate) use collections::array_species;
 use collections::{array_method, bobj_method, function_method, iterate};
+pub(crate) use collections::{array_species, construct_into};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an iterator whose prototype the model does not know.
 pub(crate) const ITERATOR_KIND: &str = members::ANY_ITERATOR;
@@ -39,9 +39,9 @@ pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
-    global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
-    note_native_write, require_parts, settle_native_given,
+    global_field, global_user_key, global_value_written, is_builtin_module, native_parent_ctor,
+    native_parent_keys, native_parent_summarized, native_proto, native_written, native_written_by,
+    note_global_in_top, note_native_write, require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -174,6 +174,29 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
 /// receiver (a builtin namespace's, a builtin function's), which gives that
 /// object to no one.
 fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
+    let recv = if own { Recv::Own } else { Recv::Given };
+    unknown_method_at(m, call, why, proto, recv)
+}
+
+/// `unknown_method` called on a primitive receiver (a primitive's method a
+/// store into ⊤ may have written onto its prototype): the method runs with
+/// the primitive as `this`, so no object of the receiver node reaches it.
+/// The arguments escape, the result is ⊤.
+fn unknown_prim_method(m: &mut Model, call: CallId, why: &str) {
+    unknown_method_at(m, call, why, None, Recv::Primitive)
+}
+
+/// What the unknown method's `this` is: the receiver given (it escapes),
+/// the runtime's own object (`unknown_method_proto`'s `own`), or a
+/// primitive (nothing escapes).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recv {
+    Given,
+    Own,
+    Primitive,
+}
+
+fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
         let d = m.diagnostic.as_mut().unwrap();
         let c = d.census.as_mut().unwrap();
@@ -183,20 +206,20 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
             .take()
             .filter(|(_, _, is_call, id)| *is_call && *id == call)
             .map(|(t, a, _, _)| (t, a));
-        unknown_method_proto_inner(m, call, why, proto, own);
+        unknown_method_proto_inner(m, call, why, proto, recv);
         let d = m.diagnostic.as_mut().unwrap();
         d.cur_call = saved.0;
         d.census.as_mut().unwrap().active_gate = saved.1;
         return;
     }
-    unknown_method_proto_inner(m, call, why, proto, own);
+    unknown_method_proto_inner(m, call, why, proto, recv);
 }
 fn unknown_method_proto_inner(
     m: &mut Model,
     call: CallId,
     why: &str,
     proto: Option<usize>,
-    own: bool,
+    recv: Recv,
 ) {
     m.diagnostic_builtin(call, |_| format!("opaque-summary:{why}"));
     let c = m.calls[call as usize].clone();
@@ -216,8 +239,9 @@ fn unknown_method_proto_inner(
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
-    let kept = |m: &Model, t: Tok| own && m.named_shared(t).is_some();
+    let kept = |m: &Model, t: Tok| recv == Recv::Own && m.named_shared(t).is_some();
     match (m.cur_this, &c.this) {
+        _ if recv == Recv::Primitive => {}
         (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => m.sink_node(*n, r),
@@ -371,6 +395,8 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
     let p = m.node_l("resolver-param");
     m.edge(p, dst);
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         name: "<resolver>".into(),
@@ -420,6 +446,8 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
     m.add_top(ret, |_| "result of another unit's accessor".into());
     m.add_prim(ret, prim::ALL);
     m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         name: "<another unit's accessor>".into(),
@@ -888,6 +916,14 @@ pub use loads::*;
 /// to the chain (`Cons::ProtoGiven`).
 pub(crate) fn is_collection(what: &str) -> bool {
     members::bobj_family(what) == Family::Collection
+}
+
+/// A builtin object template kind whose iteration reads indices as an
+/// Array's does (`Family::Box`: the arrays and records the runtime fills,
+/// `Object.keys` results among them). Every other builtin object iterates
+/// its internal entries, or has no `@@iterator`.
+pub(crate) fn iterates_indices(what: &str) -> bool {
+    members::bobj_family(what) == Family::Box
 }
 
 /// A builtin object whose template is a container the model fills
@@ -1413,15 +1449,15 @@ fn ns_method_inner(
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             let vals = all_arg_values(m, call);
-            m.cons(
-                vals,
-                Cons::Load {
-                    key: Key::any(),
-                    dst: fa,
-                },
-            );
             if name == "of" {
                 m.edge(vals, fa);
+            } else {
+                // ECMA-262 23.1.2.1: an iterable is iterated; an array-like
+                // (no `@@iterator`) is read at its indices below `length`.
+                let it = iterate(m, call, vals);
+                m.edge(it, fa);
+                let ek = m.elem_key();
+                m.cons(vals, Cons::Load { key: ek, dst: fa });
             }
             // A map function is called with each element.
             if let Some(f) = arg(m, call, 1) {
@@ -1443,6 +1479,35 @@ fn ns_method_inner(
                 m.edge(ret, fa);
             }
             ret_tok(m, call, arr);
+            // IsConstructor(C) (23.1.2.1 step 4, 23.1.2.3 step 4): the
+            // result is Construct(C) of the `this` value, with «len» (an
+            // array-like source, `of`) or no argument (an iterable).
+            let c = m.calls[call as usize].clone();
+            let this = match c.this {
+                ThisArg::Node(n) => Some(n),
+                ThisArg::Tok(t) => {
+                    let n = m.node_l("from-this");
+                    m.add_tok(n, t);
+                    Some(n)
+                }
+                ThisArg::Undef => None,
+            };
+            if let Some(this) = this {
+                let len = m.node_l("from-length");
+                m.add_prim(len, prim::NUM | prim::UNDEF);
+                let made = m.node_l("from-constructed");
+                let mc = m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args: vec![len],
+                        spread: vec![],
+                        ret: made,
+                        site: c.site,
+                    },
+                );
+                construct_into(m, this, mc, arr, made, c.ret);
+            }
         }
         (BuiltinNs::Json, "stringify") => {
             // The value is serialized; a replacer is called back.
@@ -1470,30 +1535,42 @@ fn ns_method_inner(
         }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
+            // Its objects are ordinary objects, its arrays arrays
+            // (`members::box_chain`), as `Gen::json_value` models them.
             let j = site_tmpl(m, call, "json");
+            let ja = site_tmpl(m, call, "Array");
             let fa = m.field_any(j);
-            m.add_prim(fa, prim::ALL);
-            m.add_tok(fa, j);
+            for f in [fa, m.field_any(ja)] {
+                m.add_prim(f, prim::ALL);
+                m.add_tok(f, j);
+                m.add_tok(f, ja);
+            }
             ret_tok(m, call, j);
+            ret_tok(m, call, ja);
             ret_prim(m, call, prim::ALL);
             if let Some(rv) = arg(m, call, 1) {
-                // reviver(key, value) with `this` = the holder
+                // reviver(key, value) with `this` = the holder, an object
+                // or an array
                 let ret = m.calls[call as usize].ret;
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
-                let call2 = m.calls.len() as CallId;
-                m.solver_call(
-                    call,
-                    CallSite {
-                        this: ThisArg::Tok(j),
-                        args: vec![s, fa],
-                        spread: vec![],
-                        ret,
-                        site: call2,
-                    },
-                );
-                m.cons(rv, Cons::Call { call: call2 });
+                for holder in [j, ja] {
+                    let call2 = m.calls.len() as CallId;
+                    m.solver_call(
+                        call,
+                        CallSite {
+                            this: ThisArg::Tok(holder),
+                            args: vec![s, fa],
+                            spread: vec![],
+                            ret,
+                            site: call2,
+                        },
+                    );
+                    m.cons(rv, Cons::Call { call: call2 });
+                }
                 m.edge(ret, fa);
+                let fja = m.field_any(ja);
+                m.edge(ret, fja);
             }
         }
         // Every Math function returns a Number (ECMA-262 Math).
@@ -1540,15 +1617,10 @@ fn ns_method_inner(
             let v = promise_value(m, p);
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
+            // ECMA-262 27.2.4.1 ff.: the iterable is iterated
+            // (GetIterator); its values are the items.
             let vals = all_arg_values(m, call);
-            let items = m.node_l("promise-items");
-            m.cons(
-                vals,
-                Cons::Load {
-                    key: Key::any(),
-                    dst: items,
-                },
-            );
+            let items = iterate(m, call, vals);
             let settled = m.node_l("settled");
             adopt(m, call, items, settled);
             m.edge(settled, fa);
