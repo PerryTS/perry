@@ -718,3 +718,13 @@ pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
         runner::input_event(operation, value.input_value());
     }
 }
+
+/// Expand a stdlib observation only in the runtime's instruments cohort.
+/// The empty production expansion needs no new stdlib build-script dependency.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[macro_export]
+macro_rules! census_inputs { ($($code:tt)*) => {{ $($code)* }}; }
+#[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+#[macro_export]
+macro_rules! census_inputs { ($($code:tt)*) => {}; }
+
