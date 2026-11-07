@@ -1511,6 +1511,13 @@ impl Model {
         {
             self.native_given.push((t, src));
         }
+        // The runtime's own lookups on such an object (and the program's
+        // through a chain the model does not walk past it) reach `src`'s
+        // members: unknown code holds the given prototype, so it escapes.
+        if t == TOP || self.shared_of(t).is_some() {
+            let r = self.reason("prototype given to a runtime object");
+            self.sink_node(src, r);
+        }
         // `%Object.prototype%` is an immutable prototype exotic
         // object: setting its [[Prototype]] to anything but its
         // own (null) throws.
