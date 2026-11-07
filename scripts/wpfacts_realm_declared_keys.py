@@ -21,7 +21,7 @@ the realm defines (every other global name is the program's).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
 strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
-`native <owner> <key> <identity>` rows resolve callable property references on global, namespace and prototype holders
+`native <owner> <key> <identity>` rows resolve callable property references on global, namespace, node module (`node:fs`) and prototype holders
 (an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
 """
 import argparse
@@ -50,6 +50,12 @@ def member_properties(declarations, holder, inherited):
         holder = declarations.get(holder.get("prototype")) if inherited else None
 
 
+def node_module(name, kind):
+    """A node module object (`node:fs`): wpfacts names it `BuiltinNs::Module`;
+    its callable members resolve here (`native` rows), its keys are not R1's."""
+    return kind == "namespace" and name.startswith("node:") and "." not in name
+
+
 def intrinsic_prototype(name, kind):
     """A realm prototype named by its intrinsic (`%GeneratorPrototype%`), not
     reachable as a constructor's `.prototype`: its own callable members only."""
@@ -66,8 +72,9 @@ def rows(realm):
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
         if (name.endswith(".prototype") or namespace_holder(name, kind) or name == "%Global%"
-                or intrinsic_prototype(name, kind)):
-            for prop in member_properties(declarations, d, namespace_holder(name, kind) or name == "%Global%"):
+                or intrinsic_prototype(name, kind) or node_module(name, kind)):
+            inherited = namespace_holder(name, kind) or name == "%Global%" or node_module(name, kind)
+            for prop in member_properties(declarations, d, inherited):
                 getter = prop.get("get")
                 if getter and declarations[getter].get("effects") == receiver_result:
                     out.add(("getter-this", name, prop["key"], getter))

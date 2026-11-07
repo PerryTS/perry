@@ -1947,4 +1947,5 @@ mod uri_coercion;
 
 mod accessor_lookup_values;
 mod native_fs_effects;
+mod native_module_ref;
 mod native_process;
