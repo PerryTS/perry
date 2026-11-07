@@ -536,7 +536,7 @@ pub(super) fn generate_embedded_asset_object(
     };
     let mut command = Command::new(&compiler);
     if cross_target {
-        command.arg("--target").arg(&target_triple);
+        command.arg("-target").arg(&target_triple);
     }
     let status = command
         .arg("-c")
@@ -779,5 +779,30 @@ const escape = "/$bunfs/root/../outside.bin";
         let lit = c_byte_literal(&[0x00, b'"', b'\\', 0x41, 0xFF]);
         assert_eq!(lit, "\"\\000\\\"\\\\A\\377\"");
         assert!(lit.is_ascii());
+    }
+
+    #[test]
+    fn staticlib_anchor_object_uses_selected_cross_target_architecture() {
+        if perry_codegen::linker::find_clang().is_none() {
+            eprintln!("skipping cross-target embed test: clang is unavailable");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let object = generate_embedded_asset_object(
+            &[],
+            dir.path(),
+            &std::collections::HashSet::new(),
+            false,
+            false,
+            Some("linux-aarch64"),
+        )
+        .unwrap()
+        .unwrap();
+
+        // An empty static library still needs the anchor member, and it must
+        // be an ELF AArch64 object rather than a host Mach-O object.
+        let bytes = fs::read(object).unwrap();
+        assert!(bytes.starts_with(b"\x7fELF"), "unexpected object format");
+        assert_eq!(u16::from_le_bytes([bytes[18], bytes[19]]), 183);
     }
 }
