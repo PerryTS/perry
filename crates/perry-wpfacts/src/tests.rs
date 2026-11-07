@@ -69,6 +69,7 @@ mod folded_call_own;
 mod for_in_keys;
 mod for_of_yield;
 mod function_ctor_without_interp;
+mod indirect_eval_call;
 mod function_values;
 mod getter_contract;
 mod global_gc;

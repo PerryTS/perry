@@ -1427,6 +1427,18 @@ fn ns_method_inner(
             }
             ret_prim(m, call, prim::UNDEF);
         }
+        // A call of the realm's `eval` function under any spelling that is
+        // not a direct eval (`(0, eval)(s)`, `const e = eval; e(s)`,
+        // `globalThis.eval(s)`, `eval?.(s)`) is an indirect eval: with the
+        // interpreter linked it runs its string argument as global code
+        // (`global_this_eval_thunk`), which reads and calls what the program
+        // stored on the global object (DECISIONS 150/235), as a call of the
+        // Function constructor does. Without the interpreter it runs no
+        // program code.
+        (BuiltinNs::Other, "eval") if m.interp_linked => {
+            set_dyn_eval(m, "E14 indirect eval call");
+            unknown_method(m, call, "E14 dynamic code");
+        }
         // The runtime's `gc([force])`: the argument is ignored.
         (BuiltinNs::Other, "gc") => ret_prim(m, call, prim::UNDEF),
         // A method of the global object named by one of the runtime's global
