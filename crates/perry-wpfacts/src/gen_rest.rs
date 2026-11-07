@@ -189,8 +189,7 @@ impl<'a> Gen<'a> {
                 receiver,
             } => match self.class_home_of(fx, home) {
                 Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
                     for start in self.super_starts_of(tm) {
@@ -214,8 +213,7 @@ impl<'a> Gen<'a> {
                 receiver,
             } => match self.class_home_of(fx, home) {
                 Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
@@ -240,8 +238,7 @@ impl<'a> Gen<'a> {
                 args,
             } => match self.class_home_of(fx, home) {
                 Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
