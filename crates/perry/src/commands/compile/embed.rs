@@ -367,8 +367,9 @@ pub(super) fn generate_embedded_asset_object(
     output_dir: &Path,
     text_modules: &std::collections::HashSet<String>,
     bun_platform: bool,
+    sea_profile: bool,
 ) -> Result<Option<PathBuf>> {
-    if assets.is_empty() {
+    if assets.is_empty() && !sea_profile {
         return Ok(None);
     }
     // Match the host linker: `cc` emits Mach-O/ELF, while LLVM clang emits
@@ -406,6 +407,9 @@ pub(super) fn generate_embedded_asset_object(
     c.push_str("// registers them into the runtime registry before `main`.\n");
     c.push_str("#include <stddef.h>\n\n");
     c.push_str("extern void js_register_embedded_asset(const char *name, size_t name_len, const char *bytes, size_t bytes_len);\n\n");
+    if sea_profile {
+        c.push_str("extern void js_register_sea_profile(void);\n\n");
+    }
     if !text_modules.is_empty() {
         c.push_str("extern void js_register_embedded_text_asset(const char *name, size_t name_len, const char *bytes, size_t bytes_len);\n\n");
     }
@@ -475,6 +479,9 @@ pub(super) fn generate_embedded_asset_object(
     } else {
         c.push_str("__attribute__((constructor(101)))\n");
         c.push_str("static void perry_register_embedded_assets(void) {\n");
+    }
+    if sea_profile {
+        c.push_str("    js_register_sea_profile();\n");
     }
     for idx in 0..assets.len() {
         if let Some(original_len) = payloads[idx].original_len {

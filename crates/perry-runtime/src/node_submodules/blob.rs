@@ -377,7 +377,7 @@ pub(crate) fn blob_value_from_bytes(bytes: &[u8]) -> f64 {
     blob_value_from_bytes_and_type(bytes, "")
 }
 
-fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
+pub(crate) fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
     let backing = buffer_from_bytes(bytes, false, false);
     let obj = js_object_alloc(CLASS_ID_BLOB, 7);
     set_named_value(obj, b"size", bytes.len() as f64);

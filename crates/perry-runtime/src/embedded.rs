@@ -113,6 +113,14 @@ pub(crate) struct EmbeddedDirEntry {
 
 static EMBEDDED_ASSETS: OnceLock<Mutex<Vec<EmbeddedAsset>>> = OnceLock::new();
 
+/// Snapshot embedded asset names for APIs that enumerate the registry.
+pub(crate) fn asset_names() -> Vec<String> {
+    let mut names = snapshot().into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
 fn registry() -> &'static Mutex<Vec<EmbeddedAsset>> {
     crate::once_init::get_or_init(&EMBEDDED_ASSETS, || Mutex::new(Vec::new()))
 }
@@ -209,6 +217,14 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
     reg.iter_mut()
         .find(|a| a.name == key)
+        .map(EmbeddedAsset::bytes)
+}
+
+/// Exact-key lookup for `node:sea`, whose keys are not filesystem paths.
+pub(crate) fn lookup_sea_asset(name: &str) -> Option<&'static [u8]> {
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    reg.iter_mut()
+        .find(|asset| asset.name == name)
         .map(EmbeddedAsset::bytes)
 }
 
