@@ -26,7 +26,7 @@ impl<'a> Gen<'a> {
     /// carrying its point interval (`model::range`), or the Number node.
     pub fn num_literal(&mut self, v: f64) -> NodeId {
         let iv = crate::model::Iv::literal(v);
-        if iv.is_top() {
+        if iv.is_top() || !self.int_ranges {
             return self.prim_node(prim::NUM);
         }
         if let Some(&n) = self.num_lits.get(&iv.lo) {
@@ -53,6 +53,9 @@ impl<'a> Gen<'a> {
         r: Option<NodeId>,
         dst: NodeId,
     ) {
+        if !self.int_ranges {
+            return;
+        }
         let other = r.unwrap_or(crate::model::NO_NODE);
         self.m.cons(
             l,
