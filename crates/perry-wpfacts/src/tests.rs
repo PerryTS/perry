@@ -61,6 +61,7 @@ mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
 mod field_array_push;
+mod folded_call_own;
 mod for_in_keys;
 mod for_of_yield;
 mod function_ctor_without_interp;
