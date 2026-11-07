@@ -638,7 +638,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound
             // the value without one.
-            ctx.pushed_array_birth = ctx.loop_pushed_arrays.contains(id)
+            ctx.pushed_array_birth = ctx.loop_pushed_arrays.reserve.contains(id)
                 && matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty());
             let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
             ctx.pushed_array_birth = false;
