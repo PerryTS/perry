@@ -1876,6 +1876,7 @@ mod global_unresolved;
 mod helper_protocols;
 mod host_helpers;
 mod iter_result_array;
+mod key_fn_shape;
 mod key_shape;
 mod method_this_escape;
 mod native_proto_member;
