@@ -4,8 +4,11 @@
 //! Object.assign is [[Set]] on its target under every source key, named or
 //! not (ECMA-262 20.1.2.1); bind reads the target's `length` and `name`
 //! (20.2.3.2), as its runtime declaration says (`reads(field(this, k))`).
-//! CXCHK0 gap witnesses test_gap_11866_object_assign_inherited,
-//! test_gap_bind_creation_metadata, test_gap_call_bind_explicit_this.
+//! JSON.stringify [[Get]]s each own enumerable key of what it serializes
+//! (25.5.2.5), so an accessor defined on a `JSON.parse` record after its
+//! birth runs. CXCHK0 gap witnesses test_gap_11866_object_assign_inherited,
+//! test_gap_bind_creation_metadata, test_gap_call_bind_explicit_this,
+//! test_gap_json_root_record.
 
 use super::*;
 
@@ -132,6 +135,46 @@ function f(a: any) { return a; }
 Object.defineProperty(f, "other", { get() { return hit(); }, configurable: true });
 const g = f.bind(null);
 console.log(g(1));
+"#,
+    );
+}
+
+#[test]
+fn json_stringify_reads_own_getters_recursively() {
+    runs(
+        "own getter of a parsed record",
+        r#"
+function hit() { return 7; }
+const row: any = JSON.parse("{\"a\":1}");
+Object.defineProperty(row, "score", { get() { return hit(); }, enumerable: true });
+console.log(JSON.stringify(row));
+"#,
+    );
+    runs(
+        "nested literal getter",
+        r#"
+function hit() { return 7; }
+const row: any = { child: { get g() { return hit(); } } };
+console.log(JSON.stringify(row));
+"#,
+    );
+    stays(
+        "not stringified",
+        r#"
+function hit() { return 7; }
+const row: any = { get g() { return hit(); } };
+const other = { a: 1 };
+console.log(JSON.stringify(other), typeof row);
+"#,
+    );
+    stays(
+        "getter on another parsed record",
+        r#"
+function hit() { return 7; }
+const row: any = JSON.parse("{\"a\":1}");
+Object.defineProperty(row, "score", { get() { return hit(); }, enumerable: true });
+const other: any = JSON.parse("{\"b\":2}");
+console.log(JSON.stringify(other), typeof row);
 "#,
     );
 }
