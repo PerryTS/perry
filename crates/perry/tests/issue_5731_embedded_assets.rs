@@ -67,11 +67,14 @@ fn runtime_dir() -> PathBuf {
                 "-p",
                 "perry-gc-effects",
             ])
-            // The sidecar analyzer relies on the same unwind-table build
-            // setting as Perry's GC workflow to discover the runtime call
-            // graph. Without it, the archive passes compilation but yields
-            // only one analyzed export.
-            .env("RUSTFLAGS", "-C force-unwind-tables=yes")
+            // This environment override replaces `.cargo/config.toml` rather
+            // than extending it. Keep both required unwind options here so
+            // the analyzer sees the same synchronous tables as Perry's GC
+            // workflow and can discover the runtime call graph.
+            .env(
+                "RUSTFLAGS",
+                "-C force-unwind-tables=yes -Z use-sync-unwind=yes",
+            )
             .output()
             .expect("build perry runtime archive");
         assert!(
@@ -211,7 +214,6 @@ fn sea_profile_supports_relocated_assets_and_zero_asset_builds() {
         r#"
 import { isSea, getAsset, getAssetKeys, getAssetAsBlob } from "node:sea";
 import { resolveObjectURL } from "node:buffer";
-import { createObjectURL } from "node:url";
 const bytes = getAsset("assets/message.txt") as ArrayBuffer;
 const decoder = new TextDecoder();
 console.log(isSea(), getAssetKeys().join(","), decoder.decode(bytes));
@@ -225,7 +227,7 @@ console.log("blob type", getAssetAsBlob("assets/a", { type: "TEXT/PLAIN" }).type
 console.log("blob invalid type", getAssetAsBlob("assets/a", { type: "x\u0001y" }).type);
 console.log("blob coerces type", getAssetAsBlob("assets/a", { type: 42 }).type);
 const seaBlob = getAssetAsBlob("assets/bin", { type: "application/octet-stream" });
-const seaBlobUrl = createObjectURL(seaBlob);
+const seaBlobUrl = URL.createObjectURL(seaBlob);
 const resolvedSeaBlob = resolveObjectURL(seaBlobUrl)!;
 console.log("blob URL roundtrip", resolvedSeaBlob.size, resolvedSeaBlob.type);
 function errorCode(fn: () => unknown): string { try { fn(); return "none"; } catch (e) { return (e as any).code; } }
