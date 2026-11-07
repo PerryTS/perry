@@ -122,3 +122,32 @@ fn exists_sync_reads_only_what_node_reads() {
     let x = field(tmpl(&pf, "P"), "x");
     assert!(x.readonly, "{}", pf.dump_text());
 }
+
+/// The error message's `util.inspect(v, { depth: -1 })` names the value by
+/// its constructor (node 26 `getConstructorName`): the first `constructor`
+/// data property on its chain whose value is a named function and has the
+/// value as an instance, so it runs `v instanceof C`, a user
+/// `@@hasInstance` with `v` as its argument. It does so when the
+/// `[[Get]]` of `constructor` found no name (here an own accessor before
+/// the prototype's data `constructor`). What the hook stores through its
+/// argument is seen.
+#[test]
+fn exists_sync_runs_the_chain_constructors_has_instance() {
+    let pf = facts(
+        r#"
+        import * as fs from "fs";
+        class P {
+            x: any;
+            constructor(x: number) { this.x = x; }
+            static [Symbol.hasInstance](v: any) { v.p.x = "s"; return true; }
+        }
+        const p = new P(1);
+        const o: any = { __proto__: P.prototype, get constructor() { return undefined; } };
+        o.p = p;
+        console.log(fs.existsSync(o));
+        console.log(p.x);
+    "#,
+    );
+    let x = field(tmpl(&pf, "P"), "x");
+    assert!(!x.readonly, "{}", pf.dump_text());
+}
