@@ -212,7 +212,10 @@ impl Model {
                 "perry: int-top n{n} ({}) from n{} ({}) via_edge={}",
                 self.labels[n as usize],
                 self.cur_src,
-                self.labels.get(self.cur_src as usize).copied().unwrap_or("-"),
+                self.labels
+                    .get(self.cur_src as usize)
+                    .copied()
+                    .unwrap_or("-"),
                 self.cur_range.is_some()
             );
         }

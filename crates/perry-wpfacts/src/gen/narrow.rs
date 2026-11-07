@@ -27,6 +27,9 @@ pub(crate) struct Narrow {
     start: NodeId,
     end: NodeId,
     written: bool,
+    /// The update is walked: it reads the end node, and its write (which
+    /// runs after the body) reaches only the counter.
+    in_update: bool,
 }
 
 fn expr_has(e: &Expr, p: &mut impl FnMut(&Expr) -> bool) -> bool {
@@ -99,7 +102,11 @@ impl<'a> Gen<'a> {
         body: &[Stmt],
     ) -> bool {
         if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
-            eprintln!("perry: narrow_for init={:?}\n  cond={:?}", init.map(|s| format!("{s:?}").chars().take(200).collect::<String>()), condition.map(|c| format!("{c:?}").chars().take(300).collect::<String>()));
+            eprintln!(
+                "perry: narrow_for init={:?}\n  cond={:?}",
+                init.map(|s| format!("{s:?}").chars().take(200).collect::<String>()),
+                condition.map(|c| format!("{c:?}").chars().take(300).collect::<String>())
+            );
         }
         let Some(Stmt::Let { id, .. }) = init else {
             return false;
@@ -140,19 +147,22 @@ impl<'a> Gen<'a> {
             start,
             end,
             written: false,
+            in_update: false,
         });
         true
     }
 
-    pub(crate) fn narrow_end(&mut self) {
-        self.narrow.pop();
+    /// Walking the update (`true`) or the body (`false`) of the innermost
+    /// narrowing.
+    pub(crate) fn narrow_in_update(&mut self, on: bool) {
+        if let Some(n) = self.narrow.last_mut() {
+            n.in_update = on;
+            n.written = on;
+        }
     }
 
-    /// Reads of the innermost narrowing of `(mi, id)` until its body ends.
-    pub(crate) fn narrow_set_written(&mut self, written: bool) {
-        if let Some(n) = self.narrow.last_mut() {
-            n.written = written;
-        }
+    pub(crate) fn narrow_end(&mut self) {
+        self.narrow.pop();
     }
 
     /// The node a read of local `id` sees under a narrowing, if any.
@@ -172,7 +182,7 @@ impl<'a> Gen<'a> {
         let ends: Vec<NodeId> = self
             .narrow
             .iter_mut()
-            .filter(|n| n.mi == mi && n.id == id && n.f == f)
+            .filter(|n| n.mi == mi && n.id == id && n.f == f && !n.in_update)
             .map(|n| {
                 n.written = true;
                 n.end

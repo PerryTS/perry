@@ -1129,13 +1129,13 @@ impl<'a> Gen<'a> {
                     body,
                 );
                 if narrowed {
-                    self.narrow_set_written(true);
+                    self.narrow_in_update(true);
                 }
                 if let Some(u) = update {
                     let _ = self.expr(fx, u);
                 }
                 if narrowed {
-                    self.narrow_set_written(false);
+                    self.narrow_in_update(false);
                 }
                 match self.for_in_of(fx, body) {
                     Some(f) => self.for_in_body(fx, &f),
