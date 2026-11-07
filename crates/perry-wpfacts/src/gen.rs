@@ -1317,7 +1317,7 @@ impl<'a> Gen<'a> {
         let display = format!("{}:{}", self.mods[mi as usize].path_short(), c.name);
         let mut accessor_keys = Vec::new();
         for (n, _) in c.getters.iter().chain(c.setters.iter()) {
-            let a = self.m.atom(n);
+            let a = self.accessor_atom(mi, c, n);
             if !accessor_keys.contains(&a) {
                 accessor_keys.push(a);
             }
@@ -1495,7 +1495,7 @@ impl<'a> Gen<'a> {
                 self.m.this_class.insert(this, tm);
                 proto
             };
-            let a = self.m.atom(name);
+            let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((holder, a)).or_default().0.push(ft);
@@ -1521,7 +1521,7 @@ impl<'a> Gen<'a> {
                 self.m.this_class.insert(this, tm);
                 proto
             };
-            let a = self.m.atom(name);
+            let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
@@ -1827,10 +1827,21 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// The storage key of private field `name` (`#x`) declared by class `c`
-    /// of module `mi`: the class its private elements belong to, the one it
-    /// was specialized from (codegen `element_class_id_in`), names it.
-    pub(crate) fn private_field_key(&self, mi: u32, c: &Class, name: &str) -> String {
+    /// The key accessor `name` of class `c` is held under: a private one
+    /// (`get #x()`) under the dispatch key its guarded access reads
+    /// (`Expr::PrivateGuard` keeps the `perry_hir::private_names` key), named
+    /// by the class it was specialized from, as its fields are.
+    fn accessor_atom(&mut self, mi: u32, c: &Class, name: &str) -> Atom {
+        if !name.starts_with('#') {
+            return self.m.atom(name);
+        }
+        let k = perry_hir::private_names::private_member_key(self.private_class_id(mi, c), name);
+        self.m.atom(&k)
+    }
+
+    /// The class whose private elements class `c` of module `mi` carries:
+    /// the one it was specialized from (codegen `element_class_id_in`).
+    fn private_class_id(&self, mi: u32, c: &Class) -> u32 {
         let module = self.modules[mi as usize].1;
         let mut cur = c;
         for _ in 0..module.classes.len() {
@@ -1843,7 +1854,14 @@ impl<'a> Gen<'a> {
                 None => break,
             }
         }
-        perry_hir::private_names::private_value_key(cur.id, name)
+        cur.id
+    }
+
+    /// The storage key of private field `name` (`#x`) declared by class `c`
+    /// of module `mi`: the class its private elements belong to, the one it
+    /// was specialized from (codegen `element_class_id_in`), names it.
+    pub(crate) fn private_field_key(&self, mi: u32, c: &Class, name: &str) -> String {
+        perry_hir::private_names::private_value_key(self.private_class_id(mi, c), name)
     }
 
     /// The key of static field `field_name` of class `class_name`: a `#x`
