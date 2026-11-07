@@ -85,6 +85,20 @@ pub(super) fn on() -> bool {
     ANCHOR.on.load(Relaxed)
 }
 
+// Const-initialized native TLS needs neither lazy initialization nor allocation.
+// It lives outside the generated program's tracked TLS pages.
+#[thread_local]
+static LOGGING_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+
+/// Allocator callbacks must be rejected before formatting or borrowing State.
+pub(super) fn inputs_on() -> bool {
+    on() && LOGGING_DEPTH.get() == 0
+}
+pub(super) fn logging_scope(enter: bool) {
+    let depth = LOGGING_DEPTH.get();
+    LOGGING_DEPTH.set(if enter { depth + 1 } else { depth - 1 });
+}
+
 /// Collection is held until the boundary (not in the weights run).
 pub(super) fn holds_collection() -> bool {
     on() && !state().noprotect
@@ -92,7 +106,7 @@ pub(super) fn holds_collection() -> bool {
 
 // Native helper threads are visible in the syscall companion, but must not
 // borrow the main thread's census buffers.
-fn on_main_thread() -> bool {
+pub(super) fn on_main_thread() -> bool {
     let p = ANCHOR.state.load(Relaxed);
     !p.is_null() && unsafe { (*p).main_tid == libc::syscall(libc::SYS_gettid) }
 }
@@ -1047,6 +1061,7 @@ unsafe fn start_census(out: String) {
     st.last_ir = read_ir(st.perf_fd);
     ANCHOR.state.store(&mut *st as *mut State, Relaxed);
     std::mem::forget(st);
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     // Nothing moves until the boundary. The weights run (no protection)
     // collects as production does: its Ir per init includes the collections.
@@ -1100,9 +1115,12 @@ unsafe fn start_census(out: String) {
             }
         }
     }
+    st.inputs.watch_enabled = !std::env::var("PERRY_SNAP22_WATCH").is_ok_and(|v| v == "0");
     st.inputs.allocated_bytes = st.births.as_slice().iter().map(|b| b.size as u64).sum();
+    input_record::open(st).expect("cannot open ordered input record");
     install_handlers();
     ANCHOR.on.store(true, Relaxed);
+    let _input_logging = input_record::Scope::enter();
     input_record::event(st, "census_start", String::new());
     let mut raw_env = Vec::<Vec<u8>>::new();
     let mut env_entry = environ;
@@ -1292,6 +1310,7 @@ pub(super) fn init_enter(addr: usize) {
     if !on() && !start_if_requested() {
         return;
     }
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     charge(st);
     let parent = st.frames.last().copied();
@@ -1373,6 +1392,7 @@ pub(super) fn init_enter(addr: usize) {
 }
 
 pub(super) fn init_exit(threw: bool) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     charge(st);
     input_record::event(st, "init_exit", format!("threw={threw}"));
@@ -1399,6 +1419,7 @@ pub(super) fn init_guard(addr: usize, guard: usize) {
 }
 
 pub(super) fn init_part() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if let Some(f) = st.frames.last() {
         if f.kind == FrameKind::Init {
@@ -1418,6 +1439,7 @@ pub(super) fn require_depth(delta: i32) {
 /// target's init guard, 0 after it (the target was already evaluated, so no
 /// evaluation took the mark).
 pub(super) fn require_edge(on: bool) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.require_edge = on.then(|| top_init(st));
 }
@@ -1437,6 +1459,7 @@ pub(super) fn bookkeeping_depth(delta: i32) {
 }
 
 pub(super) fn job_enter(owner: u32) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     charge(st);
     st.frames.push(Frame {
@@ -1448,6 +1471,7 @@ pub(super) fn job_enter(owner: u32) {
 }
 
 pub(super) fn job_exit() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     input_record::event(st, "job_exit", String::new());
     charge(st);
@@ -1458,6 +1482,7 @@ pub(super) fn job_exit() {
 }
 
 pub(super) fn entry_body() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.entry_body_seq == 0 {
         st.seq += 1;
@@ -1497,6 +1522,7 @@ pub(super) fn entry_module() {
 /// meta word at `slot`: an empty meta behaves as no meta, so the store is
 /// representation, like the string alias hint (design §2.10.11).
 pub(super) fn meta_install(slot: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.meta_rule {
         st.meta_slot = slot & !7;
@@ -1507,6 +1533,7 @@ pub(super) fn meta_install(slot: usize) {
 /// written into it later is a write of the owner: under rule 4 the record
 /// of a pre-existing owner is pre-existing too.
 pub(super) fn meta_installed(slot: usize, meta: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.meta_slot = 0;
     st.meta_installs += 1;
@@ -1542,6 +1569,7 @@ pub(super) fn global_key<'a>(
     obj: usize,
     key: impl FnOnce() -> Option<&'a [u8]>,
 ) -> Option<(u64, [u8; GKEY_NAME], u8)> {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.gkey_rule {
         return None;
@@ -1569,11 +1597,13 @@ pub(super) fn global_key<'a>(
 
 /// The keyed operation [`global_key`] opened is over.
 pub(super) fn global_key_end(prev: (u64, [u8; GKEY_NAME], u8)) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     (st.gkey, st.gkey_name, st.gkey_len) = prev;
 }
 
 pub(super) fn representation(delta: i32) -> bool {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.meta_rule {
         return false;
@@ -1587,6 +1617,7 @@ pub(super) fn representation(delta: i32) -> bool {
 }
 
 pub(super) fn attached(obj: usize, cells: &[usize]) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.transparent.is_empty() {
         return;
@@ -1609,6 +1640,7 @@ pub(super) fn attached(obj: usize, cells: &[usize]) {
 }
 
 pub(super) fn dyn_code(kind: u8) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     if top == 0 {
@@ -1628,6 +1660,7 @@ pub(super) fn dyn_code(kind: u8) {
 }
 
 pub(super) fn input_scope(delta: i32) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if delta > 0 {
         st.inputs.call_depth += 1;
@@ -1638,10 +1671,12 @@ pub(super) fn input_scope(delta: i32) {
 }
 
 pub(super) fn input_event(op: &str, value: String) -> u64 {
+    let _input_logging = input_record::Scope::enter();
     input_record::event(state(), op, value)
 }
 
 pub(super) fn host(class: Effect, what: &'static str) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let input_top = top_init(st) as usize;
     if class != Effect::TargetFact
@@ -1649,13 +1684,7 @@ pub(super) fn host(class: Effect, what: &'static str) {
         && input_top != 0
         && st.inputs.writes.get(input_top).is_some_and(Option::is_none)
     {
-        st.inputs.seq += 1;
-        st.inputs.writes[input_top] = Some(input_record::Write {
-            seq: st.inputs.seq,
-            ir: read_ir(st.perf_fd),
-            word: 0,
-            pc: 0,
-        });
+        input_record::remember_write(st, 0, 0);
         st.inputs.watching = false;
         unsafe {
             apply_protection(st);
@@ -1734,6 +1763,7 @@ fn object_start(st: &State, word: usize) -> Option<usize> {
 }
 
 pub(super) fn birth(addr: usize, size: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.inputs.allocated_bytes += size as u64;
     // Memory handed out again (a free-list slot, a rewound bump) holds new
@@ -1775,6 +1805,7 @@ pub(super) fn birth(addr: usize, size: usize) {
 }
 
 pub(super) fn region_mapped(base: usize, len: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if unsafe { libc::syscall(libc::SYS_gettid) } != st.main_tid {
         return;
@@ -1787,6 +1818,7 @@ pub(super) fn region_mapped(base: usize, len: usize) {
 }
 
 pub(super) fn global_root(slot: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     // A slot registered again is one address linked into several modules
     // (codegen registers a class-static global in its defining module and in
@@ -1826,6 +1858,7 @@ pub(super) fn global_root(slot: usize) {
 }
 
 fn mark_tracked(lo: usize, hi: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let mut p = lo & !(PAGE - 1);
     while p < hi {
@@ -2207,6 +2240,7 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
             (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
             return;
         }
+        let _input_logging = input_record::Scope::enter();
         if st.in_handler > 0 {
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
@@ -2319,6 +2353,7 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
         if st_ptr.is_null() || (*st_ptr).pending[0] == 0 {
             return chain(std::ptr::addr_of!(PREV_TRAP.0).cast(), sig);
         }
+        let _input_logging = input_record::Scope::enter();
         let st = &mut *st_ptr;
         let pending = st.pending;
         if st.rset_active {
@@ -2738,6 +2773,7 @@ unsafe extern "C" {
 /// knobs, C libraries), not only the entries that declare `env`.
 #[no_mangle]
 pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char {
+    let saved_errno = *libc::__errno_location();
     if name.is_null() {
         return std::ptr::null_mut();
     }
@@ -2754,30 +2790,28 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
             e = e.add(1);
         }
     }
-    if on() && on_main_thread() {
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
         let st = state();
-        let top = st.frames.last().map_or(0, |f| f.init);
-        let raw_value = if found.is_null() {
-            "unset".to_owned()
+        if found.is_null() {
+            input_record::native_event(
+                st,
+                "getenv",
+                format_args!("{}=unset", input_record::Hex(key)),
+            );
         } else {
-            input_record::hex(std::ffi::CStr::from_ptr(found).to_bytes())
-        };
-        input_record::event(
-            st,
-            "getenv",
-            format!("{}={}", input_record::hex(key), raw_value),
-        );
-        if st.env_reads.len() < 1 << 20 {
-            let value = (!found.is_null()).then(|| {
-                std::ffi::CStr::from_ptr(found)
-                    .to_string_lossy()
-                    .into_owned()
-            });
-            st.env_reads
-                .push((top, String::from_utf8_lossy(key).into_owned(), value));
+            input_record::native_event(
+                st,
+                "getenv",
+                format_args!(
+                    "{}={}",
+                    input_record::Hex(key),
+                    input_record::Hex(std::ffi::CStr::from_ptr(found).to_bytes())
+                ),
+            );
         }
     }
-    if on() && !on_main_thread() {
+    if inputs_on() && !on_main_thread() {
         let value = if found.is_null() {
             b"<unset>".as_slice()
         } else {
@@ -2785,6 +2819,7 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
         };
         foreign_input(b"getenv", key, value);
     }
+    *libc::__errno_location() = saved_errno;
     found
 }
 
@@ -2799,6 +2834,7 @@ pub(super) fn skip_collection() -> bool {
 }
 
 pub(super) fn boundary(at: &'static str) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.boundary_seq != 0 {
         return;
@@ -2879,6 +2915,7 @@ fn heap_pointer(st: &State, v: u64) -> bool {
 }
 
 extern "C" fn rset_report() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.rset_active {
         return;
@@ -2984,6 +3021,8 @@ pub(super) fn after_boundary_collection() {
 }
 
 fn write_report(st: &mut State) {
+    st.env_reads =
+        input_record::env_rows(st).expect("cannot read durable environment observations");
     use std::io::Write;
     let Ok(mut f) = std::fs::File::create(&st.out) else {
         return;
@@ -3972,11 +4011,13 @@ pub(super) fn births_len() -> usize {
 }
 
 pub(super) fn env_site(kind: i32) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.env_site = Some((top_init(st), kind as u8));
 }
 
 pub(super) fn env_object(bits: u64) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.env_rule {
         return host(Effect::HostRead, "env");
@@ -3998,6 +4039,7 @@ pub(super) fn env_object(bits: u64) {
 }
 
 pub(super) fn env_storage(begin: usize, obj: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let h = obj - crate::gc::GC_HEADER_SIZE;
     let new: Vec<(usize, usize)> = st.births.as_slice()[begin.min(st.births.len)..]
@@ -4018,6 +4060,7 @@ pub(super) fn env_storage(begin: usize, obj: usize) {
 }
 
 pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     input_record::event(st, "env_get", format!("{name:?}={value:?}"));
     let top = top_init(st);
@@ -4051,6 +4094,7 @@ pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
 }
 
 pub(super) fn env_has(name: &str, present: bool) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     input_record::event(st, "env_has", format!("{name:?}={present}"));
     if !st.env_rule {
@@ -4119,6 +4163,7 @@ fn env_word_access(st: &mut State, v: u32, word: usize, write: bool, pc: usize) 
 
 /// The check run: the evaluation now on top is a member of D.
 pub(super) fn skip_body() -> bool {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.skip.is_empty() {
         return false;
@@ -4441,17 +4486,25 @@ pub unsafe extern "C" fn clock_gettime(
 ) -> libc::c_int {
     let rc = libc::syscall(libc::SYS_clock_gettime, clock, out) as libc::c_int;
     let saved_errno = *libc::__errno_location();
-    if on() && on_main_thread() {
-        let value = if rc == 0 && !out.is_null() {
-            format!(
-                "clock={clock};sec={};nsec={}",
-                (*out).tv_sec,
-                (*out).tv_nsec
-            )
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        if rc == 0 && !out.is_null() {
+            input_record::native_event(
+                state(),
+                "native.clock_gettime",
+                format_args!(
+                    "clock={clock};sec={};nsec={}",
+                    (*out).tv_sec,
+                    (*out).tv_nsec
+                ),
+            );
         } else {
-            format!("clock={clock};rc={rc};errno={saved_errno}")
-        };
-        input_event("native.clock_gettime", value);
+            input_record::native_event(
+                state(),
+                "native.clock_gettime",
+                format_args!("clock={clock};rc={rc};errno={saved_errno}"),
+            );
+        }
     }
     *libc::__errno_location() = saved_errno;
     rc
@@ -4464,13 +4517,21 @@ pub unsafe extern "C" fn gettimeofday(
 ) -> libc::c_int {
     let rc = libc::syscall(libc::SYS_gettimeofday, out, zone) as libc::c_int;
     let saved_errno = *libc::__errno_location();
-    if on() && on_main_thread() {
-        let value = if rc == 0 && !out.is_null() {
-            format!("sec={};usec={}", (*out).tv_sec, (*out).tv_usec)
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        if rc == 0 && !out.is_null() {
+            input_record::native_event(
+                state(),
+                "native.gettimeofday",
+                format_args!("sec={};usec={}", (*out).tv_sec, (*out).tv_usec),
+            );
         } else {
-            format!("rc={rc};errno={saved_errno}")
-        };
-        input_event("native.gettimeofday", value);
+            input_record::native_event(
+                state(),
+                "native.gettimeofday",
+                format_args!("rc={rc};errno={saved_errno}"),
+            );
+        }
     }
     *libc::__errno_location() = saved_errno;
     rc
@@ -4480,8 +4541,13 @@ pub unsafe extern "C" fn gettimeofday(
 pub unsafe extern "C" fn time(out: *mut libc::time_t) -> libc::time_t {
     let rc = libc::syscall(libc::SYS_time, out) as libc::time_t;
     let saved_errno = *libc::__errno_location();
-    if on() && on_main_thread() {
-        input_event("native.time", format!("seconds={rc};errno={saved_errno}"));
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        input_record::native_event(
+            state(),
+            "native.time",
+            format_args!("seconds={rc};errno={saved_errno}"),
+        );
     }
     *libc::__errno_location() = saved_errno;
     rc
@@ -4492,13 +4558,18 @@ pub unsafe extern "C" fn time(out: *mut libc::time_t) -> libc::time_t {
 #[no_mangle]
 pub unsafe extern "C" fn unsetenv(name: *const libc::c_char) -> libc::c_int {
     let saved_errno = *libc::__errno_location();
-    if on() && on_main_thread() {
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
         let key = if name.is_null() {
-            "null".into()
+            b"<null>".as_slice()
         } else {
-            input_record::hex(std::ffi::CStr::from_ptr(name).to_bytes())
+            std::ffi::CStr::from_ptr(name).to_bytes()
         };
-        input_event("native.unsetenv", key);
+        input_record::native_event(
+            state(),
+            "native.unsetenv",
+            format_args!("{}", input_record::Hex(key)),
+        );
         host(Effect::HostWrite, "env");
     }
     let next = libc::dlsym(libc::RTLD_NEXT, c"unsetenv".as_ptr());
@@ -4515,20 +4586,26 @@ pub unsafe extern "C" fn setenv(
     overwrite: libc::c_int,
 ) -> libc::c_int {
     let saved_errno = *libc::__errno_location();
-    if on() && on_main_thread() {
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
         let key = if name.is_null() {
-            "null".into()
+            b"<null>".as_slice()
         } else {
-            input_record::hex(std::ffi::CStr::from_ptr(name).to_bytes())
+            std::ffi::CStr::from_ptr(name).to_bytes()
         };
         let val = if value.is_null() {
-            "null".into()
+            b"<null>".as_slice()
         } else {
-            input_record::hex(std::ffi::CStr::from_ptr(value).to_bytes())
+            std::ffi::CStr::from_ptr(value).to_bytes()
         };
-        input_event(
+        input_record::native_event(
+            state(),
             "native.setenv",
-            format!("{key}={val};overwrite={overwrite}"),
+            format_args!(
+                "{}={};overwrite={overwrite}",
+                input_record::Hex(key),
+                input_record::Hex(val)
+            ),
         );
         host(Effect::HostWrite, "env");
     }

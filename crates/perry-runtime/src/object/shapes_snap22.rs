@@ -17,6 +17,7 @@ impl std::fmt::Write for Line {
 }
 pub(crate) fn snapshot(label: &str, error: u64) {
     let saved_errno = unsafe { *libc::__errno_location() };
+    let _scope = crate::snap_census::record_scope();
     let mut out = Line {
         bytes: [0; 2048],
         len: 0,

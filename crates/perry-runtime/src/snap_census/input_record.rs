@@ -1,34 +1,102 @@
-//! Ordered evidence for execution-prefix eligibility. This module is only
-//! compiled with the Linux instruments runner; it never decides production facts.
+//! Ordered execution-prefix evidence, streamed through native storage.
 use super::{read_ir, top_init, State};
 use std::fmt::Write as _;
 
-#[derive(Default)]
 pub(super) struct Record {
     pub seq: u64,
-    pub events: Vec<Event>,
     pub writes: Vec<Option<Write>>,
     pub watching: bool,
+    pub watch_enabled: bool,
     pub call_depth: u32,
     pub allocated_bytes: u64,
+    fd: i32,
 }
-pub(super) struct Write {
-    pub seq: u64,
-    pub ir: u64,
-    pub word: usize,
-    pub pc: usize,
+impl Default for Record {
+    fn default() -> Self {
+        Self {
+            seq: 0,
+            writes: Vec::new(),
+            watching: false,
+            watch_enabled: true,
+            call_depth: 0,
+            allocated_bytes: 0,
+            fd: -1,
+        }
+    }
 }
-pub(super) struct Event {
-    seq: u64,
-    ir: u64,
-    allocated_bytes: u64,
-    init: u32,
-    stack: Vec<(u32, u32, u8)>,
-    pcs: [usize; 6],
-    op: String,
-    value: String,
+pub(super) struct Write;
+
+pub(super) fn open(st: &mut State) -> std::io::Result<()> {
+    use std::os::fd::IntoRawFd;
+    let saved = unsafe { *libc::__errno_location() };
+    let _scope = Scope::enter();
+    st.inputs.fd = std::fs::File::create(format!("{}.inputs.tsv", st.out))?.into_raw_fd();
+    emit(
+        st.inputs.fd,
+        b"seq\tir\tinit\tstack_parts\top\tvalue_hex\tpcs\tallocated_bytes\n",
+    );
+    unsafe {
+        *libc::__errno_location() = saved;
+    }
+    Ok(())
+}
+
+/// The companion records these intervals as diagnostic execution. The marker
+/// and file writes preserve errno and never enter a JS allocator.
+pub(crate) fn logger_scope(enter: bool) {
+    if enter {
+        super::logging_scope(true);
+    }
+    unsafe {
+        let saved = *libc::__errno_location();
+        libc::syscall(
+            libc::SYS_lseek,
+            -1 as libc::c_int,
+            u64::from(enter),
+            0x5322 as libc::c_int,
+        );
+        *libc::__errno_location() = saved;
+    }
+    if !enter {
+        super::logging_scope(false);
+    }
+}
+pub(crate) struct Scope;
+impl Scope {
+    pub(crate) fn enter() -> Self {
+        logger_scope(true);
+        Self
+    }
+}
+impl Drop for Scope {
+    fn drop(&mut self) {
+        logger_scope(false);
+    }
+}
+fn emit(fd: i32, bytes: &[u8]) {
+    let saved = unsafe { *libc::__errno_location() };
+    let mut at = 0;
+    while at < bytes.len() {
+        let n = unsafe { libc::write(fd, bytes.as_ptr().add(at).cast(), bytes.len() - at) };
+        if n > 0 {
+            at += n as usize;
+        } else if n < 0 && unsafe { *libc::__errno_location() } == libc::EINTR {
+            continue;
+        } else {
+            let message = b"SNAP22 input record write failed\n";
+            unsafe {
+                libc::write(2, message.as_ptr().cast(), message.len());
+                libc::_exit(92);
+            }
+        }
+    }
+    unsafe {
+        *libc::__errno_location() = saved;
+    }
 }
 pub(super) fn event(st: &mut State, op: &str, value: String) -> u64 {
+    let saved = unsafe { *libc::__errno_location() };
+    logger_scope(true);
     let ir = read_ir(st.perf_fd);
     let init = top_init(st);
     st.inputs.seq += 1;
@@ -40,28 +108,29 @@ pub(super) fn event(st: &mut State, op: &str, value: String) -> u64 {
     for (to, from) in six.iter_mut().zip(pcs[..n].iter().skip(1)) {
         *to = *from;
     }
-    let stack = st
-        .frames
-        .iter()
-        .map(|f| {
-            (
-                f.init,
-                st.inits[f.init as usize].parts as u32,
-                u8::from(f.kind == super::FrameKind::Job),
-            )
-        })
-        .collect();
-    st.inputs.events.push(Event {
-        seq,
-        ir,
-        allocated_bytes: st.inputs.allocated_bytes,
-        init,
-        stack,
-        pcs: six,
-        op: op.to_owned(),
-        value,
-    });
-    let saved_errno = unsafe { *libc::__errno_location() };
+    let mut row = format!("{seq}\t{ir}\t{init}\t");
+    for (i, f) in st.frames.iter().enumerate() {
+        if i != 0 {
+            row.push(',');
+        }
+        let _ = write!(
+            row,
+            "{}:{}:{}",
+            f.init,
+            st.inits[f.init as usize].parts,
+            u8::from(f.kind == super::FrameKind::Job)
+        );
+    }
+    let _ = write!(row, "\t{op}\t{}\t", hex(value.as_bytes()));
+    for (i, pc) in six.iter().enumerate() {
+        if i != 0 {
+            row.push(',');
+        }
+        let _ = write!(row, "{pc:x}");
+    }
+    let _ = writeln!(row, "\t{}", st.inputs.allocated_bytes);
+    emit(st.inputs.fd, row.as_bytes());
+    logger_scope(false);
     unsafe {
         libc::syscall(
             libc::SYS_lseek,
@@ -69,21 +138,82 @@ pub(super) fn event(st: &mut State, op: &str, value: String) -> u64 {
             seq as libc::off_t,
             0x5321 as libc::c_int,
         );
-    }
-    unsafe {
-        *libc::__errno_location() = saved_errno;
+        *libc::__errno_location() = saved;
     }
     seq
 }
 pub(super) fn watch(st: &State) -> bool {
     let id = top_init(st) as usize;
-    st.inputs.call_depth == 0
+    st.inputs.watch_enabled
+        && st.inputs.call_depth == 0
         && id != 0
         && st.inits[id].parts >= 2
         && st.inputs.writes.get(id).is_some_and(Option::is_none)
 }
-/// Called after the census has excluded bookkeeping and untracked binary
-/// words. A signal handler must not allocate or format strings here.
+
+struct SignalRow<const N: usize> {
+    bytes: [u8; N],
+    len: usize,
+}
+impl<const N: usize> std::fmt::Write for SignalRow<N> {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        if self.len + value.len() > self.bytes.len() {
+            return Err(std::fmt::Error);
+        }
+        self.bytes[self.len..self.len + value.len()].copy_from_slice(value.as_bytes());
+        self.len += value.len();
+        Ok(())
+    }
+}
+/// No allocation, formatting heap, JS API or deferred payload is permitted in
+/// the fault handler. An oversized frame record fails explicitly, never truncates.
+pub(super) fn remember_write(st: &mut State, word: usize, pc: usize) {
+    let saved = unsafe { *libc::__errno_location() };
+    let id = top_init(st) as usize;
+    st.inputs.seq += 1;
+    st.inputs.writes[id] = Some(Write);
+    let ir = read_ir(st.perf_fd);
+    logger_scope(true);
+    let mut row = SignalRow {
+        bytes: [0; 65536],
+        len: 0,
+    };
+    let result = (|| -> std::fmt::Result {
+        write!(row, "{}\t{ir}\t{id}\t", st.inputs.seq)?;
+        for (i, f) in st.frames.iter().enumerate() {
+            if i != 0 {
+                row.write_char(',')?;
+            }
+            write!(
+                row,
+                "{}:{}:{}",
+                f.init,
+                st.inits[f.init as usize].parts,
+                u8::from(f.kind == super::FrameKind::Job)
+            )?;
+        }
+        row.write_str("\tfirst_changed_tracked_word\t")?;
+        let mut text = SignalRow {
+            bytes: [0; 16],
+            len: 0,
+        };
+        write!(text, "{word:x}")?;
+        for byte in &text.bytes[..text.len] {
+            write!(row, "{byte:02x}")?;
+        }
+        writeln!(row, "\t{pc:x}\t{}", st.inputs.allocated_bytes)
+    })();
+    if result.is_err() {
+        unsafe {
+            libc::_exit(93);
+        }
+    }
+    emit(st.inputs.fd, &row.bytes[..row.len]);
+    logger_scope(false);
+    unsafe {
+        *libc::__errno_location() = saved;
+    }
+}
 pub(super) fn changed_word(st: &mut State, word: usize, pc: usize) {
     let id = top_init(st) as usize;
     if !watch(st) {
@@ -94,73 +224,123 @@ pub(super) fn changed_word(st: &mut State, word: usize, pc: usize) {
         || super::object_start(st, word)
             .and_then(|h| st.born_by.get(h as u64))
             .is_some_and(|owner| owner as usize != id);
-    if !external {
-        return;
+    if external {
+        remember_write(st, word, pc);
     }
-    st.inputs.seq += 1;
-    st.inputs.writes[id] = Some(Write {
-        seq: st.inputs.seq,
-        ir: read_ir(st.perf_fd),
-        word,
-        pc,
-    });
 }
-pub(super) fn write(st: &State) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let mut rows: Vec<(u64, String)> = Vec::new();
-    let mut out = std::io::BufWriter::new(std::fs::File::create(format!("{}.inputs.tsv", st.out))?);
-    writeln!(
-        out,
-        "seq\tir\tinit\tstack_parts\top\tvalue_hex\tpcs\tallocated_bytes"
-    )?;
-    for e in &st.inputs.events {
-        let stack = e
-            .stack
-            .iter()
-            .map(|(i, p, k)| format!("{i}:{p}:{k}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let pcs = e
-            .pcs
-            .iter()
-            .map(|p| format!("{p:x}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        rows.push((
-            e.seq,
-            format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                e.seq,
-                e.ir,
-                e.init,
-                stack,
-                e.op,
-                hex(e.value.as_bytes()),
-                pcs,
-                e.allocated_bytes
-            ),
-        ));
-    }
-    for (id, hit) in st.inputs.writes.iter().enumerate() {
-        if let Some(w) = hit {
-            rows.push((
-                w.seq,
-                format!(
-                    "{}\t{}\t{}\t\tfirst_changed_tracked_word\t{}\t{:x}\t",
-                    w.seq,
-                    w.ir,
-                    id,
-                    hex(format!("{:x}", w.word).as_bytes()),
-                    w.pc
-                ),
-            ));
+pub(super) fn write(_st: &State) -> std::io::Result<()> {
+    // Rows are unbuffered write-all calls, including the fault-handler rows.
+    Ok(())
+}
+
+/// Used by libc callbacks, including callbacks from inside mimalloc. No
+/// heap allocation, JS API, backtrace cache, or native allocator is entered.
+pub(super) fn native_event(st: &mut State, op: &str, value: std::fmt::Arguments<'_>) {
+    let saved = unsafe { *libc::__errno_location() };
+    let _scope = Scope::enter();
+    let ir = read_ir(st.perf_fd);
+    st.inputs.seq += 1;
+    let seq = st.inputs.seq;
+    let mut text = SignalRow {
+        bytes: [0; 65536],
+        len: 0,
+    };
+    if text.write_fmt(value).is_err() {
+        unsafe {
+            libc::_exit(93);
         }
     }
-    rows.sort_unstable_by_key(|r| r.0);
-    for (_, line) in rows {
-        writeln!(out, "{line}")?;
+    let mut row = SignalRow {
+        bytes: [0; 131072],
+        len: 0,
+    };
+    let result = (|| -> std::fmt::Result {
+        write!(row, "{seq}\t{ir}\t{}\t", top_init(st))?;
+        for (i, f) in st.frames.iter().enumerate() {
+            if i != 0 {
+                row.write_char(',')?;
+            }
+            write!(
+                row,
+                "{}:{}:{}",
+                f.init,
+                st.inits[f.init as usize].parts,
+                u8::from(f.kind == super::FrameKind::Job)
+            )?;
+        }
+        write!(row, "\t{op}\t")?;
+        for b in &text.bytes[..text.len] {
+            write!(row, "{b:02x}")?;
+        }
+        writeln!(row, "\t0,0,0,0,0,0\t{}", st.inputs.allocated_bytes)
+    })();
+    if result.is_err() {
+        unsafe {
+            libc::_exit(93);
+        }
     }
-    out.flush()
+    emit(st.inputs.fd, &row.bytes[..row.len]);
+    unsafe {
+        libc::syscall(
+            libc::SYS_lseek,
+            -1 as libc::c_int,
+            seq as libc::off_t,
+            0x5321 as libc::c_int,
+        );
+        *libc::__errno_location() = saved;
+    }
+}
+pub(super) struct Hex<'a>(pub &'a [u8]);
+impl std::fmt::Display for Hex<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
+    }
+}
+pub(super) fn env_rows(st: &State) -> std::io::Result<Vec<(u32, String, Option<String>)>> {
+    use std::io::{BufRead, Error, ErrorKind};
+    fn unhex(s: &str) -> std::io::Result<Vec<u8>> {
+        if s.len() % 2 != 0 {
+            return Err(Error::new(ErrorKind::InvalidData, "odd hex"));
+        }
+        (0..s.len())
+            .step_by(2)
+            .map(|i| {
+                u8::from_str_radix(&s[i..i + 2], 16)
+                    .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid hex"))
+            })
+            .collect()
+    }
+    let mut rows = Vec::new();
+    for line in
+        std::io::BufReader::new(std::fs::File::open(format!("{}.inputs.tsv", st.out))?).lines()
+    {
+        let line = line?;
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.get(4) != Some(&"getenv") {
+            continue;
+        }
+        let value = String::from_utf8(unhex(fields[5])?)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "bad env row"))?;
+        let (name, value) = value
+            .split_once('=')
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing env separator"))?;
+        let value = if value == "unset" {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&unhex(value)?).into_owned())
+        };
+        rows.push((
+            fields[2]
+                .parse()
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "bad init"))?,
+            String::from_utf8_lossy(&unhex(name)?).into_owned(),
+            value,
+        ));
+    }
+    Ok(rows)
 }
 pub(super) fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -256,9 +436,22 @@ impl Value for *mut crate::ArrayHeader {
             return "null".into();
         }
         let len = unsafe { (**self).length };
+        if unsafe {
+            crate::array::array_has_element_descriptors_resolved(*self) || len > (**self).capacity
+        } {
+            return "unsupported_array_payload".into();
+        }
         let mut out = String::from("[");
         for i in 0..len {
-            let value = crate::array::js_array_get_f64_unchecked(*self, i).to_bits();
+            let mut value = unsafe {
+                (crate::array::array_elements_ptr(*self) as *const f64)
+                    .add(i as usize)
+                    .read()
+                    .to_bits()
+            };
+            if value == crate::value::TAG_HOLE {
+                value = 0x7ffc_0000_0000_0001;
+            }
             if i != 0 {
                 out.push(',');
             }

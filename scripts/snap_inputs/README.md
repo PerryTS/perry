@@ -34,3 +34,29 @@ writes or their absence: representation writes, non-GC native state and local
 allocations must be audited separately. A decoder's "representation" annotation
 likewise cannot admit a native resource. Unknown input or incomplete payload is
 a STOP; module names and TypeScript types never grant eligibility.
+
+SNAP22 abort survival: compile `fixtures/abort/main.ts` with the instrumented
+cohort, then run with `SNAP22_ABORT_SENTINEL=before_abort` and
+`PERRY_SNAP_CENSUS=<report>`; expect SIGABRT/134. Run
+`python3 scripts/snap_inputs/check_abort.py <report>.inputs.tsv`.
+The assertion is RED with SNAP21's boundary-buffered recorder. Each row now
+uses native write-all immediately, including first-write rows from signal
+context. Native logging intervals carry lseek marker 0x5322; the syscall
+companion excludes only those explicit intervals and their dedicated fds.
+No JS values, shapes, native frames or event payload buffers are retained
+by the recorder. A failed or oversized write fails explicitly (92/93).
+
+The recorder suppresses allocator callbacks with const-initialized native TLS
+before callback formatting or borrowing census state. Only diagnostic scopes
+are suppressed; the actual observed JS/native operation runs outside them.
+Clock and libc environment observation payloads use bounded stack buffers.
+
+For the GC/re-entry regression, compile fixtures/effect/main.ts (requires the
+same installed effect package as the subject) and fixtures/pressure/main.ts.
+Run each with PERRY_SNAP22_WATCH=0 and =1, PERRY_SNAP_NOPROTECT=1 and distinct
+report paths. check_recorder.py ROOT [ARM=guard-head] asserts six ordered
+prefixes under ROOT/fx/{effect,shapes,abort}/ARM, report-0/report-1 inputs,
+stdout-0/stdout-1, and a live-object census proving GC completed. The abort
+fixture intentionally exits 134 without reaching the boundary. On the old
+recorder the effect GC crashes, pressure fails, and abort rows are absent or
+out of order; a successful process exit alone cannot satisfy these assertions.

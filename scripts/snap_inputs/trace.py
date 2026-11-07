@@ -67,9 +67,9 @@ def main():
   os.execvpe(command[0],command,os.environ)
  _,status=os.waitpid(pid,0)
  ptrace(SETOPTIONS,pid,0,1|(1<<1)|(1<<2)|(1<<3)|(1<<4)|(1<<20))
- active={pid:{"perf":counter(pid),"entry":None,"mem":None,"diagnostic_fds":set()}}
+ active={pid:{"perf":counter(pid),"entry":None,"mem":None,"diagnostic_fds":set(),"logger_depth":0}}
  sequence=0; main_rc=None; failures=[]
- out=open(output,"w")
+ out=open(output,"w",buffering=1)
  out.write(json.dumps({"kind":"collector","sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),"command":command})+"\n")
  def memory(tid,addr,n):
   if n==0:return b""
@@ -209,7 +209,7 @@ def main():
    if tid==pid:main_rc=rc
    out.write(json.dumps({"kind":"exit","tid":tid,"rc":rc})+"\n");continue
   if tid not in active:
-   active[tid]={"perf":counter(tid),"entry":None,"mem":None,"diagnostic_fds":set()}
+   active[tid]={"perf":counter(tid),"entry":None,"mem":None,"diagnostic_fds":set(),"logger_depth":0}
   sig=os.WSTOPSIG(status); event=status>>16
   if event in (1,2,3):
    child=C.c_ulonglong()
@@ -233,7 +233,9 @@ def main():
     a=args
     # Optional raw stack evidence for source audit. These words are not a
     # backtrace and never establish an input's eligibility or pointer shape.
-    if nr not in REP and not(nr in (0,1) and a[0] in state["diagnostic_fds"]):
+    if state["logger_depth"]:
+     entry["policy"]="diagnostic"
+    if nr not in REP and not state["logger_depth"] and not(nr in (0,1) and a[0] in state["diagnostic_fds"]):
      regs=(C.c_ulonglong*27)()
      ptrace(12,tid,0,C.addressof(regs))
      sp=int(regs[19]);entry["rsp"]=sp
@@ -265,6 +267,10 @@ def main():
     elif nr==46:entry["message"]=message(tid,a[1],1<<63)
     elif nr in (42,49):entry["sockaddr"]=blob(tid,a[1],a[2])
     elif nr==54:entry["option"]=blob(tid,a[3],a[4])
+    if nr==8 and (a[0]&0xffffffff)==0xffffffff and a[2]==0x5322:
+     entry["kind"]="logger_scope";entry["policy"]="diagnostic"
+     state["logger_depth"] += 1 if a[1] else -1
+     if state["logger_depth"]<0:raise RuntimeError("unbalanced logger scope")
     if nr==8 and (a[0]&0xffffffff)==0xffffffff and a[2]==0x5321:
      entry["kind"]="runtime_marker";entry["runtime_seq"]=a[1]
     if nr in (0,1,8) and a[0] in state["diagnostic_fds"]:entry["policy"]="diagnostic"
@@ -275,7 +281,7 @@ def main():
     e["ir_exit"]=pos;e["ret"]=ret;e["is_error"]=bool(raw[32])
     a=e["args"];nr=e["nr"]
     if ret>=0:
-     if nr==298:state["diagnostic_fds"].add(ret)
+     if nr==298 or (nr in (2,257) and e["policy"]=="diagnostic"):state["diagnostic_fds"].add(ret)
      if nr==9 and C.c_int(a[4]).value>=0:
       # A file-backed mapping is an input/resource boundary even if its
       # contents are first used later. Capture this observation; subsequent

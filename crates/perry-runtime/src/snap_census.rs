@@ -688,11 +688,14 @@ pub use runner::input_record::Value as InputValue;
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub fn input_call<T: InputValue>(operation: &str, arguments: &str, call: impl FnOnce() -> T) -> T {
-    if !runner::on() {
+    if !runner::inputs_on() || !runner::on_main_thread() {
         return call();
     }
     let before_errno = unsafe { *libc::__errno_location() };
-    let token = runner::input_event(operation, arguments.to_owned());
+    let token = {
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event(operation, arguments.to_owned())
+    };
     unsafe {
         *libc::__errno_location() = before_errno;
     }
@@ -700,7 +703,10 @@ pub fn input_call<T: InputValue>(operation: &str, arguments: &str, call: impl Fn
     let result = call();
     let saved_errno = unsafe { *libc::__errno_location() };
     runner::input_scope(-1);
-    runner::input_event("result", format!("{token}:{}", result.input_value()));
+    {
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event("result", format!("{token}:{}", result.input_value()));
+    }
     unsafe {
         *libc::__errno_location() = saved_errno;
     }
@@ -709,12 +715,13 @@ pub fn input_call<T: InputValue>(operation: &str, arguments: &str, call: impl Fn
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub fn runner_on_for_inputs() -> bool {
-    runner::on()
+    runner::inputs_on() && runner::on_main_thread()
 }
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
-    if runner::on() {
+    if runner::inputs_on() && runner::on_main_thread() {
+        let _scope = runner::input_record::Scope::enter();
         runner::input_event(operation, value.input_value());
     }
 }
@@ -728,3 +735,5 @@ macro_rules! census_inputs { ($($code:tt)*) => {{ $($code)* }}; }
 #[macro_export]
 macro_rules! census_inputs { ($($code:tt)*) => {}; }
 
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn record_scope() -> impl Drop { runner::input_record::Scope::enter() }
