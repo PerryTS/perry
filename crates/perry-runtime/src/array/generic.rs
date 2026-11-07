@@ -27,7 +27,7 @@
 //!   * a bare number/boolean → boxed into its `Number`/`Boolean` wrapper object
 //!     (so inherited prototype `length`/indices are read and the callback's
 //!     3rd argument is `instanceof Number`/`Boolean`),
-//!   * a symbol/bigint → no indexed properties → an empty array-like (length 0).
+//!   * a symbol/bigint → its wrapper, ordinarily an empty array-like (length 0).
 
 use super::generic_object::{
     arg_at, object_concat, object_pop, object_push, object_reverse, object_shift, object_sort,
@@ -63,9 +63,8 @@ fn top16(bits: u64) -> u64 {
 /// object so the generic algorithms below (and the callback's 3rd argument)
 /// observe an object with the right prototype chain — e.g.
 /// `Array.prototype.map.call(false, fn)` must read length/indices inherited
-/// from `Boolean.prototype` and pass a `Boolean` wrapper to `fn`. Strings keep
-/// their dedicated code-unit path; symbols / bigints (no indexed properties)
-/// are returned as-is and read as an empty array-like.
+/// from `Boolean.prototype` and pass a `Boolean` wrapper to `fn`. Strings,
+/// symbols and bigints also receive their corresponding wrapper objects.
 pub(super) fn to_object(recv: f64) -> f64 {
     let b = recv.to_bits();
     if b == TAG_UNDEFINED || b == TAG_NULL {
@@ -115,18 +114,20 @@ pub(super) fn to_object(recv: f64) -> f64 {
     recv
 }
 
-/// The receiver of an `Array.prototype` method value: step 1 of every method
-/// is `O = ToObject(this value)`. The method value runs it at its receiver
-/// boundary, because a reflective call (`Array.prototype.m.call(prim, ...)`,
-/// a held `m.call(...)`, `Reflect.apply`) hands it the raw `this`. A heap value
-/// is already an object and keeps every dense and typed path (one tag compare);
-/// anything else goes through [`to_object`]: `null` / `undefined` throw, a
-/// primitive boxes into its wrapper. The wrapper's shape decides the rest: a
-/// `String` wrapper's indices and `length` are non-writable (the mutators
-/// throw), `Number` / `Boolean` wrappers are ordinary length-0 objects.
+/// `ToObject(this)` at an Array method-value boundary. A caller that has
+/// already classified the receiver supplies its GC kind, so an object takes
+/// one tag comparison without another header load. Unclassified pointers need
+/// their kind: Symbol primitives share the pointer tag with objects.
 #[inline(always)]
-pub(crate) fn array_receiver(this: f64) -> f64 {
+pub(crate) fn array_receiver(this: f64, known_kind: Option<u8>) -> f64 {
     if top16(this.to_bits()) == 0x7FFD {
+        let kind = known_kind.or_else(|| {
+            crate::value::addr_class::pointer_value_header(this.to_bits())
+                .map(|header| header.obj_type)
+        });
+        if kind == Some(crate::gc::GC_TYPE_SYMBOL) {
+            return to_object(this);
+        }
         this
     } else {
         to_object(this)
@@ -166,40 +167,51 @@ fn to_length(v: f64) -> i64 {
     }
 }
 
-/// Genuine `ArrayHeader*` if `recv` is a real (or lazy) array, else null.
-///
-/// Objects and arrays share `POINTER_TAG`, so the GC-header `obj_type` byte —
-/// not `clean_arr_ptr` alone — must gate the array fast path: `clean_arr_ptr`
-/// accepts an object pointer whose leading `ObjectHeader` words happen to pass
-/// its `length <= capacity` bound, then `(*arr).length` / the element buffer
-/// read `ObjectHeader`'s words / inline slots as garbage (see
-/// `normalize_array_receiver`).
+/// A boxed non-array receiver for iterator `[[Get]]`/`length` access.
+/// The real-array branch keeps its dense path and does not need boxing.
 #[inline]
-/// A receiver the array iterators read through `[[Get]]` (`al_length` /
-/// `al_get`) rather than an `ArrayHeader`: a Proxy, or an ordinary object
-/// that is not an Array (`Array.prototype.keys.call({ length: 2 })`).
-pub(super) fn is_generic_arraylike_receiver(recv: f64) -> bool {
-    as_real_array(recv).is_null()
-        && matches!(
-            classify_pointer(recv),
-            Some(PtrKind::Proxy) | Some(PtrKind::Object)
-        )
+pub(super) fn generic_arraylike_receiver(recv: f64) -> Option<f64> {
+    let (array, kind) = as_real_array_with_kind(recv);
+    if !array.is_null() {
+        return None;
+    }
+    let recv = array_receiver(recv, kind);
+    matches!(
+        classify_pointer(recv),
+        Some(PtrKind::Proxy) | Some(PtrKind::Object)
+    )
+    .then_some(recv)
 }
 
+/// Genuine `ArrayHeader*` for a real or lazy array, otherwise null.
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
-    // One admission: a POINTER_TAG word names a GC-headed object (honest
-    // pointers; Proxy and stream ids are HANDLE_TAG), so the header byte
-    // decides. Lazy and forwarded arrays take the resolver.
     let b = recv.to_bits();
     let Some(header) = crate::value::addr_class::pointer_value_header(b) else {
         return ptr::null_mut();
     };
     let raw = (b & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+    array_from_header(raw, header)
+}
+
+/// Resolve an already admitted GC header; both classifiers use the same path.
+#[inline(always)]
+fn array_from_header(raw: *const ArrayHeader, header: &crate::gc::GcHeader) -> *mut ArrayHeader {
     match header.obj_type {
         crate::gc::GC_TYPE_ARRAY => unsafe { super::clean_headed_arr_ptr(raw, header) as *mut _ },
         crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_mut(raw as *mut ArrayHeader),
         _ => ptr::null_mut(),
     }
+}
+
+#[inline(always)]
+fn as_real_array_with_kind(recv: f64) -> (*mut ArrayHeader, Option<u8>) {
+    let b = recv.to_bits();
+    let Some(header) = crate::value::addr_class::pointer_value_header(b) else {
+        return (ptr::null_mut(), None);
+    };
+    let kind = header.obj_type;
+    let raw = (b & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+    (array_from_header(raw, header), Some(kind))
 }
 
 #[inline]
@@ -1490,14 +1502,13 @@ pub fn dispatch_arraylike_read_method(
 /// engine; any other receiver yields `undefined`. `recv` is the call-site
 /// `this` (the receiver parameter) the thunk read.
 pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
-    // #6908: every mutator's step 1 is `ToObject(this value)`: a nullish
-    // receiver (`const f = arr.push; f(3)`) throws, and a primitive one
-    // (`Array.prototype.push.call(true, 1)`) mutates its wrapper.
-    let recv = array_receiver(recv);
-    let arr = as_real_array(recv);
+    let (arr, kind) = as_real_array_with_kind(recv);
     if !arr.is_null() {
         return unsafe { real_array_mutator(arr, method, args_ptr, args_len) };
     }
+    // Arrays already are objects. Only the non-array branch needs boxing;
+    // its classification above also distinguishes Symbols without a reread.
+    let recv = array_receiver(recv, kind);
     run_object_mutator(recv, method, args_ptr, args_len).unwrap_or_else(undef)
 }
 
@@ -1767,3 +1778,43 @@ pub fn run_object_mutator(
 
 #[cfg(test)]
 mod class_mutator_tests;
+
+#[cfg(test)]
+mod receiver_tests {
+    use super::*;
+
+    #[test]
+    fn array_receiver_boxes_both_known_and_unclassified_symbols() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
+        for kind in [None, Some(crate::gc::GC_TYPE_SYMBOL)] {
+            let boxed = array_receiver(symbol, kind);
+            let (_, payload) = crate::builtins::boxed_primitive_payload(boxed)
+                .expect("ToObject must produce a primitive wrapper");
+            assert_eq!(payload.to_bits(), symbol.to_bits());
+            assert_eq!(
+                crate::builtins::boxed_primitive_to_string_tag(boxed),
+                Some("Symbol")
+            );
+            assert_ne!(boxed.to_bits(), symbol.to_bits());
+            assert_eq!(al_length(boxed), 0);
+        }
+    }
+
+    #[test]
+    fn array_receiver_reuses_the_callers_object_kind_without_a_header_load() {
+        // The kind is already proven by the caller. This address is never
+        // dereferenced: reclassifying it would read unmapped memory.
+        let object =
+            crate::value::js_nanbox_pointer(crate::value::addr_class::HANDLE_BAND_MAX as i64);
+        assert_eq!(
+            array_receiver(object, Some(crate::gc::GC_TYPE_OBJECT)).to_bits(),
+            object.to_bits()
+        );
+        assert_eq!(
+            array_receiver(object, Some(crate::gc::GC_TYPE_ARRAY)).to_bits(),
+            object.to_bits()
+        );
+    }
+}

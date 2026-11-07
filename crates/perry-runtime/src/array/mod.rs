@@ -181,7 +181,7 @@ pub use self::generic::{
     try_object_arraylike_mutator,
 };
 pub(crate) use self::generic::{
-    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
+    non_array_object_receiver, object_owns_user_method, plain_object_value,
     value_is_own_user_method,
 };
 pub use self::generic_mutators::{
