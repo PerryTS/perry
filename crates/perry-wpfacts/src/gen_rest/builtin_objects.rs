@@ -99,13 +99,10 @@ impl<'a> Gen<'a> {
                 // (`Cons::DefineAll`); any other map's own values are these
                 // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                let va = self.m.atom("value");
-                let value = self.load(descs, Key::Named(va));
+                let [value, dget, dset] = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
                 let star = self.m.atom(crate::STAR_KEY);
-                for (name, setter) in [("get", false), ("set", true)] {
-                    let a = self.m.atom(name);
-                    let f = self.load(descs, Key::Named(a));
+                for (f, setter) in [(dget, false), (dset, true)] {
                     self.m.cons(
                         f,
                         Cons::Accessor {

@@ -871,6 +871,18 @@ impl Protocol {
     }
 }
 
+/// ToPropertyDescriptor (ECMA-262 6.2.6.5) reads each of these keys of the
+/// descriptor with [[Get]], in this order: a getter on any of them runs,
+/// with `this` = the descriptor, whichever keys the definition then uses.
+pub const DESCRIPTOR_KEYS: [&str; 6] = [
+    "enumerable",
+    "configurable",
+    "value",
+    "writable",
+    "get",
+    "set",
+];
+
 /// `Symbol.toPrimitive` / `Symbol.hasInstance` as HIR folds them
 /// (`Gen::read_key`).
 pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";

@@ -16,6 +16,24 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// ToPropertyDescriptor of `desc` (`DESCRIPTOR_KEYS`): each key read with
+    /// [[Get]], getters run. The values of `value`, `get` and `set`, the keys
+    /// a definition uses.
+    pub(crate) fn descriptor_reads(&mut self, desc: NodeId) -> [NodeId; 3] {
+        let mut used = [desc; 3];
+        for name in DESCRIPTOR_KEYS {
+            let a = self.m.atom(name);
+            let v = self.load(desc, Key::Named(a));
+            match name {
+                "value" => used[0] = v,
+                "get" => used[1] = v,
+                "set" => used[2] = v,
+                _ => {}
+            }
+        }
+        used
+    }
+
     /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
     /// descriptor's value is a post-construction write, and its accessors
     /// become accessors of the target (called with `this` = the target).
@@ -58,10 +76,9 @@ impl<'a> Gen<'a> {
                 },
             ),
         }
+        let [v, dget, dset] = self.descriptor_reads(desc);
         // An accessor descriptor has no value: the getter is the read.
         if !accessor {
-            let va = self.m.atom("value");
-            let v = self.load(desc, Key::Named(va));
             let k = match &key {
                 Some(s) => Key::Named(self.m.atom(s)),
                 None => Key::any(),
@@ -75,15 +92,9 @@ impl<'a> Gen<'a> {
         if key.is_some() {
             self.m.add_accessor_atom(ka);
         }
-        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
+        for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
             // A literal descriptor's own get/set (`accessor_literal`).
-            let f = match own {
-                Some(f) => f,
-                None => {
-                    let a = self.m.atom(name);
-                    self.load(desc, Key::Named(a))
-                }
-            };
+            let f = own.unwrap_or(read);
             self.m.cons(
                 f,
                 Cons::Accessor {
@@ -121,20 +132,13 @@ impl<'a> Gen<'a> {
                 accessor,
             },
         );
+        let [v, dget, dset] = self.descriptor_reads(desc);
         if !accessor {
-            let va = self.m.atom("value");
-            let v = self.load(desc, Key::Named(va));
             let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
             self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
         }
-        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
-            let f = match own {
-                Some(f) => f,
-                None => {
-                    let a = self.m.atom(name);
-                    self.load(desc, Key::Named(a))
-                }
-            };
+        for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
+            let f = own.unwrap_or(read);
             self.m.cons(
                 kn,
                 Cons::AccessorKeyed {
