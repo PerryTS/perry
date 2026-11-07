@@ -262,9 +262,12 @@ fn written_computed_call_of_the_builtin_stays() {
     assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
-/// The program replaces `Object.prototype.hasOwnProperty` before reading it.
+/// The program tries to replace `Object.prototype.hasOwnProperty` before
+/// reading it: DEC 250 refuses the store (an image member of the locked
+/// `Object.prototype`; the runtime throws a TypeError there), so the read
+/// after it, if any runs, is the builtin.
 #[test]
-fn written_object_prototype_has_own_property_stays() {
+fn refused_object_prototype_has_own_property_store_leaves_the_builtin() {
     let pf = facts(
         r#"
         (Object.prototype as any).hasOwnProperty = function (key: string) { return true; };
@@ -281,7 +284,7 @@ fn written_object_prototype_has_own_property_stays() {
         console.log(total);
         "#,
     );
-    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+    assert!(!unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
 /// The program replaces `Object.hasOwn` (a static member of a builtin
