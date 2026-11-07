@@ -263,6 +263,11 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The counted walks HIR lowers a for-of over an ordinary array to
+    /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
+    /// local, counter local). Their `array[k]` binding is what the
+    /// iteration yields, as the IteratorRecord loop's element is.
+    pub(crate) for_of_walks: crate::pts::FxHashSet<(u32, u32, u32)>,
     /// The `const` bindings walked with an initializer (module, HIR id).
     pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
@@ -585,6 +590,7 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            for_of_walks: Default::default(),
             initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),

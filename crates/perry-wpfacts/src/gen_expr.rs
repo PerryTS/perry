@@ -1150,6 +1150,20 @@ impl<'a> Gen<'a> {
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                // A for-of walk's element (`Gen::for_of_walks`): the counter
+                // is below the length, so the read is what the iteration of
+                // the array yields (a hole's `undefined` included), as the
+                // IteratorRecord loop's element is, and never the past-the-end
+                // `undefined` of an arbitrary index.
+                let walk = match (object.as_ref(), index.as_ref()) {
+                    (Expr::LocalGet(a), Expr::LocalGet(k)) => {
+                        self.for_of_walks.contains(&(fx.module, *a, *k))
+                    }
+                    _ => false,
+                };
+                if walk {
+                    return self.iterate(o);
+                }
                 match key {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any(_) => {

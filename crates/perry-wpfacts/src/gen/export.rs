@@ -38,7 +38,8 @@ impl<'a> Gen<'a> {
             for e in self.exports_of(mi) {
                 match e {
                     // An erased type export binds nothing and shadows nothing.
-                    Export::Named { local, .. } if modules[mi].1.is_type_only_export_binding(local) => {}
+                    Export::Named { local, .. }
+                        if modules[mi].1.is_type_only_export_binding(local) => {}
                     Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
                         names.push(exported)
                     }
