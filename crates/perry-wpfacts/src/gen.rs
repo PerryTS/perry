@@ -16,6 +16,7 @@ mod native_result;
 mod once;
 mod own_guard;
 mod own_store;
+mod param_key;
 pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
@@ -385,6 +386,9 @@ pub struct Gen<'a> {
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
     /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
     pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// Per module: its call-only functions' parameters and calls
+    /// (`Gen::key_shape_of`).
+    pub(crate) param_calls: FxHashMap<u32, param_key::ParamCalls<'a>>,
 }
 
 /// Per-function walking context.
@@ -653,6 +657,7 @@ impl<'a> Gen<'a> {
             for_in_key: Vec::new(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
+            param_calls: FxHashMap::default(),
         }
     }
 
