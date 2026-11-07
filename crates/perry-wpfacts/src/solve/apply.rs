@@ -404,7 +404,11 @@ impl Model {
                     self.add_tok(dst, t);
                 }
                 if prim & !strip != 0 {
+                    // A filter of the host's values: its Numbers keep the
+                    // host's interval.
+                    let saved = self.cur_range.replace(self.nodes[n as usize].range);
                     self.add_prim(dst, prim & !strip);
+                    self.cur_range = saved;
                 }
             }
             Cons::Falsy { dst } => {
@@ -421,7 +425,15 @@ impl Model {
                     }
                 }
                 if p != 0 {
+                    // The host's falsy Numbers: within its interval unless ⊤
+                    // or a marker adds falsy values of its own.
+                    let own = !toks.iter().any(|&t| t == TOP || self.is_marker(t));
+                    let saved = std::mem::replace(
+                        &mut self.cur_range,
+                        own.then(|| self.nodes[n as usize].range),
+                    );
                     self.add_prim(dst, p);
+                    self.cur_range = saved;
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {

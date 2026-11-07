@@ -172,6 +172,19 @@ pub enum RangeOp {
     /// The values of the left operand that pass a loop test against the
     /// right one (`CLIP_LT` ...): the reads the test dominates.
     Clip(u8),
+    /// `Math.abs`.
+    Abs,
+    /// `Math.min` / `Math.max` of two operands (a longer list folds).
+    Min,
+    Max,
+    /// `Math.floor`, `ceil`, `round`, `trunc`: the identity on integers.
+    Integral,
+    /// `Math.sign`.
+    Sign,
+    /// `Math.clz32`: 0..=32 whatever the operand.
+    Clz32,
+    /// `Math.imul`: an int32 whatever the operands.
+    Imul,
 }
 
 pub const CLIP_LT: u8 = 0;
@@ -200,6 +213,13 @@ impl RangeOp {
             RangeOp::Clip(CLIP_LE) => "clip-le",
             RangeOp::Clip(CLIP_GT) => "clip-gt",
             RangeOp::Clip(_) => "clip-ge",
+            RangeOp::Abs => "abs",
+            RangeOp::Min => "min",
+            RangeOp::Max => "max",
+            RangeOp::Integral => "integral",
+            RangeOp::Sign => "sign",
+            RangeOp::Clz32 => "clz32",
+            RangeOp::Imul => "imul",
         }
     }
 
@@ -242,9 +262,17 @@ fn mask_above(v: i64) -> i64 {
 /// operand holds only Numbers (the caller's purity test): an arithmetic
 /// operator then coerces nothing. A unary operator ignores `r`.
 pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
-    if l.is_empty()
-        || (!matches!(op, RangeOp::Neg | RangeOp::BitNot | RangeOp::Step(_)) && r.is_empty())
-    {
+    let unary = matches!(
+        op,
+        RangeOp::Neg
+            | RangeOp::BitNot
+            | RangeOp::Step(_)
+            | RangeOp::Abs
+            | RangeOp::Integral
+            | RangeOp::Sign
+            | RangeOp::Clz32
+    );
+    if l.is_empty() || (!unary && r.is_empty()) {
         return Iv::EMPTY;
     }
     match op {
@@ -330,6 +358,21 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
                 _ => Iv::int(l.lo.max(r.lo), l.hi),
             }
         }
+        RangeOp::Abs if !l.is_top() => {
+            if l.lo >= 0 {
+                l
+            } else if l.hi <= 0 {
+                Iv::int(-l.hi, -l.lo)
+            } else {
+                Iv::int(0, (-l.lo).max(l.hi))
+            }
+        }
+        RangeOp::Min if !l.is_top() && !r.is_top() => Iv::int(l.lo.min(r.lo), l.hi.min(r.hi)),
+        RangeOp::Max if !l.is_top() && !r.is_top() => Iv::int(l.lo.max(r.lo), l.hi.max(r.hi)),
+        RangeOp::Integral if !l.is_top() => l,
+        RangeOp::Sign if !l.is_top() => Iv::int(l.lo.signum(), l.hi.signum()),
+        RangeOp::Clz32 => Iv::int(0, 32),
+        RangeOp::Imul => Iv::I32,
         RangeOp::Shl => Iv::I32,
         RangeOp::BitNot => {
             let a = to_int32(l);
@@ -441,6 +484,30 @@ mod tests {
             Iv::int(0, 1 << 53)
         );
         assert!(widen(Iv::int(0, 1 << 53), Iv::TOP).is_top());
+    }
+
+    #[test]
+    fn math_builtins_keep_integer_bounds() {
+        assert_eq!(eval(RangeOp::Abs, Iv::int(-6, 4), Iv::EMPTY), Iv::int(0, 6));
+        assert_eq!(
+            eval(RangeOp::Abs, Iv::int(-6, -2), Iv::EMPTY),
+            Iv::int(2, 6)
+        );
+        assert_eq!(
+            eval(RangeOp::Min, Iv::int(0, 24), Iv::int(24, 24)),
+            Iv::int(0, 24)
+        );
+        assert_eq!(
+            eval(RangeOp::Max, Iv::int(-3, 2), Iv::int(0, 0)),
+            Iv::int(0, 2)
+        );
+        assert_eq!(
+            eval(RangeOp::Sign, Iv::int(-5, 0), Iv::EMPTY),
+            Iv::int(-1, 0)
+        );
+        assert!(eval(RangeOp::Integral, Iv::TOP, Iv::EMPTY).is_top());
+        assert!(eval(RangeOp::Min, Iv::TOP, Iv::int(1, 1)).is_top());
+        assert_eq!(eval(RangeOp::Clz32, Iv::TOP, Iv::EMPTY), Iv::int(0, 32));
     }
 
     #[test]
