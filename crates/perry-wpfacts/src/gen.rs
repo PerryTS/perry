@@ -1731,6 +1731,11 @@ impl<'a> Gen<'a> {
             // so the value is checked during the solve (`Cons::NativeParent`).
             None if native.is_some() => {
                 let tm = tm.unwrap();
+                // The evaluated value is a built-in constructor, no class:
+                // no static construction through a parent is published
+                // (`super_unrelinked`); `super()` follows the live edge,
+                // which is where the native run happens.
+                self.m.parent_unsettled.insert(tm);
                 let chk = self.m.node_l("native-parent-check");
                 self.m.edge(v, chk);
                 let reason = self.m.reason(why);
