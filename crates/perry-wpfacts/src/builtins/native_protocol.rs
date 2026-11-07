@@ -310,7 +310,16 @@ pub fn settle_native_given(m: &mut Model) -> bool {
                 continue;
             }
             more = true;
+            // The census names the given prototype `src` as the write's
+            // source (no call runs it): a ⊤ there makes it derived.
+            let saved = m
+                .diagnostic
+                .as_mut()
+                .map(|d| (d.cur_call.take(), d.cause_node.replace(src)));
             note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
+                (d.cur_call, d.cause_node) = saved;
+            }
         }
     }
     more
