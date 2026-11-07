@@ -77,8 +77,26 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "Set" => BuiltinNs::Set,
         "WeakMap" => BuiltinNs::WeakMap,
         "WeakSet" => BuiltinNs::WeakSet,
-        _ => return None,
+        _ => return node_module(name),
     })
+}
+
+/// The node module object the realm declares as `name` (`node:fs`).
+fn node_module(name: &str) -> Option<BuiltinNs> {
+    if !name.starts_with("node:") {
+        return None;
+    }
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == name && e.kind == perry_hir::realm_manifest::RealmKind::Namespace)
+        .map(|e| BuiltinNs::Module(e.name))
+}
+
+/// The node module object `require(m)` or a namespace import of `m` names,
+/// when the realm declares it (`fs` and `node:fs` alike).
+pub(crate) fn node_module_ns(m: &str) -> Option<BuiltinNs> {
+    let bare = m.strip_prefix("node:").unwrap_or(m);
+    node_module(&format!("node:{bare}"))
 }
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.

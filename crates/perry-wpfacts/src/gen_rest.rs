@@ -106,6 +106,11 @@ impl<'a> Gen<'a> {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
                 }
+                // A module the realm declares is its namespace object.
+                if let Some(ns) = crate::builtins::node_module_ns(m) {
+                    let t = self.m.tok(TokKind::Builtin(ns));
+                    return self.tok_node(t);
+                }
                 self.m.top_val(&format!("native module ref {m}"))
             }
             Expr::NativeMethodCall {
