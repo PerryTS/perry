@@ -121,6 +121,7 @@ mod rest_element;
 mod rest_elements;
 mod run_once_closed;
 mod runtime_helpers;
+mod fresh_static_blocks;
 mod spread_arguments;
 mod spread_elements;
 mod spread_iterable_args;
