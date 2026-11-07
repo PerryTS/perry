@@ -131,6 +131,10 @@ pub(crate) fn run(
         diagnostics: dump.is_some(),
         birth_census: std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some(),
         relations,
+        no_int_ranges: matches!(
+            std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -775,6 +779,10 @@ pub(crate) fn activation(
     let cfg = perry_wpfacts::FactsConfig {
         roots,
         // The facts' negative controls act on this pass (it is theirs).
+        no_int_ranges: matches!(
+            std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),

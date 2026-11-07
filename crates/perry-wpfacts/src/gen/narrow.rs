@@ -101,6 +101,9 @@ impl<'a> Gen<'a> {
         update: Option<&Expr>,
         body: &[Stmt],
     ) -> bool {
+        if !self.int_ranges {
+            return false;
+        }
         let Some(Stmt::Let { id, .. }) = init else {
             return false;
         };
