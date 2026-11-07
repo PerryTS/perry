@@ -132,6 +132,7 @@ mod protocol_keys;
 mod reach_accessor;
 mod receiver_slots;
 mod receiver_this;
+mod runtime_errors;
 mod reflect_construct;
 mod regexp_exec;
 mod relinked_parent;
@@ -1449,6 +1450,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: vec![p],
         rest: None,
@@ -1520,6 +1522,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: Vec::new(),
         rest: None,
@@ -1580,6 +1583,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: Vec::new(),
         rest: None,
@@ -1634,6 +1638,7 @@ fn marker_model() -> crate::model::Model {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: Vec::new(),
         rest: None,

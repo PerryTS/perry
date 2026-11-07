@@ -393,6 +393,7 @@ fn timer_callback_constraints(direct: bool) -> Vec<(Vec<u32>, Vec<u32>, Vec<Stri
         spread: vec![],
         ret,
         site: 0,
+        region: m.thrown,
     });
     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
     let recv = m.node_l("receiver");

@@ -1355,6 +1355,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: name.to_string(),
             params: Vec::new(),
             rest: None,

@@ -95,6 +95,10 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// An operation on the node runs in throw region `region` (DESIGN SEEDE
+    /// section 8): once ⊤ is here, unknown code may run (a getter, a trap,
+    /// ToPrimitive, a callee) and throw anything into the region.
+    Raise { region: NodeId },
     /// A realm field already retains its canonical value. Storing it again
     /// exposes no new reach; every other alternative takes the usual sink.
     RuntimeStore { reason: u32, retained: Tok },
@@ -542,6 +546,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
+            Cons::Raise { .. } => "raise",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",

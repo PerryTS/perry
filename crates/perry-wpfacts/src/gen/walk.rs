@@ -212,6 +212,43 @@ impl<'a> Gen<'a> {
     /// and classes. A module it loads statically, by an import or a
     /// re-export, loads with it (`dynamic_only_modules` counts both).
     pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
+        // The module body's throw region: uncaught at evaluation, except a
+        // dynamically imported module's, which rejects the import.
+        let r = self.m.raise_of(init_fn);
+        if self.dynamic_only.contains(&mi) {
+            self.m.edge(r, self.thrown);
+        }
+        // A target this module requires lazily (a deferred CommonJS require)
+        // runs its body when the require runs, through the path registry.
+        for i in self.imports_of(mi as usize) {
+            if !i.is_deferred_require {
+                continue;
+            }
+            let t = i.resolved_path.as_ref().and_then(|p| self.path_index.get(p).copied());
+            if let Some(t) = t {
+                let rt = self.module_raise(t);
+                self.m.edge(rt, self.m.lazy_raise);
+            }
+        }
+        let region = std::mem::replace(&mut self.m.gen_region, Some(r));
+        self.walk_module_inner(mi, init_fn);
+        self.m.gen_region = region;
+    }
+
+    /// The throw region of module `t`'s body (its `<init>` function's).
+    pub(crate) fn module_raise(&mut self, t: u32) -> NodeId {
+        let f = match self.init_fn_of.get(&t) {
+            Some(&f) => f,
+            None => {
+                let f = self.synthetic_fn(t, "<init>");
+                self.init_fn_of.insert(t, f);
+                f
+            }
+        };
+        self.m.raise_of(f)
+    }
+
+    fn walk_module_inner(&mut self, mi: u32, init_fn: FnIdx) {
         #[cfg(test)]
         let packet_prior = self.m.packet_body(init_fn);
         #[cfg(test)]
@@ -608,7 +645,10 @@ impl<'a> Gen<'a> {
         let packet_read_start = self.read_sites.len();
         #[cfg(test)]
         self.m.packet_declarations(&f.body);
+        let r = self.m.raise_of(fxi);
+        let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
+        self.m.gen_region = region;
         #[cfg(test)]
         {
             self.packet_reads(packet_read_start);
@@ -715,6 +755,14 @@ impl<'a> Gen<'a> {
 
     /// Field initializers run per construction: unordered (RPG1b).
     fn walk_fields_body(&mut self, mi: u32, c: &'a Class) {
+        // Field initializers run inside the constructor call: the shared
+        // cell, which every catch reads.
+        let region = std::mem::replace(&mut self.m.gen_region, Some(self.thrown));
+        self.walk_fields_body_region(mi, c);
+        self.m.gen_region = region;
+    }
+
+    fn walk_fields_body_region(&mut self, mi: u32, c: &'a Class) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
         #[cfg(test)]
@@ -1142,20 +1190,30 @@ impl<'a> Gen<'a> {
             }
             Stmt::Throw(e) => {
                 let v = self.expr(fx, e);
-                self.m.edge(v, self.thrown);
+                let r = self.region();
+                self.m.edge(v, r);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
+                // The try body is a throw region of its own; its catch and
+                // finally run in the enclosing one.
+                let rt = self.m.node_l("RAISE-try");
+                let outer = std::mem::replace(&mut self.m.gen_region, Some(rt));
                 self.stmts(fx, body);
+                self.m.gen_region = outer;
                 if let Some(c) = catch {
                     if let Some((id, _)) = &c.param {
                         let n = self.local(fx.module, *id);
+                        self.m.edge(rt, n);
                         self.m.edge(self.thrown, n);
                     }
                     self.stmts(fx, &c.body);
+                } else {
+                    let r = self.region();
+                    self.m.edge(rt, r);
                 }
                 if let Some(f) = finally {
                     self.stmts(fx, f);
@@ -1176,6 +1234,13 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// The throw region generation is in (`thrown` outside a body).
+    pub(crate) fn region(&self) -> NodeId {
+        self.m.gen_region.unwrap_or(self.thrown)
     }
 }
 

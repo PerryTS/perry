@@ -52,6 +52,7 @@ impl<'a> Gen<'a> {
             spread,
             ret,
             site: id,
+            region: self.region(),
         });
         (id, ret)
     }
@@ -877,8 +878,11 @@ impl<'a> Gen<'a> {
             },
             Expr::Compare { op, left, right } => match op {
                 CompareOp::Eq | CompareOp::Ne => {
-                    let _ = self.expr(fx, left);
-                    let _ = self.expr(fx, right);
+                    // IsLooselyEqual runs ToPrimitive on an object operand.
+                    let l = self.expr(fx, left);
+                    let r = self.expr(fx, right);
+                    self.raise_on(l);
+                    self.raise_on(r);
                     self.prim_node(prim::BOOL)
                 }
                 _ => self.prim_op(
@@ -1004,7 +1008,9 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let _ = self.expr(fx, object);
+                // HasProperty on a Proxy runs its `has` trap.
+                let o = self.expr(fx, object);
+                self.raise_on(o);
                 self.prim_node(prim::BOOL)
             }
             Expr::Await(x) => {

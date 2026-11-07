@@ -148,6 +148,23 @@ impl<'a> Gen<'a> {
         self.store(fx, recv, ek, v, what.to_string(), None, false);
     }
 
+    /// An operation without a rule of its own runs code on `n` once ⊤ is
+    /// there (DESIGN SEEDE section 8): ⊤ into the current throw region.
+    pub(crate) fn raise_on(&mut self, n: NodeId) {
+        let region = self.region();
+        self.m.cons(n, Cons::Raise { region });
+    }
+
+    /// An async step closure's call: what its body throws settles the
+    /// promise, so it runs in the shared cell (rejections; DESIGN SEEDE
+    /// section 8), not the caller's region.
+    pub(super) fn async_callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
+        let region = std::mem::replace(&mut self.m.gen_region, Some(self.thrown));
+        let r = self.callback(cb, args);
+        self.m.gen_region = region;
+        r
+    }
+
     /// Call `cb` with `args` (this = undefined); returns the result node.
     pub(super) fn callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
         self.call_value(cb, ThisArg::Undef, args, vec![])
