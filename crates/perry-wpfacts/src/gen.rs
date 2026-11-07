@@ -12,6 +12,7 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+mod narrow;
 mod native_result;
 mod once;
 mod own_guard;
@@ -263,6 +264,8 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// Loop-test narrowings being walked (`gen/narrow.rs`).
+    pub(crate) narrow: Vec<narrow::Narrow>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
     /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
     /// local, counter local). Their `array[k]` binding is what the
@@ -594,6 +597,7 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            narrow: Vec::new(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
             write_top: Default::default(),
