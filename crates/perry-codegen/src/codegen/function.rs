@@ -1219,9 +1219,12 @@ pub(super) fn compile_function(
             }
         }
     }
-    // Admission already excluded rebound and mutated parameters.
+    // Admission already excluded rebound and mutated parameters. A spec
+    // clone's own proof (an `Int32` lane) is the stronger fact and stays.
     for id in &facts_number_params {
-        body_entry_proofs.insert(*id, perry_hir::types::Type::Number);
+        body_entry_proofs
+            .entry(*id)
+            .or_insert(perry_hir::types::Type::Number);
     }
     let typed_locals = crate::collectors::typed_locals::apply(
         &f.body,
@@ -1867,6 +1870,7 @@ pub(super) fn compile_function(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;

@@ -34,3 +34,16 @@ console.log(sum, g.size(), g.at(16), g.at(19), g.key(2.5));
 const holes: number[] = [];
 for (let i = 0; i < g.size(); i++) holes.push(g.at(i + 0));
 console.log(holes.join(","));
+
+// The index clone reads its index back as an i32, so `-0` must take the
+// generic body: `1 / i` tells `-0` from `0`.
+class Signed {
+  private c = [5, 6];
+  at(i: number): number { return (this.c[i] ?? 0) + 1 / i; }
+}
+const sg = new Signed();
+const zeros = [0, -0];
+for (const z of zeros) {
+  const i = z * 1;
+  console.log(sg.at(i), sg.at(-0 * 1), sg.at(0 * 1));
+}

@@ -10,7 +10,9 @@
 //!
 //! Such a binding owns no root slot, and each read is the slot's raw double,
 //! on the footing of the field proof (`expr/wpfacts_access.rs`,
-//! `FieldProof::number`): a Number has one encoding.
+//! `FieldProof::number`): a Number has one encoding. A facts-verification
+//! build checks every consumed claim, at the parameter entry and at each
+//! store into a proven `let` (`accept_let_value`).
 //!
 //! A parameter the body never rebinds or mutates converts an INT32 box to its
 //! plain double at entry, as a split region's Number parameter does, and is
@@ -92,6 +94,60 @@ pub(crate) fn facts_number_lets(
             && !module_globals.contains_key(id)
     });
     lets
+}
+
+/// Record that this body consumes the facts' Number proof for `id`.
+fn note_consumed(id: u32) {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::NumberInput,
+        || serde_json::json!({ "local": id }),
+    );
+    crate::facts_consumed::used();
+}
+
+/// A facts-verification build checks the claim where it is consumed: the
+/// value is a plain Number, or the witness reports the binding.
+fn emit_witness(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u32) {
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    let number = super::emit_plain_number_bits_test(ctx.block(), &bits);
+    crate::stmt::indexed_owner_loop::verify_number_input(ctx, &number, value, id);
+}
+
+/// At body entry, after the parameters are bound: each proven parameter's
+/// converted argument is a plain Number.
+pub(crate) fn emit_param_witnesses(ctx: &mut crate::expr::FnCtx<'_>, params: &HashSet<u32>) {
+    let mut ids: Vec<u32> = params.iter().copied().collect();
+    ids.sort_unstable();
+    for id in ids {
+        note_consumed(id);
+        if !crate::verify_facts::enabled() {
+            continue;
+        }
+        let Some(slot) = ctx.locals.get(&id).cloned() else {
+            continue;
+        };
+        let value = ctx.block().load(DOUBLE, &slot);
+        emit_witness(ctx, &value, id);
+    }
+}
+
+/// The value a write stores into a proven `let`, unchanged: a Number has one
+/// encoding, as for the field proof. A verification build checks it here.
+pub(crate) fn accept_let_value(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    id: u32,
+    _source: &perry_hir::Expr,
+    value: String,
+) -> String {
+    if !ctx.facts_number_locals.contains(&id) {
+        return value;
+    }
+    note_consumed(id);
+    emit_witness(ctx, &value, id);
+    value
 }
 
 /// The empty set, for bodies that take no facts-proven `let`s.

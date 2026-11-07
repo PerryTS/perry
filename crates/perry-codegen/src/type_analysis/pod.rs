@@ -43,60 +43,28 @@ pub(crate) fn is_typed_array_expr(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 
 /// `object.length` is a Number by the value `object` holds, not by its
 /// annotation: a literal, a binding whose stable initializer proof is a
-/// String or an Array, or one the whole-program facts prove holds only
-/// strings and ordinary Arrays (`ElisionFacts::length_number_inputs`). A declared `string[]` element or an `any` cast can
-/// hold a Number, whose `length` is `undefined`, so the annotation-based
-/// [`expression_has_numeric_length`] is only a candidate for a guarded
-/// consumer, never a raw-double operand. `PERRY_PROVEN_NUMERIC_LENGTH=0`
-/// restores the annotation answer.
-pub(crate) fn expression_has_proven_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
-    if !proven_numeric_length_enabled() {
-        return expression_has_numeric_length(ctx, object);
-    }
+/// String, an Array or a numeric typed array, or one the whole-program facts
+/// prove holds only strings and ordinary Arrays
+/// (`ElisionFacts::length_number_inputs`). A declared `string[]` element or
+/// an `any` cast can hold a Number, whose `length` is `undefined`.
+pub(crate) fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     match object {
         Expr::String(_) | Expr::WtfString(_) | Expr::Array(_, _) => true,
         Expr::LocalGet(id) => {
-            matches!(
-                ctx.stable_local_type_proof(id),
+            let proven = match ctx.stable_local_type_proof(id) {
                 Some(
                     HirType::String
-                        | HirType::StringLiteral(_)
-                        | HirType::Array(_)
-                        | HirType::Tuple(_)
-                )
-            ) || (!ctx.wpfacts_off && ctx.wpfacts.length_number_inputs.contains(id))
+                    | HirType::StringLiteral(_)
+                    | HirType::Array(_)
+                    | HirType::Tuple(_),
+                ) => true,
+                Some(HirType::Named(name)) => {
+                    name == "Buffer" || is_numeric_typed_array_class(name)
+                }
+                _ => false,
+            };
+            proven || (!ctx.wpfacts_off && ctx.wpfacts.length_number_inputs.contains(id))
         }
-        _ => false,
-    }
-}
-
-fn proven_numeric_length_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_PROVEN_NUMERIC_LENGTH").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
-
-pub(crate) fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
-    // A LocalGet's declared hint is only a candidate, but a stable initializer
-    // proof is runtime-derived evidence. String literals have a numeric
-    // length just like widened strings; consult that proof directly so a
-    // literal-typed binding does not fall back to a dynamic `+` consumer.
-    if let Expr::LocalGet(id) = object {
-        if matches!(
-            ctx.stable_local_type_proof(id),
-            Some(HirType::String | HirType::StringLiteral(_))
-        ) {
-            return true;
-        }
-    }
-
-    match static_type_of(ctx, object) {
-        Some(HirType::Array(_)) | Some(HirType::Tuple(_)) | Some(HirType::String) => true,
-        Some(HirType::Named(name)) => name == "Buffer" || is_numeric_typed_array_class(&name),
         _ => false,
     }
 }

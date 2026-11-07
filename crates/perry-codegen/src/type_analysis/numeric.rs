@@ -486,7 +486,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             ) {
                 return true;
             }
-            if property == "length" && expression_has_proven_numeric_length(ctx, object) {
+            if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
             // #10185: `arr[i].<string field>.length` inside an element-shape
