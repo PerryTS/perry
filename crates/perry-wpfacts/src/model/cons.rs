@@ -442,6 +442,17 @@ pub enum Cons {
     /// dst ⊇ the numeric kinds its values turn into (Number; BigInt for a
     /// BigInt; both for an object, whose ToPrimitive may return either).
     Arith { dst: NodeId },
+    /// The node is an operand of a numeric operator whose result `dst`
+    /// takes its integer interval from this rule (`range::eval`), the
+    /// operand's interval beside `other`'s (`NO_NODE`: a unary operator).
+    /// The kinds of `dst` stay `Arith`'s / `Plus`'s.
+    Range {
+        op: RangeOp,
+        other: NodeId,
+        dst: NodeId,
+        /// The node is the right operand (`eval`'s second argument).
+        right: bool,
+    },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -585,6 +596,7 @@ impl Cons {
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
+            Cons::Range { .. } => "range",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",

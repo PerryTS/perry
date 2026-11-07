@@ -21,4 +21,58 @@ impl<'a> Gen<'a> {
             }
         }
     }
+
+    /// The node of a numeric literal: a shared node per integer value,
+    /// carrying its point interval (`model::range`), or the Number node.
+    pub fn num_literal(&mut self, v: f64) -> NodeId {
+        let iv = crate::model::Iv::literal(v);
+        if iv.is_top() {
+            return self.prim_node(prim::NUM);
+        }
+        if let Some(&n) = self.num_lits.get(&iv.lo) {
+            return n;
+        }
+        let n = self.m.node_named("NUMLIT", || format!("NUMLIT{}", iv.lo));
+        {
+            let nd = &mut self.m.nodes[n as usize];
+            nd.ruled = true;
+            nd.range = iv;
+        }
+        self.m.add_prim(n, prim::NUM);
+        self.num_lits.insert(iv.lo, n);
+        n
+    }
+
+    /// Register the interval rule of a numeric operator: `dst` takes its
+    /// interval from `op` over `l` (and `r`). On both operands, so a growth
+    /// of either re-evaluates it.
+    pub fn range_rule(
+        &mut self,
+        op: crate::model::RangeOp,
+        l: NodeId,
+        r: Option<NodeId>,
+        dst: NodeId,
+    ) {
+        let other = r.unwrap_or(crate::model::NO_NODE);
+        self.m.cons(
+            l,
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right: false,
+            },
+        );
+        if let Some(r) = r {
+            self.m.cons(
+                r,
+                Cons::Range {
+                    op,
+                    other: l,
+                    dst,
+                    right: true,
+                },
+            );
+        }
+    }
 }

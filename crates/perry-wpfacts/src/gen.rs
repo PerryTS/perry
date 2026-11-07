@@ -309,6 +309,9 @@ pub struct Gen<'a> {
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
     pub prim_const: [NodeId; 7],
+    /// One node per integer literal value, holding that Number with its
+    /// point interval (`Gen::num_literal`); shared like `prim_const`.
+    pub num_lits: FxHashMap<i64, NodeId>,
     pub(crate) shared_closures: shared_closures::SharedClosures<'a>,
     pub walked: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 225: the bodies not walked yet because they are not
@@ -612,6 +615,7 @@ impl<'a> Gen<'a> {
             field_init_fn: FxHashMap::default(),
             static_init_fn: FxHashMap::default(),
             prim_const,
+            num_lits: FxHashMap::default(),
             walked: Default::default(),
             pending_walk: Default::default(),
             shared_closures: Default::default(),

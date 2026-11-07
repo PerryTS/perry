@@ -1198,9 +1198,7 @@ impl Model {
                         (prim::UNDEF, &["undefined"][..]),
                     ] {
                         if prim & bit != 0
-                            && self
-                                .idx_done
-                                .insert((n, obj, call, IDX_CALL_NAMED + bit))
+                            && self.idx_done.insert((n, obj, call, IDX_CALL_NAMED + bit))
                         {
                             for k in keys {
                                 let a = self.atom(k);
@@ -1301,6 +1299,28 @@ impl Model {
                             setter,
                         },
                     );
+                }
+            }
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right,
+            } => {
+                let me = self.range_input(n);
+                let ot = if other == NO_NODE {
+                    Iv::EMPTY
+                } else {
+                    self.range_input(other)
+                };
+                let (l, r) = if right { (ot, me) } else { (me, ot) };
+                let iv = crate::model::range::eval(op, l, r);
+                if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
+                    let d = &mut self.nodes[dst as usize];
+                    if !d.in_wl {
+                        d.in_wl = true;
+                        self.wl.push_back(dst);
+                    }
                 }
             }
             Cons::Arith { dst } => {
