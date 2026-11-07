@@ -340,7 +340,21 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
-            .map(|(&id, &n)| (id, facts_of(g, n)))
+            .map(|(&id, &n)| {
+                let f = facts_of(g, n);
+                if std::env::var_os("PERRY_FACTS_INT_REPORT").is_some() {
+                    let nd = &g.m.nodes[n as usize];
+                    eprintln!(
+                        "perry: int-range node m{mi} local {id} {} prim={} toks={} range={:?} ruled={}",
+                        g.m.node_names.get(n as usize).map(String::as_str).unwrap_or("?"),
+                        nd.prim,
+                        nd.pts.len(),
+                        nd.range,
+                        nd.ruled
+                    );
+                }
+                (id, f)
+            })
             .collect();
         v.sort_by_key(|(id, _)| *id);
         out[mi].locals = v;
