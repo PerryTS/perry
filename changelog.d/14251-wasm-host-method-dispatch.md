@@ -1,0 +1,1 @@
+On the web/wasm target, `.then` / `.catch` / `.finally` on a promise the host created (an async function's result, a `fetch`) now run their callbacks instead of silently returning `undefined`; other methods of host objects dispatch the same way.
