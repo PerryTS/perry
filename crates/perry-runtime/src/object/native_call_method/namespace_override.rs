@@ -76,6 +76,10 @@ pub(super) unsafe fn call_native_namespace_override(
     let args_handles = root_scope.root_nanbox_f64_slice(args);
     // Allocates (the probe key string): everything live is rooted above.
     let own = crate::object::native_module::native_namespace_user_value(&module, method_name)?;
+    // A primitive (a deleted member reads `undefined`) is not callable.
+    if !crate::value::JSValue::from_bits(own.to_bits()).is_pointer() {
+        crate::closure::throw_not_callable();
+    }
     if !crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(own) as usize) {
         return None;
     }
