@@ -72,6 +72,7 @@ mod function_values;
 mod getter_contract;
 mod global_gc;
 mod gopd_key;
+mod fn_intrinsic_proto;
 mod global_namespace_store;
 mod host_objects;
 mod hub_tokens;

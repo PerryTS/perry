@@ -761,6 +761,16 @@ impl Model {
             self.builtin_field_use(t, key, ChainAct::Load(dst));
         }
         self.proto_value_at(t, dst);
+        // A program function born with another intrinsic prototype
+        // (`%AsyncGeneratorFunction.prototype%`, a generator object's
+        // `%GeneratorPrototype%` chain) has one the model does not
+        // describe: not `Function.prototype`, whose reads differ.
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            if !builtins::born_with_function_proto(self, f) {
+                self.add_tok(dst, TOP);
+                return;
+            }
+        }
         if let Some(ns) = builtins::chain_ns(self, t) {
             self.with_b(|m| builtins::builtin_proto_value(m, Some(ns), dst));
         }
