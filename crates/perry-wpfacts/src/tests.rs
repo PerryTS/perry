@@ -33,6 +33,7 @@ mod box_chain;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
 mod builtin_members;
+mod builtin_proto_value;
 mod builtin_program_fields;
 mod builtin_spread;
 mod call_shadow;

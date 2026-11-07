@@ -198,10 +198,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         // chain's (`Function` for a constructor, `Object` for a namespace).
         Some(Mem::Ctor) if name == "@@__perry_wk_species" => m.add_tok(dst, t),
         Some(Mem::Ctor) => family_ctor(m, members::ns_chain(ns), dst),
-        Some(Mem::Proto) => {
-            let op = m.tok(TokKind::ObjectProto);
-            m.add_tok(dst, op);
-        }
+        Some(Mem::Proto) => builtin_proto_value(m, (name == "prototype").then_some(ns), dst),
         None => m.add_prim(dst, prim::UNDEF),
     }
     // Absent on the namespace and on its chain: a key the program writes
@@ -456,10 +453,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     opaque_member(m, dst);
                 }
             }
-            Some("prototype") => {
-                let op = m.tok(TokKind::ObjectProto);
-                m.add_tok(dst, op);
-            }
+            Some("prototype") => builtin_proto_value(m, Some(ns), dst),
             // Its `constructor` is its chain's (`Function` for a
             // constructor, E14; `Object` for a namespace object).
             Some(n)
@@ -673,6 +667,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ModNs(_) | TokKind::Proto(_) => m.add_prim(dst, prim::UNDEF),
         // A key the native prototype does not define: the chain goes on.
         TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
+        // A builtin's prototype object taken as a value (`builtin_proto_tok`):
+        // its described members, as a receiver of its family reads them.
+        TokKind::NativeProto(ref n) if ns_by_name(n).and_then(proto_family).is_some() => {
+            let (fam, what, _) = ns_by_name(n).and_then(proto_family).unwrap();
+            match key {
+                Key::Named(a) => family_load(m, fam, what, a, dst),
+                Key::Any(_) => family_any(m, t, fam, dst),
+            }
+        }
         // A builtin function value (or a bound function): the members of
         // `Function.prototype`; a computed key may name any of them.
         TokKind::BuiltinFn(_) | TokKind::Bound(_) if matches!(key, Key::Named(_)) => {

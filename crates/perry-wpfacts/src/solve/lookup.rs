@@ -761,6 +761,9 @@ impl Model {
             self.builtin_field_use(t, key, ChainAct::Load(dst));
         }
         self.proto_value_at(t, dst);
+        if let Some(ns) = builtins::chain_ns(self, t) {
+            self.with_b(|m| builtins::builtin_proto_value(m, Some(ns), dst));
+        }
     }
 
     pub(super) fn proto_value_at(&mut self, t: Tok, dst: NodeId) {

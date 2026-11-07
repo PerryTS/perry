@@ -964,6 +964,67 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     }
 }
 
+/// The builtin whose prototype object is the `ObjectProto` the chain of
+/// `t` starts with (`proto_node` seeds it; `seed_family`'s kinds): an
+/// array's `Array`, a site builtin object's own builtin, a function's
+/// `Function`; a typed array prototype's goes on to `%TypedArray%.prototype`,
+/// which the one `TypedArray` prototype stands for. `None`: the chain's
+/// prototypes are values or a class's, or `t` is no builtin receiver.
+pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
+    match &m.toks[t as usize] {
+        TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Arr { .. } => Some(BuiltinNs::Array),
+            TmplKind::BObj {
+                what: "TypedArray", ..
+            } => Some(BuiltinNs::TypedArray),
+            TmplKind::BObj { what, .. } => ns_by_name(what),
+            _ => None,
+        },
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => {
+            Some(BuiltinNs::Function)
+        }
+        TokKind::ClassObj(tm) => {
+            let tm = &m.tmpls[*tm as usize];
+            (tm.parent.is_none() && tm.parent_value.is_none()).then_some(BuiltinNs::Function)
+        }
+        TokKind::Builtin(ns) if members::ns_chain(*ns) == Family::Function => {
+            Some(BuiltinNs::Function)
+        }
+        TokKind::NativeProto(n) if ns_by_name(n) == Some(BuiltinNs::TypedArray) => {
+            Some(BuiltinNs::TypedArray)
+        }
+        _ => None,
+    }
+}
+
+/// The token of builtin `ns`'s prototype object taken as a value: the
+/// native prototype of its global (`native_proto`, resolved back through
+/// `ns_by_name` and `loads::proto_family`), whose reads are that builtin's
+/// described members. `None` for `Object.prototype`, which `ObjectProto`
+/// is, and for a builtin whose prototype the model does not describe.
+pub(crate) fn builtin_proto_tok(m: &mut Model, ns: BuiltinNs) -> Option<Tok> {
+    match loads::proto_family(ns)? {
+        (Family::Object, _, _) => None,
+        (_, _, global) => Some(native_proto(m, global)),
+    }
+}
+
+/// `dst` ⊇ builtin `ns`'s prototype object as a value (`F.prototype`;
+/// `Object.getPrototypeOf(x)` of a builtin receiver `x`, `chain_ns`): the
+/// collapsed `ObjectProto`, which every builtin receiver's chain reads (so
+/// a write through the value stays a write of it, as a write of any
+/// builtin prototype is), and the builtin's own token
+/// (`builtin_proto_tok`), so that an object whose chain the value becomes
+/// reads the builtin's members and accessors.
+pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: NodeId) {
+    let op = m.tok(TokKind::ObjectProto);
+    m.add_tok(dst, op);
+    if let Some(p) = ns.and_then(|ns| builtin_proto_tok(m, ns)) {
+        m.add_tok(dst, p);
+    }
+}
+
 fn is_site_builtin(m: &Model, t: Tok) -> bool {
     matches!(m.toks[t as usize], TokKind::Obj(tm, _)
         if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))

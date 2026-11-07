@@ -1119,11 +1119,14 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         }
     };
     let src_call = |c: Option<CallId>| c.map(|c| m.diagnostic_source_call(c).unwrap_or(c));
+    // An unknown call's `protocol`: a runtime protocol step the solver runs
+    // on a token (`Model::protocol_calls`: ToPrimitive, iteration), one per
+    // token and made for no one program call, so its `source` is itself.
     if let Some(d) = m.diagnostic.as_ref() {
         for (c, (n, top)) in &d.unknown_calls {
             let (root, origin) = n.map_or((NO_NODE, String::new()), |n| m.diagnostic_root(n));
-            out.push(format!("{{\"record\":\"unknown-call\",\"call\":{c},\"source\":{},\"node\":{},\"top\":{top},\"root\":{root},\"rootFunction\":{},\"label\":{},\"origin\":{}}}",
-                opt(src_call(Some(*c))), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
+            out.push(format!("{{\"record\":\"unknown-call\",\"call\":{c},\"source\":{},\"protocol\":{},\"node\":{},\"top\":{top},\"root\":{root},\"rootFunction\":{},\"label\":{},\"origin\":{}}}",
+                opt(src_call(Some(*c))), m.protocol_calls.contains(c), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
         }
         for (t, e) in &d.esc_first {
             out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{}}}",
