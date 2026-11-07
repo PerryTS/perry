@@ -1143,6 +1143,17 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             // branches both update the slot via the existing
             // boxed/captured/local fall-through below.
             if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
+                // An owned local (`collectors::loop_pushed_arrays`) is the
+                // live head of an ordinary array born from a literal in this
+                // function, and nothing else holds it: it cannot be a
+                // forwarded stub (every growth stores the new head back into
+                // its slot, and a collection reloads the slot), an Array
+                // subclass, or carry a named layout (an own property, a
+                // descriptor, an own `push`). Those probes are constants for
+                // it, and LLVM drops their loads. The integrity/layout mask,
+                // the prototype admission and the room test still run.
+                let owned = matches!(home, PushReceiverHome::Slot(_))
+                    && ctx.loop_pushed_arrays.owned.contains(array_id);
                 let apush_meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
                     ctx.target_triple,
                     crate::target_layout::HeaderForm::Meta,
@@ -1225,6 +1236,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let blk = ctx.block();
                     // A forwarded receiver keeps the runtime arm; a live
                     // non-Array receiver gets the elements probe.
+                    let fwd_set = if owned {
+                        "false".to_string()
+                    } else {
+                        fwd_set.clone()
+                    };
                     blk.cond_br(&fwd_set, &fwd_label, &elem_label);
                 }
                 let _ = &is_fwd;
@@ -1240,7 +1256,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 ctx.current_block = elem_idx;
                 {
                     let blk = ctx.block();
-                    let array_receiver = blk.icmp_eq(I8, &gc_type, "1");
+                    let array_receiver = if owned {
+                        "true".to_string()
+                    } else {
+                        blk.icmp_eq(I8, &gc_type, "1")
+                    };
                     blk.cond_br(&array_receiver, &nofwd_label, &elem_meta_label);
                 }
                 let elem_probe_end = ctx.block_label(elem_idx);
@@ -1409,10 +1429,15 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let clean = blk.and(I1, &clean, &prototype_clean);
                     // A non-writable `length`, an element descriptor or an own
                     // `push` lives in the array's named layout (§6a).
-                    let has_named =
-                        crate::expr::array_proto_guard::emit_array_has_named_layout(blk, &payload);
-                    let no_named = blk.xor(I1, &has_named, "true");
-                    let clean = blk.and(I1, &clean, &no_named);
+                    let clean = if owned {
+                        clean
+                    } else {
+                        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(
+                            blk, &payload,
+                        );
+                        let no_named = blk.xor(I1, &has_named, "true");
+                        blk.and(I1, &clean, &no_named)
+                    };
                     admitted = clean.clone();
                     let length = admitted_length_load(blk, &payload);
                     let cap_addr = blk.add(I64, &payload, "4");
