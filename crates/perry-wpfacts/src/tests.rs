@@ -73,6 +73,7 @@ mod getter_contract;
 mod global_gc;
 mod gopd_key;
 mod fn_intrinsic_proto;
+mod private_method_read;
 mod global_namespace_store;
 mod host_objects;
 mod hub_tokens;
