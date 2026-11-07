@@ -549,6 +549,8 @@ pub extern "C" fn js_os_version() -> *mut StringHeader {
 /// Get the process uptime in seconds (time since process started)
 #[no_mangle]
 pub extern "C" fn js_process_uptime() -> f64 {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.uptime", 0);
     get_process_start().elapsed().as_secs_f64()
 }
 
@@ -594,7 +596,7 @@ pub unsafe extern "C" fn js_set_process_entry_path(ptr: *const u8, len: u32) {
 pub extern "C" fn js_process_argv_value() -> f64 {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     {
-        return crate::snap_census::input_call("argv.value", &format!("{:?}", ()), || {
+        let value = crate::snap_census::input_call("argv.value", &format!("{:?}", ()), || {
             crate::effect!(host_read, argv);
             if crate::process::worker_restrictions::in_node_worker() {
                 if let Some(value) =
@@ -605,6 +607,8 @@ pub extern "C" fn js_process_argv_value() -> f64 {
             }
             crate::value::js_nanbox_pointer(js_process_argv() as i64)
         });
+        crate::snap_census::argv_read(value);
+        return value;
     }
 
     crate::effect!(host_read, argv);

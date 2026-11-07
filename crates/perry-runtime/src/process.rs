@@ -407,6 +407,7 @@ pub(crate) fn module_builtin_modules_array() -> f64 {
 
 fn process_exec_argv_value() -> f64 {
     crate::effect!(host_read, argv);
+    crate::snap_funnel!(ExecArgv);
     static EXEC_ARGV: OnceLock<Vec<String>> = OnceLock::new();
     let values = crate::once_init::get_or_init(&EXEC_ARGV, || {
         let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());
@@ -453,6 +454,7 @@ pub(crate) fn process_argv0_string() -> String {
 /// example, after unlinking the executable). Windows already supplies an
 /// absolute path, and canonicalize would introduce a verbatim-path prefix.
 pub(crate) fn process_exec_path_string() -> String {
+    crate::snap_funnel!(ExecPath);
     std::env::current_exe()
         .map(|exe| {
             #[cfg(unix)]

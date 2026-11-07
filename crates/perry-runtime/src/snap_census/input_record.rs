@@ -250,6 +250,17 @@ pub(super) fn native_event(st: &mut State, op: &str, value: std::fmt::Arguments<
             libc::_exit(93);
         }
     }
+    let mut six = [0usize; 6];
+    if super::c25() {
+        if super::funnel() != 0 && !op.starts_with("getenv") {
+            let _ = write!(text, ";funnel={}", super::funnel_name(super::funnel()));
+        }
+        let mut pcs = [0usize; crate::error::MAX_CAPTURED_FRAMES];
+        let n = crate::error::capture_ips(&mut pcs);
+        for (to, from) in six.iter_mut().zip(pcs[..n].iter().skip(1)) {
+            *to = *from;
+        }
+    }
     let mut row = SignalRow {
         bytes: [0; 131072],
         len: 0,
@@ -272,7 +283,14 @@ pub(super) fn native_event(st: &mut State, op: &str, value: std::fmt::Arguments<
         for b in &text.bytes[..text.len] {
             write!(row, "{b:02x}")?;
         }
-        writeln!(row, "\t0,0,0,0,0,0\t{}", st.inputs.allocated_bytes)
+        row.write_char('\t')?;
+        for (i, pc) in six.iter().enumerate() {
+            if i != 0 {
+                row.write_char(',')?;
+            }
+            write!(row, "{pc:x}")?;
+        }
+        writeln!(row, "\t{}", st.inputs.allocated_bytes)
     })();
     if result.is_err() {
         unsafe {
@@ -319,7 +337,7 @@ pub(super) fn env_rows(st: &State) -> std::io::Result<Vec<(u32, String, Option<S
     {
         let line = line?;
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.get(4) != Some(&"getenv") {
+        if fields.get(4) != Some(&"getenv") && fields.get(4) != Some(&"getenv.program") {
             continue;
         }
         let value = String::from_utf8(unhex(fields[5])?)
@@ -341,6 +359,31 @@ pub(super) fn env_rows(st: &State) -> std::io::Result<Vec<(u32, String, Option<S
         ));
     }
     Ok(rows)
+}
+/// SNAP25: env names read inside a program-input funnel (`getenv.program`):
+/// guard members whatever their prefix.
+pub(super) fn program_env_names(st: &State) -> Vec<String> {
+    use std::io::BufRead;
+    let mut out = Vec::new();
+    let Ok(f) = std::fs::File::open(format!("{}.inputs.tsv", st.out)) else {
+        return out;
+    };
+    for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.get(4) == Some(&"getenv.program") {
+            let raw = fields[5];
+            let bytes: Vec<u8> = (0..raw.len() / 2)
+                .filter_map(|i| u8::from_str_radix(&raw[2 * i..2 * i + 2], 16).ok())
+                .collect();
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let name = text.split_once('=').map_or(text.as_str(), |(n, _)| n);
+            let name: Vec<u8> = (0..name.len() / 2)
+                .filter_map(|i| u8::from_str_radix(&name[2 * i..2 * i + 2], 16).ok())
+                .collect();
+            out.push(String::from_utf8_lossy(&name).into_owned());
+        }
+    }
+    out
 }
 pub(super) fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);

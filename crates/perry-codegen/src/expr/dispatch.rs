@@ -53,6 +53,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // SNAP census (instrumented compiles only): an env read whose value this
     // expression stores is a store site (`expr/snap_env_site.rs`).
     super::snap_env_site::note_store_parent(ctx, expr);
+    super::snap_argv_site::note_parent(expr);
     // #9856: under `--debug-symbols`, record this expression's source line
     // for the DWARF line table (`crate::debug_info`). No-op otherwise.
     crate::debug_info::mark_expr_location(ctx, expr);

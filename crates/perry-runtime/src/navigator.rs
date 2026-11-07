@@ -201,9 +201,23 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     });
 
     // hardwareConcurrency: recommended parallelism (>= 1).
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get() as f64)
-        .unwrap_or(1.0);
+    let cores = {
+        crate::snap_funnel!(Parallelism);
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        {
+            crate::snap_census::input_call("navigator.hardwareConcurrency", "()", || {
+                std::thread::available_parallelism()
+                    .map(|n| n.get() as f64)
+                    .unwrap_or(1.0)
+            })
+        }
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            std::thread::available_parallelism()
+                .map(|n| n.get() as f64)
+                .unwrap_or(1.0)
+        }
+    };
     obj.with_mut_ptr(|obj| js_object_set_field(obj, 3, JSValue::number(cores)));
 
     // platform: browser-style token.

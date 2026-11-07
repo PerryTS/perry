@@ -4398,6 +4398,7 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     rebaseline: BudgetedGcRebaseline,
     progress_kind: GcProgressKind,
 ) -> BudgetedGcCycle {
+    crate::snap_funnel!(Gc);
     // Same direct-constructor path as gc_start_budgeted_full_cycle above.
     crate::arena::sync_inline_arena_state();
     super::roots::ensure_stack_maps_built();
@@ -4878,6 +4879,7 @@ pub(super) fn gc_idle_reclaim_try_start() -> bool {
 /// is active the stepper's pressure check runs exactly as it would at any host
 /// safepoint.
 pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> GcStepReport {
+    crate::snap_funnel!(Gc);
     let start = Instant::now();
     let mut result = gc_budgeted_step_work_units_inner_with_progress(
         GC_NORMAL_INCREMENTAL_WORK_UNITS,
@@ -4976,6 +4978,7 @@ fn gc_budgeted_start_or_step(
     start_progress_kind: GcProgressKind,
     automatic: bool,
 ) -> GcStepReport {
+    crate::snap_funnel!(Gc);
     if let Some(due) = due {
         if start_progress_kind.is_budgeted()
             && (due == BudgetedGcTrigger::YoungScavengeCap
@@ -5147,6 +5150,7 @@ pub extern "C" fn js_gc_step_work_units(work_units: u64, out: *mut JsGcStepResul
 
 #[no_mangle]
 pub extern "C" fn js_gc_step_us(budget_us: u64, out: *mut JsGcStepResult) -> u32 {
+    crate::snap_funnel!(Gc);
     if budget_us == 0 {
         let result = gc_budgeted_status_result().with_debt();
         return write_gc_step_result(out, result);
@@ -5221,6 +5225,7 @@ extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
 }
 
 fn js_gc_collect_body() {
+    crate::snap_funnel!(Gc);
     if crate::snap_census::explicit_gc() {
         return;
     }

@@ -453,6 +453,7 @@ fn capture_encoded(
         return crate::snap_census::input_call("stack.capture", &format!("{:?}", (want,)), || {
             let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
             let n = walk::capture_js(origin, &mut pcs, want);
+            crate::snap_census::pc_check(&pcs[..n]);
             if diag_enabled() {
                 eprintln!(
                     "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",

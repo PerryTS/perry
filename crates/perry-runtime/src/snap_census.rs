@@ -642,6 +642,87 @@ pub extern "C" fn js_snap_env_site(kind: i32) {
     let _ = kind;
 }
 
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+/// SNAP25 funnels: the runtime routine a native read is issued by. A census
+/// row (and, through an lseek marker, the syscall companion) names the
+/// innermost funnel open on its thread; the class follows from the funnel.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum Funnel {
+    ExecPath = 1,
+    StackMaps = 2,
+    StackBounds = 3,
+    Parse = 4,
+    Parallelism = 5,
+    Gc = 6,
+    ExecArgv = 7,
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[inline(always)]
+pub(crate) fn funnel_enter(f: Funnel) -> runner::FunnelScope {
+    runner::FunnelScope::enter(f as u8)
+}
+
+/// Open a SNAP25 funnel for the rest of the enclosing block, in the
+/// instrumented Linux cohort only; nothing in any other build.
+#[macro_export]
+macro_rules! snap_funnel {
+    ($f:ident) => {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        let _snap_funnel = $crate::snap_census::funnel_enter($crate::snap_census::Funnel::$f);
+    };
+}
+
+/// Codegen calls this right before a `process.argv` read, in instrumented
+/// compiles only (`expr/snap_argv_site.rs`): `kind` 1 = the read is
+/// `process.argv.length`, 2 = `process.argv[index]` with a constant index,
+/// 0 = any other use (the whole array escapes). Kept for the next
+/// `js_process_argv_value` on this thread.
+#[cfg(perry_gc_instruments)]
+#[no_mangle]
+pub extern "C" fn js_snap_argv_site(kind: i32, index: i64) {
+    crate::effect!(pure);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::argv_site(kind, index);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (kind, index);
+}
+
+/// SNAP25: one `process.argv` read at its finest grain (`argv.read` row).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn argv_read(value: f64) {
+    if runner::on() {
+        runner::argv_read(value);
+    }
+}
+
+/// SNAP25: a JS-reachable clock read (timer creation, `process.uptime`,
+/// `console.time`, GC stats): a clock-class census input.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn clock_input(operation: &str, value: u64) {
+    if runner::c25() {
+        record_input_value(operation, &value);
+    }
+}
+
+/// SNAP25: every captured Error pc must lie in the executable text of an
+/// EXEC (non-PIE) image (`stack.pc_check` row).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn pc_check(pcs: &[usize]) {
+    if runner::c25() && runner::inputs_on() && runner::on_main_thread() {
+        let (exec, lo, hi) = runner::exe_text();
+        let out = pcs.iter().filter(|&&pc| pc < lo || pc >= hi).count();
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event(
+            "stack.pc_check",
+            format!("exec={};out={out};n={};text={lo:x}-{hi:x}", exec as u8, pcs.len()),
+        );
+    }
+}
+
 /// Codegen calls this around a literal CommonJS require edge's init-guard
 /// call, in instrumented compiles only (`cjsRequireEdge`): `on` 1 before, 0
 /// after. The evaluation the guard starts was reached by `require` (a static

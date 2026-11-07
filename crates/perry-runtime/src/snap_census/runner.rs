@@ -1116,6 +1116,7 @@ unsafe fn start_census(out: String) {
         }
     }
     st.inputs.watch_enabled = !std::env::var("PERRY_SNAP22_WATCH").is_ok_and(|v| v == "0");
+    C25.store(!std::env::var("PERRY_SNAP25").is_ok_and(|v| v == "0"), Relaxed);
     st.inputs.allocated_bytes = st.births.as_slice().iter().map(|b| b.size as u64).sum();
     input_record::open(st).expect("cannot open ordered input record");
     install_handlers();
@@ -2285,7 +2286,16 @@ unsafe fn on_segv_inner(
             return;
         }
         let tracked = page_flags(st, page).is_some_and(|f| *f & PF_TRACKED != 0);
-        if !tracked || policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
+        // A tracked page whose policy is open now but whose protection is
+        // still a bulk protect of an earlier mode (the watch ended while the
+        // page stayed read-only): bring the page to its policy and retry. An
+        // extra closed page only costs a fault; it never hides a write.
+        if tracked && policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
+            libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
+            st.faults_ignored += 1;
+            return;
+        }
+        if !tracked {
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
             let flags = page_flags(st, page).map_or(0xff, |f| *f as u64);
@@ -2795,16 +2805,17 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
     if inputs_on() && on_main_thread() {
         let _input_logging = input_record::Scope::enter();
         let st = state();
+        let op = if c25() && FUNNEL.get() == 7 { "getenv.program" } else { "getenv" };
         if found.is_null() {
             input_record::native_event(
                 st,
-                "getenv",
+                op,
                 format_args!("{}=unset", input_record::Hex(key)),
             );
         } else {
             input_record::native_event(
                 st,
-                "getenv",
+                op,
                 format_args!(
                     "{}={}",
                     input_record::Hex(key),
@@ -4406,8 +4417,9 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
             _ => {}
         }
     }
+    let program = input_record::program_env_names(st);
     for (init, name, value) in &st.env_reads {
-        if name.starts_with("PERRY_") || name.starts_with("RUST_") {
+        if (name.starts_with("PERRY_") || name.starts_with("RUST_")) && !program.contains(name) {
             let _ = writeln!(f, "#knob\t{name}\t{init}");
             continue;
         }
@@ -4567,10 +4579,15 @@ pub unsafe extern "C" fn unsetenv(name: *const libc::c_char) -> libc::c_int {
         } else {
             std::ffi::CStr::from_ptr(name).to_bytes()
         };
+        let was = if c25() {
+            if name.is_null() || getenv(name).is_null() { ";was=unset" } else { ";was=set" }
+        } else {
+            ""
+        };
         input_record::native_event(
             state(),
             "native.unsetenv",
-            format_args!("{}", input_record::Hex(key)),
+            format_args!("{}{was}", input_record::Hex(key)),
         );
         host(Effect::HostWrite, "env");
     }
@@ -4604,9 +4621,16 @@ pub unsafe extern "C" fn setenv(
             state(),
             "native.setenv",
             format_args!(
-                "{}={};overwrite={overwrite}",
+                "{}={};overwrite={overwrite}{}",
                 input_record::Hex(key),
-                input_record::Hex(val)
+                input_record::Hex(val),
+                if !c25() {
+                    ""
+                } else if getenv(name).is_null() {
+                    ";was=unset"
+                } else {
+                    ";was=set"
+                }
             ),
         );
         host(Effect::HostWrite, "env");
@@ -4620,4 +4644,159 @@ pub unsafe extern "C" fn setenv(
     ) -> libc::c_int = std::mem::transmute(next);
     *libc::__errno_location() = saved_errno;
     call(name, value, overwrite)
+}
+
+// ---------------------------------------------------------------------------
+// SNAP25: funnels, per-read argv, executable text (census only)
+// ---------------------------------------------------------------------------
+
+/// `PERRY_SNAP25=0` is the off arm: the census rows are exactly SNAP23's.
+static C25: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(super) fn c25() -> bool {
+    C25.load(Relaxed)
+}
+
+#[thread_local]
+static FUNNEL: std::cell::Cell<u8> = std::cell::Cell::new(0);
+#[thread_local]
+static ARGV_SITE: std::cell::Cell<(i32, i64)> = std::cell::Cell::new((-1, 0));
+
+pub(super) fn funnel() -> u8 {
+    FUNNEL.get()
+}
+pub(super) fn funnel_name(id: u8) -> &'static str {
+    match id {
+        1 => "exec_path",
+        2 => "stack_maps",
+        3 => "stack_bounds",
+        4 => "parse",
+        5 => "parallelism",
+        6 => "gc",
+        7 => "exec_argv",
+        _ => "none",
+    }
+}
+/// The syscall companion tags every later syscall of this thread with `id`.
+fn funnel_marker(id: u8) {
+    unsafe {
+        let saved = *libc::__errno_location();
+        libc::syscall(
+            libc::SYS_lseek,
+            -1 as libc::c_int,
+            u64::from(id),
+            0x5323 as libc::c_int,
+        );
+        *libc::__errno_location() = saved;
+    }
+}
+pub(crate) struct FunnelScope(u8, bool);
+impl FunnelScope {
+    #[inline(always)]
+    pub(crate) fn enter(id: u8) -> Self {
+        if !(on() && c25()) {
+            return Self(0, false);
+        }
+        let prev = FUNNEL.replace(id);
+        funnel_marker(id);
+        Self(prev, true)
+    }
+}
+impl Drop for FunnelScope {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.1 {
+            FUNNEL.set(self.0);
+            funnel_marker(self.0);
+        }
+    }
+}
+
+pub(super) fn argv_site(kind: i32, index: i64) {
+    ARGV_SITE.set((kind, index));
+}
+
+/// One `process.argv` read: `length=N`, `index=I;value=V` or `escape`.
+pub(super) fn argv_read(value: f64) {
+    let (kind, index) = ARGV_SITE.replace((-1, 0));
+    if !(c25() && inputs_on() && on_main_thread()) {
+        return;
+    }
+    let bits = value.to_bits();
+    let arr = if bits >> 48 == 0x7ffd {
+        (bits & 0x0000_ffff_ffff_ffff) as *mut crate::ArrayHeader
+    } else {
+        std::ptr::null_mut()
+    };
+    let text = {
+        let _scope = input_record::Scope::enter();
+        if arr.is_null() {
+            format!("escape;site={kind};value=non_array:{bits:016x}")
+        } else {
+            let len = unsafe { (*arr).length };
+            match kind {
+                1 => format!("length={len}"),
+                2 if index >= 0 && (index as u64) < u64::from(len) => {
+                    let e = unsafe {
+                        (crate::array::array_elements_ptr(arr) as *const f64)
+                            .add(index as usize)
+                            .read()
+                            .to_bits()
+                    };
+                    let v = if e >> 48 == 0x7fff {
+                        input_record::Value::input_value(
+                            &((e & 0x0000_ffff_ffff_ffff) as *mut crate::StringHeader),
+                        )
+                    } else {
+                        format!("bits:{e:016x}")
+                    };
+                    format!("index={index};value={v}")
+                }
+                2 => format!("index={index};value=undefined;length={len}"),
+                _ => format!("escape;site={kind};length={len}"),
+            }
+        }
+    };
+    let _scope = input_record::Scope::enter();
+    input_record::event(state(), "argv.read", text);
+}
+
+static EXE_TEXT: [std::sync::atomic::AtomicUsize; 3] = [
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+];
+/// (EXEC image, text lo, text hi) of the main executable: its executable
+/// PT_LOAD; EXEC when the loader applied no bias (non-PIE).
+pub(super) fn exe_text() -> (bool, usize, usize) {
+    if EXE_TEXT[2].load(Relaxed) == 0 {
+        unsafe extern "C" fn each(
+            info: *mut libc::dl_phdr_info,
+            _size: libc::size_t,
+            data: *mut libc::c_void,
+        ) -> libc::c_int {
+            let out = &mut *(data as *mut (usize, usize, usize));
+            let info = &*info;
+            for i in 0..info.dlpi_phnum as usize {
+                let ph = &*info.dlpi_phdr.add(i);
+                if ph.p_type == libc::PT_LOAD && ph.p_flags & libc::PF_X != 0 {
+                    let lo = info.dlpi_addr as usize + ph.p_vaddr as usize;
+                    out.0 = usize::from(info.dlpi_addr == 0);
+                    out.1 = lo;
+                    out.2 = lo + ph.p_memsz as usize;
+                    break;
+                }
+            }
+            1 // the first object is the executable
+        }
+        let mut r = (0usize, 0usize, 0usize);
+        unsafe { libc::dl_iterate_phdr(Some(each), &mut r as *mut _ as *mut libc::c_void) };
+        EXE_TEXT[0].store(r.0, Relaxed);
+        EXE_TEXT[1].store(r.1, Relaxed);
+        EXE_TEXT[2].store(r.2.max(1), Relaxed);
+    }
+    (
+        EXE_TEXT[0].load(Relaxed) == 1,
+        EXE_TEXT[1].load(Relaxed),
+        EXE_TEXT[2].load(Relaxed),
+    )
 }

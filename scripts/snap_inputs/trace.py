@@ -67,7 +67,7 @@ def main():
   os.execvpe(command[0],command,os.environ)
  _,status=os.waitpid(pid,0)
  ptrace(SETOPTIONS,pid,0,1|(1<<1)|(1<<2)|(1<<3)|(1<<4)|(1<<20))
- active={pid:{"perf":counter(pid),"entry":None,"mem":None,"diagnostic_fds":set(),"logger_depth":0}}
+ active={pid:{"perf":counter(pid),"entry":None,"mem":None,"diagnostic_fds":set(),"logger_depth":0,"funnel":0}}
  sequence=0; main_rc=None; failures=[]
  out=open(output,"w",buffering=1)
  out.write(json.dumps({"kind":"collector","sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),"command":command})+"\n")
@@ -117,6 +117,25 @@ def main():
   return {"name":blob(tid,name,nlen) if name and nlen else "",
    "iov":iov(tid,vec,count,returned),"control":blob(tid,control,clen) if control and clen else "",
    "flags":flags}
+ exe_text={}
+ def scan_pcs(tid,window):
+  if tid not in exe_text:
+   exe=os.readlink(f"/proc/{tid}/exe");spans=[]
+   for line in open(f"/proc/{tid}/maps"):
+    f=line.split(None,5)
+    if len(f)==6 and f[5].strip()==exe and "x" in f[1]:
+     lo,hi=(int(x,16) for x in f[0].split("-"));spans.append((lo,hi))
+   exe_text[tid]=spans
+  out=[]
+  for i in range(0,len(window)-7,8):
+   w=struct.unpack_from("Q",window,i)[0]
+   if not any(lo+7<=w<hi for lo,hi in exe_text[tid]):continue
+   b=memory(tid,w-7,7)
+   if b is None:continue
+   if b[2]==0xe8 or (b[5]==0xff and (b[6]>>3)&7==2) or (b[4]==0xff and (b[5]>>3)&7==2) or (b[1]==0xff and (b[2]>>3)&7==2) or (b[0]==0xff and (b[1]>>3)&7==2):
+    out.append(w)
+    if len(out)>=12:break
+  return out
  def put_breakpoint(tid,address,kind):
   if address in breakpoints:return
   word=ptrace(1,tid,address)&((1<<64)-1)
@@ -209,7 +228,7 @@ def main():
    if tid==pid:main_rc=rc
    out.write(json.dumps({"kind":"exit","tid":tid,"rc":rc})+"\n");continue
   if tid not in active:
-   active[tid]={"perf":counter(tid),"entry":None,"mem":None,"diagnostic_fds":set(),"logger_depth":0}
+   active[tid]={"perf":counter(tid),"entry":None,"mem":None,"diagnostic_fds":set(),"logger_depth":0,"funnel":0}
   sig=os.WSTOPSIG(status); event=status>>16
   if event in (1,2,3):
    child=C.c_ulonglong()
@@ -241,6 +260,9 @@ def main():
      sp=int(regs[19]);entry["rsp"]=sp
      window=memory(tid,sp,min(2048,4096-(sp&4095)))
      entry["stack_window"]=window.hex() if window is not None else None
+     # SNAP25 C1: call-preceded return addresses inside the executable's
+     # text, innermost first (a stack scan, labelled as such).
+     if window is not None:entry["pcs_scan"]=scan_pcs(tid,window)
     if nr in (2,4,6,21,80,82,83,84,85,87,89,137):entry["path"]=string(tid,a[0])
     elif nr in (257,262,267,439):entry["path"]=string(tid,a[1])
     if nr==59:
@@ -271,6 +293,10 @@ def main():
      entry["kind"]="logger_scope";entry["policy"]="diagnostic"
      state["logger_depth"] += 1 if a[1] else -1
      if state["logger_depth"]<0:raise RuntimeError("unbalanced logger scope")
+    if nr==8 and (a[0]&0xffffffff)==0xffffffff and a[2]==0x5323:
+     # SNAP25 C2: the runtime funnel now open on this thread.
+     entry["kind"]="funnel_marker";entry["policy"]="diagnostic";state["funnel"]=a[1]
+    elif state["funnel"]:entry["funnel"]=state["funnel"]
     if nr==8 and (a[0]&0xffffffff)==0xffffffff and a[2]==0x5321:
      entry["kind"]="runtime_marker";entry["runtime_seq"]=a[1]
     if nr in (0,1,8) and a[0] in state["diagnostic_fds"]:entry["policy"]="diagnostic"
