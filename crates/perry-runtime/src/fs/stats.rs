@@ -486,6 +486,9 @@ pub extern "C" fn js_fs_stat_sync(path_value: f64) -> f64 {
     js_fs_stat_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+// The Stats object build_stats_object makes: own predicate closures, own
+// numbers, the four Date accessors of its class (data-like: get/set the slot).
+crate::realm_decl! { "node:fs.statSync", effects = { path(arg(0)); reads(field(arg(1), bigint)); stores(fresh); returns(fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)})) } }
 #[no_mangle]
 pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
@@ -551,6 +554,9 @@ pub extern "C" fn js_fs_lstat_sync(path_value: f64) -> f64 {
     js_fs_lstat_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+// The Stats object build_stats_object makes: own predicate closures, own
+// numbers, the four Date accessors of its class (data-like: get/set the slot).
+crate::realm_decl! { "node:fs.lstatSync", effects = { path(arg(0)); reads(field(arg(1), bigint)); stores(fresh); returns(fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)})) } }
 #[no_mangle]
 pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
