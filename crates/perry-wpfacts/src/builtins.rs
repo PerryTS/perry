@@ -30,7 +30,7 @@ pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
-use collections::{array_method, bobj_method, function_method, iterate};
+use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
 pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
@@ -651,11 +651,7 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         // A function the prototype-kind predicate says is born with
         // `%Function.prototype%`; not a generator's step closure, which
         // stands for the generator object (`FuncInfo::gen_step`).
-        TokKind::Func(f, _) => {
-            let fi = &m.funcs[*f as usize];
-            (fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step())
-                .then_some(members::FN_PROTO_ONLY)
-        }
+        TokKind::Func(f, _) => born_with_function_proto(m, *f).then_some(members::FN_PROTO_ONLY),
         _ => None,
     };
     // A Map or Set iterator: past its own keys the chain reaches
@@ -808,11 +804,17 @@ pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
 
 /// Does receiver token `r` have the family of native member `(fam, what)`,
 /// so that the member called on it runs `own_method(r, key)`, the model a
-/// call `r.key()` runs: an array for `Array.prototype`'s, a site builtin
-/// object of the same kind, a function value for `Function.prototype`'s.
+/// call `r.key()` runs: a site builtin object of the same kind, a function
+/// value for `Function.prototype`'s. `Array.prototype`'s methods are generic
+/// over `this` (ECMA-262 23.1.3: ToObject(this), its `length` and indices
+/// through [[Get]]/[[Set]], ArraySpeciesCreate): they run on any object,
+/// an array or not (`native_prototype_call`).
 pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>, r: Tok) -> bool {
     if fam == Family::Object {
         return r != TOP;
+    }
+    if fam == Family::Array && what.is_none() {
+        return matches!(m.toks[r as usize], TokKind::Obj(..));
     }
     match &m.toks[r as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
@@ -838,6 +840,11 @@ pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Ato
         Family::Object => {
             let proto = m.tok(TokKind::ObjectProto);
             proto_method(m, proto, r, Key::Named(key), call);
+        }
+        // The method itself, whatever chain the receiver has.
+        Family::Array => {
+            let name = m.atoms[key as usize].clone();
+            array_method_on(m, r, &name, call);
         }
         _ => own_method_inner(m, r, Key::Named(key), call),
     }
@@ -970,6 +977,17 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
 /// `Function`; a typed array prototype's goes on to `%TypedArray%.prototype`,
 /// which the one `TypedArray` prototype stands for. `None`: the chain's
 /// prototypes are values or a class's, or `t` is no builtin receiver.
+/// Is program function `f` born with `%Function.prototype%` as its
+/// `[[Prototype]]` (the prototype-kind predicate,
+/// `perry_hir::fn_proto::FnProtoKind::Function`)? Not an async, generator
+/// or async-generator function (`%AsyncFunction.prototype%` & co.), and not
+/// a generator's step closure, which stands for the generator object
+/// (`FuncInfo::gen_step`).
+pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
+    let fi = &m.funcs[f as usize];
+    fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
+}
+
 pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
     match &m.toks[t as usize] {
         TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,

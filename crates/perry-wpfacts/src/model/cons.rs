@@ -264,6 +264,10 @@ pub enum Cons {
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
+    /// The node holds the prototypes of a `super` access's home object
+    /// (its [[GetPrototypeOf]] at the access): continue the lookup at each
+    /// (`Cons::Super`), with each token of `recv` as the receiver.
+    SuperFrom { recv: NodeId, key: Key, act: ChainAct },
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
     SuperCtor { class: TmplId, call: CallId },
@@ -564,6 +568,7 @@ impl Cons {
             Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::Super { .. } => "super",
+            Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",
             Cons::SuperCtorParent { .. } => "superctorparent",
             Cons::ThisFrom { .. } => "thisfrom",

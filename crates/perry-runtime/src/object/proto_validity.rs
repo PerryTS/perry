@@ -473,7 +473,7 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
 /// # Safety
 /// `obj` is the receiver the funnel is about to stamp, so its `GcHeader`
 /// precedes it.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn note_object_shape_stamping(
     obj: usize,
     previous: u32,
@@ -486,6 +486,18 @@ pub(crate) unsafe fn note_object_shape_stamping(
     if !object_is_marked_prototype(obj) {
         return false;
     }
+    note_marked_object_shape_stamping(obj, published, added_key);
+    true
+}
+
+// The marked-object report stays outside the inlined admission guards.
+#[cold]
+#[inline(never)]
+unsafe fn note_marked_object_shape_stamping(
+    obj: usize,
+    published: u32,
+    added_key: Option<*const crate::StringHeader>,
+) {
     use crate::object::builtin_proto::{Key, Mutation};
     crate::object::builtin_proto::note_write(
         obj as *const crate::object::ObjectHeader,
@@ -495,7 +507,6 @@ pub(crate) unsafe fn note_object_shape_stamping(
         },
         "shape stamp",
     );
-    true
 }
 
 /// [`note_object_shape_stamped`]'s second half for a marked prototype, run

@@ -434,6 +434,24 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     out.fnproto_borrow_unwritten = pf.fnproto_borrow_written.is_none() || unchecked;
+    // The method calls proven to read their intrinsic member. Interpreted
+    // code may store into any member it can name: then no site is proven and
+    // each reads its property (a guarded namespace call has tested the
+    // namespace shadow bit instead).
+    if !out.interp_guard {
+        if let Some(module) = pf.module_paths.iter().position(|p| p == path) {
+            out.native_member_calls = pf
+                .sites
+                .iter()
+                .filter(|s| {
+                    s.module as usize == module
+                        && s.is_call
+                        && matches!(s.verdict, perry_wpfacts::Verdict::NativeMember)
+                })
+                .map(|s| s.byte_offset)
+                .collect();
+        }
+    }
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };

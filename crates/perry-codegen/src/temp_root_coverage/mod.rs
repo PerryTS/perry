@@ -55,7 +55,7 @@ pub(crate) fn entry_opts() -> CompileOptions {
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
-        program_facts: Default::default(),
+        program_facts: proven_console_facts(),
         program_layouts: Default::default(),
         gc_effects: Default::default(),
         target: None,
@@ -189,7 +189,24 @@ pub(crate) fn under_both_lowerings(mut body: impl FnMut(&str)) {
     }
 }
 
-/// `console.log(a, b, …)` — the shape in the #6951 repro.
+/// The callee offset of the fixtures' console calls ([`console_log`]).
+pub(crate) const PROVEN_CONSOLE_SITE: u32 = 7;
+
+/// Facts that prove the console call at [`PROVEN_CONSOLE_SITE`] reads the
+/// native member, so it binds the runtime's console intrinsic (an unproven
+/// site reads `console.<m>` and calls it instead).
+pub(crate) fn proven_console_facts() -> crate::ProgramFactsView {
+    crate::ProgramFactsView {
+        elision: std::sync::Arc::new(crate::ElisionFacts {
+            native_member_calls: [PROVEN_CONSOLE_SITE].into_iter().collect(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// `console.log(a, b, …)` — the shape in the #6951 repro, at a site the
+/// facts prove native ([`proven_console_facts`]).
 pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
         byte_end: 0,
@@ -197,11 +214,11 @@ pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
             byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "log".to_string(),
-            byte_offset: 0,
+            byte_offset: PROVEN_CONSOLE_SITE,
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: PROVEN_CONSOLE_SITE,
     })
 }
 

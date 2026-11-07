@@ -317,6 +317,15 @@ impl<'a> Gen<'a> {
     /// always holds one (`const k = "name"; o[k]`: `Gen::const_key`, the
     /// resolver constant stores and definitions use). A binding read before
     /// its initialization throws (TDZ) and names no key at all.
+    /// The key of `super[key]` (a read, store or call): the key expression
+    /// runs, then ToPropertyKey, whose `@@toPrimitive`, `toString` or
+    /// `valueOf` of an object key is program code.
+    pub(crate) fn super_key(&mut self, fx: &Fx, key: &Expr) -> Key {
+        let kn = self.expr(fx, key);
+        self.to_property_key(kn);
+        self.key_of(fx.module, key)
+    }
+
     pub(crate) fn key_of(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
@@ -934,10 +943,18 @@ impl<'a> Gen<'a> {
                 }
                 last
             }
-            Expr::InstanceOf { expr, ty_expr, .. } => {
+            Expr::InstanceOf { expr, ty, ty_expr } => {
                 let _ = self.expr(fx, expr);
-                if let Some(t) = ty_expr {
-                    let tv = self.expr(fx, t);
+                // The right-hand side is a value: the dynamic type
+                // expression, or the user class `ty` names (codegen
+                // `class_ids`: a local or imported user class, called with
+                // its class value). InstanceofOperator runs its
+                // `@@hasInstance` (GetMethod) either way.
+                let rhs = match ty_expr {
+                    Some(t) => Some(self.expr(fx, t)),
+                    None => self.instanceof_class(mi, ty),
+                };
+                if let Some(tv) = rhs {
                     // Symbol.hasInstance is a protocol method.
                     let r = self.m.reason("Symbol.hasInstance");
                     self.m.cons(
@@ -1016,6 +1033,12 @@ impl<'a> Gen<'a> {
                         value_call: false,
                         func: fx.f,
                     });
+                }
+                // A guarded private method read (`this.#m`) is the declaring
+                // brand's member, as its call is: the runtime takes it from
+                // the class registry, never from the receiver's chain.
+                if let Some(callee) = self.private_method_callee(mi, object) {
+                    return callee;
                 }
                 self.load(o, Key::Named(a))
             }
@@ -2025,33 +2048,16 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertyGet { property } => {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: Key::Named(a),
-                            act: ChainAct::Load(dst),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, Key::Named(a), ChainAct::Load(dst));
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
-                let _ = self.expr(fx, key);
+                let k = self.super_key(fx, key);
                 let v = self.expr(fx, value);
-                let k = self.key_of(fx.module, key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: k,
-                            act: ChainAct::Store(v),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, k, ChainAct::Store(v));
                 v
             }
 
