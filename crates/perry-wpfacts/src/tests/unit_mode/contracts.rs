@@ -301,10 +301,13 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // walks; unrelated units must still stay out of the later rounds.
     // Rule G: a global key's ownership is the realm's declaration lookup
     // (charged per search step) and `%Global%` declares its own keys, so the
-    // same solve is charged more (was [885, 1237, 1039, 258]). A folded
+    // same solve is charged more (was [885, 1237, 1039, 258]). An escaped
+    // object literal's class is a layout no unknown code constructs
+    // (`Model::unknown_constructible`): the later rounds build no unknown
+    // `new` of it (was [889, 1241, 1079, 260]). A folded
     // builtin call is the method call it folds, and a native method runs
-    // once summaries exist (`Deferred::Native`): was [889, 1241, 1079, 260].
-    assert_eq!(pf.round_work, [832, 1256, 1056, 258], "{:?}", pf.units);
+    // once summaries exist (`Deferred::Native`).
+    assert_eq!(pf.round_work, [832, 1203, 988, 258], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

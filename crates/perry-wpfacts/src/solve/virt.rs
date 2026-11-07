@@ -29,7 +29,7 @@ impl Model {
         }
         if let Some(&pn) = self.proto_node.get(&t) {
             for &p in &fresh {
-                let pt = self.tok(TokKind::Proto(p));
+                let pt = self.tok(TokKind::Proto(self.constructor_origin(p)));
                 self.add_tok(pn, pt);
             }
         }

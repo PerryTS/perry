@@ -84,6 +84,12 @@ impl Model {
             Cons::ReflectNew { call, new_target } => {
                 for &target in toks {
                     self.cons(new_target, Cons::ReflectNewTarget { call, target });
+                    // An unknown target may be any escaped class: each one,
+                    // now or later, arrives here as an ordinary target.
+                    if target == TOP && !self.sum.templates.contains(&call) {
+                        let esc = self.escaped_classes;
+                        self.cons(esc, Cons::ReflectNew { call, new_target });
+                    }
                 }
             }
             Cons::ReflectNewTarget { call, target } => {
@@ -649,6 +655,13 @@ impl Model {
                         Key::Any(_) => self.key_fields(q, key),
                     };
                     self.edge(f, dst);
+                    for x in self.class_id_holders(of, q) {
+                        let f = match key {
+                            Key::Named(a) => self.field(x, a),
+                            Key::Any(_) => self.key_fields(x, key),
+                        };
+                        self.edge(f, dst);
+                    }
                     self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
                     if self.stops_at(q, key) {
                         let v = self.stopped_shared.entry(q).or_default();
