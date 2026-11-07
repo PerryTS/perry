@@ -185,21 +185,20 @@ fn a_native_field_primitive_store_does_not_escape_its_old_value() {
     assert!(proven(&pf, &src, "// SITE-D2", "n"));
 }
 
-/// A declared key keeps today's path: the runtime reads it. A function
-/// stored as `Error.prepareStackTrace` is called by the runtime with its
-/// call sites; one stored as `Object.keys` by any caller; an object stored
-/// as `Error.stackTraceLimit` is converted by the runtime.
+/// A static the realm reads keeps today's path. A function stored as
+/// `Error.prepareStackTrace` is called by the runtime with its call sites;
+/// an object stored as `Error.stackTraceLimit` is converted by the runtime.
+/// Another declared static (`Object.keys`) is the constructor's own field,
+/// called by the program's callers (tests/realm_read_static.rs).
 #[test]
 fn a_store_under_a_declared_key_keeps_todays_path() {
     let src = "class L { n: number; constructor() { this.n = 3; } }\n\
          (Error as any).prepareStackTrace = (e: any, cs: any) => cs.length; // SITE-P\n\
-         (Object as any).keys = (o: any) => o.size; // SITE-K\n\
          const lim = new L();\n\
          (Error as any).stackTraceLimit = lim;\n\
          console.log(lim.n.toFixed(0)); // SITE-S\n";
     let pf = facts(src);
     assert!(unproven(&pf, src, "// SITE-P", "length"));
-    assert!(unproven(&pf, src, "// SITE-K", "size"));
     assert!(unproven(&pf, src, "// SITE-S", "n"));
 }
 
