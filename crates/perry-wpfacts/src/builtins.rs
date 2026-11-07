@@ -842,7 +842,7 @@ pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
 /// Does receiver token `r` have the family of native member `(fam, what)`,
 /// so that the member called on it runs `own_method(r, key)`, the model a
 /// call `r.key()` runs: a site builtin object of the same kind, a function
-/// value for `Function.prototype`'s. `Array.prototype`'s methods are generic
+/// value (a class object too) for `Function.prototype`'s. `Array.prototype`'s methods are generic
 /// over `this` (ECMA-262 23.1.3: ToObject(this), its `length` and indices
 /// through [[Get]]/[[Set]], ArraySpeciesCreate): they run on any object,
 /// an array or not (`native_prototype_call`).
@@ -859,7 +859,9 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
             TmplKind::BObj { what: w, .. } => what == Some(*w) && members::bobj_family(w) == fam,
             _ => false,
         },
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => fam == Family::Function,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::ClassObj(_) => {
+            fam == Family::Function
+        }
         TokKind::Builtin(_) => fam == Family::Function && builtin_function(m, r),
         _ => false,
     }
