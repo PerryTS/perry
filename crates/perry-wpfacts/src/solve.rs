@@ -1285,7 +1285,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            if proto.reads_all() {
+            for &proto in proto.read_touches() {
                 self.cons(dst, Cons::Implicit { reason, proto });
             }
             self.add_tok(recv, t);

@@ -79,6 +79,31 @@ fn exists_sync_runs_the_path_getters() {
     }
 }
 
+/// Named control: the error message's `util.inspect(v, { depth: -1 })`
+/// (`ShallowInspect`) reads an Error's `stack` and `message`, getters
+/// included: what they store is seen. (Its `[util.inspect.custom]` and
+/// `@@toStringTag` are computed members, which every named read sees.)
+#[test]
+fn exists_sync_runs_the_inspect_reads() {
+    for arg in [
+        "{ get stack() { p.x = \"s\"; return \"e\"; } }",
+        "{ get message() { p.x = \"s\"; return \"e\"; } }",
+    ] {
+        let pf = facts(&format!(
+            r#"
+            import * as fs from "fs";
+            class P {{ x: any; constructor(x: number) {{ this.x = x; }} }}
+            const p = new P(1);
+            const o: any = {arg};
+            console.log(fs.existsSync(o));
+            console.log(p.x);
+        "#
+        ));
+        let x = field(tmpl(&pf, "P"), "x");
+        assert!(!x.readonly, "{arg}\n{}", pf.dump_text());
+    }
+}
+
 /// Node reads only the keys of its path check: a getter under any other
 /// key never runs, so what it would store is not seen (main: the argument
 /// was read under any key).

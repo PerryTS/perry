@@ -53,9 +53,11 @@ pub enum RealmProtocol {
     Json,
     HasInstance,
     OwnKeys,
-    /// Node's value formatter (`util.inspect`): the `[util.inspect.custom]`
-    /// hook, own values and labels, each formatted in turn.
-    Inspect,
+    /// Node's `util.inspect(v, { depth: -1 })` (an argument-type error's
+    /// message on an object without a named constructor): the
+    /// `[util.inspect.custom]` hook and the few labels printed before the
+    /// depth check; no own value is read.
+    ShallowInspect,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]

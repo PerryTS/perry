@@ -796,8 +796,10 @@ pub extern "C" fn js_fs_append_file_sync_options(
 }
 
 // node's existsSync: getValidatedPath on the argument (any error is
-// `false`), then the existence check; it keeps nothing and calls nothing.
-crate::realm_decl! { "node:fs.existsSync", effects = { path(arg(0)); returns(prim(bool)) } }
+// `false`), then the existence check; it keeps nothing of the program's
+// and calls nothing else. The path text it decodes is its own
+// (`stores(fresh)`, as every allocating native declares).
+crate::realm_decl! { "node:fs.existsSync", effects = { path(arg(0)); stores(fresh); returns(prim(bool)) } }
 /// Check if a file or directory exists
 /// Returns 1 if exists, 0 if not
 /// Accepts NaN-boxed string path
