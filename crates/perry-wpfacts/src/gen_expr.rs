@@ -1119,7 +1119,7 @@ impl<'a> Gen<'a> {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
                     let key = match self.key_of(fx.module, key) {
-                        Key::Any(_) => Key::Any(self.m.key_shape(key)),
+                        Key::Any(_) => Key::Any(self.key_shape(fx.module, key)),
                         k => k,
                     };
                     // A receiver other than the target gets the own data store.
@@ -1236,7 +1236,7 @@ impl<'a> Gen<'a> {
                         let dst = self.tmp("idxload");
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
-                        let shape = self.m.key_shape(index);
+                        let shape = self.key_shape(fx.module, index);
                         match self.own_reads.remove(&(e as *const Expr as usize)) {
                             // Behind an own-property test (`gen/own_guard.rs`).
                             Some(bad) => {
@@ -1305,7 +1305,7 @@ impl<'a> Gen<'a> {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
                     let key = match self.key_of(fx.module, index) {
-                        Key::Any(_) => Key::Any(self.m.key_shape(index)),
+                        Key::Any(_) => Key::Any(self.key_shape(fx.module, index)),
                         k => k,
                     };
                     self.store_elem(fx, e, o, key, i, v, "[]=");
@@ -2069,5 +2069,32 @@ impl<'a> Gen<'a> {
             // ----------------------------------------------- the rest
             _ => self.expr_rest(fx, e),
         }
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// The shape of computed key `e` of module `mi`: its literal parts
+    /// (`KeyShape::of`), or for a call of one of the module's functions
+    /// (HIR `FuncRef`: a declaration the program reassigns is a local, so
+    /// the call runs this body) what that body returns
+    /// (`KeyShape::of_returns`).
+    pub(crate) fn key_shape(&mut self, mi: u32, e: &Expr) -> KeyShapeId {
+        let s = match e {
+            Expr::Call { callee, .. } => match callee.as_ref() {
+                Expr::FuncRef(id)
+                    if !self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) =>
+                {
+                    self.modules[mi as usize]
+                        .1
+                        .functions
+                        .iter()
+                        .find(|f| f.id == *id)
+                        .and_then(crate::model::KeyShape::of_returns)
+                }
+                _ => None,
+            },
+            _ => crate::model::KeyShape::of(e),
+        };
+        self.m.key_shape(s)
     }
 }

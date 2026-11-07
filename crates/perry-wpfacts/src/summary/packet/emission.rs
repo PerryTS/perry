@@ -404,8 +404,8 @@ impl Model {
         self.packet_scope = Some(b);
     }
 
-    pub(super) fn packet_shape(&self, shape: KeyShapeId) -> Option<&[String]> {
-        (shape != 0).then(|| self.key_shapes[shape as usize].pieces.as_slice())
+    pub(super) fn packet_shape(&self, shape: KeyShapeId) -> Option<&[Vec<String>]> {
+        (shape != 0).then(|| self.key_shapes[shape as usize].globs.as_slice())
     }
 
     pub(super) fn packet_key(&self, key: Key) -> String {
