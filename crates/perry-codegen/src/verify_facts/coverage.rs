@@ -28,6 +28,7 @@ pub(crate) enum Fact {
     MinimumExtent,
     Separation,
     NumberInput,
+    Int32Input,
     IndexedMetadata,
     NumericBody,
     NumericResult,
@@ -60,6 +61,7 @@ impl Fact {
             Self::MinimumExtent => "indexed minimum extent",
             Self::Separation => "indexed separation",
             Self::NumberInput => "number input",
+            Self::Int32Input => "int32 input",
             Self::IndexedMetadata => "indexed metadata",
             Self::NumericBody => "numeric body",
             Self::NumericResult => "numeric result",
@@ -87,7 +89,10 @@ pub(crate) fn consumed(fact: Fact, operands: impl FnOnce() -> Value) {
 
 pub(crate) fn checked(fact: Fact, operands: Value) {
     let identity = record(fact.name(), operands, true);
-    if matches!(fact, Fact::Bodies | Fact::StaticGuard | Fact::NumberInput) {
+    if matches!(
+        fact,
+        Fact::Bodies | Fact::StaticGuard | Fact::NumberInput | Fact::Int32Input
+    ) {
         let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
         unit_report_validation(inventory.claims.get_mut(&identity).unwrap());
     }
@@ -234,6 +239,10 @@ pub(crate) fn emitted(module: &str, emission: u64, copy: Value) {
 
 pub(crate) fn number(id: u32) {
     checked(Fact::NumberInput, json!({"local":id}));
+}
+
+pub(crate) fn int32(id: u32) {
+    checked(Fact::Int32Input, json!({"local":id}));
 }
 
 pub(crate) fn normal_call_miss(class: &str, key: &str) {

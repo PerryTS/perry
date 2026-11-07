@@ -74,6 +74,7 @@ mod getter_contract;
 mod global_gc;
 mod gopd_key;
 mod fn_intrinsic_proto;
+mod int_ranges;
 mod private_method_read;
 mod fn_inst_default_proto;
 mod descriptor_reads;

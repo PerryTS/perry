@@ -271,7 +271,11 @@ pub enum Cons {
     /// The node holds the prototypes of a `super` access's home object
     /// (its [[GetPrototypeOf]] at the access): continue the lookup at each
     /// (`Cons::Super`), with each token of `recv` as the receiver.
-    SuperFrom { recv: NodeId, key: Key, act: ChainAct },
+    SuperFrom {
+        recv: NodeId,
+        key: Key,
+        act: ChainAct,
+    },
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
     SuperCtor { class: TmplId, call: CallId },
@@ -446,6 +450,17 @@ pub enum Cons {
     /// dst ⊇ the numeric kinds its values turn into (Number; BigInt for a
     /// BigInt; both for an object, whose ToPrimitive may return either).
     Arith { dst: NodeId },
+    /// The node is an operand of a numeric operator whose result `dst`
+    /// takes its integer interval from this rule (`range::eval`), the
+    /// operand's interval beside `other`'s (`NO_NODE`: a unary operator).
+    /// The kinds of `dst` stay `Arith`'s / `Plus`'s.
+    Range {
+        op: RangeOp,
+        other: NodeId,
+        dst: NodeId,
+        /// The node is the right operand (`eval`'s second argument).
+        right: bool,
+    },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -523,6 +538,20 @@ pub enum Cons {
 }
 
 impl Cons {
+    /// The rule delivers Numbers of its host with the host's interval
+    /// (`model::range`): it re-runs when only that interval grows, so the
+    /// interval it delivered keeps covering the host's.
+    pub fn carries_range(&self) -> bool {
+        matches!(
+            self,
+            Cons::Range { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::NotUndefined { .. }
+                | Cons::Falsy { .. }
+        )
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Load { .. } => "load",
@@ -590,6 +619,7 @@ impl Cons {
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
+            Cons::Range { .. } => "range",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",

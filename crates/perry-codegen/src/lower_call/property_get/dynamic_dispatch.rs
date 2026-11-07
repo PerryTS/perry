@@ -56,7 +56,7 @@ struct TowerPshapeRoute {
     keys_global: String,
     /// The index argument positions and clone parameter ids when the case's
     /// index arguments are proven Numbers (`lower_call::index_split`).
-    number_index: Option<(Vec<usize>, Vec<u32>)>,
+    number_index: Option<(Vec<crate::lower_call::index_split::IndexArg>, Vec<u32>)>,
 }
 
 /// Build the exact direct-call ABI for one concrete method implementation.

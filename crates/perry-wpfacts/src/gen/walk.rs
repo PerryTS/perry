@@ -1100,6 +1100,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                self.narrow_enter_loop(s);
                 self.loop_depth += 1;
                 let _ = self.expr(fx, condition);
                 self.stmts(fx, body);
@@ -1111,6 +1112,7 @@ impl<'a> Gen<'a> {
                 update,
                 body,
             } => {
+                self.narrow_enter_loop(s);
                 if let Some(i) = init {
                     self.stmt(fx, i);
                 }
@@ -1118,12 +1120,29 @@ impl<'a> Gen<'a> {
                 if let Some(c) = condition {
                     let _ = self.expr(fx, c);
                 }
+                // The update runs after the body: it reads the end node.
+                let narrowed = self.narrow_for(
+                    fx,
+                    init.as_deref(),
+                    condition.as_ref(),
+                    update.as_ref(),
+                    body,
+                );
+                if narrowed {
+                    self.narrow_in_update(true);
+                }
                 if let Some(u) = update {
                     let _ = self.expr(fx, u);
+                }
+                if narrowed {
+                    self.narrow_in_update(false);
                 }
                 match self.for_in_of(fx, body) {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
+                }
+                if narrowed {
+                    self.narrow_end();
                 }
                 self.loop_depth -= 1;
             }

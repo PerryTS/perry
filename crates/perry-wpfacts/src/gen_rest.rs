@@ -519,21 +519,33 @@ impl<'a> Gen<'a> {
                 let a = self.m.atom("size");
                 self.load(recv, Key::Named(a))
             }
+            // A Math function with an integer rule: the Number result's
+            // interval (`model::range`).
+            Expr::MathAbs(x) => self.math_range(fx, crate::model::RangeOp::Abs, &[x.as_ref()]),
+            Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathRound(x) | Expr::MathTrunc(x) => {
+                self.math_range(fx, crate::model::RangeOp::Integral, &[x.as_ref()])
+            }
+            Expr::MathSign(x) => self.math_range(fx, crate::model::RangeOp::Sign, &[x.as_ref()]),
+            Expr::MathClz32(x) => self.math_range(fx, crate::model::RangeOp::Clz32, &[x.as_ref()]),
+            Expr::MathImul(a, b) => {
+                self.math_range(fx, crate::model::RangeOp::Imul, &[a.as_ref(), b.as_ref()])
+            }
+            Expr::MathMin(xs) if !xs.is_empty() => {
+                let xs: Vec<&Expr> = xs.iter().collect();
+                self.math_range(fx, crate::model::RangeOp::Min, &xs)
+            }
+            Expr::MathMax(xs) if !xs.is_empty() => {
+                let xs: Vec<&Expr> = xs.iter().collect();
+                self.math_range(fx, crate::model::RangeOp::Max, &xs)
+            }
             // Every Math function returns a Number (ECMA-262 Math).
-            Expr::MathFloor(..)
-            | Expr::MathCeil(..)
-            | Expr::MathRound(..)
-            | Expr::MathTrunc(..)
-            | Expr::MathSign(..)
-            | Expr::MathAbs(..)
-            | Expr::MathSqrt(..)
+            Expr::MathSqrt(..)
             | Expr::MathLog(..)
             | Expr::MathLog2(..)
             | Expr::MathLog10(..)
             | Expr::MathPow(..)
             | Expr::MathMin(..)
             | Expr::MathMax(..)
-            | Expr::MathImul(..)
             | Expr::MathRandom
             | Expr::MathSin(..)
             | Expr::MathCos(..)
@@ -546,7 +558,6 @@ impl<'a> Gen<'a> {
             | Expr::MathHypot(..)
             | Expr::MathFround(..)
             | Expr::MathF16round(..)
-            | Expr::MathClz32(..)
             | Expr::MathExpm1(..)
             | Expr::MathLog1p(..)
             | Expr::MathSinh(..)

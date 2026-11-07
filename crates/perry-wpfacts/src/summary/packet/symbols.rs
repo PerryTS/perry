@@ -409,6 +409,7 @@ impl Model {
                 holder, f, setter
             ),
             Cons::Arith { dst } => format!("Arith dst={:?}", dst),
+            Cons::Range { op, other, dst, right } => format!("Range op={} other={:?} dst={:?} right={}", op.name(), other, dst, right),
             Cons::Plus { str, num } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::ShareBuffer { ta } => {
