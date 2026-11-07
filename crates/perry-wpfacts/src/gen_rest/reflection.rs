@@ -3,6 +3,21 @@
 use super::*;
 
 impl<'a> Gen<'a> {
+    /// ToPropertyKey of a reflective key operand
+    /// (`Object.getOwnPropertyDescriptor`, `Reflect.getOwnPropertyDescriptor`,
+    /// `Reflect.deleteProperty`): an object key runs its `@@toPrimitive`,
+    /// `toString` or `valueOf` before the lookup.
+    pub(crate) fn to_property_key(&mut self, key: NodeId) {
+        let r = self.m.reason("ToPropertyKey");
+        self.m.cons(
+            key,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+
     pub(super) fn expr_rest_reflection(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -103,7 +118,8 @@ impl<'a> Gen<'a> {
             }
             Expr::ReflectDelete { target, key } => {
                 let t = self.expr(fx, target);
-                let _ = self.expr(fx, key);
+                let k = self.expr(fx, key);
+                self.to_property_key(k);
                 let r = self.m.reason("E7 Reflect.deleteProperty");
                 self.m.cons(
                     t,
