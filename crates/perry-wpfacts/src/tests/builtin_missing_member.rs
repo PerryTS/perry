@@ -306,3 +306,62 @@ fn namespace_symbol_iterator_program_added_is_called() {
 fn undescribed_namespace_symbol_iterator_stays_open() {
     sym_iter("", "Date", false);
 }
+
+/// The callees of the iteration call of `for (const v of N)`, as the solve
+/// records them: an opaque builtin summary run for the call (the census'
+/// builtin injections at a call) and an unknown callee (`unknown-call`).
+/// The iteration protocol's calls are the program's only calls.
+fn iteration_callees(iterated: &str) -> Vec<String> {
+    let src =
+        format!("const it: any = {iterated};\nfor (const value of it) {{ value.field = 1; }}\n");
+    let cfg = FactsConfig {
+        diagnostics: true,
+        birth_census: true,
+        ..Default::default()
+    };
+    let pf = facts_with(&src, cfg);
+    let field = |l: &str, k: &str| {
+        let s = l.find(&format!("\"{k}\":"))? + k.len() + 3;
+        Some(
+            l[s..]
+                .split([',', '}'])
+                .next()?
+                .trim_matches('"')
+                .to_string(),
+        )
+    };
+    let lines = pf.diagnostics.iter().flat_map(|(_, l)| l);
+    let mut callees: Vec<String> = lines
+        .filter_map(|l| {
+            if l.starts_with("{\"record\":\"unknown-call\"") {
+                Some(format!("unknown callee (call {})", field(l, "call")?))
+            } else if l.starts_with("{\"record\":\"birth-injection\"")
+                && field(l, "injector")?.ends_with("src/builtins.rs")
+                && field(l, "call")? != u32::MAX.to_string()
+            {
+                Some(format!("opaque builtin: {}", field(l, "why")?))
+            } else {
+                None
+            }
+        })
+        .collect();
+    callees.sort();
+    callees.dedup();
+    callees
+}
+
+/// Fact level: the iteration call of a described namespace has no callee
+/// (GetIterator throws: no unknown callee, no opaque summary); an
+/// undescribed namespace's (`Date`'s statics) keeps the any-key callee.
+#[test]
+fn namespace_iteration_call_callee_set() {
+    for ns in ["Object", "Function", "Object.prototype.hasOwnProperty"] {
+        let c = iteration_callees(ns);
+        assert!(c.is_empty(), "{ns}: {c:?}");
+    }
+    let c = iteration_callees("Date");
+    assert!(
+        c.iter().any(|c| c.contains("builtin Date[computed]")),
+        "Date: {c:?}"
+    );
+}
