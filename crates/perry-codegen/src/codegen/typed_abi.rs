@@ -100,7 +100,7 @@ pub(crate) fn emit_typed_i32_guard_and_raw(
     blk: &mut crate::block::LlBlock,
     value: &str,
 ) -> (String, String) {
-    use crate::types::{DOUBLE, I1, I32, I64};
+    use crate::types::{I1, I32, I64};
 
     let bits = blk.bitcast_double_to_i64(value);
     let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
