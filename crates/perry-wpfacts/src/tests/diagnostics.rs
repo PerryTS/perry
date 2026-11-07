@@ -231,10 +231,18 @@ fn diagnostic_solver_call_reports_its_program_call() {
         let v = l.split(&format!("\"{k}\":")).nth(1)?;
         v.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
     };
+    // A runtime protocol step (`"protocol":true`, a ToPrimitive of a value
+    // the callback may return) is made for no program call.
     let calls: Vec<(u32, Option<u32>)> = lines
         .iter()
         .filter(|l| l.contains("\"record\":\"unknown-call\""))
+        .filter(|l| !l.contains("\"protocol\":true"))
         .map(|l| (num(l, "call").unwrap(), num(l, "source")))
+        .collect();
+    let program_calls: Vec<u32> = lines
+        .iter()
+        .filter(|l| l.contains("\"record\":\"site\"") && l.contains("\"kind\":\"value-call\""))
+        .filter_map(|l| num(l, "call"))
         .collect();
     let site_call = |key: &str| -> u32 {
         let l = lines
@@ -248,10 +256,18 @@ fn diagnostic_solver_call_reports_its_program_call() {
         num(l, "call").unwrap()
     };
     let (direct, outer) = (site_call("direct"), site_call("call"));
-    // `unknown.direct` is a program call: it reports itself. Every other
-    // unknown call is one the solver made for the `.call` (the callback).
+    // `unknown.direct` is a program call: it reports itself, as any program
+    // call does (`console.log`, once ⊤ code may have written the console).
+    // Every other unknown call is one the solver made for the `.call` (the
+    // callback, and what `replace` calls for it).
     assert!(calls.contains(&(direct, Some(direct))), "{calls:?}");
-    let inner: Vec<_> = calls.iter().filter(|c| c.0 != direct).collect();
+    for c in calls.iter().filter(|c| program_calls.contains(&c.0)) {
+        assert_eq!(c.1, Some(c.0), "a program call reports itself: {calls:?}");
+    }
+    let inner: Vec<_> = calls
+        .iter()
+        .filter(|c| !program_calls.contains(&c.0))
+        .collect();
     assert!(!inner.is_empty(), "{calls:?}\n{}", lines.join("\n"));
     for c in inner {
         assert_eq!(

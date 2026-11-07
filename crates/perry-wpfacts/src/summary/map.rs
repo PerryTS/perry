@@ -187,6 +187,11 @@ pub fn map_cons(
             key,
             act: act_map(act, &mut n, &mut k),
         },
+        SuperFrom { recv, key, act } => SuperFrom {
+            recv: n(recv),
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
         SuperCtor { class, call } => SuperCtor {
             class,
             call: k(call),

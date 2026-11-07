@@ -131,7 +131,7 @@ impl Model {
         .into_iter()
         .enumerate()
         {
-            if prim & bit != 0 && self.idx_done.insert((n, obj, dst, IDX_OWN_PRIM + i as u8)) {
+            if prim & bit != 0 && self.idx_done.insert((n, obj, dst, IDX_OWN_PRIM + i as u16)) {
                 for k in keys {
                     let a = self.atom(k);
                     let f = self.field(obj, a);

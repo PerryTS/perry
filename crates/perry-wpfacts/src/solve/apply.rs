@@ -716,6 +716,11 @@ impl Model {
                     self.super_lookup(t, start, key, act);
                 }
             }
+            Cons::SuperFrom { recv, key, act } => {
+                for &start in toks {
+                    self.cons(recv, Cons::Super { start, key, act });
+                }
+            }
             Cons::SuperCtor { class, call } => {
                 for &t in toks {
                     let owner_class = self.constructor_origin(class);
@@ -1103,7 +1108,7 @@ impl Model {
                         (prim::NULL, &["null"][..]),
                         (prim::UNDEF, &["undefined"][..]),
                     ] {
-                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit as u8)) {
+                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
                             for k in keys {
                                 let a = self.atom(k);
                                 self.load_program_key(obj, a, dst);
@@ -1118,7 +1123,7 @@ impl Model {
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
                     self.with_b(|m| builtins::prim_plain_key(m, prim, call));
                     let p = prim & !(prim::NULL | prim::UNDEF);
-                    if p != 0 && self.idx_done.insert((idx, TOP, call, 128 | p as u8)) {
+                    if p != 0 && self.idx_done.insert((idx, TOP, call, IDX_MCALL_PRIM | p)) {
                         self.cons(
                             idx,
                             Cons::IdxKeyCall {
@@ -1137,7 +1142,7 @@ impl Model {
                         self.method_on(t, Key::any(), call);
                         continue;
                     }
-                    if self.idx_done.insert((idx, t, call, 0)) {
+                    if self.idx_done.insert((idx, t, call, IDX_MCALL_TOKEN)) {
                         self.mark_use(t, crate::model::MARK_ESCAPE);
                         if self.index_needs_all_own_fields(t) {
                             let own = self.key_fields(t, Key::Any(shape));
@@ -1165,7 +1170,7 @@ impl Model {
                 let named = index_needs_general_key(toks, prim);
                 // One rule per receiver: a token, or (⊤) primitive kinds.
                 let rule = match obj {
-                    TOP => 128 | recv_prim as u8,
+                    TOP => 128 | recv_prim,
                     _ => IDX_CALL_ANY,
                 };
                 if named && self.idx_done.insert((n, obj, call, rule)) {
@@ -1195,7 +1200,7 @@ impl Model {
                         if prim & bit != 0
                             && self
                                 .idx_done
-                                .insert((n, obj, call, IDX_CALL_NAMED + bit as u8))
+                                .insert((n, obj, call, IDX_CALL_NAMED + bit))
                         {
                             for k in keys {
                                 let a = self.atom(k);
@@ -1519,10 +1524,27 @@ impl Model {
         // A runtime object (⊤ may be one; `ObjectProto` stands for
         // every builtin prototype) takes `src` as its prototype:
         // its lookups may reach the keys of `src`'s chain.
+        // Such a lookup of a key `src`'s chain holds reads the opaque member
+        // (`settle_native_given` writes every key of that chain on `t`): the
+        // value it stands for, what `src`'s chain holds under the key, is
+        // handed to code the model does not follow, so each member escapes.
+        // `src` itself does not: a lookup on `t` finds what `src` holds,
+        // never `src`. A builtin function value keeps the `proto_node` link
+        // below, which the model walks.
         if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
             && !self.native_given.contains(&(t, src))
         {
             self.native_given.push((t, src));
+            let members = self.node_l("given-prototype-members");
+            self.cons(
+                src,
+                Cons::Load {
+                    key: Key::Any(0),
+                    dst: members,
+                },
+            );
+            let r = self.reason("E6 member of a prototype given to a runtime object");
+            self.sink_node(members, r);
         }
         // `%Object.prototype%` is an immutable prototype exotic
         // object: setting its [[Prototype]] to anything but its
