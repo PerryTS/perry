@@ -22,7 +22,15 @@ const BARE_SPEC_CALL: &str = "call i64 @js_array_push_f64_spec(";
 
 /// `let a: <ty> = []; a.push(<value>); return a;` as one function.
 fn push_ir(ty: Type, value: Expr) -> String {
+    push_ir_with(ty, value, true)
+}
+
+/// `escape`: hand `a` out with a bare mention, so the push takes the full
+/// receiver admission rather than the owned one
+/// (`collectors::loop_pushed_arrays`).
+fn push_ir_with(ty: Type, value: Expr, escape: bool) -> String {
     let mut hir = HirModule::new("apush_own_test");
+    let mention = escape.then_some(Stmt::Expr(Expr::LocalGet(0)));
     hir.functions.push(Function {
         id: 0,
         name: "pushes".to_string(),
@@ -42,8 +50,11 @@ fn push_ir(ty: Type, value: Expr) -> String {
                 value: Box::new(value),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(0))),
-        ],
+        ]
+        .into_iter()
+        .chain(mention)
+        .chain([Stmt::Return(Some(Expr::LocalGet(0)))])
+        .collect(),
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -173,5 +184,40 @@ fn the_spec_ordered_arm_takes_the_own_exit() {
     assert!(
         ir.contains(OR_OWN_CALL) && !ir.contains(BARE_SPEC_CALL),
         "the spec-ordered arm must call the own-aware push:\n{ir}"
+    );
+}
+
+/// An owned local (bound to a literal, only pushed and returned) skips the
+/// forwarded / non-Array / named-layout probes: the first two branches are
+/// constants and the nofwd block reads no `ArrayHeader.named`. The
+/// `_reserved` admission mask stays.
+#[test]
+fn an_owned_local_skips_the_receiver_probes_but_keeps_the_admission_mask() {
+    let ir = push_ir_with(
+        Type::Array(Box::new(Type::Number)),
+        Expr::Number(1.5),
+        false,
+    );
+    // The forwarded arm calls the runtime, so a stack check may sit in front
+    // of it (`stack_guard`): match the false edge's other target instead.
+    assert!(
+        ir.lines()
+            .any(|l| l.contains("br i1 false, label %") && l.contains(", label %apush.elements")),
+        "the forwarded test is the constant false:\n{ir}"
+    );
+    assert!(
+        ir.contains("br i1 true, label %apush.nofwd"),
+        "the Array test is the constant true:\n{ir}"
+    );
+    let nofwd = block(&ir, "apush.nofwd");
+    assert!(
+        nofwd.lines().any(|l| l.contains("= and i16 ")),
+        "the `_reserved` admission mask stays:\n{nofwd}"
+    );
+    assert!(
+        !nofwd
+            .lines()
+            .any(|l| l.contains("= add i64 ") && l.trim_end().ends_with(", 8")),
+        "no `ArrayHeader.named` read:\n{nofwd}"
     );
 }

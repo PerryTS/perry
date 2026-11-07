@@ -51,7 +51,7 @@ fn only_a_loop_entered_after_the_binding_counts() {
         // Declared in a loop, filled by a nested one: the larger birth.
         looped(vec![empty(4), looped(vec![push(4)])]),
     ]);
-    let mut got: Vec<u32> = loop_pushed_arrays(&m).into_iter().collect();
+    let mut got: Vec<u32> = loop_pushed_arrays(&m).reserve.into_iter().collect();
     got.sort_unstable();
     assert_eq!(got, vec![1, 4]);
 }
@@ -76,4 +76,80 @@ fn the_larger_birth_reserves_sixteen_slots() {
         ir.contains(&format!("store i64 {}, ptr %array", 16u64 << 32)),
         "{ir}"
     );
+}
+
+#[test]
+fn owned_arrays_are_only_pushed_read_and_returned() {
+    let get = |id: u32| Expr::LocalGet(id);
+    let length = |id: u32| Expr::PropertyGet {
+        object: Box::new(get(id)),
+        property: "length".into(),
+        byte_offset: 0,
+        byte_end: 0,
+    };
+    let other = |id: u32| Stmt::Let {
+        id,
+        name: format!("o{id}"),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Number(0.0)),
+    };
+    let m = module(vec![
+        // Pushed, its length read and returned: owned.
+        empty(1),
+        looped(vec![push(1)]),
+        Stmt::Expr(length(1)),
+        // Aliased into another binding: not owned.
+        empty(2),
+        push(2),
+        Stmt::Let {
+            id: 20,
+            name: "alias".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(get(2)),
+        },
+        // Pushed as a value into another array: not owned.
+        empty(3),
+        Stmt::Expr(Expr::ArrayPush {
+            array_id: 1,
+            value: Box::new(get(3)),
+            field_writeback: None,
+        }),
+        // Reassigned: not owned.
+        empty(4),
+        Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Array(Vec::new(), None)))),
+        // Not bound to an array literal: not owned.
+        other(5),
+        push(5),
+        Stmt::Return(Some(get(1))),
+    ]);
+    let mut got: Vec<u32> = loop_pushed_arrays(&m).owned.into_iter().collect();
+    got.sort_unstable();
+    assert_eq!(got, vec![1]);
+}
+
+#[test]
+fn an_array_another_body_mentions_is_not_owned() {
+    let mut m = module(vec![empty(1), looped(vec![push(1)]), empty(2), push(2)]);
+    // A module function pushing into the module-level array 1.
+    m.functions.push(perry_hir::Function {
+        id: 0,
+        name: "addTop".into(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: vec![push(1)],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let mut got: Vec<u32> = loop_pushed_arrays(&m).owned.into_iter().collect();
+    got.sort_unstable();
+    assert_eq!(got, vec![2]);
 }
