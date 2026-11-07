@@ -599,6 +599,11 @@ impl Model {
                     }
                 }
             }
+            Cons::HasInstance { reason, arg } => {
+                for &t in toks {
+                    self.has_instance(t, reason, arg);
+                }
+            }
             Cons::UnnamedSet { target } => {
                 let walked = self
                     .walk_nodes

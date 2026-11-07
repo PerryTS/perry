@@ -944,7 +944,7 @@ impl<'a> Gen<'a> {
                 last
             }
             Expr::InstanceOf { expr, ty, ty_expr } => {
-                let _ = self.expr(fx, expr);
+                let lhs = self.expr(fx, expr);
                 // The right-hand side is a value: the dynamic type
                 // expression, or the user class `ty` names (codegen
                 // `class_ids`: a local or imported user class, called with
@@ -955,15 +955,10 @@ impl<'a> Gen<'a> {
                     None => self.instanceof_class(mi, ty),
                 };
                 if let Some(tv) = rhs {
-                    // Symbol.hasInstance is a protocol method.
+                    // Symbol.hasInstance is a protocol method, called with
+                    // the left-hand side.
                     let r = self.m.reason("Symbol.hasInstance");
-                    self.m.cons(
-                        tv,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::HasInstance,
-                        },
-                    );
+                    self.m.cons(tv, Cons::HasInstance { reason: r, arg: lhs });
                 }
                 self.prim_node(prim::BOOL)
             }
