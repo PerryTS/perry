@@ -772,7 +772,9 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // The `{ v }` literals share one literal-shape class, a layout no
         // unknown code constructs: its escape no longer builds the unknown
         // `new` (result, arguments, instance), 16 entries fewer at every n.
-        (942, 2590, 8190),
+        // HOST-P: the runtime-made `process.execArgv` array, like `argv`, is one
+        // more entry at every n -> (943, 2591, 8191).
+        (943, 2591, 8191),
         "entries {e8} {e16} {e32}"
     );
 }

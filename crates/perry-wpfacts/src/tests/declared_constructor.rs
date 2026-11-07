@@ -166,3 +166,48 @@ fn an_undeclared_event_method_sees_detail() {
     let pf = facts(&src);
     assert!(!proven(&pf, &src), "{}", verdicts(&pf, &src));
 }
+
+/// Red on main: every argument of `new Blob` escaped (the unknown
+/// constructor), `this` with it (GLTFLoader's `new Blob([bufferView])`
+/// shape). The constructor iterates its parts and converts each one that is
+/// not bytes to a string; it reads the options' `type` and `endings`.
+#[test]
+fn blob_parts_keep_this() {
+    let src = program("", "new Blob([this, \"x\"], { type: \"text/plain\" });");
+    let pf = facts(&src);
+    assert!(proven(&pf, &src), "{}", verdicts(&pf, &src));
+    assert!(!admits_w(&pf, &src), "{}", verdicts(&pf, &src));
+}
+
+/// Control: a part's `toString` runs.
+#[test]
+fn the_blob_part_to_string_runs() {
+    let src = program(
+        "",
+        "new Blob([{ toString() { self.v = new W(2); return \"\"; } }] as any);",
+    );
+    let pf = facts(&src);
+    assert!(admits_w(&pf, &src), "{}", verdicts(&pf, &src));
+}
+
+/// Control: the parts' iterator runs.
+#[test]
+fn the_blob_parts_iterator_runs() {
+    let src = program(
+        "",
+        "new Blob({ [Symbol.iterator]() { self.v = new W(2); return [][Symbol.iterator](); } } as any);",
+    );
+    let pf = facts(&src);
+    assert!(admits_w(&pf, &src), "{}", verdicts(&pf, &src));
+}
+
+/// Control: the options' `type` getter runs.
+#[test]
+fn the_blob_options_getter_runs() {
+    let src = program(
+        "",
+        "new Blob([], { get type() { self.v = new W(2); return \"\"; } } as any);",
+    );
+    let pf = facts(&src);
+    assert!(admits_w(&pf, &src), "{}", verdicts(&pf, &src));
+}

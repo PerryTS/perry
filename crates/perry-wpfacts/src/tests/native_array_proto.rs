@@ -225,3 +225,90 @@ fn index_accessor_of_a_non_array_receiver_runs_and_is_an_element() {
         assert_eq!(site_n(&full), Ok(true), "{call}");
     }
 }
+
+/// Past `Array.prototype` taken as a value, a key it does not own and no
+/// write added continues on `Object.prototype` (add-locked, image-locked,
+/// DEC 250): `valueOf` is `%Object.prototype.valueOf%` and returns its
+/// receiver, `"" + p` runs `Array.prototype.toString` (its `join`), and
+/// neither hands `p` to unknown code.
+#[test]
+fn object_prototype_method_past_array_prototype_is_the_intrinsic() {
+    let s = src(
+        "const p: any = Object.create(Array.prototype); p.push(payload);
+         const s = \"\" + p; const v = p.valueOf();",
+        "v[0]",
+    );
+    assert_eq!(site_n(&s), Ok(true));
+}
+
+/// A key absent on `Array.prototype` and on `Object.prototype` is no
+/// callee (the call throws a TypeError): `p.split` runs nothing and the
+/// receiver goes nowhere.
+#[test]
+fn key_absent_past_array_prototype_is_no_callee() {
+    let s = src(
+        "const p: any = Object.create(Array.prototype); p.push(payload);
+         try { p.split(\",\"); } catch (e) {} const s = p.slice();",
+        "s[0]",
+    );
+    assert_eq!(site_n(&s), Ok(true));
+}
+
+const WRITTEN: &str = r#"
+function vWritten() { return 0; }
+function leak(x: any) { (globalThis as any).leaked = x; }
+(Array.prototype as any).valueOf = function (this: any) { vWritten(); leak(this); return this; };
+"#;
+
+/// Control: the program writes `Array.prototype.valueOf` first. The
+/// lookup stops there: the written function runs (it is reached) and the
+/// call is the written member's, so the site stays unproven.
+#[test]
+fn written_array_prototype_key_is_not_object_prototype_s() {
+    let s = format!(
+        "{WRITTEN}\n{}",
+        src(
+            "const p: any = Object.create(Array.prototype); p.push(payload);
+             const v = p.valueOf();",
+            "v[0]",
+        )
+    );
+    assert_eq!(site_n(&s), Ok(false));
+    assert_eq!(runs(&s, &["vWritten"]), ["vWritten"]);
+}
+
+/// Control: `valueOf` written onto `Array.prototype` by a write that is no
+/// plain named store (an accessor or a value defined, `Object.assign`,
+/// `Reflect.set`, a computed key, a `for-in` copy). Each is a write
+/// `native_written` sees, so the lookup does not continue on
+/// `Object.prototype`: the written function runs (it is reached) and `v[0]`
+/// is unproven.
+#[test]
+fn key_written_by_any_write_form_is_not_object_prototype_s() {
+    const F: &str = "function (this: any) { vWritten(); return [this]; }";
+    let mut failures = Vec::new();
+    for setup in [
+        format!("Object.defineProperty(Array.prototype, \"valueOf\", {{ get() {{ return {F}; }} }});"),
+        format!("Object.defineProperty(Array.prototype, \"valueOf\", {{ value: {F} }});"),
+        format!("Object.defineProperties(Array.prototype, {{ valueOf: {{ value: {F} }} }});"),
+        format!("Object.assign(Array.prototype, {{ valueOf: {F} }});"),
+        format!("Reflect.set(Array.prototype, \"valueOf\", {F});"),
+        format!("const kk = [\"valueOf\"][0]; (Array.prototype as any)[kk] = {F};"),
+        format!("const o: any = {{ valueOf: {F} }}; for (const kk in o) (Array.prototype as any)[kk] = o[kk];"),
+    ] {
+        let s = format!(
+            "function vWritten() {{ return 0; }}\n{}",
+            src(
+                &format!("{setup}\nconst p: any = Object.create(Array.prototype); p.push(payload); const v = p.valueOf();"),
+                "v[0]",
+            )
+        );
+        if site_n(&s) != Ok(false) {
+            failures.push(format!("{setup}: v[0] proven"));
+        }
+        if runs(&s, &["vWritten"]) != ["vWritten"] {
+            failures.push(format!("{setup}: written function not reached"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

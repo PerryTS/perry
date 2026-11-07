@@ -63,6 +63,7 @@ use turnloop::{
 
 pub mod abi;
 pub mod census;
+mod defer_eof;
 pub(crate) mod errors;
 mod sink;
 pub mod transport;
@@ -74,6 +75,7 @@ mod write_queue;
 #[path = "tests.rs"]
 mod tests;
 
+pub(crate) use defer_eof::{check_phase_begin, check_phase_end, pending as eof_parked};
 pub use errors::{map_error, NodeError};
 pub use sink::{
     register_link_sink, register_sink, sink_installed, NetCompletion, SinkFn, MAX_LINK_ROUTES,
@@ -1147,6 +1149,9 @@ pub(crate) fn dispatch(completion: Completion) {
             });
             let bytes = lease.as_ref().map(|l| l.as_slice()).unwrap_or(&[]);
             debug_assert!(bytes.len() == n || lease.is_none());
+            if n != 0 {
+                defer_eof::note_data(defer_eof::Key::Id(id));
+            }
             sink::emit(subsystem, NetCompletion::data(id, bytes));
             // The lease returns to turnloop's pool here, after the sink has
             // copied what it needs. Holding it would throttle reads.
@@ -1161,12 +1166,15 @@ pub(crate) fn dispatch(completion: Completion) {
                     }
                 })
             });
-            NET.with(|net| {
-                if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
-                    entry.read_op = None;
-                }
+            let handle = NET.with(|net| {
+                let mut net = net.borrow_mut();
+                let entry = net.entries.get_mut(&id)?;
+                entry.read_op = None;
+                Some(entry.handle)
             });
-            sink::emit(subsystem, NetCompletion::eof(id));
+            if !defer_eof::park(defer_eof::Key::Id(id), subsystem, handle) {
+                sink::emit(subsystem, NetCompletion::eof(id));
+            }
         }
         OpResult::Wrote(n) => {
             // One driver write may cover many caller writes (a flushed
@@ -1193,6 +1201,7 @@ pub(crate) fn dispatch(completion: Completion) {
         }
         OpResult::Closed => {
             NET.with(|net| net.borrow_mut().entries.remove(&id));
+            defer_eof::purge(defer_eof::Key::Id(id), None);
             let retrying = NET.with(|net| {
                 let mut net = net.borrow_mut();
                 let retrying = match net.plans.get_mut(&id) {
@@ -1395,6 +1404,7 @@ fn accept_connection(subsystem: u8, server: i64, conn: Handle, peer: Option<Sock
 /// test that is about to drop the loop itself.
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
+    defer_eof::take_all();
     transport::reset_for_test();
     NET.with(|net| net.borrow_mut().timers.clear());
     NET.with(|net| {
@@ -1416,6 +1426,10 @@ pub(crate) fn shutdown_current_thread() {
     // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
     // their descriptors.
     transport::begin_teardown();
+    for cell in defer_eof::take_all() {
+        // SAFETY: each parked link EOF holds the ref that pins its cell.
+        unsafe { transport::release_parked_eof(cell) };
+    }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
     for id in ids {
         let _ = close(id);

@@ -10,7 +10,7 @@ pub(super) enum Environment {
     Private(Arc<Mutex<Entries>>),
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static CURRENT: RefCell<Environment> = const { RefCell::new(Environment::Os) };
 }
 
