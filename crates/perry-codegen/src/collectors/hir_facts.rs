@@ -2546,6 +2546,7 @@ mod tests {
             &[1].into_iter().collect(),
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
         )
     }
 
@@ -2713,6 +2714,7 @@ mod tests {
                 Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))),
             )]),
             &HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
@@ -2805,6 +2807,7 @@ mod tests {
             &HashMap::new(),
             &crate::collectors::ModuleDispatchFacts::default(),
             &HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(graph.integer_locals().contains(&1));
