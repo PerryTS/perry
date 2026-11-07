@@ -1,0 +1,1 @@
+Add an explicit `--sea` profile that exposes embedded assets through `node:sea.isSea()`, `getAssetKeys()`, `getAsset()`, and `getAssetAsBlob()` without a Node executable or runtime extraction. `getRawAsset()` and Node's `useVfs` filesystem behavior remain unsupported.
