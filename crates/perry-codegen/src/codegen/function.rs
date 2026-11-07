@@ -1173,6 +1173,13 @@ pub(super) fn compile_function(
             .return_shape_class(f.id)
             .is_some(),
     );
+    // Lets the whole-program interval proof shows hold only int32 values.
+    let facts_int32_lets = super::facts_int32_locals::lets(
+        &cross_module.wpfacts,
+        &f.body,
+        &boxed_vars,
+        module_globals,
+    );
     let mut native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_params(
         &f.body,
         &f.params,
@@ -1195,6 +1202,7 @@ pub(super) fn compile_function(
         // proves a numeric typed-array/Uint8Array kind, so `g[i]` off one is
         // Number-or-`undefined` exactly as a body-local `const` view is.
         &cross_module.module_global_proven_types,
+        &facts_int32_lets,
     );
 
     // Closed World 5d: the body's typed locals under this variant's entry
@@ -1523,6 +1531,7 @@ pub(super) fn compile_function(
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
         facts_number_locals: &facts_number_lets,
+        facts_int32_locals: &facts_int32_lets,
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),

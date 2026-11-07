@@ -1153,6 +1153,9 @@ pub(crate) struct FnCtx<'a> {
     /// `number_by_construction_locals` this says nothing about the operands
     /// of the writes, which keep their own lowering.
     pub facts_number_locals: &'a std::collections::HashSet<u32>,
+    /// Locals the whole-program interval proof shows hold only int32 values
+    /// (`codegen/facts_int32_locals.rs`).
+    pub facts_int32_locals: &'a std::collections::HashSet<u32>,
 
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty on native statepoint targets.

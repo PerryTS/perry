@@ -216,6 +216,7 @@ pub(in crate::codegen) fn compile_static_method(
         &cross_module.module_dispatch,
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     crate::codegen::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
@@ -414,6 +415,7 @@ pub(in crate::codegen) fn compile_static_method(
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
         facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.

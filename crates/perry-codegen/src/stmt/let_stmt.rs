@@ -1085,7 +1085,10 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
                 init_expr,
                 &i32_slots,
                 &flat_ca,
@@ -1241,7 +1244,10 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
                 init_expr,
                 &i32_slots,
                 &flat_ca,
@@ -1432,7 +1438,10 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
                 init_expr,
                 &i32_slots,
                 &flat_ca,
