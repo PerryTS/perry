@@ -55,6 +55,9 @@ pub(crate) use console_promise::{
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]
 mod console_rooting_tests;
+/// A console call binds the intrinsic only at a facts-proven native site.
+#[cfg(test)]
+mod console_site_facts_tests;
 #[cfg(test)]
 mod ctor_prologue_store_tests;
 mod ctor_prologue_stores;
