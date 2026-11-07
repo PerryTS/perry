@@ -110,6 +110,7 @@ mod native_proto;
 mod native_target_accessor;
 mod private_accessor_reach;
 mod native_user_code;
+mod own_values_proto;
 mod num_key;
 mod objproto_protocol;
 mod own_guarded_read;
