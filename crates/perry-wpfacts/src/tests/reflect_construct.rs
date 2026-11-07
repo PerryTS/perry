@@ -229,3 +229,31 @@ fn reflect_unknown_target_reaches_a_constructor_that_escapes_later() {
         pf.dump_text()
     );
 }
+
+#[test]
+fn reflect_unknown_target_never_constructs_an_object_literal_layout() {
+    // The literal escapes (its layout class with it), and an unknown-target
+    // Reflect.construct result gets an unknown prototype. The class of a
+    // literal is a layout no code can construct: the private read keeps its
+    // fact.
+    let pf = facts(&unseen(
+        r#"
+        declare function opaque(): any;
+        function read(o: { a: number; b: number }) { return o.a; }
+        console.log(read({ a: 1, b: 2 }));
+        (globalThis as any).leak = { a: 3, b: 4 };
+        const inst: any = Reflect.construct(opaque(), [], opaque());
+        Object.setPrototypeOf(inst, opaque());
+    "#,
+    ));
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "a" && !s.top)
+        .expect("a read");
+    assert!(
+        matches!(s.verdict, Verdict::T0Mono),
+        "{s:?}\n{}",
+        pf.dump_text()
+    );
+}

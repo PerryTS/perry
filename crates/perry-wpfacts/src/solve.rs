@@ -773,8 +773,11 @@ impl Model {
         let objproto = self.tok(TokKind::ObjectProto);
         match self.toks[t as usize].clone() {
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind.clone() {
+                // A specialization's instances have its origin's prototype
+                // object (`js_register_class_generic_origin`: one object;
+                // `class_id_holders` holds its class-id members).
                 TmplKind::Class { .. } => {
-                    let p = self.tok(TokKind::Proto(tm));
+                    let p = self.tok(TokKind::Proto(self.constructor_origin(tm)));
                     self.add_tok(n, p);
                 }
                 TmplKind::FnInst { func } => {
@@ -789,7 +792,7 @@ impl Model {
                 _ => match self.virt_protos.get(&t).cloned() {
                     Some(ps) => {
                         for p in ps {
-                            let pt = self.tok(TokKind::Proto(p));
+                            let pt = self.tok(TokKind::Proto(self.constructor_origin(p)));
                             self.add_tok(n, pt);
                         }
                     }
@@ -801,7 +804,7 @@ impl Model {
                 self.tmpls[tm as usize].native_parent.clone(),
             ) {
                 (Some(p), _) => {
-                    let pp = self.tok(TokKind::Proto(p));
+                    let pp = self.tok(TokKind::Proto(self.constructor_origin(p)));
                     self.add_tok(n, pp);
                 }
                 (None, Some((_, name))) => {
