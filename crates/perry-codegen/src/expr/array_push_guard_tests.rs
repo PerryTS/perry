@@ -205,6 +205,10 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
                     field_writeback: None,
                 })],
             },
+            // A bare mention hands `keep` out, so its pushes take the full
+            // receiver admission these tests measure, not the owned one
+            // (`collectors::loop_pushed_arrays`).
+            Stmt::Expr(Expr::LocalGet(ARRAY_ID)),
         ],
         is_async: false,
         is_generator: false,

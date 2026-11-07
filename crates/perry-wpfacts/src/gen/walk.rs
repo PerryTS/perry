@@ -661,6 +661,7 @@ impl<'a> Gen<'a> {
             return;
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
+        self.note_own_stores(f);
         self.stmts(&fx, &f.body);
         self.own_helper_finish(fxi, own);
     }
@@ -991,6 +992,9 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+        if let Some((array, counter)) = guarded_for_of_walk(s) {
+            self.for_of_walks.insert((fx.module, array, counter));
+        }
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         self.stmt_inner(fx, s);
         self.m.cur_fn = prev;
@@ -1198,6 +1202,137 @@ pub(crate) fn variant_name(e: &Expr) -> String {
     let mut h = Head(String::new(), false);
     let _ = std::fmt::write(&mut h, format_args!("{e:?}"));
     h.0
+}
+
+/// The counted walk of a for-of source that is an ordinary array
+/// (`perry_hir::lower::for_of_guard`): `for (let __forof_lit_k_N = 0;
+/// __forof_lit_k_N < a.length; __forof_lit_k_N++) { const x =
+/// a[__forof_lit_k_N]; body }`, where nothing in the body writes the
+/// counter or the array binding. Its array and counter locals. The whole
+/// shape is checked, not only the temp's name, because the binding read is
+/// then taken to lie below the length.
+fn for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
+    let Stmt::For {
+        init: Some(init),
+        condition: Some(condition),
+        update: Some(update),
+        body,
+    } = s
+    else {
+        return None;
+    };
+    let Stmt::Let {
+        id: k,
+        name,
+        init: Some(Expr::Integer(0)),
+        ..
+    } = init.as_ref()
+    else {
+        return None;
+    };
+    let k = *k;
+    if !name.starts_with("__forof_lit_k_") {
+        return None;
+    }
+    let Some(Stmt::Let {
+        init: Some(Expr::IndexGet { object, index, .. }),
+        ..
+    }) = body.first()
+    else {
+        return None;
+    };
+    let (Expr::LocalGet(a), Expr::LocalGet(i)) = (object.as_ref(), index.as_ref()) else {
+        return None;
+    };
+    let a = *a;
+    if *i != k {
+        return None;
+    }
+    let bounded = matches!(condition, Expr::Compare {
+        op: perry_hir::CompareOp::Lt,
+        left,
+        right,
+    } if matches!(left.as_ref(), Expr::LocalGet(l) if *l == k)
+        && matches!(right.as_ref(), Expr::PropertyGet { object, property, .. }
+            if property == "length" && matches!(object.as_ref(), Expr::LocalGet(o) if *o == a)));
+    let stepped = matches!(update, Expr::Update {
+        id,
+        op: perry_hir::UpdateOp::Increment,
+        ..
+    } if *id == k);
+    let untouched = !body
+        .iter()
+        .any(|s| perry_hir::walker::stmt_any_expr(s, &mut |e| writes_local(e, k, a)));
+    (bounded && stepped && untouched).then_some((a, k))
+}
+
+/// The proven arm of a for-of over a source that is not a literal
+/// (`perry_hir::lower::for_of_guard::source_for_of`):
+/// `if (arrayRecordNeedsIterator(t) === false) { [const a = t;] walk }`.
+/// The runtime test holds only for an ordinary Array whose iteration
+/// members nobody replaced, so inside the arm `a` is an Array and the walk's
+/// element is what iterating it yields. A loop of the walk's shape outside
+/// that arm (over an array-like, say) is not a walk.
+fn guarded_for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
+    let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left,
+                right,
+            },
+        then_branch,
+        ..
+    } = s
+    else {
+        return None;
+    };
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args,
+        object: None,
+        ..
+    } = left.as_ref()
+    else {
+        return None;
+    };
+    let (Some(Expr::LocalGet(t)), Expr::Bool(false)) = (args.first(), right.as_ref()) else {
+        return None;
+    };
+    if module != "__perry_runtime" || method != "arrayRecordNeedsIterator" {
+        return None;
+    }
+    let (array, walk) = match then_branch.as_slice() {
+        [walk] => (*t, walk),
+        [Stmt::Let {
+            id,
+            init: Some(Expr::LocalGet(src)),
+            ..
+        }, walk]
+            if src == t =>
+        {
+            (*id, walk)
+        }
+        _ => return None,
+    };
+    for_of_walk(walk).filter(|(a, _)| *a == array)
+}
+
+/// `e` writes local `k` or `a`, or holds a closure that may (a mutable
+/// capture of either).
+fn writes_local(e: &Expr, k: u32, a: u32) -> bool {
+    match e {
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } if *id == k || *id == a => true,
+        Expr::Closure {
+            mutable_captures, ..
+        } if mutable_captures.iter().any(|id| *id == k || *id == a) => true,
+        _ => {
+            let mut hit = false;
+            perry_hir::walker::walk_expr_children(e, &mut |c| hit = hit || writes_local(c, k, a));
+            hit
+        }
+    }
 }
 
 /// The head of a for-of body as HIR lowers it (`IteratorRecord::drive`,

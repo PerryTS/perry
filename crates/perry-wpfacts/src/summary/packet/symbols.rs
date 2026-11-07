@@ -217,6 +217,9 @@ impl Model {
                 self.packet_token(origin, packet),
                 act
             ),
+            Cons::UnnamedSet { target } => {
+                format!("UnnamedSet target={:?}", self.packet_token(target, packet))
+            }
             Cons::StoreTopProto { origin, src } => format!(
                 "StoreTopProto origin={:?} src={:?}",
                 self.packet_token(origin, packet),

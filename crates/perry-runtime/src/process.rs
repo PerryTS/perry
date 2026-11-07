@@ -15,12 +15,16 @@ use std::sync::OnceLock;
 mod attributes;
 mod credentials;
 mod env_misc;
+mod environment;
+#[cfg(test)]
+mod environment_tests;
 mod exec_env;
 mod metadata_values;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
-    run_process_exit_sequence, scan_process_env_cache_roots_mut, schedule_warning,
+    refresh_process_env, run_process_exit_sequence, scan_process_env_cache_roots_mut,
+    schedule_warning,
 };
 mod finalization;
 pub(crate) mod ipc;
@@ -38,6 +42,19 @@ pub use credentials::{
 };
 pub(crate) use ipc::*;
 pub use worker_restrictions::WorkerProcessState;
+
+/// Native child launches retain raw OS inheritance unless the agent owns a
+/// private backing. Cloning releases its lock before option coercion or GC.
+pub(crate) fn private_environment_snapshot() -> Option<Vec<(String, String)>> {
+    match environment::current() {
+        environment::Environment::Os => None,
+        private => Some(private.entries()),
+    }
+}
+
+pub(crate) fn effective_environment_var(name: &str) -> Option<String> {
+    environment::get(name)
+}
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{

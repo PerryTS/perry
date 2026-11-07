@@ -242,6 +242,28 @@ pub(crate) fn emit_string_addref_if_heap_string(ctx: &mut FnCtx<'_>, value: &str
     ctx.current_block = done_idx;
 }
 
+/// `"lit"` the string pool atomises (non-empty UTF-8 of at most
+/// `INTERN_MAX_BYTE_LEN` = 64 bytes, perry-runtime `string/intern.rs`), or a
+/// conditional choosing between such. `PERRY_UNBOXED_CLASS_FIELDS=0` answers
+/// false.
+pub(crate) fn expr_is_pool_atom_literal(value: &Expr) -> bool {
+    if crate::stmt::this_field_fast_off() {
+        return false;
+    }
+    fn walk(value: &Expr) -> bool {
+        match value {
+            Expr::String(s) => !s.is_empty() && s.len() <= 64,
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => walk(then_expr) && walk(else_expr),
+            _ => false,
+        }
+    }
+    walk(value)
+}
+
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     store_needs_string_addref(ctx, value)
 }

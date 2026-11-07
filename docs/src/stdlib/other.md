@@ -109,6 +109,10 @@ ee.emit("data", "hello");
 
 ## worker_threads
 
+Omitted or falsy Worker `name` options use `WorkerThread` for both the parent
+Worker object and the worker namespace `threadName`. Explicit non-empty string
+names remain unchanged.
+
 BroadcastChannel uses the shared EventTarget listener and handler machinery,
 including borrowed listener methods, capture matching, `once`, AbortSignal and
 listener objects and callable proxies. Closing releases the provider transport
@@ -138,6 +142,23 @@ if (parentPort) {
   });
 }
 ```
+
+`Worker` environment options follow the creating agent's effective environment:
+
+- Omitted, `undefined`, or `null` `env` copies it during construction, after
+  option getters have finished. Later changes do not affect that copy.
+- An object (including an array) supplies a private environment. Its enumerable
+  own string keys and string-coerced values are normalized before `name` and
+  before transfer-list detachment. Symbol values throw a `TypeError`.
+- `env: SHARE_ENV` shares the creating agent's backing, including a private
+  worker environment. Shared descendants retain it after the creator exits.
+
+Private workers never replace the process-wide OS environment. The main agent
+and workers sharing its environment retain OS-backed behavior. Aliases of
+`process.env` use the same backing for reads, writes, deletion and reflection. Child
+processes inherit that effective environment and executable search `PATH` by
+default. An explicit child `env` still replaces it; `fork()` adds its IPC and
+bootstrap fields after selecting the base environment.
 
 Web Worker module URLs are discovered relative to the importing source file:
 

@@ -73,7 +73,7 @@ impl<'a> Gen<'a> {
             None => self.m.atom(crate::STAR_KEY),
         };
         if key.is_some() {
-            self.m.accessor_atoms.insert(ka);
+            self.m.add_accessor_atom(ka);
         }
         for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
             // A literal descriptor's own get/set (`accessor_literal`).
@@ -261,7 +261,9 @@ impl<'a> Gen<'a> {
                         if matches!(object.as_ref(), Expr::LocalGet(_))
                             && matches!(index.as_ref(), Expr::NativeMethodCall { method, .. } if method == "arrayRecordIndex") =>
                     {
-                        let Expr::LocalGet(p) = object.as_ref() else { unreachable!() };
+                        let Expr::LocalGet(p) = object.as_ref() else {
+                            unreachable!()
+                        };
                         let payload = self.local(fx.module, *p);
                         let it = self.iterate(payload);
                         self.m.edge(it, out);
@@ -373,7 +375,13 @@ impl<'a> Gen<'a> {
                     let ra = self.m.atom("return");
                     let (rc, _) = self.new_call(ThisArg::Node(it), vec![], vec![]);
                     self.m.protocol_calls.insert(rc);
-                    self.m.cons(it, Cons::MCall { key: Key::Named(ra), call: rc });
+                    self.m.cons(
+                        it,
+                        Cons::MCall {
+                            key: Key::Named(ra),
+                            call: rc,
+                        },
+                    );
                 }
                 let out = self.tmp("close");
                 self.m.edge(self.thrown, out);

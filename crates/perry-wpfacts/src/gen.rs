@@ -15,6 +15,7 @@ mod glue;
 mod native_result;
 mod once;
 mod own_guard;
+mod own_store;
 pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
@@ -262,6 +263,11 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The counted walks HIR lowers a for-of over an ordinary array to
+    /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
+    /// local, counter local). Their `array[k]` binding is what the
+    /// iteration yields, as the IteratorRecord loop's element is.
+    pub(crate) for_of_walks: crate::pts::FxHashSet<(u32, u32, u32)>,
     /// The `const` bindings walked with an initializer (module, HIR id).
     pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
@@ -363,6 +369,9 @@ pub struct Gen<'a> {
     /// Reads guarded by an own-property test (the `IndexGet`'s address)
     /// and the invalidation node watched by `Cons::OwnGate`.
     pub(crate) own_reads: FxHashMap<usize, NodeId>,
+    /// Reads after a store of the same object and key (`gen/own_store.rs`,
+    /// the `IndexGet`'s address).
+    pub(crate) own_store_reads: crate::pts::FxHashSet<usize>,
     /// The last call's callee (`f(o,k)`), or method receiver (`H` of
     /// `H.call(o,k)`, `o` of `o.hasOwnProperty(k)`).
     pub(crate) own_test_recv: Option<NodeId>,
@@ -581,6 +590,7 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            for_of_walks: Default::default(),
             initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
@@ -624,6 +634,7 @@ impl<'a> Gen<'a> {
             default_args: FxHashMap::default(),
             call_lit_arg: None,
             own_reads: FxHashMap::default(),
+            own_store_reads: Default::default(),
             own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
@@ -1731,6 +1742,11 @@ impl<'a> Gen<'a> {
             // so the value is checked during the solve (`Cons::NativeParent`).
             None if native.is_some() => {
                 let tm = tm.unwrap();
+                // The evaluated value is a built-in constructor, no class:
+                // no static construction through a parent is published
+                // (`super_unrelinked`); `super()` follows the live edge,
+                // which is where the native run happens.
+                self.m.parent_unsettled.insert(tm);
                 let chk = self.m.node_l("native-parent-check");
                 self.m.edge(v, chk);
                 let reason = self.m.reason(why);

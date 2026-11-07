@@ -814,10 +814,21 @@ mod tests {
     }
 
     fn hir(source: &str) -> String {
+        lower(source, false)
+    }
+
+    /// The loop as the IteratorRecord lowers it, without the counted walk
+    /// `for_of_guard` puts in front of a non-literal source.
+    fn hir_record(source: &str) -> String {
+        lower(source, true)
+    }
+
+    fn lower(source: &str, walk_off: bool) -> String {
         let source = source.to_owned();
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
+                crate::lower::for_of_guard::SOURCE_WALK_OFF.with(|c| c.set(walk_off));
                 let mut cache = perry_diagnostics::SourceCache::new();
                 let parsed = perry_parser::parse_typescript_with_cache(
                     &source,
@@ -836,13 +847,29 @@ mod tests {
     }
 
     #[test]
+    fn nested_source_walks_bound_their_body_copies() {
+        // Each rewritten loop lowers its body once per arm; twenty nested
+        // loops would be 2^20 copies of the innermost body without a bound.
+        let mut src = String::from("function f(a: number[]) { let s = 0;");
+        for i in 0..20 {
+            src.push_str(&format!(" for (const x{i} of a)"));
+        }
+        src.push_str(" console.log('deep-body', s); }");
+        let ir = hir(&src);
+        let copies = ir.matches("deep-body").count();
+        assert!((2..=8).contains(&copies), "{copies} copies");
+    }
+
+    #[test]
     fn array_record_one_body_and_shape_entry() {
         for source in [
             "const a = [1,2,3]; for (const x of a) console.log('unique-body', x);",
             "function f(a: any) { for (const x of a) console.log('unique-body', x); }",
             "function f(a: number[]) { for (const x of a) console.log('unique-body', x); }",
         ] {
-            let ir = hir(source);
+            let walked = hir(source);
+            assert!(walked.contains("__forof_lit_src_"), "{walked}");
+            let ir = hir_record(source);
             assert!(ir.contains("arrayRecordNeedsIterator"), "{ir}");
             assert!(
                 ir.contains("iteratorStep") && ir.contains("IndexGet"),
@@ -852,6 +879,34 @@ mod tests {
             assert!(!ir.contains("ArrayIterationPatched"), "{ir}");
             assert!(ir.contains("arrayRecordClose"), "{ir}");
         }
+    }
+
+    /// The walk's entry over a source typed as an array walks the source temp
+    /// itself; a Number array also asks for the packed-loop admission in the
+    /// same call (`arrayRecordNeedsIterator(t, true)`). A module `const` reads
+    /// the same way from inside a function.
+    #[test]
+    fn source_walk_entry_follows_the_source_type() {
+        let walk_entry = |ir: &str| {
+            let at = ir.find("\"arrayRecordNeedsIterator\"").expect(ir);
+            let entry = &ir[at..];
+            entry[..entry.find(']').unwrap()].to_string()
+        };
+        for source in [
+            "function f(a: number[]) { let s = 0; for (const x of a) s += x; return s; }",
+            "const K = [1, 2, 3]; function f() { let s = 0; for (const x of K) s += x; return s; }",
+            "let K = [1, 2, 3]; function f() { let s = 0; for (const x of K) s += x; return s; }",
+        ] {
+            let ir = hir(source);
+            assert!(walk_entry(&ir).contains("Bool(true)"), "{ir}");
+            assert!(!ir.contains("__forof_lit_arr_"), "{ir}");
+        }
+        let strings = hir("function f(a: string[]) { for (const x of a) console.log(x); }");
+        assert!(!walk_entry(&strings).contains("Bool(true)"), "{strings}");
+        assert!(!strings.contains("__forof_lit_arr_"), "{strings}");
+        let erased = hir("function f(a: any) { for (const x of a) console.log(x); }");
+        assert!(!walk_entry(&erased).contains("Bool(true)"), "{erased}");
+        assert!(erased.contains("__forof_lit_arr_"), "{erased}");
     }
 
     #[test]
@@ -900,13 +955,13 @@ mod tests {
             init: Some(Expr::NativeMethodCall { args, .. }), .. }
             if !matches!(args.last(), Some(Expr::Bool(true)))));
 
-        let ir = hir("function f(a: number[]) { for (const x of a) { console.log(x); } }");
+        let ir = hir_record("function f(a: number[]) { for (const x of a) { console.log(x); } }");
         let entry = &ir[ir.find("\"arrayRecordNeedsIterator\"").unwrap()..];
         assert!(
             entry[..entry.find(']').unwrap()].contains("Bool(true)"),
             "the static candidate selects the counted entry: {ir}"
         );
-        let erased = hir("function f(a: any) { for (const x of a) { console.log(x); } }");
+        let erased = hir_record("function f(a: any) { for (const x of a) { console.log(x); } }");
         let entry = &erased[erased.find("\"arrayRecordNeedsIterator\"").unwrap()..];
         assert!(
             !entry[..entry.find(']').unwrap()].contains("Bool(true)"),

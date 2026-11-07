@@ -518,11 +518,37 @@ fn emit_public_spec_function_trampoline(
         .collect();
     let arg_names: Vec<String> = f.params.iter().map(|p| format!("%arg{}", p.id)).collect();
     let spec_name = spec_function_name(public_name, &plan.reps);
+    // A small specialized clone flattens into its callers before statepoint
+    // rewriting, guard included, the way a method's guarded trampoline does
+    // (`method_trampolines.rs`): the clone's real IR size decides. Before,
+    // only method trampolines were admitted, so a one-line function such as
+    // the chess engine's `onBoard(sq)`, called with an unproven argument,
+    // stayed an out-of-line call to this trampoline, a tag test, a second
+    // call and a boxed-boolean return: 7.8% of its search.
+    // `PERRY_SPEC_INLINE=0` keeps every function trampoline out of line.
+    let statements = f.body.len();
+    let admit = std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let callable_worker = llmod.callable_worker;
+    let preinline = admit
+        && !callable_worker
+        && llmod
+            .function_estimated_ir_bytes(&spec_name)
+            .is_some_and(|ir_bytes| {
+                super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
+            });
     let wf = llmod.define_function(public_name, DOUBLE, params);
     // This is deliberately an optimization boundary. Inlining a routing
     // diamond into generic callers duplicates both the specialized and
     // fallback call graphs and recreates the issue's performance cliff.
+    // An admitted small clone is the exception above.
     wf.no_inline = true;
+    wf.pre_statepoint_inline = preinline;
+    if admit && callable_worker {
+        wf.defer_body_preinline(statements, spec_name.clone());
+    }
     let _ = wf.create_block("entry");
 
     let guards: Vec<EntryArgGuard> = {
@@ -1417,6 +1443,8 @@ pub(super) fn compile_function(
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: false,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1820,7 +1848,7 @@ pub(super) fn compile_function(
 
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;
@@ -1848,6 +1876,7 @@ pub(super) fn compile_function(
         }
     }
     let site_hash = spec_site_hash(ctx.strings.module_prefix());
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
@@ -1871,6 +1900,34 @@ pub(super) fn compile_function(
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
     }
+    // A specialized clone whose lowered body is small flattens into its
+    // direct callers (and its guarded trampoline) before statepoint
+    // rewriting, as an exact-receiver method clone does (`method.rs`). The
+    // budget is the clone's real IR size. `PERRY_SPEC_INLINE=0` keeps the
+    // clone out of line.
+    if spec_entry.is_some()
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async
+        && std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+    {
+        let callable_worker = llmod.callable_worker;
+        if let Some(lowered) = llmod.function_named_mut(&llvm_name) {
+            if !lowered.is_preserve_none() {
+                if callable_worker {
+                    lowered.defer_self_preinline(f.body.len());
+                } else if super::helpers::guarded_specialization_admits_preinline(
+                    lowered.estimated_ir_bytes(),
+                    f.body.len(),
+                ) {
+                    lowered.pre_statepoint_inline = true;
+                    // Under the physical-site growth bound with the other
+                    // guarded bodies (`preinline_growth`).
+                    lowered.guarded_preinline = true;
+                }
+            }
+        }
+    }
     if let Some(kind) = typed_public_trampoline {
         emit_public_typed_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, kind);
     } else if let Some(plan) = guarded_public_plan.as_ref() {
@@ -1878,6 +1935,32 @@ pub(super) fn compile_function(
             // The guard would decide between two identical bodies: take the
             // generic body unconditionally and skip the per-call validation.
             emit_public_forwarder(llmod, f, &public_llvm_name, &llvm_name);
+            // The forwarder and the generic body it reaches flatten into
+            // their callers on the same budget a specialized clone gets: this
+            // is the same small leaf, it only proved nothing worth a clone
+            // (`sign(c: Color)` on a string-literal union).
+            if !crate::stmt::this_field_fast_off()
+                && !f.is_async
+                && !f.is_generator
+                && !f.was_plain_async
+                && std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+                && !llmod.callable_worker
+            {
+                let admits = llmod
+                    .function_estimated_ir_bytes(&llvm_name)
+                    .is_some_and(|bytes| {
+                        super::helpers::guarded_specialization_admits_preinline(bytes, f.body.len())
+                    });
+                if admits {
+                    for name in [&llvm_name, &public_llvm_name] {
+                        if let Some(lowered) = llmod.function_named_mut(name) {
+                            if !lowered.is_preserve_none() {
+                                lowered.pre_statepoint_inline = true;
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
         }

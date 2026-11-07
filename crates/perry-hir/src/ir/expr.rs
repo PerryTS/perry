@@ -378,6 +378,12 @@ pub enum Expr {
     /// Restore a captured private-name environment around a continuation.
     PrivateLexicalBrandPush(Box<Expr>),
     PrivateLexicalBrandPop,
+    /// Compiler-generated, no source syntax: true exactly in a body codegen
+    /// lowers with a proven `this` of class `.0` (a `$pshape` clone, whose
+    /// receiver, layout and method table the module facts prove), false in
+    /// every other body. Versions the `this.F` loop hoist
+    /// (`lower::property_array_hoist`). Evaluating it has no effect.
+    ThisProvenClass(String),
 
     /// Private-name brand check: `#field in obj`.
     ///

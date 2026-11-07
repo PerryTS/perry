@@ -39,7 +39,7 @@ pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
     }
     let num = m.atom(NUM_KEY);
     if !intrinsic_miss(m, num, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(m, call, "argument of a written primitive method");
+        unknown_prim_method(m, call, "argument of a written primitive method");
     }
 }
 
@@ -142,7 +142,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     // read is final on every kind of the mask (DEC 250).
     let locked = members::prim_families(prim).all(|f| members::locked_read(f, None, &name));
     if !locked && !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(
+        unknown_prim_method(
             m,
             call,
             &format!("argument of a written primitive method {name}"),

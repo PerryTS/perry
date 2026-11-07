@@ -696,11 +696,24 @@ impl Model {
         self.atoms[a as usize] == crate::STAR_KEY || self.atoms[a as usize].parse::<f64>().is_ok()
     }
 
-    /// A key generation names an accessor under. Numeric reads registered
-    /// before the first numeric accessor must start their deferred walks too:
-    /// installing a descriptor does not activate its body on their behalf.
+    /// A key becomes an accessor key: generation names an accessor under it,
+    /// or the solve installs one. The first time, the reads and writes that
+    /// arrived before it start the walks they deferred, whichever side named
+    /// the key first: in the activation pass generation and the solve
+    /// interleave, so a read of an inherited literal getter (`Object.create`,
+    /// `setPrototypeOf`) can be solved before generation walks the literal.
     pub(crate) fn add_accessor_atom(&mut self, a: Atom) {
-        self.accessor_atoms.insert(a);
+        if !self.accessor_atoms.insert(a) {
+            return;
+        }
+        self.numeric_index_walks(a);
+        self.deferred_walks(a);
+    }
+
+    /// Numeric reads registered before the first numeric accessor start
+    /// their deferred walks: installing a descriptor does not activate its
+    /// body on their behalf.
+    fn numeric_index_walks(&mut self, a: Atom) {
         if self.numeric_accessor || !self.numeric_accessor_key(a) {
             return;
         }
@@ -1650,7 +1663,7 @@ impl Model {
             }
         }
         self.leave_key(holder, key);
-        self.activate_accessor_key(key);
+        self.add_accessor_atom(key);
         if replay && !self.acc_groups.contains_key(&(holder, Key::any())) {
             let walks = self
                 .any_walk_holders
@@ -1666,14 +1679,9 @@ impl Model {
         }
     }
 
-    /// An installed callable first makes this key an accessor key. Reuse
-    /// recorded visits and leave nodes to start the walks that were not
-    /// needed when those reads/stores first arrived.
-    fn activate_accessor_key(&mut self, key: Atom) {
-        if self.accessor_atoms.contains(&key) {
-            return;
-        }
-        self.add_accessor_atom(key);
+    /// Reuse recorded visits and leave nodes to start the walks that were
+    /// not needed when those reads/stores first arrived (`add_accessor_atom`).
+    fn deferred_walks(&mut self, key: Atom) {
         let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
         let numeric = self.numeric_accessor_key(key);
         let num = self.atom(NUM_KEY);

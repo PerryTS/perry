@@ -593,6 +593,14 @@ impl Model {
                     }
                 }
             }
+            Cons::UnnamedSet { target } => {
+                let walked = self
+                    .walk_nodes
+                    .contains_key(&(target, target, Key::any(), 1));
+                if !walked && (!toks.is_empty() || prim != 0) {
+                    self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                }
+            }
             Cons::CreateProto { reason } => {
                 for &t in toks {
                     // E10: every template whose prototype this is can now

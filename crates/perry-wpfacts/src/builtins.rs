@@ -174,6 +174,29 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
 /// receiver (a builtin namespace's, a builtin function's), which gives that
 /// object to no one.
 fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
+    let recv = if own { Recv::Own } else { Recv::Given };
+    unknown_method_at(m, call, why, proto, recv)
+}
+
+/// `unknown_method` called on a primitive receiver (a primitive's method a
+/// store into ⊤ may have written onto its prototype): the method runs with
+/// the primitive as `this`, so no object of the receiver node reaches it.
+/// The arguments escape, the result is ⊤.
+fn unknown_prim_method(m: &mut Model, call: CallId, why: &str) {
+    unknown_method_at(m, call, why, None, Recv::Primitive)
+}
+
+/// What the unknown method's `this` is: the receiver given (it escapes),
+/// the runtime's own object (`unknown_method_proto`'s `own`), or a
+/// primitive (nothing escapes).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recv {
+    Given,
+    Own,
+    Primitive,
+}
+
+fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
         let d = m.diagnostic.as_mut().unwrap();
         let c = d.census.as_mut().unwrap();
@@ -183,20 +206,20 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
             .take()
             .filter(|(_, _, is_call, id)| *is_call && *id == call)
             .map(|(t, a, _, _)| (t, a));
-        unknown_method_proto_inner(m, call, why, proto, own);
+        unknown_method_proto_inner(m, call, why, proto, recv);
         let d = m.diagnostic.as_mut().unwrap();
         d.cur_call = saved.0;
         d.census.as_mut().unwrap().active_gate = saved.1;
         return;
     }
-    unknown_method_proto_inner(m, call, why, proto, own);
+    unknown_method_proto_inner(m, call, why, proto, recv);
 }
 fn unknown_method_proto_inner(
     m: &mut Model,
     call: CallId,
     why: &str,
     proto: Option<usize>,
-    own: bool,
+    recv: Recv,
 ) {
     m.diagnostic_builtin(call, |_| format!("opaque-summary:{why}"));
     let c = m.calls[call as usize].clone();
@@ -216,8 +239,9 @@ fn unknown_method_proto_inner(
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
-    let kept = |m: &Model, t: Tok| own && m.named_shared(t).is_some();
+    let kept = |m: &Model, t: Tok| recv == Recv::Own && m.named_shared(t).is_some();
     match (m.cur_this, &c.this) {
+        _ if recv == Recv::Primitive => {}
         (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => m.sink_node(*n, r),
@@ -1512,30 +1536,42 @@ fn ns_method_inner(
         }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
+            // Its objects are ordinary objects, its arrays arrays
+            // (`members::box_chain`), as `Gen::json_value` models them.
             let j = site_tmpl(m, call, "json");
+            let ja = site_tmpl(m, call, "Array");
             let fa = m.field_any(j);
-            m.add_prim(fa, prim::ALL);
-            m.add_tok(fa, j);
+            for f in [fa, m.field_any(ja)] {
+                m.add_prim(f, prim::ALL);
+                m.add_tok(f, j);
+                m.add_tok(f, ja);
+            }
             ret_tok(m, call, j);
+            ret_tok(m, call, ja);
             ret_prim(m, call, prim::ALL);
             if let Some(rv) = arg(m, call, 1) {
-                // reviver(key, value) with `this` = the holder
+                // reviver(key, value) with `this` = the holder, an object
+                // or an array
                 let ret = m.calls[call as usize].ret;
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
-                let call2 = m.calls.len() as CallId;
-                m.solver_call(
-                    call,
-                    CallSite {
-                        this: ThisArg::Tok(j),
-                        args: vec![s, fa],
-                        spread: vec![],
-                        ret,
-                        site: call2,
-                    },
-                );
-                m.cons(rv, Cons::Call { call: call2 });
+                for holder in [j, ja] {
+                    let call2 = m.calls.len() as CallId;
+                    m.solver_call(
+                        call,
+                        CallSite {
+                            this: ThisArg::Tok(holder),
+                            args: vec![s, fa],
+                            spread: vec![],
+                            ret,
+                            site: call2,
+                        },
+                    );
+                    m.cons(rv, Cons::Call { call: call2 });
+                }
                 m.edge(ret, fa);
+                let fja = m.field_any(ja);
+                m.edge(ret, fja);
             }
         }
         // Every Math function returns a Number (ECMA-262 Math).

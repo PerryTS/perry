@@ -42,12 +42,13 @@ pub(crate) fn cp_apply_uid_gid(command: &mut Command, opts_val: f64) {
 
 /// Apply shared command options to `command`. `cwd` and `env` are portable;
 /// `uid` and `gid` are applied on Unix targets. `opts_val` is a NaN-boxed
-/// options object (or undefined/null/non-object — then a no-op). Node
+/// options object (or undefined/null/non-object for inherited defaults). Node
 /// semantics: `env` *replaces* the child's environment wholesale, so when an
 /// `env` object is provided we `env_clear()` first and skip keys whose value is
 /// `undefined`. #1780.
 pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
     if cp_object_ptr(opts_val).is_none() {
+        cp_apply_default_environment(command);
         return;
     }
 
@@ -80,9 +81,17 @@ pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
                 command.env(&key, value);
             }
         }
+    } else {
+        cp_apply_default_environment(command);
     }
 
     cp_apply_uid_gid(command, opts_val);
+}
+
+fn cp_apply_default_environment(command: &mut Command) {
+    if let Some(entries) = crate::process::private_environment_snapshot() {
+        command.env_clear().envs(entries);
+    }
 }
 
 pub(crate) fn cp_read_argv0(opts_val: f64) -> Option<String> {
@@ -446,7 +455,7 @@ fn cp_effective_path(opts_val: f64) -> String {
             return CP_DEFAULT_PATH.to_string();
         }
     }
-    std::env::var("PATH").unwrap_or_else(|_| CP_DEFAULT_PATH.to_string())
+    crate::process::effective_environment_var("PATH").unwrap_or_else(|| CP_DEFAULT_PATH.to_string())
 }
 
 /// Whether `path` names an executable regular file (following symlinks).
@@ -767,5 +776,146 @@ mod tests {
             "some-other-program",
             &["-e".to_string(), "console.log(45)".to_string()],
         ));
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    use crate::process::WorkerProcessState;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn private_worker_default_child_environment_uses_native_backing() {
+        let state =
+            WorkerProcessState::capture(Some(&[("PERRY_CHILD_PRIVATE".into(), "private".into())]));
+        std::thread::spawn(move || {
+            state.install();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options =
+                scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+            for options in [cp_undefined(), options.get_nanbox_f64()] {
+                let command = cp_build_command("/usr/bin/env", &[], options);
+                assert_eq!(
+                    command.get_envs().collect::<Vec<_>>(),
+                    [(
+                        OsStr::new("PERRY_CHILD_PRIVATE"),
+                        Some(OsStr::new("private"))
+                    )]
+                );
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn main_child_defaults_preserve_raw_os_inheritance() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let options =
+            scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+        for options in [cp_undefined(), options.get_nanbox_f64()] {
+            let command = cp_build_command("native-child", &[], options);
+            assert_eq!(
+                command.get_envs().count(),
+                0,
+                "OS defaults must not become a lossy string replacement"
+            );
+        }
+    }
+
+    fn explicit_options(scope: &crate::gc::RuntimeHandleScope) -> f64 {
+        let env = scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+        let value = cp_box_string("explicit");
+        cp_set_field(env.get_nanbox_f64(), b"ONLY", value);
+        cp_set_field(env.get_nanbox_f64(), b"OMITTED", cp_undefined());
+        cp_set_field(env.get_nanbox_f64(), b"BOOL", TAG_FALSE_F64);
+        let options =
+            scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+        cp_set_field(options.get_nanbox_f64(), b"env", env.get_nanbox_f64());
+        options.get_nanbox_f64()
+    }
+
+    #[test]
+    fn explicit_child_environment_replaces_private_defaults() {
+        let state = WorkerProcessState::capture(Some(&[("PRIVATE".into(), "parent".into())]));
+        std::thread::spawn(move || {
+            state.install();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options = scope.root_nanbox_f64(explicit_options(&scope));
+            let command = cp_build_command("native-child", &[], options.get_nanbox_f64());
+            assert_eq!(
+                command.get_envs().collect::<Vec<_>>(),
+                [
+                    (OsStr::new("BOOL"), Some(OsStr::new("false"))),
+                    (OsStr::new("ONLY"), Some(OsStr::new("explicit"))),
+                ]
+            );
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn fork_bootstrap_fields_overlay_the_selected_environment() {
+        let state = WorkerProcessState::capture(Some(&[
+            ("PRIVATE".into(), "parent".into()),
+            ("NODE_CHANNEL_FD".into(), "old".into()),
+        ]));
+        std::thread::spawn(move || {
+            state.install();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options = scope.root_nanbox_f64(explicit_options(&scope));
+            for (options, base_key) in [
+                (cp_undefined(), "PRIVATE"),
+                (options.get_nanbox_f64(), "ONLY"),
+            ] {
+                let mut command = Command::new("native-child");
+                crate::child_process::fork::cp_apply_fork_environment(
+                    &mut command,
+                    options,
+                    7,
+                    true,
+                    Some("[]"),
+                );
+                let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+                assert!(environment.contains_key(OsStr::new(base_key)));
+                assert_eq!(
+                    environment.get(OsStr::new("NODE_CHANNEL_FD")),
+                    Some(&Some(OsStr::new("7")))
+                );
+                assert_eq!(
+                    environment.get(OsStr::new("NODE_CHANNEL_SERIALIZATION_MODE")),
+                    Some(&Some(OsStr::new("advanced")))
+                );
+                assert_eq!(
+                    environment.get(OsStr::new("PERRY_PROCESS_EXEC_ARGV")),
+                    Some(&Some(OsStr::new("[]")))
+                );
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_worker_default_path_resolves_its_own_executable() {
+        let directory =
+            std::env::temp_dir().join(format!("perry-child-private-path-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("perry-private-shell");
+        std::os::unix::fs::symlink("/bin/sh", &executable).unwrap();
+        let state = WorkerProcessState::capture(Some(&[(
+            "PATH".into(),
+            directory.to_str().unwrap().into(),
+        )]));
+        std::thread::spawn(move || {
+            state.install();
+            let command = cp_command_for_program("perry-private-shell", cp_undefined());
+            assert_eq!(command.get_program(), executable.as_os_str());
+        })
+        .join()
+        .unwrap();
     }
 }
