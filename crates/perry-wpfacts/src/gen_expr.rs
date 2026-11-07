@@ -2034,32 +2034,16 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertyGet { property } => {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: Key::Named(a),
-                            act: ChainAct::Load(dst),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, Key::Named(a), ChainAct::Load(dst));
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
                 let k = self.super_key(fx, key);
                 let v = self.expr(fx, value);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: k,
-                            act: ChainAct::Store(v),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, k, ChainAct::Store(v));
                 v
             }
 
