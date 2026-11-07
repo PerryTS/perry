@@ -623,6 +623,17 @@ pub(super) fn native_method(
             ret_tok(m, call, origin);
         }
         ("EventEmitter", "emit") => {
+            // `emit("error", er)` with no `error` listener throws `er` itself
+            // when it is an Error (`event_emitter_error.rs`); otherwise a
+            // runtime error (always in `thrown`).
+            let thrown = m.calls[call as usize].region;
+            if let Some(&er) = c.args.get(1) {
+                m.edge(er, thrown);
+            }
+            for &s in &c.spread {
+                let key = m.elem_key();
+                m.cons(s, Cons::Load { key, dst: thrown });
+            }
             let a = m.atom("#listeners");
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
@@ -635,6 +646,7 @@ pub(super) fn native_method(
                     spread: c.spread.clone(),
                     ret,
                     site: call2,
+                    region: m.thrown,
                 },
             );
             m.cons(fl, Cons::Call { call: call2 });

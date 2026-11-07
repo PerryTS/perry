@@ -449,6 +449,7 @@ fn token_receiver_remains_an_explicit_call_input() {
             spread: vec![],
             ret,
             site: 0,
+            region: m.thrown,
         });
         begin(&mut m, 0);
         m.cons(callee, Cons::Call { call: 0 });

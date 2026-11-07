@@ -17,6 +17,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             spread: vec![],
             ret: c.ret,
             site: c.site,
+            region: m.thrown,
         });
         return new_builtin_ns(m, ns, c2);
     }
@@ -64,6 +65,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                         spread: vec![],
                         ret,
                         site: call2,
+                        region: m.thrown,
                     },
                 );
                 m.cons(ex, Cons::Call { call: call2 });

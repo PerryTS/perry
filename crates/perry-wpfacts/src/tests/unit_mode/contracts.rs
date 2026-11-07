@@ -311,7 +311,17 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // declarations (charged per search step, as rule G) and holds the
     // runtime-made `process.execArgv` array beside `process.argv`: 25 work
     // per unit solve, 9/7/7/2 solves per round (was [832, 1203, 988, 258]).
-    assert_eq!(pf.round_work, [1057, 1378, 1163, 308], "{:?}", pf.units);
+    // SEEDE: every unit holds the runtime error object in `thrown`, each
+    // body its throw region, and an operation of a body on a value that can
+    // be ⊤ its `Raise` constraint (DESIGN SEEDE section 8), charged per
+    // delivered set like any constraint (was [1057, 1378, 1163, 308]; with
+    // the regions but no `Raise` constraints [1273, 1549, 1334, 356]); the
+    // `Raise` constraints are summary constraints (`summary::map::gen_kind`),
+    // so the bodies holding them keep their summaries: [1482, 1763, 1479,
+    // 395]. Every escaped value's accessor functions escape (descriptor
+    // reads, ESCACCESSORS): a getter and a setter descriptor walk per
+    // escaped value, charged in each round that escapes it.
+    assert_eq!(pf.round_work, [1719, 2122, 1854, 449], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

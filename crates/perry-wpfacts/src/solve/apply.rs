@@ -127,6 +127,11 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
+            Cons::Raise { region } => {
+                if toks.contains(&TOP) {
+                    self.raise_top(region, n, "unknown code may throw in the region (an operation on ⊤)");
+                }
+            }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
                 let retained = if let Cons::RuntimeStore { retained, .. } = c {
                     Some(*retained)

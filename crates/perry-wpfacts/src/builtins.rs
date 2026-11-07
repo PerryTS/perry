@@ -111,6 +111,9 @@ pub fn interpreted_code_runs(m: &mut Model) {
     note_native_write(m, gt, None, "interpreted code may run");
     let r = m.reason("thrown where interpreted code can catch it");
     let thrown = m.thrown;
+    // It throws what it holds too.
+    m.add_top(thrown, |_| "thrown by interpreted code".into());
+    m.add_prim(thrown, prim::ALL);
     m.thrown_reason = Some(r);
     m.sink_node(thrown, r);
 }
@@ -409,6 +412,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
+        raise: u32::MAX,
         name: "<resolver>".into(),
         params: vec![p],
         rest: None,
@@ -460,6 +464,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
+        raise: u32::MAX,
         name: "<another unit's accessor>".into(),
         params: vec![p],
         rest: None,
@@ -521,6 +526,7 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     let then = m.atom("then");
@@ -1563,6 +1569,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret,
                         site: call2,
+                        region: m.thrown,
                     },
                 );
                 m.cons(f, Cons::Call { call: call2 });
@@ -1594,6 +1601,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret: made,
                         site: c.site,
+                        region: m.thrown,
                     },
                 );
                 construct_into(m, this, mc, arr, made, c.ret);
@@ -1654,6 +1662,7 @@ fn ns_method_inner(
                             spread: vec![],
                             ret,
                             site: call2,
+                            region: m.thrown,
                         },
                     );
                     m.cons(rv, Cons::Call { call: call2 });
@@ -1729,6 +1738,19 @@ fn ns_method_inner(
             } else {
                 m.edge(settled, v);
             }
+            if name == "any" {
+                // Every item rejected: an AggregateError whose `errors` are
+                // the reasons (rejections are what `thrown` holds).
+                let e = error_tok(m, call);
+                let errs = site_tmpl(m, call, "Array");
+                let efa = m.field_any(errs);
+                let thrown = m.thrown;
+                m.edge(thrown, efa);
+                let ea = m.atom("errors");
+                let f = m.field(e, ea);
+                m.add_tok(f, errs);
+                m.add_tok(thrown, e);
+            }
             ret_tok(m, call, p);
         }
         // An Array of the target's own keys.
@@ -1796,6 +1818,9 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
         BuiltinNs::Require => {
+            // The path registry may run a lazy module body inside the call.
+            let (lazy, region) = (m.lazy_raise, m.calls[call as usize].region);
+            m.edge(lazy, region);
             // `require('module')` is the node:module namespace, which hands
             // out `Module._cache`: the cache reaches code nothing models.
             if m.call_lit

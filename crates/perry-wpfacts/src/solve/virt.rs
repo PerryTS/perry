@@ -176,6 +176,7 @@ impl Model {
             body_packet: Default::default(),
             module: 0,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name,
             params: Vec::new(),
             rest: None,

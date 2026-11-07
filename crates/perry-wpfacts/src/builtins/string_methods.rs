@@ -63,6 +63,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     m.cons(
@@ -464,6 +465,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     m.cons(ctor, Cons::New { call });
