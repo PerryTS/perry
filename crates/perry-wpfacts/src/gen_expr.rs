@@ -1017,6 +1017,12 @@ impl<'a> Gen<'a> {
                         func: fx.f,
                     });
                 }
+                // A guarded private method read (`this.#m`) is the declaring
+                // brand's member, as its call is: the runtime takes it from
+                // the class registry, never from the receiver's chain.
+                if let Some(callee) = self.private_method_callee(mi, object) {
+                    return callee;
+                }
                 self.load(o, Key::Named(a))
             }
             Expr::PropertySet {
