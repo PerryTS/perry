@@ -4,11 +4,11 @@
 //! The public entry of such a method guards a boxed argument with the exact
 //! i32 test: an INT32 box or a double that converts exactly, then a sign
 //! test. A call site that proves the argument a canonical double
-//! (`expr_produces_canonical_raw_f64`) needs only the double half: the
-//! saturating conversion round-trips exactly for every in-range integral
-//! value (`-0` converts to `0`, the same array index) and fails for NaN, a
-//! fraction or a value out of the i32 range. The site therefore selects the
-//! clone or the generic body itself, and the public guard is not emitted.
+//! (`expr_produces_canonical_raw_f64`) applies that predicate's plain-double
+//! half (`emit_typed_i32_plain_guard_and_raw`, the very half the public guard
+//! uses) inline and selects the clone or the generic body itself: the clone
+//! admits exactly the values the public guard admits (no `-0`, NaN, fraction
+//! or value outside the i32 range).
 //!
 //! `PERRY_NUMBER_INDEX_SPLIT=0` keeps the call on the public entry.
 
@@ -76,9 +76,11 @@ pub(crate) fn emit_number_index_split(
     for pos in positions {
         let value = arg_slices[pos + 1].1.to_string();
         let blk = ctx.block();
-        let int = blk.call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, &value)]);
-        let back = blk.sitofp(I32, &int, DOUBLE);
-        let exact = blk.fcmp("oeq", &back, &value);
+        // The public entry's own predicate, restricted to a canonical double
+        // (its INT32-box half can never match): both admit the same set, and
+        // `-0` is excluded because the clone reads its index back as `+0`.
+        let bits = blk.bitcast_double_to_i64(&value);
+        let (exact, int) = crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, &value, &bits);
         let nonnegative = blk.icmp_sge(I32, &int, "0");
         let ok = blk.and(I1, &exact, &nonnegative);
         admitted = Some(match admitted {
