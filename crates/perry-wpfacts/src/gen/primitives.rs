@@ -85,7 +85,7 @@ impl<'a> Gen<'a> {
         op: crate::model::RangeOp,
         operands: &[&perry_hir::Expr],
     ) -> NodeId {
-        let r = self.m.reason("primitive builtin operand");
+        let r = self.m.reason("ToNumber of a Math operand");
         let mut nodes = Vec::with_capacity(operands.len());
         for o in operands {
             let v = self.expr(fx, o);

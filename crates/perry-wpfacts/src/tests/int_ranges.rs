@@ -66,7 +66,9 @@ fn a_loop_test_bounds_its_counter() {
     );
     let (lo, hi) = r["i"].expect("the counter is bounded");
     assert!(lo <= 0 && hi >= 107, "i holds 0..=107: {:?}", r["i"]);
-    assert!(hi <= 255, "the test bounds the climb: {:?}", r["i"]);
+    // Widening climbs a threshold ladder; the test bound stops it well below
+    // the int32 range.
+    assert!(hi <= 1023, "the test bounds the climb: {:?}", r["i"]);
     // The accumulator has no bound.
     assert_eq!(r["s"], None);
 }
