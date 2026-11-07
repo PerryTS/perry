@@ -589,7 +589,7 @@ fn the_gated_arm_still_reaches_the_barrier_call() {
 /// The block an edge into `label` really enters: a body's moved stack check
 /// (`stack_guard::move_check_to_call_sites`) sits in front of a calling block
 /// as `stack_guard.*` blocks, which this follows to the one block they lead to.
-fn through_stack_check(ir: &str, label: &str) -> String {
+pub(super) fn through_stack_check(ir: &str, label: &str) -> String {
     let mut work = vec![label.to_string()];
     let mut seen = std::collections::HashSet::new();
     let mut exits = std::collections::BTreeSet::new();
