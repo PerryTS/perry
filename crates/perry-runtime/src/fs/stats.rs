@@ -478,6 +478,19 @@ unsafe fn embedded_stats(path: &str, bigint: bool) -> Option<f64> {
     ))
 }
 
+/// Node `statSync`/`lstatSync` with `{ throwIfNoEntry: false }` (exactly
+/// `false`: node's binding checks `IsFalse()`) return `undefined` for ENOENT
+/// and ENOTDIR instead of throwing.
+unsafe fn stat_missing_returns_undefined(options_value: f64, err: &std::io::Error) -> bool {
+    let no_entry = matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    );
+    no_entry
+        && options_field_value(options_value, b"throwIfNoEntry")
+            .is_some_and(|v| v.bits() == crate::value::TAG_FALSE)
+}
+
 /// `fs.statSync(path)` — returns a Stats-like object with Node-compatible
 /// predicate methods and scalar fields, or throws a Node-shaped fs Error when
 /// metadata lookup fails.
@@ -542,6 +555,9 @@ pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -
                 )
             }
             Err(err) => {
+                if stat_missing_returns_undefined(options_value, &err) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
                 let err_val = fs_error(&err, "stat", &path_str);
                 crate::exception::throw_core(err_val)
             }
@@ -610,6 +626,9 @@ pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) 
                 )
             }
             Err(err) => {
+                if stat_missing_returns_undefined(options_value, &err) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
                 let err_val = fs_error(&err, "lstat", &path_str);
                 crate::exception::throw_core(err_val)
             }
