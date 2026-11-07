@@ -347,7 +347,7 @@ pub struct Gen<'a> {
     pub rooted_stores: std::collections::BTreeMap<usize, bool>,
     /// Locals holding a class method's lexical home (`ClassMethodHome`):
     /// (module, local) → the class. `super` through such a home starts at
-    /// that class's parent, exactly like `SuperPropertyGet`.
+    /// the home's prototypes, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
     /// The unpublished object of each enclosing chunked literal birth
     /// (`Expr::LiteralChunks`), innermost last: what its chunk calls'

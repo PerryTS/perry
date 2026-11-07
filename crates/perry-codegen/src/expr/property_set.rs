@@ -38,11 +38,10 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
-    class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
-    emit_jsvalue_slot_store_pointer_tested_known, emit_typed_feedback_register_site,
-    expr_produces_non_pointer_bits_by_construction, lower_expr, lower_expr_native,
-    raw_f64_layout_fact, try_lower_pod_field_set, typed_feedback_emission_enabled, unbox_to_i64,
-    FnCtx, TypedFeedbackContract, TypedFeedbackKind,
+    class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested_known,
+    emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
+    lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set,
+    typed_feedback_emission_enabled, unbox_to_i64, FnCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 /// Metadata-only class candidate for the runtime-guarded plain-field store.
