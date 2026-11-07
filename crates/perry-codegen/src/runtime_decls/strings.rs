@@ -498,7 +498,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_promises_rmdir", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdirSync(path) — returns i32 status (1=success).
     module.declare_function("js_fs_mkdir_sync", I32, &[DOUBLE]);
-    module.declare_function("js_fs_mkdir_sync_options", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_mkdir_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.unlinkSync(path) — returns i32 status.
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     // fs.readdirSync(path, options) — returns NaN-boxed array of
