@@ -1946,4 +1946,5 @@ mod shaped_key_proto_methods;
 mod uri_coercion;
 
 mod accessor_lookup_values;
+mod native_fs_effects;
 mod native_process;

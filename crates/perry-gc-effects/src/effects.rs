@@ -122,7 +122,12 @@ pub fn natives(manifest: &str) -> Result<Vec<Native>> {
             .as_str()
             .context("declaration without name")?
             .to_owned();
-        let Some(symbol) = d["function_info"]["source_symbol"]
+        // A bound_method member's effects describe the function its
+        // native_module_dispatch arm calls (`effects_body`), not the
+        // sentinel body every bound method shares.
+        let Some(symbol) = d
+            .get("effects_body")
+            .unwrap_or(&d["function_info"]["source_symbol"])
             .as_str()
             .and_then(|s| s.strip_prefix("source:"))
         else {
@@ -306,6 +311,19 @@ mod tests {
             root: RealmSlotRoot::This,
             steps: Cow::Borrowed(&[]),
         }
+    }
+
+    /// A bound_method member's effects are checked on the function its
+    /// dispatch arm calls, not on the sentinel body all bound methods share.
+    #[test]
+    fn a_member_declared_at_its_dispatch_callee_is_checked_there() {
+        let manifest = r#"{"declarations":[{"name":"node:x.has","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+            "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."},
+            "effects_body":"source:js_x_has","effects":[{"returns":{"prim":["bool"]}}]}]}"#;
+        let natives = super::natives(manifest).unwrap();
+        assert_eq!(natives.len(), 1);
+        assert_eq!(natives[0].symbol, "js_x_has");
+        assert_eq!(natives[0].effects.len(), 1);
     }
 
     #[test]

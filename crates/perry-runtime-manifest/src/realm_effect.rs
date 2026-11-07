@@ -53,6 +53,9 @@ pub enum RealmProtocol {
     Json,
     HasInstance,
     OwnKeys,
+    /// Node's value formatter (`util.inspect`): the `[util.inspect.custom]`
+    /// hook, own values and labels, each formatted in turn.
+    Inspect,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
