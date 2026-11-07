@@ -381,7 +381,9 @@ pub(super) fn generate_embedded_asset_object(
     } else {
         "__perry_embedded_assets.o"
     });
-    let payloads = compression::prepare(assets, output_dir, bun_platform)?;
+    // Node SEA assets are exposed as raw immutable bytes; do not inherit Bun's
+    // optional zstd asset packing when both platform modes are selected.
+    let payloads = compression::prepare(assets, output_dir, bun_platform && !sea_profile)?;
     let compressed = payloads
         .iter()
         .any(|payload| payload.original_len.is_some());

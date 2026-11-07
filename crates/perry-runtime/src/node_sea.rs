@@ -12,6 +12,12 @@ pub extern "C" fn js_register_sea_profile() {
     SEA_PROFILE.store(true, Ordering::Release);
 }
 
+// The generated registration object references this function outside Rust's
+// reachability graph; retain it through the release whole-program LTO pass.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_SEA_PROFILE_REGISTRATION: unsafe extern "C" fn() = js_register_sea_profile;
+
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_SEA_IS_SEA: extern "C" fn() -> f64 = js_sea_is_sea;
@@ -59,53 +65,68 @@ fn throw_not_in_sea() -> ! {
 }
 
 fn asset_key(value: f64) -> String {
+    crate::value::boxed_text::get_string_content(value)
+}
+
+fn blob_content_type(value: f64) -> String {
     let value = JSValue::from_bits(value.to_bits());
-    crate::string::string_as_str(value.as_string_ptr()).to_string()
+    if value.is_undefined() {
+        return String::new();
+    }
+    // Node's Blob constructor applies Web IDL DOMString conversion to `type`,
+    // then keeps printable ASCII and lowercases ASCII letters.
+    let value = f64::from_bits(value.bits());
+    let string = crate::value::js_nanbox_string(crate::value::js_jsvalue_to_string(value) as i64);
+    let raw = crate::value::boxed_text::get_string_content(string);
+    if !raw.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
+        return String::new();
+    }
+    raw.to_ascii_lowercase()
 }
 
 fn asset_bytes(key: &str) -> &'static [u8] {
     crate::embedded::lookup_sea_asset(key).unwrap_or_else(|| {
         crate::fs::validate::throw_error_with_code(
             &format!("No such asset: {key}"),
-            "ERR_INVALID_ARG_VALUE",
+            "ERR_SINGLE_EXECUTABLE_APPLICATION_ASSET_NOT_FOUND",
         )
     })
 }
 
 #[no_mangle]
 pub extern "C" fn js_sea_is_sea() -> f64 {
-    if sea_enabled() { true_value() } else { false_value() }
+    if sea_enabled() {
+        true_value()
+    } else {
+        false_value()
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_sea_get_asset(key: f64, encoding: f64) -> f64 {
-    validate_key(key);
-    if !sea_enabled() {
-        throw_not_in_sea();
-    }
-    let bytes = asset_bytes(&asset_key(key));
-    let encoding = JSValue::from_bits(encoding.to_bits());
-    if encoding.is_undefined() {
-        return crate::node_submodules::consumers::bytes_to_array_buffer_value(bytes);
-    }
-    if !encoding.is_any_string() {
+    let encoding_js = JSValue::from_bits(encoding.to_bits());
+    if !encoding_js.is_undefined() && !encoding_js.is_any_string() {
         crate::fs::validate::throw_type_error_with_code(
             "The \"encoding\" argument must be of type string",
             "ERR_INVALID_ARG_TYPE",
         );
     }
-    let encoding = crate::string::string_as_str(encoding.as_string_ptr());
-    let Some(encoding_impl) = encoding_rs::Encoding::for_label(encoding.as_bytes()) else {
-        crate::fs::validate::throw_type_error_with_code(
-            &format!("The argument 'encoding' is invalid encoding. Received '{encoding}'"),
-            "ERR_INVALID_ARG_VALUE",
+    validate_key(key);
+    if !sea_enabled() {
+        throw_not_in_sea();
+    }
+    let bytes = asset_bytes(&asset_key(key));
+    if encoding_js.is_undefined() {
+        return crate::node_submodules::consumers::bytes_to_array_buffer_value(bytes);
+    }
+    let encoding = crate::value::boxed_text::get_string_content(encoding);
+    let Some(decoded) = crate::text::decode_bytes_with_label(bytes, &encoding) else {
+        crate::fs::validate::throw_range_error_named(
+            &format!("The \"encoding\" argument is invalid. Received '{encoding}'"),
+            "ERR_ENCODING_NOT_SUPPORTED",
         );
     };
-    let decoded = encoding_impl.decode_with_bom_removal(bytes);
-    crate::value::js_nanbox_string(
-        crate::string::js_string_from_bytes(decoded.as_bytes().as_ptr(), decoded.len() as u32)
-            as i64,
-    )
+    crate::value::js_nanbox_string(decoded)
 }
 
 #[no_mangle]
@@ -120,26 +141,26 @@ pub extern "C" fn js_sea_get_asset_as_blob(key: f64, options: f64) -> f64 {
             let obj = options.as_pointer::<crate::object::ObjectHeader>();
             let type_key = crate::string::intern_ascii_literal(b"type");
             let type_value = crate::object::js_object_get_field_by_name_f64(obj, type_key);
-            let type_value = JSValue::from_bits(type_value.to_bits());
-            if type_value.is_undefined() {
-                String::new()
-            } else if type_value.is_any_string() {
-                crate::string::string_as_str(type_value.as_string_ptr()).to_string()
-            } else {
-                crate::fs::validate::throw_type_error_with_code(
-                    "The \"type\" option must be of type string",
-                    "ERR_INVALID_ARG_TYPE",
-                );
-            }
+            blob_content_type(type_value)
         } else {
-            crate::fs::validate::throw_type_error_with_code(
-                "The \"options\" argument must be of type object",
-                "ERR_INVALID_ARG_TYPE",
-            );
+            // Blob's Web IDL dictionary conversion accepts primitive values
+            // (which have no `type` member) and nullish values.
+            String::new()
         };
         return crate::node_submodules::blob::blob_value_from_bytes_and_type(bytes, &content_type);
     }
     throw_not_in_sea()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodings_accept_only_labels_known_to_text_decoder() {
+        assert!(crate::text::decode_bytes_with_label(b"hi", "utf-8").is_some());
+        assert!(crate::text::decode_bytes_with_label(b"hi", "this-is-not-an-encoding").is_none());
+    }
 }
 
 #[no_mangle]
@@ -169,7 +190,8 @@ pub extern "C" fn js_sea_get_asset_keys() -> f64 {
             crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32) as i64,
         ));
         let array_ptr = JSValue::from_bits(array.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::array::ArrayHeader>();
+            .as_pointer::<crate::array::ArrayHeader>()
+            .cast_mut();
         let grown = crate::array::js_array_push_f64(array_ptr, string.get_nanbox_f64());
         array.set_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
     }
