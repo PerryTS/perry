@@ -268,3 +268,265 @@ fn local_environment_mutations_update_only_their_cached_field_and_json_alias() {
     .join()
     .unwrap();
 }
+
+fn own_env_descriptor(env: f64, name: &str) -> Option<crate::object::descriptors::OwnProperty> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let env = scope.root_nanbox_f64(env);
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    unsafe {
+        crate::object::descriptors::own_property(
+            env.get_nanbox_f64(),
+            crate::value::js_nanbox_string(key as i64),
+        )
+    }
+}
+
+fn assert_env_descriptor(env: f64, name: &str, expected: Option<&str>) {
+    match (own_env_descriptor(env, name), expected) {
+        (Some(crate::object::descriptors::OwnProperty::Data(value, attrs)), Some(expected)) => {
+            assert_eq!(
+                crate::validators::received::read_js_string_pub(value),
+                expected
+            );
+            assert!(attrs.writable() && attrs.enumerable() && attrs.configurable());
+        }
+        (None, None) => {}
+        _ => panic!("Environment descriptor must reflect its effective backing"),
+    }
+}
+
+#[test]
+fn environment_descriptor_keeps_unqueried_mirrored_strings() {
+    let state = WorkerProcessState::capture(Some(&[
+        ("QUERY".into(), "query-value".into()),
+        ("KEEP".into(), "unqueried-mirrored-value".into()),
+    ]));
+    std::thread::spawn(move || {
+        state.install();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let env = scope.root_nanbox_f64(js_process_env());
+        let keep =
+            scope.root_nanbox_u64(own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits());
+        assert_env_descriptor(env.get_nanbox_f64(), "QUERY", Some("query-value"));
+        assert_eq!(
+            own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits(),
+            keep.get_nanbox_u64(),
+            "Reading one environment descriptor must not rebuild another field's string"
+        );
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn unchanged_environment_enumeration_keeps_mirrored_strings() {
+    let state =
+        WorkerProcessState::capture(Some(&[("KEEP".into(), "unchanged-mirrored-value".into())]));
+    std::thread::spawn(move || {
+        state.install();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let env = scope.root_nanbox_f64(js_process_env());
+        let keep =
+            scope.root_nanbox_u64(own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits());
+        for operation in 0..4 {
+            match operation {
+                0 => {
+                    crate::object::js_object_keys_value(env.get_nanbox_f64());
+                }
+                1 => {
+                    crate::object::js_object_get_own_property_names(env.get_nanbox_f64());
+                }
+                2 => {
+                    crate::object::js_object_values(crate::value::js_nanbox_get_pointer(
+                        env.get_nanbox_f64(),
+                    ) as *const _);
+                }
+                _ => {
+                    crate::object::js_object_entries(crate::value::js_nanbox_get_pointer(
+                        env.get_nanbox_f64(),
+                    ) as *const _);
+                }
+            }
+            assert_eq!(
+                own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits(),
+                keep.get_nanbox_u64(),
+                "Unchanged enumeration operation {operation} must retain the stored string"
+            );
+        }
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn shared_environment_descriptors_remain_live_after_moving_collection() {
+    let state = WorkerProcessState::capture(Some(&[
+        ("OLD".into(), "old-value".into()),
+        ("CHANGE".into(), "original-value".into()),
+    ]));
+    std::thread::spawn(move || {
+        let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::process::scan_process_env_cache_roots_mut,
+        );
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::shapes::scan_shape_table_rekey_mut,
+        );
+        state.install();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let env = scope.root_nanbox_f64(js_process_env());
+        let before = env.get_nanbox_f64().to_bits();
+        crate::gc::gc_collect_minor();
+        assert_ne!(
+            before,
+            env.get_nanbox_f64().to_bits(),
+            "The tested environment must actually move"
+        );
+        let shared = WorkerProcessState::capture_shared();
+        std::thread::spawn(move || {
+            shared.install();
+            super::environment::set("CHANGE", "changed-value");
+            super::environment::set("NEW_A", "first-new-value");
+            super::environment::set("NEW_B", "second-new-value");
+            super::environment::remove("OLD");
+        })
+        .join()
+        .unwrap();
+        // No query may synchronize the external additions before the local add.
+        let key = js_string_from_bytes(b"NUMBER".as_ptr(), 6);
+        js_setenv(key, 42.0);
+        assert_env_descriptor(env.get_nanbox_f64(), "NEW_B", Some("second-new-value"));
+        assert_env_descriptor(env.get_nanbox_f64(), "NEW_A", Some("first-new-value"));
+        assert_env_descriptor(env.get_nanbox_f64(), "CHANGE", Some("changed-value"));
+        assert_env_descriptor(env.get_nanbox_f64(), "OLD", None);
+        assert_env_descriptor(env.get_nanbox_f64(), "NUMBER", Some("42"));
+        let names = scope.root_nanbox_f64(crate::object::js_object_get_own_property_names(
+            env.get_nanbox_f64(),
+        ));
+        let actual: Vec<_> = (0..crate::array::arraylike_length(names.get_nanbox_f64()))
+            .map(|index| {
+                crate::validators::received::read_js_string_pub(crate::array::arraylike_get(
+                    names.get_nanbox_f64(),
+                    index,
+                ))
+            })
+            .collect();
+        assert_eq!(actual, ["CHANGE", "NEW_A", "NEW_B", "NUMBER"]);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn shared_environment_descriptor_misses_keep_native_key_order() {
+    let state = WorkerProcessState::capture(Some(&[("KEEP".into(), "kept-value".into())]));
+    std::thread::spawn(move || {
+        state.install();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let env = scope.root_nanbox_f64(js_process_env());
+        let shared = WorkerProcessState::capture_shared();
+        std::thread::spawn(move || {
+            shared.install();
+            super::environment::set("FIRST", "first-value");
+            super::environment::set("SECOND", "second-value");
+        })
+        .join()
+        .unwrap();
+        assert_env_descriptor(env.get_nanbox_f64(), "SECOND", Some("second-value"));
+        assert_env_descriptor(env.get_nanbox_f64(), "FIRST", Some("first-value"));
+        let names = scope.root_nanbox_f64(crate::object::js_object_get_own_property_names(
+            env.get_nanbox_f64(),
+        ));
+        let actual: Vec<_> = (0..crate::array::arraylike_length(names.get_nanbox_f64()))
+            .map(|index| {
+                crate::validators::received::read_js_string_pub(crate::array::arraylike_get(
+                    names.get_nanbox_f64(),
+                    index,
+                ))
+            })
+            .collect();
+        assert_eq!(actual, ["KEEP", "FIRST", "SECOND"]);
+    })
+    .join()
+    .unwrap();
+}
+
+fn with_shared_environment_edits(check: fn(f64)) {
+    let state = WorkerProcessState::capture(Some(&[
+        ("FIRST".into(), "first".into()),
+        ("SECOND".into(), "second".into()),
+        ("DROP".into(), "dropped".into()),
+    ]));
+    std::thread::spawn(move || {
+        state.install();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let env = scope.root_nanbox_f64(js_process_env());
+        let shared = WorkerProcessState::capture_shared();
+        std::thread::spawn(move || {
+            shared.install();
+            super::environment::remove("FIRST");
+            super::environment::remove("DROP");
+            super::environment::set("ADDED", "added");
+            super::environment::set("FIRST", "renewed");
+        })
+        .join()
+        .unwrap();
+        check(env.get_nanbox_f64());
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn shared_environment_delete_reinsert_uses_native_key_order() {
+    with_shared_environment_edits(|env| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let names = scope.root_nanbox_f64(crate::object::js_object_get_own_property_names(env));
+        let actual: Vec<_> = (0..crate::array::arraylike_length(names.get_nanbox_f64()))
+            .map(|index| {
+                crate::validators::received::read_js_string_pub(crate::array::arraylike_get(
+                    names.get_nanbox_f64(),
+                    index,
+                ))
+            })
+            .collect();
+        assert_eq!(actual, ["SECOND", "ADDED", "FIRST"]);
+    });
+}
+
+#[test]
+fn shared_environment_json_observes_native_membership_values_and_order() {
+    with_shared_environment_edits(|env| {
+        let json = unsafe { crate::json::js_json_stringify(env, 0) };
+        assert_eq!(
+            crate::validators::received::read_js_string_pub(crate::value::js_nanbox_string(
+                json as i64
+            )),
+            "{\"SECOND\":\"second\",\"ADDED\":\"added\",\"FIRST\":\"renewed\"}"
+        );
+    });
+}
+
+#[test]
+fn shared_environment_spread_observes_native_membership_values_and_order() {
+    with_shared_environment_edits(|env| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let env = scope.root_nanbox_f64(env);
+        let target = crate::object::js_object_alloc(0, 4);
+        let target = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(target as i64));
+        let result = unsafe {
+            crate::object::js_object_literal_spread(target.get_nanbox_f64(), env.get_nanbox_f64())
+        };
+        let result = scope.root_nanbox_f64(result);
+        let json = unsafe { crate::json::js_json_stringify(result.get_nanbox_f64(), 0) };
+        assert_eq!(
+            crate::validators::received::read_js_string_pub(crate::value::js_nanbox_string(
+                json as i64
+            )),
+            "{\"SECOND\":\"second\",\"ADDED\":\"added\",\"FIRST\":\"renewed\"}"
+        );
+    });
+}

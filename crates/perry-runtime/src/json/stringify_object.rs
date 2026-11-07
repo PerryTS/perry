@@ -75,6 +75,18 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     }
 }
 
+// Plain-member admission excludes native-backed receivers. General object
+// walks refresh those receivers before retaining any physical key snapshot.
+#[inline]
+pub(super) fn refresh_environment_receiver(ptr: *const u8) -> *const u8 {
+    let value = crate::value::js_nanbox_pointer(ptr as i64);
+    if crate::process::is_process_env_object(value) {
+        crate::value::js_nanbox_get_pointer(crate::process::refresh_process_env(value)) as *const u8
+    } else {
+        ptr
+    }
+}
+
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
     // Taken unconditionally so a verdict for this object can never reach a
     // later walk (see `TO_JSON_RESOLVED_FOR`). An armed one-shot suppression
@@ -166,6 +178,11 @@ unsafe fn stringify_object_walk(
     global_proof: &mut bool,
 ) {
     check_stringify_nesting_depth(depth as usize);
+    let ptr = if plain_member.is_none() {
+        refresh_environment_receiver(ptr)
+    } else {
+        ptr
+    };
     let obj = ptr as *const crate::ObjectHeader;
     // #6519: a WHATWG `URL` instance is a plain `GC_TYPE_OBJECT` (class_id 0)
     // whose `searchParams` field points back at the URL — walking its fields

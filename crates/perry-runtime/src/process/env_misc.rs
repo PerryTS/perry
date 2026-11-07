@@ -1496,12 +1496,16 @@ pub(crate) fn refresh_process_env(value: f64) -> f64 {
         let len = keys.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
             crate::array::js_array_length(array)
         });
+        let mut reorder = len as usize != vars.len();
         for index in 0..len {
             let key = keys.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
                 crate::array::js_array_get_f64(keys, index)
             });
             let key = scope.root_nanbox_f64(key);
             let name = crate::validators::received::read_js_string_pub(key.get_nanbox_f64());
+            reorder |= vars
+                .get(index as usize)
+                .is_none_or(|(native, _)| native != &name);
             if !names.contains(name.as_str()) {
                 let key = scope.root_string_ptr(crate::value::js_get_string_pointer_unified(
                     key.get_nanbox_f64(),
@@ -1516,15 +1520,48 @@ pub(crate) fn refresh_process_env(value: f64) -> f64 {
             }
         }
         for (name, value) in &vars {
-            let key = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
-            let val = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-            key.with_const_ptr(|key| {
-                crate::object::js_object_set_field_by_name(
+            let stored = unsafe {
+                crate::object::js_object_record_get_by_bytes(
                     crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
-                        as *mut crate::ObjectHeader,
-                    key,
-                    f64::from_bits(JSValue::string_ptr(val).bits()),
+                        as *const crate::ObjectHeader,
+                    name.as_ptr(),
+                    name.len(),
                 )
+            };
+            let unchanged =
+                unsafe { crate::string::js_string_key_matches_bytes(stored, value.as_bytes()) };
+            if unchanged && !reorder {
+                continue;
+            }
+            // A native delete/reinsert can change order without changing the
+            // mirror's membership. Retain its actual string across rebuilding.
+            let stored = unchanged.then(|| scope.root_nanbox_f64(f64::from_bits(stored.bits())));
+            let key = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+            let val = stored.map_or_else(
+                || {
+                    crate::value::js_nanbox_string(js_string_from_bytes(
+                        value.as_ptr(),
+                        value.len() as u32,
+                    ) as i64)
+                },
+                |stored| stored.get_nanbox_f64(),
+            );
+            let val = scope.root_nanbox_f64(val);
+            key.with_const_ptr(|key| unsafe {
+                let obj = crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                    as *mut crate::ObjectHeader;
+                if reorder {
+                    crate::object::js_object_delete_field(obj, key);
+                    // The mirror owns native data fields. Re-appending one
+                    // must not invoke an inherited JavaScript setter.
+                    crate::object::object_ops::define_property_force_store_value(
+                        obj,
+                        key,
+                        val.get_nanbox_f64(),
+                    );
+                } else {
+                    crate::object::js_object_set_field_by_name(obj, key, val.get_nanbox_f64());
+                }
             });
         }
     });

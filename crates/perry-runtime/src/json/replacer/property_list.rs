@@ -11,6 +11,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     use_pretty: bool,
 ) {
     check_stringify_nesting_depth(depth);
+    let ptr = super::super::stringify_object::refresh_environment_receiver(ptr);
     // Circular reference check
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
