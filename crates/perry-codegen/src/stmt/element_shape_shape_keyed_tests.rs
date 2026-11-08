@@ -35,6 +35,10 @@ const MOD_ID: u32 = 33;
 const U_SUM_ID: u32 = 34;
 const U_COUNTER_ID: u32 = 35;
 const U_INDEX_ID: u32 = 36;
+// The loop bound is `count | 0`: an int32, so the counter's `i++` under
+// `i < limit` provably stays inside i32 (an unproven Number bound could pass
+// 2^31, where an i32 counter would wrap).
+const U_LIMIT_ID: u32 = 37;
 
 /// `rows[<index>].<prop>`
 fn untyped_elem_field(index: Expr, prop: &str) -> Expr {
@@ -132,6 +136,17 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             },
+            Stmt::Let {
+                id: U_LIMIT_ID,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left: Box::new(Expr::LocalGet(COUNT_ID)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+            },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
                     id: U_COUNTER_ID,
@@ -143,7 +158,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 condition: Some(Expr::Compare {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(U_COUNTER_ID)),
-                    right: Box::new(Expr::LocalGet(COUNT_ID)),
+                    right: Box::new(Expr::LocalGet(U_LIMIT_ID)),
                 }),
                 update: Some(Expr::Update {
                     id: U_COUNTER_ID,

@@ -285,7 +285,11 @@ fn lower_stmts_list(
                 crate::expr::try_match_channel_reduction(&stmts[..limit], i, ctx.integer_locals)
             {
                 if ctx.buffer_data_slots.contains_key(&reduction.array_id) {
-                    crate::expr::lower_channel_reduction(ctx, &reduction)?;
+                    crate::expr::lower_channel_reduction(
+                        ctx,
+                        &reduction,
+                        &stmts[i..i + reduction.acc_ids.len()],
+                    )?;
                     let last_lowered_idx = i + reduction.acc_ids.len() - 1;
                     i += reduction.acc_ids.len();
                     if emit_shadow_clears && !ctx.block().is_terminated() {

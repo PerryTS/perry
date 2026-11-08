@@ -158,6 +158,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
     // `error: use of undefined value '@llvm.assume'`.
     module.declare_function("llvm.assume", VOID, &[I1]);
+    // The out-of-range arm of a proven native buffer read
+    // (`expr/buffer_access.rs::OutOfBoundsArm::Abort`).
+    module.declare_function("js_native_access_bounds_failed", VOID, &[I32, I32]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
     // see the size-keyed lookup table at lower_call.rs:168). Same

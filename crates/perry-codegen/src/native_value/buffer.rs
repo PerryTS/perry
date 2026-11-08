@@ -70,6 +70,14 @@ pub(crate) enum BoundsProof {
     LoopGuard,
     MinLength,
     ExplicitGuard,
+    /// The fast copy of a counter-versioned loop (`stmt/loops.rs::
+    /// lower_overflow_exit_for`): a loop-entry check on the ACTUAL i32 values
+    /// — counter `>= 0`, step `>= 0`, `bound + step` inside i32 and
+    /// `bound + width <= length` — plus the guard the copy re-tests on the
+    /// counter's slot every iteration put every access in bounds. Unlike
+    /// the other proofs it is a fact about the lowered index, so the access
+    /// needs no per-access check.
+    EntryGuard,
     // #854: bounds-proof variant matched by uses_unsound_explicit_assume_guard
     // but not yet constructed by any proof emitter; kept as part of the
     // serialized BoundsProof contract.
@@ -276,6 +284,11 @@ pub(crate) struct BufferAccessProof {
     pub buffer_local_id: u32,
     pub view: BufferViewSlot,
     pub index: LoweredValue,
+    /// `[lo, hi]` containing the lowered index for EVERY operand value: the
+    /// index is built only from literals and ToInt32/ToUint32-wrapping
+    /// operators (`collectors::static_index_window`), so the bounds check can
+    /// test `hi` instead of the index and does not vary inside a loop.
+    pub index_window: Option<(i64, i64)>,
     pub access_mode: BufferAccessMode,
     pub bounds: BoundsState,
     // #854: in-progress buffer-access fact bundle (Debug field); populated path

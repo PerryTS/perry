@@ -49,7 +49,7 @@
 //!
 //! Both endpoints are compile-time integers; the local is admitted only when
 //! **both fit i32**. That is a genuine range argument, not the compatibility
-//! bound that `integer_locals ∩ index_used_locals` rests on (see the range
+//! bound that `integer_locals ∩ index_used_locals` used to rest on (see the range
 //! soundness audit in `expr/slot_rep.rs`): it introduces no new overflow
 //! surface, because there is no reachable state in which the value leaves i32.
 //!
@@ -377,7 +377,7 @@ fn collect_const_ints(stmts: &[Stmt], st: &mut State) {
 /// `Update`. `collect_localset_ids_in_stmts` deliberately skips `Update`
 /// (it preserves integer-ness, which is what that collector asks about);
 /// here a `++` is exactly what must disqualify a "constant" bound.
-fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
+pub(crate) fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
     fn in_expr(e: &Expr, out: &mut HashSet<u32>) {
         match e {
             Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
