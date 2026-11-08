@@ -34,14 +34,20 @@ pub const BIG: i64 = 1 << 60;
 pub const WIDEN_STEPS: u8 = 3;
 pub const WIDEN_LIMIT: u8 = 80;
 
-/// The next threshold at or above an upper bound: `2^k - 1`, the uint32
-/// maximum, 2^53. A growing bound jumps to it, so a cycle meets a finite
-/// ladder of bounds (and a test bound below a threshold stops the climb).
+/// The thresholds a growing bound jumps through: the representation
+/// boundaries a consumer asks about (a byte, a 0x88 board, a code unit, the
+/// int32 and uint32 maxima). Few rungs, so a cycle meets few re-deliveries
+/// (each growth re-delivers the node); a test bound below a rung stops the
+/// climb.
+const LADDER: [i64; 8] = [0, 1, 7, 127, 255, 65535, i32::MAX as i64, u32::MAX as i64];
+
+/// The next threshold at or above an upper bound: a [`LADDER`] rung, then
+/// 2^53, then [`BIG`].
 fn hi_threshold(h: i64) -> i64 {
     if h < 0 {
         -1
     } else if h <= u32::MAX as i64 {
-        mask_above(h)
+        *LADDER.iter().find(|&&t| t >= h).unwrap()
     } else if h <= SAFE {
         SAFE
     } else {
@@ -53,7 +59,7 @@ fn lo_threshold(l: i64) -> i64 {
     if l >= 0 {
         0
     } else if l >= -(1i64 << 32) {
-        -(mask_above(-l - 1) + 1)
+        -(*LADDER.iter().find(|&&t| t + 1 >= -l).unwrap() + 1)
     } else if l >= -SAFE {
         -SAFE
     } else {
