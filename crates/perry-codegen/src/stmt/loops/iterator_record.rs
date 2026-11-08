@@ -312,7 +312,10 @@ fn lower_array_arm(
         };
         let indexed = (|| -> Result<()> {
             lower_stmt(ctx, &set_state(2.0))?;
-            let ready = crate::lower_conditional::lower_test(ctx, &condition)?;
+            let ready = match u32_bound(ctx, &arm)? {
+                Some(ready) => ready,
+                None => crate::lower_conditional::lower_test(ctx, &condition)?,
+            };
             emit_gc_loop_safepoint(ctx, &[], &[&condition]);
             ctx.block().cond_br(&ready, &array_get_label, &exit_label);
             ctx.current_block = array_get_idx;
@@ -382,6 +385,39 @@ fn lower_array_arm(
     crate::stmt::region_loop::end(ctx, region);
     lowered?;
     Ok(true)
+}
+
+/// The indexed head's `cursor < payload.length` for a u32 cursor
+/// (`collectors/array_record_cursor.rs`): the record's length guard compares
+/// the header's u32 word with the cursor directly, and only its cold arm (the
+/// exact property read) compares Numbers. Both head spellings, the hinted
+/// `payload.length` and `arrayRecordLength(payload)`, read the live length of
+/// the same receiver through that guard. A hoisted or scalar-replaced length
+/// keeps its own lowering.
+fn u32_bound(ctx: &mut FnCtx<'_>, arm: &ArrayArm<'_>) -> Result<Option<String>> {
+    let Some(cursor) =
+        crate::array_record_stack::u32_cursor_slot(ctx, &Expr::LocalGet(arm.counter))
+    else {
+        return Ok(None);
+    };
+    if ctx.non_escaping_arrays.contains_key(&arm.array)
+        || ctx.receiver_descriptors.cached_length_slot(arm.array).is_some()
+    {
+        return Ok(None);
+    }
+    let cursor = ctx.block().load(crate::types::I32, &cursor);
+    let receiver = lower_expr(ctx, &Expr::LocalGet(arm.array))?;
+    let bits = ctx.block().bitcast_double_to_i64(&receiver);
+    let handle = ctx
+        .block()
+        .and(crate::types::I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    Ok(Some(crate::expr::property_get::emit_record_length_use(
+        ctx,
+        &receiver,
+        &bits,
+        &handle,
+        crate::expr::property_get::LengthUse::Below(&cursor),
+    )))
 }
 
 /// Does `stmt` read local `id`? A closure counts as reading every local:
