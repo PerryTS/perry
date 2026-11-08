@@ -321,6 +321,107 @@ fn closure_writes(e: &Expr, excl: &mut crate::pts::FxHashSet<u32>) {
     });
 }
 
+/// The `const` bindings a body declares itself (`Stmt::Let` with an
+/// initializer and no `mutable`), outside its nested function bodies (each
+/// adds its own when walked). A const is written once, by its
+/// initialization, and a read before it throws (TDZ): every read sees the
+/// one value, in this body and in every closure that captures it.
+fn own_consts(ss: &[Stmt], out: &mut Vec<u32>) {
+    for s in ss {
+        match s {
+            Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(_),
+                ..
+            } => out.push(*id),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                own_consts(then_branch, out);
+                if let Some(e) = else_branch {
+                    own_consts(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => own_consts(body, out),
+            Stmt::For { init, body, .. } => {
+                if let Some(i) = init {
+                    own_consts(std::slice::from_ref(i), out);
+                }
+                own_consts(body, out);
+            }
+            Stmt::Labeled { body, .. } => own_consts(std::slice::from_ref(body), out),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                own_consts(body, out);
+                if let Some(c) = catch {
+                    own_consts(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    own_consts(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    own_consts(&c.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a guard may narrow in the body walked next: its own locals
+/// (`scope_locals`) and the consts of the bodies around it that it
+/// captures (`Gen::narrow_consts`). `exit` restores the walk's state.
+pub(crate) struct Scope {
+    saved: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    mi: u32,
+    own: Vec<u32>,
+}
+
+impl<'a> Gen<'a> {
+    pub(crate) fn narrow_enter_body(
+        &mut self,
+        mi: u32,
+        f: FnIdx,
+        params: &[perry_hir::Param],
+        body: &[Stmt],
+        captures: &[u32],
+    ) -> Scope {
+        let mut own = Vec::new();
+        let scope = (self.int_ranges || self.guard_presence).then(|| {
+            let mut ls = scope_locals(params, body);
+            ls.extend(
+                captures
+                    .iter()
+                    .filter(|c| self.narrow_consts.contains(&(mi, **c)))
+                    .copied(),
+            );
+            own_consts(body, &mut own);
+            self.narrow_consts.extend(own.iter().map(|&c| (mi, c)));
+            (f, ls)
+        });
+        Scope {
+            saved: std::mem::replace(&mut self.narrow_scope, scope),
+            mi,
+            own,
+        }
+    }
+
+    pub(crate) fn narrow_exit_body(&mut self, s: Scope) {
+        for &id in &s.own {
+            self.narrow_consts.remove(&(s.mi, id));
+        }
+        self.narrow_scope = s.saved;
+    }
+}
+
 /// Whether `ss` always leaves the enclosing statement list.
 pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     matches!(

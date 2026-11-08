@@ -711,9 +711,7 @@ impl<'a> Gen<'a> {
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
-        let scope = (self.int_ranges || self.guard_presence)
-            .then(|| (fxi, narrow::scope_locals(&f.params, &f.body)));
-        let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
+        let scope = self.narrow_enter_body(fx.module, fxi, &f.params, &f.body, &f.captures);
         self.stmts(&fx, &f.body);
         if ctor_of.is_none() && narrow::may_complete(&f.body) {
             // The body's normal completion returns `undefined` (a class
@@ -721,7 +719,7 @@ impl<'a> Gen<'a> {
             // `super()` yield `this`).
             self.m.add_prim(info.ret, prim::UNDEF);
         }
-        self.narrow_scope = saved_scope;
+        self.narrow_exit_body(scope);
         self.own_helper_finish(fxi, own);
     }
 

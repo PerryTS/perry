@@ -3,7 +3,8 @@
 //! `null`/`undefined`. `mk` may fall off its end, so `a` is an Array or
 //! `undefined`; a `length` read of it is an own Array length only where a
 //! guard removed the `undefined`. The rule is the `if`'s, through `&&`,
-//! `||`, `?:`, `!`, a predicate and an early exit alike.
+//! `||`, `?:`, `!`, a predicate and an early exit alike, and in a closure
+//! for a const it captures.
 use super::*;
 
 const SRC: &str = r#"
@@ -31,12 +32,22 @@ function early(n: number) {
   if (!a) return 0;
   return a.length; // EARLY
 }
+function configure(n: number) {
+  const arr = mk(n);
+  function inner() { return arr ? arr.length : 0; } // CAPCONST
+  const arrow = () => arr && arr.length; // CAPARROW
+  let m = mk(n);
+  const later = () => m ? m.length : 0; // CAPLET
+  m = mk(n + 1);
+  return inner() + Number(arrow()) + later();
+}
 function bare(n: number) {
   const a = mk(n);
   return a.length; // BARE
 }
 main(process.argv.length);
 early(process.argv.length);
+configure(process.argv.length);
 bare(process.argv.length);
 "#;
 
@@ -68,7 +79,7 @@ fn why(pf: &ProgramFacts, marker: &str) -> String {
     )
 }
 
-const GUARDED: [&str; 8] = [
+const GUARDED: [&str; 10] = [
     "// AND",
     "// COND",
     "// IF",
@@ -77,6 +88,8 @@ const GUARDED: [&str; 8] = [
     "// STRICT",
     "// PRED",
     "// EARLY",
+    "// CAPCONST",
+    "// CAPARROW",
 ];
 
 #[test]
@@ -88,8 +101,9 @@ fn a_presence_guard_removes_undefined_from_the_read() {
 }
 
 /// The controls: no guard, the falsy outcome, a guard that leaves
-/// `undefined` (`=== null`), a write in the guarded code, and a closure
-/// that may write the local.
+/// `undefined` (`=== null`), a write in the guarded code, a closure that
+/// may write the local, and a closure's guard of a captured `let` its
+/// creator writes (only a captured const is narrowed).
 #[test]
 fn a_read_no_presence_guard_covers_keeps_undefined() {
     let pf = facts(SRC);
@@ -99,6 +113,7 @@ fn a_read_no_presence_guard_covers_keeps_undefined() {
         "// NULLONLY",
         "// WRITTEN",
         "// CAPTURED",
+        "// CAPLET",
     ] {
         assert!(!proven(&pf, m), "{}", why(&pf, m));
     }
