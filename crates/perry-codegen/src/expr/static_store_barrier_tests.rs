@@ -2,9 +2,9 @@
 //! literals, or a call of a function returning only such selections) takes
 //! no write barrier; any other value keeps it (`with_static_child`).
 //!
-//! The stores are `this.f = v` in a class's methods: the shape-proven body
-//! (`$pshape`) lowers them inline with their barrier, so the counts below
-//! are about this exemption alone.
+//! The stores are `this.f = v` in a class's methods, whose shape-proven body
+//! lowers them inline with their barrier, so the counts below are about this
+//! exemption alone.
 
 const SOURCE: &str = r#"
 function pick(c: string): string { return c === "white" ? "black" : "white"; }
@@ -37,18 +37,25 @@ fn compile() -> String {
     .unwrap()
 }
 
-/// The barrier calls in method `name`'s shape-proven body.
+/// The barrier calls in every body compiled for method `name` (the generic
+/// body stores through the runtime; the shape-proven clone stores inline).
 fn barriers(ir: &str, name: &str) -> usize {
-    let at = ir
-        .find(&format!("@perry_method_sbar__Box__{name}$pshape("))
-        .and_then(|p| {
-            ir[..p]
-                .rfind("define ")
-                .filter(|d| !ir[*d..p].contains('\n'))
-        })
-        .unwrap_or_else(|| panic!("no body for {name}"));
-    let end = ir[at..].find("\n}\n").unwrap() + at;
-    ir[at..end].matches("call void @js_write_barrier").count()
+    let symbol = format!("@perry_method_sbar__Box__{name}");
+    let mut count = 0;
+    let mut bodies = 0;
+    let mut rest = ir;
+    while let Some(at) = rest.find("\ndefine ") {
+        let body = &rest[at + 1..];
+        let end = body.find("\n}\n").map_or(body.len(), |e| e + 3);
+        let head = body.lines().next().unwrap_or("");
+        if head.contains(&format!("{symbol}(")) || head.contains(&format!("{symbol}$")) {
+            bodies += 1;
+            count += body[..end].matches("call void @js_write_barrier").count();
+        }
+        rest = &body[end..];
+    }
+    assert!(bodies > 0, "no body for {name}");
+    count
 }
 
 #[test]
