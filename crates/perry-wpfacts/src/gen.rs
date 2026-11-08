@@ -1705,13 +1705,21 @@ impl<'a> Gen<'a> {
             self.m.constructor_origins.insert(tm, origin);
             self.m.rel(|| format!("ctororigin {tm} {origin}"));
         }
-        let parent = c
-            .extends_name
-            .as_ref()
-            .and_then(|n| self.resolve_class_name(mi, n));
-        let builtin_parent = c
-            .extends_name
-            .as_deref()
+        // The name a member heritage carries (`extends O.Base`, `O["Base"]`)
+        // is its property key, which names no binding: the parent is the
+        // value the heritage evaluated to, whatever class elsewhere carries
+        // that name (§17.2). A global name (`extends Error`) is a read of
+        // the global object (`GlobalGet(0)`), a binding.
+        let member = match c.extends_expr.as_deref() {
+            Some(perry_hir::Expr::PropertyGet { object, .. }) => {
+                !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(0))
+            }
+            Some(perry_hir::Expr::IndexGet { .. } | perry_hir::Expr::StaticFieldGet { .. }) => true,
+            _ => false,
+        };
+        let binding = c.extends_name.as_deref().filter(|_| !member);
+        let parent = binding.and_then(|n| self.resolve_class_name(mi, n));
+        let builtin_parent = binding
             .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
@@ -1732,7 +1740,7 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            self.parent_values.push((mi, tm, c.extends_name.clone()));
+            self.parent_values.push((mi, tm, binding.map(str::to_string)));
         }
     }
 
