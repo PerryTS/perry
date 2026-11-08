@@ -45,6 +45,26 @@ pub use native_protocol::{
 };
 use native_protocol::{native_method, native_skips};
 
+/// The NativeError constructors (ECMA-262 20.5.5.1-6), each its own
+/// namespace ([`BuiltinNs::NativeError`]).
+pub(crate) const NATIVE_ERRORS: [&str; 6] = [
+    "EvalError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+];
+
+/// The builtin constructor that is `ns`'s [[Prototype]] (`Error` for
+/// `TypeError`), as its statics describe it.
+pub(crate) fn ns_parent(ns: BuiltinNs) -> Option<BuiltinNs> {
+    match members::ns_statics(ns).prototype {
+        members::NsProto::Constructor(parent) => Some(parent),
+        _ => None,
+    }
+}
+
 /// Global names the `GlobalGet(0)` sentinel resolves to.
 fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     Some(match name {
@@ -57,8 +77,10 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "console" => BuiltinNs::Console,
         "%Global%" | "globalThis" | "global" | "window" | "self" => BuiltinNs::GlobalThis,
         "process" => BuiltinNs::Process,
-        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" => BuiltinNs::Error,
+        "Error" => BuiltinNs::Error,
+        _ if NATIVE_ERRORS.contains(&name) => {
+            BuiltinNs::NativeError(NATIVE_ERRORS.into_iter().find(|n| *n == name)?)
+        }
         "AggregateError" => BuiltinNs::AggregateError,
         "Date" => BuiltinNs::Date,
         "RegExp" => BuiltinNs::RegExp,
@@ -1026,6 +1048,7 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::Json
         | BuiltinNs::Math
         | BuiltinNs::Promise
+        | BuiltinNs::NativeError(_)
         | BuiltinNs::AggregateError
         | BuiltinNs::Date
         | BuiltinNs::RegExp
@@ -1911,7 +1934,11 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
             ret_prim(m, call, prim::BOOL);
         }
-        (BuiltinNs::Error, "captureStackTrace") => {
+        // `TypeError.captureStackTrace` is `Error`'s, read through the chain.
+        (
+            BuiltinNs::Error | BuiltinNs::NativeError(_) | BuiltinNs::AggregateError,
+            "captureStackTrace",
+        ) => {
             // E21: a writer of `stack` on the target. The runtime installs a
             // lazy `stack` GETTER (`install_lazy_stack_accessor`), an
             // accessor definition like `defineProperty` (E5): the slot no
@@ -2055,7 +2082,10 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
         BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
-        BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
+        BuiltinNs::Error
+        | BuiltinNs::NativeError(_)
+        | BuiltinNs::AggregateError
+        | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {
                 // `RegExp(re)` can return the existing regexp object, after

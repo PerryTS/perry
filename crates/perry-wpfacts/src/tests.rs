@@ -1976,3 +1976,4 @@ mod host_inspector_effects;
 mod host_fs_read_effects;
 mod native_process;
 mod number_bigint_ns;
+mod error_namespaces;
