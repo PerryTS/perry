@@ -43,7 +43,7 @@ port cannot be transferred or send further messages.
 
 Include every `MessagePort` reachable from a message in its transfer list:
 
-```typescript
+```typescript,no-test
 const channel = new MessageChannel();
 worker.postMessage({ port: channel.port1 }, [channel.port1]);
 ```
