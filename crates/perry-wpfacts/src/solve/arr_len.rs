@@ -10,7 +10,8 @@
 //!   (`arr_len_store`);
 //! - an element store other than such an index store (`push`, a spread
 //!   into it, a native's element write: `arr_len_store`);
-//! - a builtin method that may change the length (`array_method`);
+//! - a builtin method that may change the length (`array_method`), and
+//!   the HIR's own `pop` (`Expr::ArrayPop`, a ⊤ `Cons::LenIndex`);
 //! - a copy of another object's own properties into it (`Object.assign`:
 //!   `Cons::SpreadFrom`) and a `defineProperty` of an index or `length`;
 //! - an escape or a hard marker (`mark_escaped`, `mark_hard`);

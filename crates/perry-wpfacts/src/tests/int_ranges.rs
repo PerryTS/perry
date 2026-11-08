@@ -340,3 +340,17 @@ fn a_digit_tested_character_converts_to_its_value() {
     let (lo, hi) = r["sq"].expect("sq is bounded");
     assert!(lo == 16 && (23..=31).contains(&hi), "sq: {:?}", r["sq"]);
 }
+
+#[test]
+fn a_pop_moves_the_length() {
+    let r = ranges(
+        "const S: number[] = [1, 2, 3, 4, 5];\n\
+         function f(): number { let s = 0; for (let p = 0; p < S.length; p++) { s += p; S.pop(); } return s; }\n\
+         console.log(f());",
+    );
+    assert!(
+        unbounded(&r, "p") || r["p"].is_some_and(|(_, hi)| hi > 4),
+        "p: {:?}",
+        r["p"]
+    );
+}
