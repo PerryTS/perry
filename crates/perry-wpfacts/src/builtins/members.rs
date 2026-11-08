@@ -659,7 +659,10 @@ const SY: Mem = Mem::Prim(prim::SYMBOL);
 pub(super) enum NsProto {
     Function,
     Object,
-    Constructor(&'static NsStatics),
+    /// Another builtin constructor (`TypeError`'s is `Error`): its statics
+    /// are read through it, and it is the namespace's chain value
+    /// (`Model::proto_node`).
+    Constructor(BuiltinNs),
     /// An undescribed chain; the family only preserves generic call summaries.
     Unknown(Family),
 }
@@ -669,27 +672,6 @@ pub(super) struct NsStatics {
     pub(super) members: Option<&'static [(&'static str, Mem)]>,
     pub(super) prototype: NsProto,
 }
-
-// Error tokens include native subclasses as well as Error itself. Their
-// possible parent constructor is the mutable Error namespace, whose own
-// [[Prototype]] is exactly Function.prototype.
-const ERROR_NAMESPACE: NsStatics = NsStatics {
-    members: Some(&[
-        ("prototype", Mem::Proto),
-        ("captureStackTrace", FN),
-        ("isError", FN),
-        ("prepareStackTrace", FN),
-        ("stackTraceLimit", N),
-    ]),
-    prototype: NsProto::Function,
-};
-
-// The concrete typed-array constructors inherit from %TypedArray%, whose
-// own members are undescribed here. That constructor is not a locked prototype.
-const TYPED_ARRAY_NAMESPACE: NsStatics = NsStatics {
-    members: None,
-    prototype: NsProto::Function,
-};
 
 /// The own properties and [[Prototype]] of a builtin namespace. Missing
 /// own descriptions remain opaque even when a structural parent is known.
@@ -830,24 +812,31 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("@@__perry_wk_species", Mem::Ctor),
             ]),
         ),
-        // Error and its native subclasses; V8's `captureStackTrace` and
-        // `stackTraceLimit` (node), `prepareStackTrace` (absent until set:
-        // a program write is a store, `intrinsic_written`).
-        // `AggregateError` is an `Error` subclass: the same statics apply.
-        BuiltinNs::Error | BuiltinNs::AggregateError => (
-            NsProto::Constructor(&ERROR_NAMESPACE),
+        // Error: V8's `captureStackTrace`, `prepareStackTrace` and
+        // `stackTraceLimit` (node; the realm declares all three).
+        BuiltinNs::Error => (
+            NsProto::Function,
             Some(&[
                 ("prototype", Mem::Proto),
                 ("captureStackTrace", FN),
                 ("isError", FN),
+                ("prepareStackTrace", FN),
                 ("stackTraceLimit", N),
             ]),
+        ),
+        // ECMA-262 20.5.6.2, 20.5.7.2: a NativeError and `AggregateError`
+        // own `prototype`; the rest is `Error`'s, their [[Prototype]].
+        BuiltinNs::NativeError(_) | BuiltinNs::AggregateError => (
+            NsProto::Constructor(BuiltinNs::Error),
+            Some(&[("prototype", Mem::Proto)]),
         ),
         // The model does not describe these namespaces' own members. They are
         // constructor tokens only, for the `new`/call summaries; naming them
         // here would claim a precision the model does not have.
         BuiltinNs::Date | BuiltinNs::RegExp | BuiltinNs::ArrayBuffer => (NsProto::Function, None),
-        BuiltinNs::TypedArray => (NsProto::Constructor(&TYPED_ARRAY_NAMESPACE), None),
+        // The concrete typed-array constructors and %TypedArray% are one
+        // namespace here: undescribed.
+        BuiltinNs::TypedArray => (NsProto::Function, None),
         BuiltinNs::Symbol => (
             NsProto::Function,
             Some(&[
@@ -1044,7 +1033,7 @@ fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {
     match description.prototype {
         NsProto::Function => Some(member(Family::Function, name)),
         NsProto::Object => Some(member(Family::Object, name)),
-        NsProto::Constructor(parent) => described_member(*parent, name),
+        NsProto::Constructor(parent) => described_member(ns_statics(parent), name),
         NsProto::Unknown(_) => None,
     }
 }
@@ -1057,7 +1046,7 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
         match prototype {
             NsProto::Function => return Family::Function,
             NsProto::Object => return Family::Object,
-            NsProto::Constructor(parent) => prototype = parent.prototype,
+            NsProto::Constructor(parent) => prototype = ns_statics(parent).prototype,
             NsProto::Unknown(family) => return family,
         }
     }
@@ -1103,7 +1092,7 @@ fn runtime_member_description() {
                 out.extend(OBJECT.iter().map(|(key, _)| *key));
             }
             NsProto::Object => out.extend(OBJECT.iter().map(|(key, _)| *key)),
-            NsProto::Constructor(parent) => return keys(*parent, out),
+            NsProto::Constructor(parent) => return keys(ns_statics(parent), out),
             NsProto::Unknown(_) => return false,
         }
         true

@@ -72,7 +72,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
             ret_tok(m, call, p);
         }
-        BuiltinNs::Error | BuiltinNs::AggregateError => {
+        BuiltinNs::Error | BuiltinNs::NativeError(_) | BuiltinNs::AggregateError => {
             implicit_args(m, call, "Error message", Protocol::Any);
             let e = error_tok(m, call);
             let options = if ns == BuiltinNs::AggregateError {
