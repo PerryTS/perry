@@ -266,6 +266,41 @@ pub(super) fn cb_call(
     ret
 }
 
+/// The one call a builtin method makes of member `key` of receiver `t`
+/// (`Array.prototype.toString`'s Invoke(this, "join"), `toLocaleString`'s
+/// of each element), whatever call ran the method: the member, its `this`
+/// and its arguments depend on `t` alone, so every run of the method on `t`
+/// shares it. A call per run never settles when the member is the method
+/// itself (`o.join = Array.prototype.toString`: the method's run on `o` in
+/// the new call makes a new call again). Its `nargs` argument nodes and its
+/// result are of `t`'s run (`fam_home`), as a protocol call's; it is born
+/// at no program site. `true`: made now, the caller adds its callee.
+fn recv_call(m: &mut Model, t: Tok, key: Atom, this: ThisArg, nargs: usize) -> (CallId, bool) {
+    if let Some(&c) = m.recv_calls.get(&(t, key)) {
+        return (c, false);
+    }
+    let home = m.fam_home(t);
+    let mut args = Vec::with_capacity(nargs);
+    for _ in 0..nargs {
+        let a = m.node_l("recv-call-arg");
+        m.nodes[a as usize].frame = home;
+        args.push(a);
+    }
+    let ret = m.node_l("recv-call-ret");
+    m.nodes[ret as usize].frame = home;
+    let call = m.calls.len() as CallId;
+    m.calls.push(CallSite {
+        this,
+        args,
+        spread: vec![],
+        ret,
+        site: call,
+        region: m.thrown,
+    });
+    m.recv_calls.insert((t, key), call);
+    (call, true)
+}
+
 /// ToPrimitive on `v`: its `@@toPrimitive`, `valueOf` and `toString` run.
 pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
     let r = m.reason(why);
@@ -867,10 +902,20 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
     }
     match name {
         "toString" => {
-            let join = Key::Named(m.atom("join"));
-            let f = m.node_l("array-like-join");
-            m.cons(recv, Cons::Load { key: join, dst: f });
-            let r = cb_call(m, call, f, ThisArg::Tok(t), vec![]);
+            let ja = m.atom("join");
+            let (jc, made) = recv_call(m, t, ja, ThisArg::Tok(t), 0);
+            if made {
+                let f = m.node_l("array-like-join");
+                m.cons(
+                    recv,
+                    Cons::Load {
+                        key: Key::Named(ja),
+                        dst: f,
+                    },
+                );
+                m.cons(f, Cons::Call { call: jc });
+            }
+            let r = m.calls[jc as usize].ret;
             let ret = m.calls[call as usize].ret;
             m.edge(r, ret);
         }
@@ -1147,34 +1192,29 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // element is skipped.
         Some("toLocaleString") => {
             let a = m.atom("toLocaleString");
-            let nested = m.calls.len() as CallId;
-            let r = m.node_l("array-locale-result");
-            m.solver_call(
-                call,
-                CallSite {
-                    this: ThisArg::Node(elems),
-                    args: c.args.iter().take(2).copied().collect(),
-                    spread: vec![],
-                    ret: r,
-                    site: nested,
-                    region: m.thrown,
-                },
-            );
-            m.cons(
-                elems,
-                Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                },
-            );
-            let why = m.reason("array join (locale element ToString)");
-            m.cons(
-                r,
-                Cons::Implicit {
-                    reason: why,
-                    proto: Protocol::ToPrimitive,
-                },
-            );
+            let (nested, made) = recv_call(m, t, a, ThisArg::Node(elems), 2);
+            if made {
+                m.cons(
+                    elems,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call: nested,
+                    },
+                );
+                let r = m.calls[nested as usize].ret;
+                let why = m.reason("array join (locale element ToString)");
+                m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+            }
+            let params = m.calls[nested as usize].args.clone();
+            for (&x, p) in c.args.iter().zip(params) {
+                m.edge(x, p);
+            }
             ret_prim(m, call, prim::STR);
         }
         Some("toString") => {
@@ -1240,9 +1280,17 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
     // The four collection kinds share one model of their contents; a
     // member no arm models is looked up on the kind's own chain.
     let (kind, fam) = (what, members::bobj_family(what));
+    // A Buffer's method `Buffer.prototype` does not own is its typed
+    // array chain's.
+    let buffer_owns = |m: &Model, n: &str| {
+        m.declarations
+            .named("Buffer.prototype", m)
+            .is_some_and(|h| m.declarations.property(h, n, m).is_some())
+    };
     let what = match fam {
         Family::Collection => "Collection",
         Family::Iterator => "Iterator",
+        _ if what == "Buffer" && !name.is_some_and(|n| buffer_owns(m, n)) => "TypedArray",
         _ => what,
     };
     match (what, name) {
@@ -1250,7 +1298,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
         (
-            "Collection" | "TypedArray" | "Promise" | "Error" | "IterResult",
+            "Collection" | "TypedArray" | "Buffer" | "Promise" | "Error" | "IterResult",
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
@@ -1525,6 +1573,17 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             if matches!(n, "unref" | "ref" | "refresh") {
                 ret_tok(m, call, t);
             }
+        }
+        // A `Buffer.prototype` method the runtime declares the effects of.
+        ("Buffer", Some(n)) if effects::declared_at("Buffer.prototype", n).is_some() => {
+            let e = effects::declared_at("Buffer.prototype", n).expect("declared");
+            effects::run_native(m, e, t, call);
+        }
+        ("Buffer", _) => {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
         }
         ("TypedArray", Some(n)) if typed_array_methods::method(m, t, n, call) => {}
         ("TypedArray", Some("transfer" | "transferToFixedLength" | "resize" | "grow")) => {

@@ -537,8 +537,19 @@ pub(crate) mod bigint {
     pub(crate) use super::{coerce_for_kind, to_bigint_for_store};
     pub(crate) use crate::byte_cell_support::{is_bigint_kind, throw_bigint_number_mix};
 }
+/// `Buffer.prototype`'s member table: a Buffer exists only in a program the
+/// typed-array install covers (the `Buffer` identifier, `node:buffer` and every
+/// module that births one name it), so an empty slot leaves only `constructor`.
+static BUFFER_PROTOTYPE_MEMBERS: Hook<fn(*mut crate::object::ObjectHeader)> = Hook::empty();
+pub(crate) fn buffer_prototype_members(proto: *mut crate::object::ObjectHeader) {
+    if let Some(install) = BUFFER_PROTOTYPE_MEMBERS.get() {
+        install(proto);
+    }
+}
 pub(crate) fn install() {
     crate::perry_install_once!({
+        BUFFER_PROTOTYPE_MEMBERS
+            .set(crate::object::native_module::callable_exports::install_buffer_prototype_members);
         COERCE_FOR_KIND.set(crate::typedarray::bigint::coerce_for_kind);
         FORMAT_TYPED_ARRAY.set(crate::typedarray::format_typed_array);
         #[cfg(test)]

@@ -796,8 +796,18 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 /// Resolve the member's object reference before interning its token. The
 /// receiver family locates the holder, but is never part of value identity.
 fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
+    // A Buffer's own prototype first: past it the chain is a typed array's.
+    if what == Some("Buffer") {
+        if let Some(p) = m
+            .declarations
+            .named("Buffer.prototype", m)
+            .and_then(|h| m.declarations.property(h, name, m))
+        {
+            return p.native.map(|identity| Native::Member { identity });
+        }
+    }
     let holder = match what {
-        Some("TypedArray") => m.declarations.named("%TypedArray%.prototype", m),
+        Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
         // Every iterator kind resolves its members as `Iterator.prototype`'s.
         Some(w) if members::bobj_family(w) == Family::Iterator => {
             m.declarations.named("Iterator.prototype", m)
@@ -1104,7 +1114,8 @@ pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => Some(BuiltinNs::Array),
             TmplKind::BObj {
-                what: "TypedArray", ..
+                what: "TypedArray" | "Buffer",
+                ..
             } => Some(BuiltinNs::TypedArray),
             TmplKind::BObj { what, .. } => ns_by_name(what),
             _ => None,

@@ -1516,7 +1516,7 @@ impl Model {
                 for &t in toks {
                     let shared = t == TOP
                         || matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-                            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }));
+                            if self.tmpls[tm as usize].kind.typed_storage());
                     if shared {
                         let r = self.reason("B1 typed array over a shared buffer");
                         self.mark_hard(ta, Hard::B1Exposed, r);
