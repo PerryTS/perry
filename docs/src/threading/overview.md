@@ -35,9 +35,15 @@ Like Node 26, `initMessageEvent` returns a new event rather than mutating its re
 
 ## Transferring MessagePorts
 
+Closing a port outside message dispatch discards its incoming queue. Closing it
+from its message callback lets the active dispatch drain that same FIFO before
+the `close` event. Peer messages posted during that drain are included, and
+`receiveMessageOnPort` can consume queued messages synchronously. The closing
+port cannot be transferred or send further messages.
+
 Include every `MessagePort` reachable from a message in its transfer list:
 
-```typescript
+```typescript,no-test
 const channel = new MessageChannel();
 worker.postMessage({ port: channel.port1 }, [channel.port1]);
 ```
