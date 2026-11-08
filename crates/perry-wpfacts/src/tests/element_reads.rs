@@ -41,19 +41,27 @@ fn a_fixed_length_field_array_read_is_proven() {
 
 #[test]
 fn a_literal_array_read_in_bounds_needs_no_bound() {
-    // A loop counter is narrowed in a function body (`gen::narrow`).
-    let src = "const a = [1, 2, 3, 4];\n\
-               function sum(): number {\n\
-                 let s = 0;\n\
-                 for (let i = 0; i < 4; i++) s += a[i];\n\
-                 return s;\n\
-               }\n\
-               console.log(sum());";
-    let r = reads(src, "a[i]").expect("proven read");
+    // A loop counter is narrowed in a function body (`gen::narrow`) by its
+    // test against the array's constant length. (A short constant loop is
+    // unrolled by HIR, its reads then see the counter's whole interval.)
+    let elems = (0..40)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let src = format!(
+        "const a = [{elems}];\n\
+         function sum(): number {{\n\
+           let s = 0;\n\
+           for (let i = 0; i < a.length; i++) s += a[i];\n\
+           return s;\n\
+         }}\n\
+         console.log(sum());"
+    );
+    let r = reads(&src, "a[i]").expect("proven read");
     assert_eq!(
         r,
         ElementRead {
-            len: 4,
+            len: 40,
             key_in_bounds: true
         }
     );
