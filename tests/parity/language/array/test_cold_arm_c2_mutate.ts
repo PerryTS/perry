@@ -1,7 +1,6 @@
-// b2 C2: a getter on the slow arm changes the receiver's kind, length,
-// storage or element descriptors; later reads in the loop see each change.
+// b2 C2: in a covered loop, a getter on the slow arm changes the receiver's
+// kind, length, storage or element descriptors; later reads see each change.
 let a: any[] = [];
-function reset() { a = [1, 2, 3, 4, 5, 6, 7, 8]; }
 let mode = 0;
 Object.defineProperty(Array.prototype, "1.5", {
   configurable: true,
@@ -14,12 +13,15 @@ Object.defineProperty(Array.prototype, "1.5", {
   },
 });
 for (mode = 0; mode < 4; mode++) {
-  reset();
-  const out: any[] = [];
-  for (let k = 0; k < 6; k++) {
-    out.push(a[k % 4]);
-    if (k === 1) out.push(a[k + 0.5]);
+  a = [1, 2, 3, 4, 5, 6, 7, 8];
+  let s = 0, und = 0, acc = 0, num = 0;
+  for (let k = 0; k < 12; k++) {
+    if (a[k & 3] === "s") s++;
+    if (a[k & 3] === undefined) und++;
+    if (a[k & 3] === "acc") acc++;
+    if (a[k & 3] === (k & 3) + 1) num++;
+    if (k === 1 && a[k + 0.5] === 0) num += 100;
   }
-  console.log(mode, out.join(" "), a.length);
+  console.log(mode, s, und, acc, num, a.length);
 }
 delete (Array.prototype as any)["1.5"];
