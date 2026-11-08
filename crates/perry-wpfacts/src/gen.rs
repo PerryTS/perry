@@ -270,6 +270,10 @@ pub struct Gen<'a> {
     /// The function body being walked and its locals a guard may narrow
     /// (`narrow::scope_locals`).
     pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    /// The `const` bindings the bodies being walked declare
+    /// (`narrow::Consts`): a body a closure creates may narrow the ones it
+    /// captures.
+    pub(crate) narrow_consts: crate::pts::FxHashSet<(u32, u32)>,
     /// `(module, byte offset, argument nodes)` of each method call site
     /// (`bindings::ModuleBindings::call_arg_ranges`).
     pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
@@ -348,6 +352,9 @@ pub struct Gen<'a> {
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
+    /// Guards narrow locals by presence: a truthy or non-nullish test
+    /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
+    pub guard_presence: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -634,6 +641,7 @@ impl<'a> Gen<'a> {
             for_binding: None,
             narrow: Vec::new(),
             narrow_scope: None,
+            narrow_consts: Default::default(),
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
             str_lits: Default::default(),
@@ -668,6 +676,7 @@ impl<'a> Gen<'a> {
             int_ranges: true,
             arr_lengths: true,
             guard_ranges: true,
+            guard_presence: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),

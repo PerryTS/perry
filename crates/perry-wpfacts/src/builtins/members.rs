@@ -579,14 +579,21 @@ pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
 pub(crate) const MAP_ITERATOR: &str = "MapIterator";
 pub(crate) const SET_ITERATOR: &str = "SetIterator";
 
-/// The intrinsic prototype of iterator kind `what` whose image members the
-/// runtime locks while it takes adds (`builtin_proto.rs`
-/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`): its realm-table name and
-/// its lock holder (`perry_abi::lock`), for `builtins::locked_chain_read`.
-pub(crate) fn iterator_prototype(what: &str) -> Option<(&'static str, LockHolder)> {
+/// The intrinsic prototype of builtin object kind `what` whose image members
+/// the runtime locks while it takes adds: `%MapIteratorPrototype%`,
+/// `%SetIteratorPrototype%` (`builtin_proto.rs` `MAP_ITERATOR_FAMILY`,
+/// `SET_ITERATOR_FAMILY`), `RegExp.prototype` and `Date.prototype`
+/// (`seal_realm` seals every `BuiltinProto`). Its realm-table name and its
+/// lock holder (`perry_abi::lock`), for `builtins::locked_chain_read` and
+/// `builtins::native_locked`: a read of an image member there is final, an
+/// absent key is not.
+pub(crate) fn image_locked_prototype(what: &str) -> Option<(&'static str, LockHolder)> {
+    use perry_abi::BuiltinProto as P;
     match what {
         MAP_ITERATOR => Some(("%MapIteratorPrototype%", LockHolder::MapIterator)),
         SET_ITERATOR => Some(("%SetIteratorPrototype%", LockHolder::SetIterator)),
+        "RegExp" => Some(("RegExp.prototype", LockHolder::Proto(P::RegExp))),
+        "Date" => Some(("Date.prototype", LockHolder::Proto(P::Date))),
         _ => None,
     }
 }

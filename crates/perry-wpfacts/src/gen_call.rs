@@ -437,6 +437,7 @@ impl<'a> Gen<'a> {
             is_generator,
             is_arrow,
             is_strict,
+            captures,
             ..
         } = e
         else {
@@ -473,16 +474,13 @@ impl<'a> Gen<'a> {
         }
         self.order_ok = true;
         let own = self.own_helper_shape(params, body, *is_async || *is_generator);
-        let scope = self
-            .int_ranges
-            .then(|| (f, crate::gen::narrow::scope_locals(params, body)));
-        let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
+        let scope = self.narrow_enter_body(cfx.module, f, params, body, captures);
         self.stmts(cfx, body);
         if crate::gen::narrow::may_complete(body) {
             // The body's normal completion returns `undefined`.
             self.m.add_prim(ret, prim::UNDEF);
         }
-        self.narrow_scope = saved_scope;
+        self.narrow_exit_body(scope);
         self.own_helper_finish(f, own);
         #[cfg(test)]
         {
