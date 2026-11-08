@@ -314,3 +314,77 @@ fetch('data:text/plain,hello').then((r) => r.text()).then((text) => { console.lo
         "hello"
     );
 }
+
+#[test]
+fn host_interop_native_exceptions_reach_perry_catch() {
+    assert_eq!(
+        run_ts(
+            r#"
+const decode = globalThis.decodeURIComponent;
+try { decode('%'); }
+catch (error) { console.log('caught'); }
+console.log(decode('ok'));
+"#
+        ),
+        "caught\nok"
+    );
+    assert_eq!(
+        run_ts_after(
+            "",
+            r#"
+const assert = require('node:assert/strict');
+for (const name of ['closure_call_0', 'closure_call_1', 'closure_call_2', 'closure_call_3', 'closure_call_spread']) {
+  const error = new Error(name);
+  const fail = () => { throw error; };
+  const args = name.endsWith('spread') ? [[1, 2, 3, 4]] : [1, 2, 3];
+  __memDispatch.try_start();
+  assert.equal(__memDispatch[name](fail, ...args), undefined);
+  assert.equal(__memDispatch.has_exception(), 1);
+  assert.equal(__memDispatch.get_exception(), error);
+  __memDispatch.try_end();
+  assert.throws(() => __memDispatch[name](fail, ...args), thrown => thrown === error);
+}
+console.log('ok');
+"#
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn host_interop_worker_reuses_reference_handles() {
+    let bootstrap = WASM_RUNTIME_JS
+        .split("const WORKER_BOOTSTRAP = `")
+        .nth(1)
+        .unwrap()
+        .split("`;")
+        .next()
+        .unwrap();
+    let source = BASE64.encode(bootstrap);
+    assert_eq!(
+        run_ts_after(
+            "",
+            &format!(
+                r#"
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = Buffer.from('{source}', 'base64').toString();
+vm.runInNewContext(source + `
+const object = {{value: 7}};
+const array = [object];
+const fn = () => {{}};
+for (const value of [object, array, fn]) {{
+  const id = allocHandle(value);
+  for (let i = 0; i < 100; i++) assert.equal(allocHandle(value), id);
+  assert.equal(handleStore.get(id), value);
+}}
+assert.notEqual(allocHandle({{}}), allocHandle({{}}));
+assert.equal(__bitsToJsValue(__jsValueToBits(object)), object);
+`, {{self: {{}}, assert}});
+console.log('ok');
+"#
+            )
+        ),
+        "ok"
+    );
+}

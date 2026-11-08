@@ -1806,7 +1806,7 @@ const __memDispatch = {
     return closure;
   },
   closure_call_0: (closure) => {
-    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [].map(__hostCallback));
+    if (typeof closure === 'function') return __callHostFunction(closure, []);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1815,7 +1815,7 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_1: (closure, a0) => {
-    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [a0].map(__hostCallback));
+    if (typeof closure === 'function') return __callHostFunction(closure, [a0]);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1823,7 +1823,7 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_2: (closure, a0, a1) => {
-    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [a0, a1].map(__hostCallback));
+    if (typeof closure === 'function') return __callHostFunction(closure, [a0, a1]);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1831,7 +1831,7 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_3: (closure, a0, a1, a2) => {
-    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [a0, a1, a2].map(__hostCallback));
+    if (typeof closure === 'function') return __callHostFunction(closure, [a0, a1, a2]);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1840,7 +1840,7 @@ const __memDispatch = {
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
-    if (typeof closure === 'function') return Reflect.apply(closure, undefined, argArr.map(__hostCallback));
+    if (typeof closure === 'function') return __callHostFunction(closure, argArr);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -2316,7 +2316,14 @@ const stringTable = [];
 const handleStore = new Map();
 let nextHandleId = 1;
 const objectHandles = new WeakMap();
-function allocHandle(obj) { const id = nextHandleId++; handleStore.set(id, obj); return id; }
+function allocHandle(obj) {
+  const reference = obj !== null && (typeof obj === 'object' || typeof obj === 'function');
+  if (reference && objectHandles.has(obj)) return objectHandles.get(obj);
+  const id = nextHandleId++;
+  if (reference) objectHandles.set(obj, id);
+  handleStore.set(id, obj);
+  return id;
+}
 
 function __bitsToJsValue(bits) {
   if (bits === TAG_UNDEFINED) return undefined;
@@ -4908,6 +4915,16 @@ const __uiMethodMap = {
   run: "perry_ui_app_run", setBody: "perry_ui_app_set_body",
   addOverlay: "perry_ui_widget_add_overlay",
 };
+
+function __callHostFunction(fn, args) {
+  try {
+    return Reflect.apply(fn, undefined, args.map(__hostCallback));
+  } catch (error) {
+    if (tryDepth === 0) throw error;
+    currentException = error;
+    return undefined;
+  }
+}
 
 const hostCallbacks = new WeakMap();
 
