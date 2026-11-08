@@ -80,8 +80,9 @@ pub mod guard {
     /// A value that is no String after ToPrimitive: an operand of `+` that
     /// lets the other operand's numeric kinds reach the result.
     pub const NOT_STR: u8 = 6;
-    /// Any primitive, no object: a sloppy function's `this` that boxes it.
-    pub const PRIM: u8 = 7;
+    /// A primitive but `undefined`/`null`, no object: what a sloppy
+    /// function boxes as its `this`.
+    pub const BOXED: u8 = 7;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -94,7 +95,7 @@ pub mod guard {
             // Every primitive kind but `undefined`/`null` has a truthy value.
             TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
             NOT_STR => p::ALL & !p::STR,
-            PRIM => p::ALL,
+            BOXED => p::ALL & !(p::UNDEF | p::NULL),
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }

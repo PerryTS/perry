@@ -224,7 +224,10 @@ impl<'a> Gen<'a> {
             if !i.is_deferred_require {
                 continue;
             }
-            let t = i.resolved_path.as_ref().and_then(|p| self.path_index.get(p).copied());
+            let t = i
+                .resolved_path
+                .as_ref()
+                .and_then(|p| self.path_index.get(p).copied());
             if let Some(t) = t {
                 let rt = self.module_raise(t);
                 self.m.edge(rt, self.m.lazy_raise);
@@ -681,17 +684,23 @@ impl<'a> Gen<'a> {
         };
         self.params(&fx, &f.params);
         if !f.is_strict && class.is_none() && ctor_of.is_none() {
-            // A sloppy function boxes a primitive `this` and reads a
-            // nullish one as the global object: an object the model does
-            // not hold, so once a primitive arrives `this` is anything.
-            self.m.cons(
-                info.this,
-                Cons::Guard {
-                    test: crate::model::guard::PRIM,
-                    from: self.m.top_tok_node,
-                    dst: info.this,
-                },
-            );
+            // A sloppy function reads a nullish `this` as the global object
+            // and boxes a primitive one, an object the model does not hold:
+            // once a primitive arrives `this` is anything.
+            let global = self.tok_node(self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis)));
+            for (test, from) in [
+                (crate::model::guard::NULLISH, global),
+                (crate::model::guard::BOXED, self.m.top_tok_node),
+            ] {
+                self.m.cons(
+                    info.this,
+                    Cons::Guard {
+                        test,
+                        from,
+                        dst: info.this,
+                    },
+                );
+            }
         }
         if f.is_async || f.is_generator {
             // Not transformed (rare at this point): results are runtime
