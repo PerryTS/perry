@@ -561,7 +561,12 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     else {
         return Ok(None);
     };
-    let emission = crate::expr::emit_buffer_access_pointer(ctx, &proof, access_spec);
+    let emission = crate::expr::emit_buffer_access_pointer(
+        ctx,
+        &proof,
+        access_spec,
+        crate::expr::OutOfBoundsArm::Abort,
+    );
     let result = emit_numeric_load(
         ctx.block(),
         &spec,
