@@ -200,7 +200,7 @@ database-sqlite = ["dep:rusqlite"]
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
 crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:openssl-sys", "dep:sha1", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2"]
-bundled-bcrypt = ["dep:bcrypt", "async-bridge"]
+bundled-bcrypt = ["dep:perry-ext-bcrypt", "async-bridge"]
 bundled-argon2 = ["dep:argon2", "async-bridge"]
 
 # Compression features select the sole ext-zlib provider in default and
@@ -266,6 +266,7 @@ async-bridge = []
 container = ["dep:perry-container-compose", "async-bridge"]
 
 [dependencies]
+perry-ext-bcrypt = { workspace = true, optional = true }
 perry-ext-zlib = { workspace = true, optional = true }
 perry-ffi.workspace = true
 perry-runtime = { workspace = true, features = ["stdlib"] }
@@ -340,7 +341,6 @@ rsa-sha1 = { package = "sha1", version = "0.10", optional = true }
 md-5 = { version = "0.11", optional = true }
 perry-hex = { workspace = true, optional = true }
 hmac = { version = "0.13", optional = true }
-bcrypt = { version = "0.19", optional = true }
 p256 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 p384 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 p521 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }

@@ -447,6 +447,15 @@ where
     if !roots.is_empty() {
         ensure_scanner_registered();
     }
+    // The job completes into this agent's loop, and only a turn of that loop
+    // dispatches it. The event pump parks on and turns the loop through the
+    // turnloop hooks, so they must be in before the job is accepted, exactly
+    // as `turnloop_net::install` puts them in before a socket submits. The
+    // compiler selects them for timers and the I/O modules, but a pool job can
+    // be a program's only async source (an ext binding's `bcrypt.hash`); with
+    // no hooks the pump took the legacy condvar park, which never turns the
+    // loop, and `has_pending_jobs` kept the process waiting forever.
+    crate::feature_hooks::js_runtime_install_turnloop();
     let id = POOL.with(|state| mint_id(&mut state.borrow_mut()));
     let job = move || Ok(Payload::Boxed(Box::new(work()) as Erased));
     let submitted = crate::event_pump::with_pool_driver(|driver| match occupancy {

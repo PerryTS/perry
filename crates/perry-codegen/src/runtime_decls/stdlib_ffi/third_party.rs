@@ -14,6 +14,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_bcrypt_compare", I64, &[I64, I64]);
     module.declare_function("js_bcrypt_compare_sync", DOUBLE, &[I64, I64]);
     module.declare_function("js_bcrypt_gen_salt", I64, &[DOUBLE]);
+    module.declare_function("js_bcrypt_gen_salt_sync", I64, &[DOUBLE]);
     module.declare_function("js_bcrypt_hash", I64, &[I64, DOUBLE]);
     module.declare_function("js_bcrypt_hash_sync", I64, &[I64, DOUBLE]);
 

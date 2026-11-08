@@ -46,4 +46,44 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_STR],
         ret: NR_GCPTR,
     },
+    // The sync forms return the value itself: a raw `StringHeader` the row
+    // boxes (`NR_STR`, null on failure reads as `null`) or a NaN-boxed boolean
+    // (`NR_F64`). `genSalt`'s rounds is optional; a missing one arrives as
+    // `undefined` and the binding applies node's default of 10.
+    NativeModSig {
+        module: "bcrypt",
+        has_receiver: false,
+        method: "hashSync",
+        class_filter: None,
+        runtime: "js_bcrypt_hash_sync",
+        args: &[NA_STR, NA_F64],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "bcrypt",
+        has_receiver: false,
+        method: "compareSync",
+        class_filter: None,
+        runtime: "js_bcrypt_compare_sync",
+        args: &[NA_STR, NA_STR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "bcrypt",
+        has_receiver: false,
+        method: "genSalt",
+        class_filter: None,
+        runtime: "js_bcrypt_gen_salt",
+        args: &[NA_F64],
+        ret: NR_GCPTR,
+    },
+    NativeModSig {
+        module: "bcrypt",
+        has_receiver: false,
+        method: "genSaltSync",
+        class_filter: None,
+        runtime: "js_bcrypt_gen_salt_sync",
+        args: &[NA_F64],
+        ret: NR_STR,
+    },
 ];

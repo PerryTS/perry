@@ -190,8 +190,11 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # key); `js_ws_server_new` was the only classified one (the rest returned
 # NR_F64 / NR_VOID / NR_BOOL_I32). 158 -> 157 rows, 146 -> 145 providers, as
 # the script reports on the resolved tree.
-EXPECTED_ROWS = 157
-EXPECTED_PROVIDERS = 145
+# +1 row / +1 provider (#14008): bcrypt.genSalt exposes the existing
+# js_bcrypt_gen_salt provider, which returns a newly allocated Promise.
+# 157 -> 158 rows, 145 -> 146 providers.
+EXPECTED_ROWS = 158
+EXPECTED_PROVIDERS = 146
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
