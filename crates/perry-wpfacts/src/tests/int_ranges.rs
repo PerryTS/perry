@@ -231,3 +231,14 @@ fn a_holder_of_two_fixed_arrays_joins_their_lengths() {
     let (lo, hi) = r["e"].expect("e is bounded by both lengths");
     assert!(lo <= 0 && hi >= 8, "e covers 0..=8: {:?}", r["e"]);
 }
+
+#[test]
+fn a_pop_moves_the_length() {
+    let r = ranges(
+        "const S: number[] = [1, 2, 3, 4, 5];\n\
+         function f(): number { let s = 0; for (let p = 0; p < S.length; p++) { s += p; S.pop(); } return s; }\n\
+         console.log(f());",
+    );
+    // Without the pop S's length would bound `p` to 0..=5.
+    assert!(r["p"].is_none_or(|(_, hi)| hi > 5), "p: {:?}", r["p"]);
+}

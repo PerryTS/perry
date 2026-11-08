@@ -16,6 +16,15 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayPop(id) => {
                 let a = self.local(mi, *id);
+                // `pop` sets `length` (ArraySetLength): the array's length
+                // moves (`solve::arr_len`).
+                self.m.cons(
+                    a,
+                    Cons::LenIndex {
+                        lo: crate::model::Iv::TOP.lo,
+                        hi: crate::model::Iv::TOP.hi,
+                    },
+                );
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
                 out
