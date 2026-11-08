@@ -628,6 +628,14 @@ fn detect_optional_feature_usage_with_capabilities(
                         | "ws"
                         | "better-sqlite3"
                         | "bun:sqlite"
+                        // Well-known providers whose code is not in this repo.
+                        | "pg"
+                        | "mysql2"
+                        | "mysql2/promise"
+                        | "tursodb"
+                        | "iroh"
+                        // tty.ReadStream reads hand out Buffers.
+                        | "tty"
                 )
         });
     ctx.uses_event_target |= global_object::may_escape(hir_module)
