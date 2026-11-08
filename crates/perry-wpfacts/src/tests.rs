@@ -1869,14 +1869,15 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod array_iter_lock;
+mod cycle_e20_own_field;
+mod realm_read_static;
+mod promise_capability_executor;
+mod cycle_locked_member;
 mod collection_entries;
 mod concat_elements;
 mod console_protocol;
 mod constructor_values;
-mod cycle_e20_own_field;
-mod cycle_locked_member;
 mod date_methods;
-mod realm_read_static;
 mod declared_constructor;
 mod declared_global_write;
 mod delegate_step;
