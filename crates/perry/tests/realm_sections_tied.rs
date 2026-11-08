@@ -85,7 +85,11 @@ fn every_realm_section_input_is_link_ordered() {
         "perry_realm inputs without SHF_LINK_ORDER (GNU ld < 2.36 rejects the mix): {untied:#?}"
     );
     // Each kind of cell was emitted, so the check above covered it.
-    for kind in ["perry_runtime_layout_", "_image_keys", "perry_static_seed_list_"] {
+    for kind in [
+        "perry_runtime_layout_",
+        "_image_keys",
+        "perry_static_seed_list_",
+    ] {
         assert!(
             ordered.iter().any(|name| name.contains(kind)),
             "no tied {kind} cell in the emitted objects: {ordered:#?}"

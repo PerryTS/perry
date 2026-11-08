@@ -50,9 +50,22 @@ use crate::types::{DOUBLE, I64};
 pub(crate) fn is_direct_collection_builtin_name(property: &str) -> bool {
     matches!(
         property,
-        "get" | "set" | "has" | "delete" | "add" | "clear" | "entries" | "keys" | "values"
-            | "union" | "intersection" | "difference" | "symmetricDifference" | "isSubsetOf"
-            | "isSupersetOf" | "isDisjointFrom"
+        "get"
+            | "set"
+            | "has"
+            | "delete"
+            | "add"
+            | "clear"
+            | "entries"
+            | "keys"
+            | "values"
+            | "union"
+            | "intersection"
+            | "difference"
+            | "symmetricDifference"
+            | "isSubsetOf"
+            | "isSupersetOf"
+            | "isDisjointFrom"
     )
 }
 

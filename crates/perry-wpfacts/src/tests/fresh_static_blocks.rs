@@ -60,5 +60,8 @@ function make(tag: string) {
 console.log(log.length, typeof make);"#;
     let (ids, pf) = blocks(src);
     assert_eq!(ids.len(), 1, "one static block");
-    assert!(!active(&pf, ids[0]), "static block of an unevaluated class active");
+    assert!(
+        !active(&pf, ids[0]),
+        "static block of an unevaluated class active"
+    );
 }

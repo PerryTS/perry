@@ -103,6 +103,7 @@ def main():
         ("receiver-negative", "unchecked", "F4 receiver set"),
         ("kind-negative", "kind:Box.v=num", "F2 kind"),
         ("int32-negative", "range", "int32 input"),
+        ("arrlen-negative", "arrlen", "array constant length"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:

@@ -331,6 +331,9 @@ pub struct Gen<'a> {
     pub dynimport_sabotage: bool,
     /// Integer intervals are generated (`FactsConfig::no_int_ranges`).
     pub int_ranges: bool,
+    /// Array literals record their birth length (`solve::arr_len`;
+    /// `FactsConfig::no_array_lengths`).
+    pub arr_lengths: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -645,6 +648,7 @@ impl<'a> Gen<'a> {
             export_sources: Default::default(),
             dynimport_sabotage: false,
             int_ranges: true,
+            arr_lengths: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),

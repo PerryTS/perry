@@ -10,6 +10,9 @@
 //! `i -> start -> end -> update -> i` stops at the test bound instead of
 //! widening away.
 //!
+//! The bound is a literal, a local, or a local's `length` (an Array's
+//! carries its length interval, `solve::arr_len`).
+//!
 //! The rule only applies where no other code can write `i` during the loop:
 //! `i` is declared by the loop's `init` and no closure appears in the loop.
 //! A nested loop that writes `i` ends the start reads before it (its body
@@ -82,11 +85,13 @@ fn test_bound(c: &Expr, id: u32) -> Option<(u8, &Expr)> {
     } else {
         return None;
     };
-    matches!(
+    let length_of_local = matches!(bound, Expr::PropertyGet { object, property, .. }
+        if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)));
+    (matches!(
         bound,
         Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_)
-    )
-    .then_some((kind, bound))
+    ) || length_of_local)
+        .then_some((kind, bound))
 }
 
 impl<'a> Gen<'a> {
@@ -129,6 +134,21 @@ impl<'a> Gen<'a> {
             Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::Number(v) => self.num_literal(*v),
             Expr::LocalGet(l) => self.local(mi, *l),
+            // `o.length`: a fresh read of it (an Array's carries its
+            // interval, `solve::arr_len`; any other value's is ⊤).
+            Expr::PropertyGet { object, .. } => {
+                let Expr::LocalGet(o) = object.as_ref() else {
+                    return false;
+                };
+                if *o == id {
+                    return false;
+                }
+                let on = self.local(mi, *o);
+                let len = self.tmp("narrow-length");
+                let key = crate::model::Key::Named(self.m.atom("length"));
+                self.m.cons(on, crate::model::Cons::Load { key, dst: len });
+                len
+            }
             _ => return false,
         };
         let start = self.tmp("narrow");

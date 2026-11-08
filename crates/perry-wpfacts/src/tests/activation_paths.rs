@@ -197,7 +197,11 @@ fn active_bodies(src: &str, sab: Option<&str>) -> Vec<String> {
     };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
     assert!(pf.body_reach.complete, "activated");
-    pf.body_reach.bodies.iter().map(|(_, _, n)| n.clone()).collect()
+    pf.body_reach
+        .bodies
+        .iter()
+        .map(|(_, _, n)| n.clone())
+        .collect()
 }
 
 fn runs(bodies: &[String], name: &str) -> bool {
@@ -245,7 +249,10 @@ console.log(s.marker, s.n);
 fn a_generic_subclass_runs_the_written_class_fields() {
     for (name, src) in WRITTEN_CLASS_NEW {
         let on = active_bodies(src, None);
-        assert!(runs(&on, "S::<fields>"), "{name}: S::<fields> inactive: {on:?}");
+        assert!(
+            runs(&on, "S::<fields>"),
+            "{name}: S::<fields> inactive: {on:?}"
+        );
     }
 }
 
@@ -274,7 +281,11 @@ console.log(s.tag, s.b);
 "#;
     let on = active_bodies(src, None);
     assert!(!runs(&on, "S::<fields>"), "S::<fields> active: {on:?}");
-    assert!(on.iter().any(|b| b.contains("S$") && b.ends_with("::<fields>")), "{on:?}");
+    assert!(
+        on.iter()
+            .any(|b| b.contains("S$") && b.ends_with("::<fields>")),
+        "{on:?}"
+    );
 }
 
 /// The written class's field initializers are carried by the construction
@@ -283,6 +294,9 @@ console.log(s.tag, s.b);
 fn leaving_out_the_construction_excludes_the_written_class_fields() {
     for (name, src) in WRITTEN_CLASS_NEW {
         let on = active_bodies(src, Some("call+this"));
-        assert!(!runs(&on, "S::<fields>"), "{name}: S::<fields> active with call+this left out");
+        assert!(
+            !runs(&on, "S::<fields>"),
+            "{name}: S::<fields> active with call+this left out"
+        );
     }
 }

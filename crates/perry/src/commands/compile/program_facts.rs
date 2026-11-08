@@ -135,6 +135,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_lengths: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -544,6 +548,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if b.length_number {
                 out.length_number_inputs.insert(*id);
             }
+            if let Some(n) = b.const_length {
+                out.const_length_inputs.insert(*id, n);
+            }
         }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
@@ -781,6 +788,10 @@ pub(crate) fn activation(
         // The facts' negative controls act on this pass (it is theirs).
         no_int_ranges: matches!(
             std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_lengths: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")

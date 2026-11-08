@@ -141,6 +141,10 @@ pub struct BindingFacts {
     /// Number (a String's code-unit count, an Array's non-configurable
     /// `length`), whatever its declared type says.
     pub length_number: bool,
+    /// It holds one program Array literal's tokens and nothing else, each
+    /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
+    /// that constant.
+    pub const_length: Option<i64>,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -206,6 +210,37 @@ pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
         return None;
     }
     Some((tm, *m.ta_elem.get(&tm)?))
+}
+
+/// The length every value of node `n` has: it holds only program Array
+/// tokens whose birth length never moved (`solve::arr_len`), all the same.
+fn const_length(m: &Model, n: u32) -> Option<i64> {
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 || node.pts.contains_tok(TOP) {
+        return None;
+    }
+    let mut len = None;
+    for t in node.pts.to_sorted() {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if !m.is_arr(t) || m.foreign.contains_key(&tm) || m.is_escaped(t) {
+            return None;
+        }
+        let birth = *m.arr_birth_len.get(&tm)?;
+        if let Some(&ln) = m.arr_len.get(&t) {
+            let r = m.nodes[ln as usize].range;
+            if r.is_top() || r.lo != birth || r.hi != birth {
+                return None;
+            }
+        }
+        match len {
+            None => len = Some(birth),
+            Some(l) if l == birth => {}
+            Some(_) => return None,
+        }
+    }
+    len
 }
 
 fn indexed_owner(g: &Gen, n: u32) -> Option<IndexedOwner> {
@@ -320,6 +355,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     if !node.range.is_top() && !node.range.is_empty() {
         out.int_range = Some((node.range.lo, node.range.hi));
     }
+    out.const_length = const_length(m, n);
     out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
     out

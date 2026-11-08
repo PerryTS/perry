@@ -37,7 +37,9 @@ fn ir_of(source: &str) -> String {
 }
 
 fn main_body(ir: &str) -> &str {
-    let start = ir.find("define i32 @main(").expect("entry module defines main");
+    let start = ir
+        .find("define i32 @main(")
+        .expect("entry module defines main");
     let body = &ir[start..];
     &body[..body.find("\n}\n").expect("main is closed")]
 }
@@ -50,15 +52,16 @@ fn adds_before_super(source: &str) -> (usize, usize) {
     let enter = main
         .find(SUPER_SCOPE)
         .or_else(|| main.find(SUPER_PARENT))
-        .unwrap_or_else(|| {
-            panic!("the inlined body's super() must lower live in main:\n{main}")
-        });
+        .unwrap_or_else(|| panic!("the inlined body's super() must lower live in main:\n{main}"));
     assert!(
         main.contains(SUPER_PARENT),
         "the inlined body's super() must reach the parent constructor at run time \
          (the shape under test):\n{main}"
     );
-    (main[..enter].matches(FIELD_ADD).count(), main.matches(FIELD_ADD).count())
+    (
+        main[..enter].matches(FIELD_ADD).count(),
+        main.matches(FIELD_ADD).count(),
+    )
 }
 
 #[test]
@@ -94,5 +97,8 @@ const t = new Tail();
 console.log(t.count, t.m, t.between, t.tail);
 "#,
     );
-    assert_eq!(before, 0, "Root's `#count` was staged before Mid's inlined body");
+    assert_eq!(
+        before, 0,
+        "Root's `#count` was staged before Mid's inlined body"
+    );
 }
