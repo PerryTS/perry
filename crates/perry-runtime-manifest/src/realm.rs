@@ -246,6 +246,67 @@ pub struct RealmEntry {
     pub facts: &'static str,
     /// The declared effects of the body (empty: undeclared, unknown code).
     pub effects: &'static [RealmEffect],
+    /// Its own properties (`RealmDeclaration::properties`), key and value
+    /// kind, so a reader of the table needs no JSON.
+    pub own: &'static [RealmOwn],
+}
+
+/// An own property of a declaration in the generated compiler table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RealmOwn {
+    /// Ordinary spelling, or `@@species` for a symbol key.
+    pub key: &'static str,
+    pub symbol: bool,
+    pub value: RealmOwnValue,
+}
+
+/// What an own property holds (`RealmProperty`): a primitive of a kind,
+/// another declaration, or an accessor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmOwnValue {
+    Undefined,
+    Null,
+    Boolean,
+    Number,
+    String,
+    Symbol,
+    /// The declaration it holds (`Date.now`, `Date.prototype`).
+    Reference(&'static str),
+    /// Its getter and setter declarations.
+    Accessor {
+        get: Option<&'static str>,
+        set: Option<&'static str>,
+    },
+    /// A value the runtime computes or a raw word.
+    Other,
+}
+
+impl RealmProperty {
+    /// Const Rust for this property's `RealmOwn` in the generated table;
+    /// `p` is the path prefix of the schema module.
+    pub fn emit_own(&self, p: &str) -> String {
+        let value = match (&self.get, &self.set, &self.value) {
+            (None, None, Some(v)) => match v {
+                RealmValue::Undefined => "Undefined".into(),
+                RealmValue::Null => "Null".into(),
+                RealmValue::Boolean(_) => "Boolean".into(),
+                RealmValue::NumberBits(_) | RealmValue::Int32(_) => "Number".into(),
+                RealmValue::String(_) => "String".into(),
+                RealmValue::Symbol(_) => "Symbol".into(),
+                RealmValue::Reference(r) => format!("Reference({r:?})"),
+                RealmValue::RawReference(_)
+                | RealmValue::Bytes(_)
+                | RealmValue::RawWord(_)
+                | RealmValue::Dynamic(_) => "Other".into(),
+            },
+            (None, None, None) => "Undefined".into(),
+            (get, set, _) => format!("Accessor {{ get: {get:?}, set: {set:?} }}"),
+        };
+        format!(
+            "{p}RealmOwn {{ key: {:?}, symbol: {}, value: {p}RealmOwnValue::{value} }}",
+            self.key, self.symbol
+        )
+    }
 }
 
 impl RealmManifest {

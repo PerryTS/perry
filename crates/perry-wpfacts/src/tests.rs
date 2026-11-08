@@ -1879,6 +1879,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
 mod array_iter_lock;
 mod cycle_e20_own_field;
 mod realm_read_static;
+mod builtin_ctor_statics;
 mod promise_capability_executor;
 mod cycle_locked_member;
 mod collection_entries;
