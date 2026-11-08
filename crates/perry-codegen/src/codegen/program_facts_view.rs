@@ -230,6 +230,9 @@ pub struct ElisionFacts {
     /// Method call byte offset → each argument's integer interval at the
     /// call (wpfacts `ModuleBindings::call_arg_ranges`).
     pub call_arg_ranges: std::collections::BTreeMap<u32, Vec<Option<(i64, i64)>>>,
+    /// Method call byte offsets whose result is a Number at every copy
+    /// (wpfacts `ModuleBindings::number_calls`, `facts_rep::number_call`).
+    pub number_calls: std::collections::BTreeSet<u32>,
     /// `IndexGet::element_offset` → the read's receivers are program Arrays
     /// whose storage never moves (wpfacts `ModuleBindings::element_reads`,
     /// `expr::index_get::proven_array`).
@@ -287,6 +290,7 @@ impl ElisionFacts {
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
             && self.call_arg_ranges.is_empty()
+            && self.number_calls.is_empty()
             && self.element_reads.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()

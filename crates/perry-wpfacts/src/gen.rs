@@ -273,6 +273,9 @@ pub struct Gen<'a> {
     /// `(module, byte offset, argument nodes)` of each method call site
     /// (`bindings::ModuleBindings::call_arg_ranges`).
     pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
+    /// `(module, byte offset, result node)` of each method call site
+    /// (`bindings::ModuleBindings::number_calls`).
+    pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
     /// One-unit String literal nodes by code (`Gen::str_literal`).
     pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
@@ -632,6 +635,7 @@ impl<'a> Gen<'a> {
             narrow: Vec::new(),
             narrow_scope: None,
             call_args_at: Vec::new(),
+            call_results_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
@@ -1719,8 +1723,8 @@ impl<'a> Gen<'a> {
         };
         let binding = c.extends_name.as_deref().filter(|_| !member);
         let parent = binding.and_then(|n| self.resolve_class_name(mi, n));
-        let builtin_parent = binding
-            .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
+        let builtin_parent =
+            binding.filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
@@ -1740,7 +1744,8 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            self.parent_values.push((mi, tm, binding.map(str::to_string)));
+            self.parent_values
+                .push((mi, tm, binding.map(str::to_string)));
         }
     }
 

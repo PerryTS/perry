@@ -22,8 +22,11 @@
 //! (`bind_params`). Its arguments are already a plain double there
 //! (`facts_number_locals::emit_entry_number`), and the I32 interval is
 //! exact, so the slot's value is one `fptosi`. The calling convention does
-//! not change yet. `PERRY_WP_REP_P2=0` keeps parameters in their double
-//! slots.
+//! not change yet. A method call whose every callee returns only Numbers
+//! (wpfacts `ModuleBindings::number_calls`, the call's return
+//! representation) is a Number: a canonical double (P3), so its readers do
+//! not test the INT32 tag (`number_call`). `PERRY_WP_REP_P2=0` keeps
+//! parameters in their double slots and call results unproven.
 
 use std::collections::HashSet;
 
@@ -68,6 +71,29 @@ pub(crate) fn typed_params() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+/// The method call whose callee is `callee` is a Number by the facts: a
+/// canonical double (module docs).
+pub(crate) fn number_call(ctx: &crate::expr::FnCtx<'_>, callee: &perry_hir::Expr) -> bool {
+    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
+        return false;
+    };
+    if !typed_params()
+        || !canonical_numbers()
+        || ctx.wpfacts_off
+        || ctx.wpfacts.interp_guard
+        || *byte_offset == 0
+        || !ctx.wpfacts.number_calls.contains(byte_offset)
+    {
+        return false;
+    }
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::NumericResult,
+        || serde_json::json!({ "call": byte_offset }),
+    );
+    crate::facts_consumed::used();
+    true
 }
 
 /// Give each parameter in `number_params` (proven Number on every entry,

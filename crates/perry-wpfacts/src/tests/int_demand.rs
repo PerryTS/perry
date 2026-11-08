@@ -97,3 +97,31 @@ fn demand_crosses_a_summarized_predicate_call() {
     assert_eq!(r["delta"], Rep::I32, "{r:?}");
     assert_eq!(r["from"], Rep::I32, "{r:?}");
 }
+
+/// The method call sites of `t.ts` whose result the facts prove a Number
+/// (`ModuleBindings::number_calls`), by the source text after the call's
+/// `.` (SWC offsets are 1-based; a site's offset is its property's).
+fn number_call_at(src: &str, at: &str) -> bool {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &Default::default());
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    let start = src.find(at).expect("call in source") as u32 + 1;
+    mb.number_calls
+        .iter()
+        .any(|o| (start..start + at.len() as u32).contains(o))
+}
+
+#[test]
+fn a_call_whose_every_callee_returns_a_number_is_a_number_call() {
+    let src = "class B {\n\
+                 board: number[] = new Array<number>(128).fill(0);\n\
+                 at(square: number): number { return this.board[square] ?? 0; }\n\
+                 name(k: number): number | string { return k > 3 ? 'x' : k; }\n\
+                 sum(): number { let s = 0; for (let i = 0; i < 8; i++) s += this.at(i); return s; }\n\
+                 show(): string { return String(this.name(5)); }\n\
+               }\n\
+               const b = new B(); console.log(b.sum(), b.show());";
+    assert!(number_call_at(src, "this.at(i)"));
+    assert!(!number_call_at(src, "this.name(5)"));
+}

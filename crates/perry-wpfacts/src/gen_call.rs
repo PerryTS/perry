@@ -121,7 +121,11 @@ impl<'a> Gen<'a> {
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        self.call_with(fx, callee, a, vec![], byte_offset)
+        let result = self.call_with(fx, callee, a, vec![], byte_offset);
+        if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+            self.call_results_at.push((fx.module, byte_offset, result));
+        }
+        result
     }
 
     /// The key of member access `object.property`: a guarded private
