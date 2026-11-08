@@ -121,6 +121,7 @@ pub(crate) use array_fold::{
 };
 
 mod lower_module_fn;
+mod module_assigned_bindings;
 mod module_strict;
 mod module_tdz;
 pub use lower_module_fn::{
