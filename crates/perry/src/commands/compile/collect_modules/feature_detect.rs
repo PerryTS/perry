@@ -586,6 +586,8 @@ fn detect_optional_feature_usage_with_capabilities(
             "TextEncoder",
             "NativeMemory",
             "ProcessStdin",
+            // The embedded-file read of `perry` returns a Buffer.
+            "readEmbedded",
         ]
         .iter()
         .any(|name| hir_debug.contains(name))
@@ -616,6 +618,24 @@ fn detect_optional_feature_usage_with_capabilities(
                         | "bun:ffi"
                         | "sqlite"
                         | "perry/thread"
+                        // Modules whose results are Buffers without the program
+                        // naming one: compressed output, byte-mode stream chunks,
+                        // StringDecoder lastChar, WebSocket messages, BLOB columns.
+                        | "zlib"
+                        | "stream"
+                        | "stream/consumers"
+                        | "string_decoder"
+                        | "ws"
+                        | "better-sqlite3"
+                        | "bun:sqlite"
+                        // Well-known providers whose code is not in this repo.
+                        | "pg"
+                        | "mysql2"
+                        | "mysql2/promise"
+                        | "tursodb"
+                        | "iroh"
+                        // tty.ReadStream reads hand out Buffers.
+                        | "tty"
                 )
         });
     ctx.uses_event_target |= global_object::may_escape(hir_module)

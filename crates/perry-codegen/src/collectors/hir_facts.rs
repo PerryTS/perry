@@ -64,6 +64,12 @@ pub(crate) struct RepresentationFacts {
     /// — it never widens the parallel-shadow `needs_i32_slot` gate. See
     /// `collectors/loop_bounded_i32.rs`.
     pub loop_bounded_i32_locals: HashSet<u32>,
+    /// `for` counters in `integer_locals` only through the overflow-exit rule
+    /// (`collectors/exact_i32_range.rs::overflow_exit_counter`): their init or
+    /// step is lowered with overflow checks that leave the loop
+    /// (`stmt/loops.rs::lower_overflow_exit_for`). Lowering them any other way
+    /// would store a wrapped value.
+    pub overflow_exit_counters: HashSet<u32>,
     /// #9363: accumulators whose `acc = acc + <byte read>` chain provably
     /// stays below 2^53, so the update's `fadd` may carry `reassoc` and the
     /// reduction can be split into parallel partial sums. Same trip-count
@@ -272,6 +278,10 @@ impl TypeFacts {
 
     pub(crate) fn loop_bounded_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.loop_bounded_i32_locals
+    }
+
+    pub(crate) fn overflow_exit_counters(&self) -> &HashSet<u32> {
+        &self.representation.overflow_exit_counters
     }
 
     pub(crate) fn reassociable_f64_accumulators(&self) -> &HashSet<u32> {
@@ -562,15 +572,16 @@ pub(crate) fn collect_type_facts(
     // bitwise result as an int32 only when it cannot be a BigInt.
     let not_bigint =
         super::not_bigint_locals::NotBigIntFacts::collect(stmts, params, binding_types);
-    let mut integer_locals = super::integer_locals::collect_integer_locals_with_seeds(
-        stmts,
-        flat_const_ids,
-        clamp_fn_ids,
-        arg_dependent_clamp_fn_ids,
-        &numeric_locals,
-        spec_i32_params,
-        &not_bigint,
-    );
+    let (mut integer_locals, overflow_exit_counters) =
+        super::integer_locals::collect_integer_locals_and_exits(
+            stmts,
+            flat_const_ids,
+            clamp_fn_ids,
+            arg_dependent_clamp_fn_ids,
+            &numeric_locals,
+            spec_i32_params,
+            &not_bigint,
+        );
     // Native-i32 residency for integer-valued locals whose init/writes include a
     // possibly-out-of-bounds INT typed-array element read or a numeric-array
     // read backed by a specialized entry guard (bcryptjs `_encipher` Feistel
@@ -943,6 +954,7 @@ pub(crate) fn collect_type_facts(
             not_bigint_locals,
             int_valued_ta_locals,
             loop_bounded_i32_locals,
+            overflow_exit_counters,
             reassociable_f64_accumulators,
             loop_induction,
             unprofitable_canonical_i32_locals,

@@ -86,9 +86,11 @@ const CTOR_MISS: &str = r#"export function mk(n: number, _k: string) {
   const o = { a: n, b: 2 };
   return o.a + o.b + String((o as any).constructor).length;
 }"#;
+/// A [[Set]] under a key no constant names: a constant other than
+/// `constructor` is final on `Object.prototype` (DEC 250).
 const SET_MISS: &str = r#"export function mk(n: number, k: string) {
   const o = { a: n, b: 2 };
-  (o as any)[k] = 1;
+  (o as any)[k + process.argv[2]] = 1;
   return o.a + o.b;
 }"#;
 

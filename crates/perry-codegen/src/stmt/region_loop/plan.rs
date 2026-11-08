@@ -585,9 +585,14 @@ impl Planner<'_, '_> {
             | Expr::FuncRef(_)
             | Expr::This => st,
             // A local ++/-- ToNumerics its operand (valueOf on an object).
-            // A ranged local (a view proof's counter) is an integer Number.
+            // A ranged local (a view proof's counter) is an integer Number,
+            // and so is any local whose every write is a Number by
+            // construction (a counter whose guard does not bound it inside
+            // int32 stays a double, yet its `++` still runs no JS).
             Expr::Update { id, .. } => {
-                if !self.ctx.integer_locals.contains(id) {
+                if !self.ctx.integer_locals.contains(id)
+                    && !self.ctx.number_by_construction_locals.contains(id)
+                {
                     self.stale(e, &mut st);
                 }
                 st

@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 per_test_global! {
     static EVALUATIONS: AtomicUsize = AtomicUsize::new(0);
 }
-static mut GUARDS: [u8; 2] = [1, 1];
+// Two emitted guards: the guard byte, then the record number (`module_init.rs`).
+static mut GUARDS: [u64; 2] = [1, 1];
 
 extern "C" fn shared_evaluation_body() {
     EVALUATIONS.fetch_add(1, Ordering::Relaxed);
@@ -16,9 +17,15 @@ fn folded_evaluation_bodies_keep_distinct_module_records() {
     EVALUATIONS.store(0, Ordering::Relaxed);
     // Windows ICF can give two modules the same evaluation body address.
     // Their emitted mutable guard globals still identify separate modules.
-    let guards = std::ptr::addr_of_mut!(GUARDS).cast::<u8>();
+    let guards = std::ptr::addr_of_mut!(GUARDS).cast::<u64>();
+    unsafe {
+        guards.write(1);
+        guards.add(1).write(1);
+    }
+    // Records are named by the numbers assigned on first evaluation.
+    let first = MODULE_INIT_SEQUENCE.load(Ordering::Relaxed) + 1;
     let keys: Vec<_> = (0..2)
-        .map(|i| format!("\0module-init:{:x}", unsafe { guards.add(i) } as usize))
+        .map(|i| format!("\0module-init:{:x}", first + i))
         .collect();
     MODULE_PATH_REGISTRY.with(|r| {
         for key in &keys {
