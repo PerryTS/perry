@@ -515,10 +515,24 @@ impl<'a> Gen<'a> {
         m.add_prim(all, prim::ALL);
         m.all_prim_node = all;
         let thrown = m.node_l("THROWN");
-        // Runtime-thrown errors are runtime objects: ⊤-origin.
-        m.add_top(thrown, |_| "thrown value (runtime errors)".into());
-        m.add_prim(thrown, prim::ALL);
+        // What a `catch` (or a rejection handler) receives beside the values
+        // the program throws (edges): the error object a failed runtime
+        // operation makes (`exception::throw_core`; codegen inserts such
+        // throws the model never sees, so every program can catch one). It is
+        // also the region of every call made outside generation (DESIGN SEEDE
+        // section 8); ⊤ reaches it only through such a region.
+        let rterr = m.runtime_error();
+        m.add_tok(thrown, rterr);
         m.thrown = thrown;
+        let esc = m.node_l("ESCRAISE");
+        let r = m.reason("thrown into unknown code");
+        m.sink_node(esc, r);
+        m.esc_raise = esc;
+        let acc = m.node_l("ESCACCESSORS");
+        let r = m.reason("accessor function of a value unknown code holds");
+        m.sink_node(acc, r);
+        m.esc_accessors = acc;
+        m.lazy_raise = m.node_l("LAZYRAISE");
         m.escaped_classes = m.node_l("ESCCLASSES");
         let cjs_registry = m.node_l("CJSREG");
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
@@ -1287,6 +1301,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: id,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: ps,
             rest,
@@ -1622,6 +1637,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: vec![],
             rest: None,

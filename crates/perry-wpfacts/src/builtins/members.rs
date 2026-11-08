@@ -608,7 +608,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -625,7 +625,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// keeps as a container's) have no chain the model describes.
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
-        "json" | "descriptor" | "descriptors" | "fromEntries" => BoxChain::Object,
+        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
         "keys" | "arraybox" => BoxChain::Array,
         "groups" => BoxChain::Null,
         _ => BoxChain::Unknown,

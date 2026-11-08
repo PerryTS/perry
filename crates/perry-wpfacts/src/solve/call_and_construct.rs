@@ -49,7 +49,10 @@ impl Model {
             });
             return self.call_tok(call, TOP, this_tok);
         }
-        if self.native_call(call, t, this_tok) {
+        let prev = self.cur_native_call.replace(call);
+        let native = self.native_call(call, t, this_tok);
+        self.cur_native_call = prev;
+        if native {
             return;
         }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn(_)) {
@@ -108,7 +111,9 @@ impl Model {
             }
             TokKind::Builtin(ns) => self.with_b(|m| {
                 let prev = std::mem::replace(&mut m.cur_this, this_tok);
+                let pc = m.cur_native_call.replace(call);
                 builtins::call_builtin_ns(m, ns, call);
+                m.cur_native_call = pc;
                 m.cur_this = prev;
             }),
             TokKind::Obj(_, _)
@@ -252,6 +257,16 @@ impl Model {
             }
         }
         let ret = self.calls[call as usize].ret;
+        let region = self.calls[call as usize].region;
+        self.raise_top(
+            region,
+            ret,
+            if t == TOP {
+                "a call of an unknown function value may throw anything"
+            } else {
+                "an opaque builtin call may throw anything"
+            },
+        );
         if t == TOP {
             self.add_tok(ret, TOP);
         } else {
@@ -293,6 +308,10 @@ impl Model {
         if !self.bind_done.insert((call, t, u32::MAX - 1)) {
             return;
         }
+        // What the callee's body throws reaches the call's region.
+        let raise = self.raise_of(f);
+        let region = self.calls[call as usize].region;
+        self.edge(raise, region);
         if self.summarized(f) {
             self.bind_summarized(call, t);
             return;
@@ -394,6 +413,7 @@ impl Model {
                 spread: c.spread.clone(),
                 ret: c.ret,
                 site: c.site,
+                region: self.thrown,
             },
         );
         self.bound_synth.insert(call2);
@@ -434,6 +454,7 @@ impl Model {
             spread: vec![arr, sp],
             ret,
             site: 0,
+            region: self.thrown,
         });
         self.bound_merged.insert((b, new), call);
         self.bound_synth.insert(call);
@@ -678,6 +699,7 @@ impl Model {
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
+                        region: self.thrown,
                     },
                 );
                 self.bound_synth.insert(call2);
@@ -712,6 +734,7 @@ impl Model {
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
+                        region: self.thrown,
                     },
                 );
                 self.cons(target, Cons::NewProgram { call: call2 });

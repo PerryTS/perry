@@ -370,18 +370,19 @@ impl Model {
     /// the field funnel. A builtin object's are when its template is a
     /// container the model fills (`builtins::own_values_filled`): its birth
     /// puts every value the runtime gives it under its any key, and the
-    /// runtime gives it no own accessor. Every other builtin object (Date,
-    /// RegExp, typed arrays, collections, markers …), a builtin namespace or
-    /// function, a native prototype and ⊤ hold own properties the model does
-    /// not list. A stand-in (`site: u32::MAX`, another unit's array as this
+    /// runtime gives it no own accessor. A builtin namespace or constructor
+    /// the realm gives no enumerable own property
+    /// (`builtins::realm_own_props_unenumerable`) holds, for a copy, only
+    /// what the program stored on it: its fields. Every other builtin object
+    /// (Date, RegExp, typed arrays, collections, markers …), a host
+    /// namespace, a builtin function, a native prototype and ⊤ hold own
+    /// properties the model does not list. A stand-in (`site: u32::MAX`, another unit's array as this
     /// unit sees it, DECISIONS 94) holds what other units wrote in a cell,
     /// not in these fields.
     pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
-            TokKind::Top
-            | TokKind::Builtin(_)
-            | TokKind::BuiltinFn(_)
-            | TokKind::NativeProto(_) => false,
+            TokKind::Builtin(ns) => builtins::realm_own_props_unenumerable(*ns),
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => false,
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {
                     site != u32::MAX && builtins::own_values_filled(what)

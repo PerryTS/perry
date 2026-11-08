@@ -519,6 +519,9 @@ pub enum OwnTestBody {
 
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
+    /// The function body's throw region (DESIGN SEEDE section 8): what a
+    /// call of it may throw; `u32::MAX` until first used (`Model::raise_of`).
+    pub raise: NodeId,
     #[cfg(test)]
     pub(crate) body_packet: std::rc::Rc<crate::summary::packet::BodyPacket>,
     pub module: u32,
@@ -608,6 +611,10 @@ pub struct CallSite {
     pub spread: Vec<NodeId>,
     pub ret: NodeId,
     pub site: SiteId,
+    /// The throw region the call runs in (DESIGN SEEDE section 8): what the
+    /// callee throws reaches this node. A call made outside generation runs
+    /// in `Model::thrown`, the shared cell every catch reads.
+    pub region: NodeId,
 }
 
 /// What a published class's method did to its receiver (`Model::recv_log`).
@@ -1407,6 +1414,22 @@ pub struct Model {
     /// `derive::constant_statics`).
     pub static_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub thrown: NodeId,
+    /// The throw region generation is in (the walked body's `FuncInfo::raise`,
+    /// a try body's node); `None` outside generation of a body.
+    pub gen_region: Option<NodeId>,
+    /// The region of calls unknown code makes to escaped functions: what they
+    /// throw goes to unknown code (sunk; no catch reads it).
+    pub esc_raise: NodeId,
+    /// The accessor functions of escaped values (unknown code reads them
+    /// with `Object.getOwnPropertyDescriptor`): sunk, no one reads it.
+    pub esc_accessors: NodeId,
+    /// What a module body run lazily may throw (a deferred CommonJS target,
+    /// a factory the path registry re-runs): the region of a call that can
+    /// run one (a require through the path registry) holds it.
+    pub lazy_raise: NodeId,
+    /// The native call being dispatched: a value it hands to unknown code
+    /// may run there, throwing into the call's region.
+    pub cur_native_call: Option<CallId>,
     /// The class objects unknown code can reach (escaped): a `Reflect.construct`
     /// whose target may be unknown constructs each of them (`Cons::ReflectNew` here).
     pub escaped_classes: NodeId,

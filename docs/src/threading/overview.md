@@ -416,3 +416,11 @@ undefined in the recipient rather than exposing a newly captured stack.
 Uncaught worker exceptions use best-effort diagnostic delivery: a throwing stack
 getter does not replace the original error or prevent its `error` and `exit`
 events. This does not provide support for custom `Error.prepareStackTrace` hooks.
+
+Message cloning preserves an Error's own data `cause`, including non-enumerable
+and explicitly undefined values, within the existing clone graph. Shared causes,
+back-references and self-references keep their identity. The data cause is
+captured before reentrant stack accessors run. Cause accessors are
+ignored without invoking their getters. Uncaught Worker diagnostic accessor and
+circular-reference formatting have a separate policy; this does not add support
+for those diagnostic cases.
