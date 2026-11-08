@@ -41,6 +41,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(idx));
+                            self.emit_exception_guard(func);
                             if self.emitter.void_funcs.contains(&idx) {
                                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                             }
@@ -197,6 +198,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(idx));
+                            self.emit_exception_guard(func);
                             // Void functions don't push a return value; push undefined
                             // so the caller always has a value on the stack.
                             if self.emitter.void_funcs.contains(&idx) {
@@ -235,6 +237,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(idx));
+                            self.emit_exception_guard(func);
                             // Void functions don't push a return value, but call
                             // expressions always need a value on the stack. Push undefined.
                             if matches!(return_type, perry_hir::types::Type::Void)

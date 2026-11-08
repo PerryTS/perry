@@ -341,9 +341,11 @@ impl<'a> FuncEmitCtx<'a> {
                         func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                             ValType::I64,
                         )));
+                        self.block_depth += 1;
                         self.emit_expr(func, right);
                         func.instruction(&Instruction::Else);
                         self.emit_expr(func, left);
+                        self.block_depth -= 1;
                         func.instruction(&Instruction::End);
                     }
                     LogicalOp::Or => {
@@ -353,9 +355,11 @@ impl<'a> FuncEmitCtx<'a> {
                         func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                             ValType::I64,
                         )));
+                        self.block_depth += 1;
                         self.emit_expr(func, left);
                         func.instruction(&Instruction::Else);
                         self.emit_expr(func, right);
+                        self.block_depth -= 1;
                         func.instruction(&Instruction::End);
                     }
                     LogicalOp::Coalesce => {
@@ -366,9 +370,11 @@ impl<'a> FuncEmitCtx<'a> {
                         func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                             ValType::I64,
                         )));
+                        self.block_depth += 1;
                         self.emit_expr(func, right);
                         func.instruction(&Instruction::Else);
                         self.emit_expr(func, left);
+                        self.block_depth -= 1;
                         func.instruction(&Instruction::End);
                     }
                 }
@@ -428,9 +434,11 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
                 )));
+                self.block_depth += 1;
                 self.emit_expr(func, then_expr);
                 func.instruction(&Instruction::Else);
                 self.emit_expr(func, else_expr);
+                self.block_depth -= 1;
                 func.instruction(&Instruction::End);
             }
 

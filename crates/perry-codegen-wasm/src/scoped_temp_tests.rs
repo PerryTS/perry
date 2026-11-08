@@ -388,3 +388,148 @@ console.log('ok');
         "ok"
     );
 }
+
+#[test]
+fn host_interop_host_methods_enter_perry_catch() {
+    assert_eq!(
+        run_ts(
+            r#"
+const json: any = globalThis.JSON;
+try { json.parse('{'); }
+catch (error) { console.log('method caught'); }
+console.log(json.parse('7'));
+"#
+        ),
+        "method caught\n7"
+    );
+}
+
+#[test]
+fn host_interop_returned_calls_enter_catch_and_release_try_state() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+function read() {
+  const decode = globalThis.decodeURIComponent;
+  try { return decode('%'); }
+  catch (error) { return 'caught'; }
+}
+console.log(read());
+function success() {
+  const decode = globalThis.decodeURIComponent;
+  try { return decode('ok'); }
+  catch (error) { return 'unexpected'; }
+}
+console.log(success());
+"#,
+            r#"
+const assert = require('node:assert/strict');
+assert.equal(tryDepth, 0);
+assert.equal(__memDispatch.has_exception(), 0);
+"#
+        ),
+        "caught\nok"
+    );
+}
+
+#[test]
+fn host_interop_null_exception_is_not_lost() {
+    assert_eq!(
+        run_ts(
+            r#"
+const create = globalThis.Function;
+const fail = create('throw null');
+try { fail(); }
+catch (error) { console.log(error === null); }
+"#
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn host_interop_catch_precedes_expression_effects_and_preserves_nesting() {
+    assert_eq!(run_ts_after(r#"
+const decode = globalThis.decodeURIComponent;
+let calls = 0;
+function later() { calls++; return 'later'; }
+function join(a: any, b: any) { return a + b; }
+try { join('prefix' + decode('%'), later()); }
+catch (error) { console.log('arguments caught'); }
+console.log(calls);
+try { const value = true ? decode('%') : later(); console.log(value); }
+catch (error) { console.log('conditional caught'); }
+try { const value = true && decode('%'); console.log(value); }
+catch (error) { console.log('logical caught'); }
+try {
+  try { decode('%'); }
+  catch (error) { console.log('inner caught'); }
+  console.log('outer continued');
+} catch (error) { console.log('unexpected outer catch'); }
+finally { console.log('finally'); }
+console.log(decode('ok'));
+"#, r#"
+const assert = require('node:assert/strict');
+assert.equal(tryDepth, 0);
+assert.equal(__memDispatch.has_exception(), 0);
+"#), "arguments caught\n0\nconditional caught\nlogical caught\ninner caught\nouter continued\nfinally\nok");
+}
+
+#[test]
+fn host_interop_caught_nullish_values_and_method_receivers_are_preserved() {
+    assert_eq!(
+        run_ts(
+            r#"
+const create = globalThis.Function;
+const fail = create('throw undefined');
+try { fail(); }
+catch (error) { console.log(error === undefined); }
+const make = create('return { value: 7, read() { if (this.value !== 7) throw null; throw this.value; } }');
+const object = make();
+try { object.read(); }
+catch (error) { console.log(error); }
+const getter = create('return { get read() { throw null; } }')();
+try { getter.read(); }
+catch (error) { console.log(error === null); }
+"#
+        ),
+        "true\n7\ntrue"
+    );
+}
+
+#[test]
+fn host_interop_nested_calls_and_loops_preserve_exception_frames() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const decode = globalThis.decodeURIComponent;
+let effects = 0;
+function later() { effects++; return 10; }
+const maker = globalThis.Function;
+const host = maker('return {sum(a,b,c){return a+b+c}}')();
+for (let i = 0; i < 3; i++) {
+  try { host.sum(1, decode('%'), later()); }
+  catch (error) { console.log(i); }
+}
+console.log(effects);
+console.log(host.sum(1,2,3));
+try { while (true) { if (true) { decode('%'); } console.log('wrong'); } }
+catch (error) { console.log('loop caught'); }
+function nestedReturn() {
+ try { try { return decode('good'); } catch (error) { return 'bad'; } }
+ catch (error) { return 'outer bad'; }
+}
+console.log(nestedReturn());
+try { try { decode('%'); } catch (error) { decode('%'); } }
+catch (error) { console.log('outer caught'); }
+console.log(host.sum(4,5,6));
+"#,
+            r#"
+const assert = require('node:assert/strict');
+assert.equal(tryDepth,0);
+assert.equal(__memDispatch.has_exception(),0);
+"#
+        ),
+        "0\n1\n2\n0\n6\nloop caught\ngood\nouter caught\n15"
+    );
+}
