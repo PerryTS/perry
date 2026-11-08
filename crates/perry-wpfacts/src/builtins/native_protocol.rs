@@ -456,8 +456,6 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     });
                 }
                 NativeMiss::Load(dst) => {
-                    let bf = builtin_fn(m, "written key replay");
-                    m.add_tok(dst, bf);
                     m.add_top(dst, |_| {
                         "member of a builtin prototype written through ⊤".into()
                     });
