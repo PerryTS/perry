@@ -871,7 +871,6 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("unscopables", SY),
             ]),
         ),
-        // Number and BigInt (one namespace kind).
         BuiltinNs::Number => (
             NsProto::Function,
             Some(&[
@@ -884,8 +883,6 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("NEGATIVE_INFINITY", N),
                 ("NaN", N),
                 ("POSITIVE_INFINITY", N),
-                ("asIntN", FN),
-                ("asUintN", FN),
                 ("isFinite", FN),
                 ("isInteger", FN),
                 ("isNaN", FN),
@@ -893,6 +890,10 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("parseFloat", FN),
                 ("parseInt", FN),
             ]),
+        ),
+        BuiltinNs::BigInt => (
+            NsProto::Function,
+            Some(&[("prototype", Mem::Proto), ("asIntN", FN), ("asUintN", FN)]),
         ),
         BuiltinNs::String => (
             NsProto::Function,

@@ -69,7 +69,8 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         }
         "ArrayBuffer" | "SharedArrayBuffer" => BuiltinNs::ArrayBuffer,
         "Symbol" => BuiltinNs::Symbol,
-        "Number" | "BigInt" => BuiltinNs::Number,
+        "Number" => BuiltinNs::Number,
+        "BigInt" => BuiltinNs::BigInt,
         "String" => BuiltinNs::String,
         "Boolean" => BuiltinNs::Boolean,
         "Function" => BuiltinNs::Function,
@@ -842,7 +843,6 @@ fn prototype_model(
     let owner = owner.strip_suffix(".prototype")?;
     let (fam, what) = match owner {
         "Object" => (Family::Object, None),
-        "BigInt" => (Family::BigInt, None),
         _ => match ns_by_name(owner).and_then(loads::proto_family) {
             Some((fam, what, _)) => (fam, what),
             None => (members::bobj_family(owner), Some(owner)),
@@ -942,11 +942,10 @@ pub(crate) fn native_prims(fam: Family) -> u16 {
 }
 
 /// The opaque member: what a key a store into ⊤ (or unmodeled code) may
-/// have written onto a builtin prototype holds: any value (⊤), a builtin
-/// function value, any primitive.
+/// have written onto a builtin prototype holds: any value (⊤) and any
+/// primitive. No builtin function value beside ⊤: ⊤ already stands for any
+/// builtin function.
 fn opaque_member(m: &mut Model, dst: NodeId) {
-    let bf = builtin_fn(m, "opaque member (written key)");
-    m.add_tok(dst, bf);
     m.add_top(dst, |_| {
         "member of a builtin prototype written through ⊤".into()
     });
@@ -1034,6 +1033,7 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::ArrayBuffer
         | BuiltinNs::Symbol
         | BuiltinNs::Number
+        | BuiltinNs::BigInt
         | BuiltinNs::String
         | BuiltinNs::Boolean
         | BuiltinNs::Function
@@ -1830,7 +1830,7 @@ fn ns_method_inner(
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
         }
-        (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
+        (BuiltinNs::Number | BuiltinNs::BigInt, _) | (BuiltinNs::String, _) => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
             if name == "raw" || name == "split" {
@@ -2068,7 +2068,11 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Date => ret_prim(m, call, prim::STR),
-        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
+        BuiltinNs::String
+        | BuiltinNs::Number
+        | BuiltinNs::BigInt
+        | BuiltinNs::Boolean
+        | BuiltinNs::Symbol => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
         }
