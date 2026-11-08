@@ -21,7 +21,13 @@ impl<'a> FuncEmitCtx<'a> {
         self.exception_handlers.push((
             self.block_depth,
             self.frame_bytes(),
-            finally.map(<[Stmt]>::to_vec),
+            finally.map(|body| FinallyScope {
+                body: body.to_vec(),
+                break_depth: self.break_depth.clone(),
+                loop_depth: self.loop_depth.clone(),
+                label_stack: self.label_stack.clone(),
+                pending_label: self.pending_label.clone(),
+            }),
         ));
         for stmt in body {
             self.emit_stmt(func, stmt, returning);
@@ -42,9 +48,17 @@ impl<'a> FuncEmitCtx<'a> {
         {
             let (_, _, finally) = self.exception_handlers.pop().unwrap();
             func.instruction(&Instruction::Call(self.rt().try_end));
-            if let Some(body) = finally {
-                self.emit_guarded_body(func, &body, None, returning);
+            if let Some(scope) = finally {
+                let breaks = std::mem::replace(&mut self.break_depth, scope.break_depth);
+                let loops = std::mem::replace(&mut self.loop_depth, scope.loop_depth);
+                let labels = std::mem::replace(&mut self.label_stack, scope.label_stack);
+                let pending = std::mem::replace(&mut self.pending_label, scope.pending_label);
+                self.emit_guarded_body(func, &scope.body, None, returning);
                 self.emit_exception_guard(func);
+                self.break_depth = breaks;
+                self.loop_depth = loops;
+                self.label_stack = labels;
+                self.pending_label = pending;
             }
         }
         self.exception_handlers = handlers;
