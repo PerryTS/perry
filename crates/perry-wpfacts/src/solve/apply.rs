@@ -1319,6 +1319,14 @@ impl Model {
                     // `a[i] = v` may write past the end; `push` appends.
                     self.cons(o, Cons::IndexHole);
                 }
+                let any = !toks.is_empty()
+                    || prim & (prim::SYMBOL | prim::BIGINT) != 0
+                    || (prim & prim::STR != 0 && strs == STRS_TOP);
+                // An Any store under the any-string shape (this pop's or an
+                // earlier one's) is every name's.
+                if shape == 0 && (any || self.index_store_done.contains(&(n, site, false))) {
+                    names.clear();
+                }
                 for a in names {
                     if self.str_store_done.insert((n, site, a)) {
                         self.cons(
@@ -1331,9 +1339,6 @@ impl Model {
                         );
                     }
                 }
-                let any = !toks.is_empty()
-                    || prim & (prim::SYMBOL | prim::BIGINT) != 0
-                    || (prim & prim::STR != 0 && strs == STRS_TOP);
                 if any && self.index_store_done.insert((n, site, false)) {
                     self.cons(
                         o,

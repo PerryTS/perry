@@ -77,11 +77,6 @@ impl Model {
         }
         self.add_tokens_s(n, Tokens::Slice(toks), prim, strs);
     }
-
-    /// Adds the string constants `strs` (a string) to `n`.
-    pub(crate) fn add_strs(&mut self, n: NodeId, strs: StrSet) {
-        self.add_tokens_s(n, Tokens::Slice(&[]), prim::STR, strs);
-    }
     /// The work bound (`FactsConfig::max_work`, 0 = none). Past it a
     /// whole-program solve (`Model::widen`) is widened (`bind_layout`: no
     /// new calling contexts) and goes on to its fixpoint; past `WIDENED_WORK` times it, or past it
