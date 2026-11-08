@@ -64,8 +64,17 @@ fn lifecycle_requires_explicit_approval_even_for_bundled_names() {
 }
 
 fn isolated_alias(root: &Path, store: &str, alias: &str) -> std::path::PathBuf {
-    let installed = format!("{store}/esbuild@1.0.0/node_modules/esbuild");
-    write_package(root, &installed, "esbuild");
+    isolated_alias_with_name(root, store, alias, "esbuild")
+}
+
+fn isolated_alias_with_name(
+    root: &Path,
+    store: &str,
+    alias: &str,
+    physical_name: &str,
+) -> std::path::PathBuf {
+    let installed = format!("{store}/esbuild@1.0.0/node_modules/{physical_name}");
+    write_package(root, &installed, physical_name);
     let physical = root.join("node_modules").join(installed);
     let manifest_path = physical.join("package.json");
     let mut manifest: serde_json::Value =
@@ -95,6 +104,56 @@ fn lifecycle_store_names_cannot_approve_visible_aliases() {
             fs::read_to_string(physical.join("ran.txt")).unwrap(),
             "approved"
         );
+    }
+}
+
+#[test]
+fn lifecycle_nested_container_links_do_not_create_store_approvals() {
+    let _env = crate::test_env_lock::env_lock();
+    for store in [".bun", ".pnpm"] {
+        for physical_name in ["esbuild", "@source/esbuild"] {
+            let root = TempDir::new().unwrap();
+            let physical =
+                isolated_alias_with_name(root.path(), store, "untrusted-fixture", physical_name);
+            let container = root
+                .path()
+                .join(format!("node_modules/{store}/esbuild@1.0.0/node_modules"));
+            std::os::unix::fs::symlink(container, physical.join("node_modules")).unwrap();
+            let summary = run(root.path(), &args(&["--run-scripts", physical_name]));
+            assert!(summary.ran.is_empty());
+            assert_eq!(summary.skipped, ["untrusted-fixture"]);
+            assert!(!physical.join("ran.txt").exists());
+        }
+    }
+}
+
+#[test]
+fn lifecycle_preserves_sibling_dependency_aliases_to_the_same_package() {
+    let _env = crate::test_env_lock::env_lock();
+    for store in [".bun", ".pnpm"] {
+        for physical_name in ["esbuild", "@source/esbuild"] {
+            for alias in ["approved-alias", "@other/esbuild"] {
+                let root = TempDir::new().unwrap();
+                let physical = isolated_alias_with_name(
+                    root.path(),
+                    store,
+                    "untrusted-fixture",
+                    physical_name,
+                );
+                let link = root.path().join(format!(
+                    "node_modules/{store}/esbuild@1.0.0/node_modules/{alias}"
+                ));
+                fs::create_dir_all(link.parent().unwrap()).unwrap();
+                std::os::unix::fs::symlink(&physical, link).unwrap();
+                let summary = run(root.path(), &args(&["--run-scripts", alias]));
+                assert_eq!(summary.ran, [alias]);
+                assert_eq!(summary.skipped, ["untrusted-fixture"]);
+                assert_eq!(
+                    fs::read_to_string(physical.join("ran.txt")).unwrap(),
+                    "approved"
+                );
+            }
+        }
     }
 }
 

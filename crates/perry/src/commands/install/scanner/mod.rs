@@ -103,8 +103,16 @@ fn record_and_recurse(
     let Ok(physical) = fs::canonicalize(pkg_dir) else {
         return;
     };
-    if excluded_package == Some(physical.as_path()) {
-        return;
+    if let Some(excluded) = excluded_package.filter(|p| p.file_name() == pkg_dir.file_name()) {
+        let Some(parent) = pkg_dir.parent() else {
+            return;
+        };
+        let Ok(parent) = fs::canonicalize(parent) else {
+            return;
+        };
+        if Some(parent.as_path()) == excluded.parent() {
+            return;
+        }
     }
     let manifest_path = pkg_dir.join("package.json");
     if let Ok(content) = fs::read_to_string(&manifest_path) {
@@ -124,7 +132,7 @@ fn record_and_recurse(
     }
     let nested = pkg_dir.join("node_modules");
     if nested.is_dir() {
-        walk(&nested, out, visited, None);
+        walk(&nested, out, visited, Some(&physical));
     }
     // Isolated dependencies are beside the physical package; its own store name is not an alias.
     if let Some(container) = dependency_container(&physical) {
