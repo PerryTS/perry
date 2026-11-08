@@ -4,7 +4,12 @@
 // stores and a literal-returning call, under allocation churn heavy enough to
 // reach the collector. If the exemption ever admitted a heap string, a minor
 // collection would miss the old-to-young edge and the checksum below would
-// read a freed or moved string.
+// read a freed or moved string. The explicit collections first age the
+// holders into the old generation, so every later heap-string store is an
+// old-to-young edge that only the barrier's remembered set can keep.
+
+// `gc` exists under node --expose-gc and in perry; elsewhere this is a no-op.
+function collect(): void { (globalThis as any).gc?.(); }
 
 type Color = "white" | "black";
 function opposite(c: Color): Color { return c === "white" ? "black" : "white"; }
@@ -20,6 +25,8 @@ class Holder {
 
 const holders: Holder[] = [];
 for (let i = 0; i < 2000; i++) holders.push(new Holder());
+collect();
+collect();
 
 let junk: any[] = [];
 let sum = 0;
@@ -41,4 +48,5 @@ for (let round = 0; round < 200; round++) {
     if (holders[i].side !== "white" && holders[i].side !== "black") sum ^= 1;
   }
 }
+collect();
 console.log(holders[1].label, holders[2].label, holders[3].side, sum);
