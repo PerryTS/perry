@@ -107,9 +107,10 @@ fn enum_modules(mods: &[(&str, &str)]) -> ProgramFacts {
 
 const USE: &str = "class Holder { x = 1; }
      const names: any[] = [\"zero\", \"one\"];
+     function nameOf(k: any): any { return names[k]; }
      const holder: any = new Holder();
      const key: string = process.argv[2] ?? \"k\";
-     holder[key] = names[SK.X];
+     holder[key] = nameOf(SK.X);
      console.log(\"holder=\" + holder);";
 
 #[test]
@@ -129,6 +130,21 @@ fn an_import_alias_reads_the_declaring_enum_not_an_unrelated_same_named_one() {
 }
 
 #[test]
+fn an_aliased_string_member_stays_a_string_key() {
+    // `SK` is `a.E`, X = "push" (inlined as a string by the pipeline). An
+    // unrelated `enum SK { X = 1 }` elsewhere must not make it a number.
+    let pf = enum_modules(&[
+        ("a", "export enum E { X = \"push\" }"),
+        ("other", "export enum SK { X = 1 }"),
+        (
+            "t",
+            &format!("import {{ E as SK }} from \"./a\";\nimport \"./other\";\n{USE}"),
+        ),
+    ]);
+    assert!(tmpl(&pf, "Holder").escape.is_some(), "{}", pf.dump_text());
+}
+
+#[test]
 fn an_unresolvable_import_alias_stays_number_or_string() {
     // The binding names a module outside the program: the member is unknown.
     let pf = enum_modules(&[
@@ -145,7 +161,10 @@ fn an_unresolvable_import_alias_stays_number_or_string() {
 fn a_reexported_enum_member_is_read_through_the_barrel() {
     let pf = enum_modules(&[
         ("a", "export enum E { X = 1 }"),
-        ("barrel", "import \"./a\";\nexport { E as SK } from \"./a\";"),
+        (
+            "barrel",
+            "import \"./a\";\nexport { E as SK } from \"./a\";",
+        ),
         ("other", "export enum SK { X = \"push\" }"),
         (
             "t",
