@@ -300,14 +300,10 @@ pub struct ModuleBindings {
     pub call_arg_ranges: Vec<(u32, Vec<Option<(i64, i64)>>)>,
 }
 
-/// Node `n` holds only Numbers, each an integer in this interval. A node
-/// that holds nothing (a copy of a call that never runs) is the empty
-/// interval, which every join absorbs.
+/// Node `n` holds only Numbers, each an integer in this interval. An empty
+/// node proves nothing (it may be one the solve left unpopulated).
 fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
     let node = &m.nodes[n as usize];
-    if node.prim == 0 && node.pts.is_empty() {
-        return Some((i64::MAX, i64::MIN));
-    }
     if node.prim != crate::model::prim::NUM || !node.pts.is_empty() {
         return None;
     }
@@ -451,13 +447,6 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
                     }
                 }
                 _ => joined.push((o, iv)),
-            }
-        }
-        for (_, iv) in &mut joined {
-            for p in iv.iter_mut() {
-                if p.is_some_and(|(lo, hi)| lo > hi) {
-                    *p = None;
-                }
             }
         }
         mb.call_arg_ranges = joined;
