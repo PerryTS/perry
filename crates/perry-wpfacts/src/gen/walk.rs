@@ -662,7 +662,12 @@ impl<'a> Gen<'a> {
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
+        let scope = self
+            .int_ranges
+            .then(|| (fxi, narrow::scope_locals(&f.params, &f.body)));
+        let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(&fx, &f.body);
+        self.narrow_scope = saved_scope;
         self.own_helper_finish(fxi, own);
     }
 
@@ -966,6 +971,7 @@ impl<'a> Gen<'a> {
     // ---------------------------------------------------------- statements
 
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
+        let mut pushed = 0;
         let mut i = 0;
         while i < ss.len() {
             if let Some(value) = for_of_binding(&ss[i..]) {
@@ -987,8 +993,24 @@ impl<'a> Gen<'a> {
                 continue;
             }
             self.stmt(fx, &ss[i]);
+            // An `if` whose one branch always leaves: what follows runs
+            // under the other outcome of its test (`narrow_guard`).
+            if let Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } = &ss[i]
+            {
+                let else_exits = else_branch.as_deref().is_some_and(narrow::always_exits);
+                if narrow::always_exits(then_branch) && !else_exits {
+                    pushed += self.narrow_guard(fx, condition, false);
+                } else if else_exits && !narrow::always_exits(then_branch) {
+                    pushed += self.narrow_guard(fx, condition, true);
+                }
+            }
             i += 1;
         }
+        self.narrow_pop(pushed);
     }
 
     pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
@@ -1089,17 +1111,30 @@ impl<'a> Gen<'a> {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
+                let k = self.narrow_guard(fx, condition, true);
                 self.stmts(&then_fx, then_branch);
+                self.narrow_pop(k);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         ..fx.clone()
                     };
+                    let k = self.narrow_guard(fx, condition, false);
                     self.stmts(&else_fx, e);
+                    self.narrow_pop(k);
                 }
             }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            Stmt::While { condition, body } => {
+                self.narrow_enter_loop(s);
+                self.loop_depth += 1;
+                let _ = self.expr(fx, condition);
+                let k = self.narrow_guard(fx, condition, true);
+                self.stmts(fx, body);
+                self.narrow_pop(k);
+                self.loop_depth -= 1;
+            }
+            Stmt::DoWhile { body, condition } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
                 let _ = self.expr(fx, condition);

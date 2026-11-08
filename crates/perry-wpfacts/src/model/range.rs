@@ -7,6 +7,13 @@
 //! holds besides Numbers (`prim`, tokens) is the node's other lattice and is
 //! read beside the interval by every consumer.
 //!
+//! Past ±2^53 a bound is [`BIG`]: every such Number is still an integer
+//! (a finite double that large has no fraction), finite and never `-0`, only
+//! not exactly known. `Add`/`Sub` keep that while at most one operand
+//! reaches `BIG` (a bounded integer added to any finite double rounds to an
+//! integer, never past `Number.MAX_VALUE`); `Mul` of a `BIG` operand may
+//! overflow to an infinity: ⊤.
+//!
 //! Fail closed: a Number that reaches a node any other way than a value-copy
 //! edge, a literal or a [`Cons::Range`](super::Cons::Range) rule makes its
 //! interval ⊤ (`Model::add_tokens`). A node that is a rule's result
@@ -16,8 +23,11 @@
 //! re-deliveries.
 
 /// Bounds beyond which interval arithmetic stops being exact for doubles:
-/// a bound past ±2^53 widens to ⊤.
+/// a bound past ±2^53 is ±[`BIG`].
 const SAFE: i64 = 1 << 53;
+
+/// An unbounded integral bound: past ±2^53, up to `Number.MAX_VALUE`.
+pub const BIG: i64 = 1 << 60;
 
 /// Growths of one node's interval before its bounds widen to the next
 /// threshold ([`widen`]); past `WIDEN_LIMIT` growths it is ⊤.
@@ -32,8 +42,10 @@ fn hi_threshold(h: i64) -> i64 {
         -1
     } else if h <= u32::MAX as i64 {
         mask_above(h)
-    } else {
+    } else if h <= SAFE {
         SAFE
+    } else {
+        BIG
     }
 }
 
@@ -42,8 +54,10 @@ fn lo_threshold(l: i64) -> i64 {
         0
     } else if l >= -(1i64 << 32) {
         -(mask_above(-l - 1) + 1)
-    } else {
+    } else if l >= -SAFE {
         -SAFE
+    } else {
+        -BIG
     }
 }
 
@@ -64,6 +78,59 @@ pub fn widen(old: Iv, next: Iv) -> Iv {
         next.lo
     };
     Iv::int(lo, hi)
+}
+
+/// The two lattices a value-copy delivers beside the values: the Numbers'
+/// integer interval and the Strings' code interval (`Node::crange`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Rg {
+    pub num: Iv,
+    pub chr: Iv,
+}
+
+impl Rg {
+    pub const TOP: Rg = Rg {
+        num: Iv::TOP,
+        chr: Iv::TOP,
+    };
+}
+
+/// Every String is `""` (code -1) or one code unit.
+pub const CHAR_ANY: Iv = Iv { lo: -1, hi: 65535 };
+
+/// The code interval of a String literal: a point for at most one code
+/// unit (`""` is -1), ⊤ for a longer one.
+pub fn char_literal(s: &str) -> Iv {
+    let mut units = s.encode_utf16();
+    match (units.next(), units.next()) {
+        (None, _) => Iv { lo: -1, hi: -1 },
+        (Some(u), None) => Iv {
+            lo: u as i64,
+            hi: u as i64,
+        },
+        _ => Iv::TOP,
+    }
+}
+
+/// `Number(s)` of Strings in code interval `c`: `""` is 0, a digit its
+/// value; any other code may be NaN (⊤).
+pub fn chars_to_number(c: Iv) -> Iv {
+    if c.is_empty() {
+        return Iv::EMPTY;
+    }
+    if c.is_top() {
+        return Iv::TOP;
+    }
+    if c.lo == -1 && c.hi == -1 {
+        return Iv { lo: 0, hi: 0 };
+    }
+    if c.lo >= 0x30 && c.hi <= 0x39 {
+        return Iv {
+            lo: c.lo - 0x30,
+            hi: c.hi - 0x30,
+        };
+    }
+    Iv::TOP
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -103,15 +170,21 @@ impl Iv {
         self == Iv::TOP
     }
 
-    /// An integer interval with checked bounds; ⊤ past ±2^53.
+    /// An integer interval with checked bounds; a bound past ±2^53 is
+    /// ±[`BIG`]. Only for a result that is an integer and finite whatever
+    /// its magnitude (`eval` decides).
     pub fn int(lo: i64, hi: i64) -> Iv {
         if lo > hi {
             return Iv::EMPTY;
         }
-        if lo < -SAFE || hi > SAFE {
-            return Iv::TOP;
-        }
+        let lo = if lo < -SAFE { -BIG } else { lo };
+        let hi = if hi > SAFE { BIG } else { hi };
         Iv { lo, hi }
+    }
+
+    /// Some bound is past ±2^53.
+    pub fn big(self) -> bool {
+        !self.is_empty() && !self.is_top() && (self.lo < -SAFE || self.hi > SAFE)
     }
 
     /// The interval of a numeric literal: a point for an integer that is
@@ -185,6 +258,14 @@ pub enum RangeOp {
     Clz32,
     /// `Math.imul`: an int32 whatever the operands.
     Imul,
+    /// `Number(x)` (`NumberCoerce`): the operand's Numbers, and its
+    /// Strings' values by their codes (`chars_to_number`). Evaluated on the
+    /// operand node whole (`Model::to_number_range`).
+    ToNumber,
+    /// The Strings of the left operand that pass a comparison with a
+    /// one-unit String literal (`CLIP_LT` ...): its code interval clipped.
+    /// The result's code interval is the rule's (`Node::cruled`).
+    SClip(u8),
 }
 
 pub const CLIP_LT: u8 = 0;
@@ -220,6 +301,8 @@ impl RangeOp {
             RangeOp::Sign => "sign",
             RangeOp::Clz32 => "clz32",
             RangeOp::Imul => "imul",
+            RangeOp::ToNumber => "tonumber",
+            RangeOp::SClip(_) => "sclip",
         }
     }
 
@@ -276,8 +359,11 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
         return Iv::EMPTY;
     }
     match op {
+        // At most one unbounded operand: no sum reaches an infinity.
+        RangeOp::Add | RangeOp::Sub if l.big() && r.big() => Iv::TOP,
         RangeOp::Add if !l.is_top() && !r.is_top() => Iv::int(l.lo + r.lo, l.hi + r.hi),
         RangeOp::Sub if !l.is_top() && !r.is_top() => Iv::int(l.lo - r.hi, l.hi - r.lo),
+        RangeOp::Mul if l.big() || r.big() => Iv::TOP,
         RangeOp::Mul if !l.is_top() && !r.is_top() => {
             // `0 * negative` is -0.
             if (l.has_zero() && r.lo < 0) || (r.has_zero() && l.lo < 0) {
@@ -410,7 +496,19 @@ mod tests {
             Iv::int(0, 112)
         );
         assert!(eval(RangeOp::Add, Iv::TOP, Iv::int(1, 1)).is_top());
-        assert!(eval(RangeOp::Add, Iv::int(0, 1 << 53), Iv::int(1, 1)).is_top());
+        // Past 2^53 a sum stays an integer, unbounded.
+        assert_eq!(
+            eval(RangeOp::Add, Iv::int(0, 1 << 53), Iv::int(1, 1)),
+            Iv::int(1, BIG)
+        );
+        // Two unbounded operands may overflow; a product of one may too.
+        assert!(eval(RangeOp::Add, Iv::int(0, BIG), Iv::int(0, BIG)).is_top());
+        assert!(eval(RangeOp::Mul, Iv::int(1, BIG), Iv::int(2, 2)).is_top());
+        // A test bound clips an unbounded counter back.
+        assert_eq!(
+            eval(RangeOp::Clip(CLIP_LT), Iv::int(0, BIG), Iv::int(8, 8)),
+            Iv::int(0, 7)
+        );
     }
 
     #[test]

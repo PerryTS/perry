@@ -215,6 +215,9 @@ pub struct ElisionFacts {
     /// is a program Array literal whose birth length never moves (wpfacts
     /// `BindingFacts::const_length`).
     pub const_length_inputs: std::collections::BTreeMap<u32, i64>,
+    /// Method call byte offset → each argument's integer interval at the
+    /// call (wpfacts `ModuleBindings::call_arg_ranges`).
+    pub call_arg_ranges: std::collections::BTreeMap<u32, Vec<Option<(i64, i64)>>>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -266,6 +269,7 @@ impl ElisionFacts {
             && self.int32_inputs.is_empty()
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
+            && self.call_arg_ranges.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()

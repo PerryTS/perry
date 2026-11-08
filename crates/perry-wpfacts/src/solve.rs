@@ -202,7 +202,7 @@ impl Model {
                 self.aborted = true;
             }
         }
-        let iv = self.cur_range.unwrap_or(Iv::TOP);
+        let iv = self.cur_range.unwrap_or(crate::model::Rg::TOP);
         let node = &mut self.nodes[n as usize];
         let newp = prim & !node.prim;
         if newp != 0 {
@@ -213,7 +213,11 @@ impl Model {
         // A Number brings its interval: the delivering edge's, else ⊤. A
         // rule's result takes its interval from the rule only.
         if prim & prim::NUM != 0 && !node.ruled {
-            changed |= grow_range(node, iv);
+            changed |= grow_range(node, iv.num);
+        }
+        // A String brings its code interval the same way.
+        if prim & prim::STR != 0 && !node.cruled {
+            changed |= grow_crange(node, iv.chr);
         }
         if changed && !node.in_wl {
             node.in_wl = true;
@@ -572,11 +576,18 @@ impl Model {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
-        if let Cons::Range { dst, .. } = c {
-            // The rule's result is every Number the node can hold: what
-            // reached it before (an instance's seeds) is subsumed.
+        if let Cons::Range { dst, op, .. } = c {
+            // The rule's result is every Number (String, for a code rule)
+            // the node can hold: what reached it before (an instance's
+            // seeds) is subsumed.
             let d = &mut self.nodes[dst as usize];
-            if !d.ruled {
+            if matches!(op, RangeOp::SClip(_)) {
+                if !d.cruled {
+                    d.cruled = true;
+                    d.crange = Iv::EMPTY;
+                    d.csteps = 0;
+                }
+            } else if !d.ruled {
                 d.ruled = true;
                 d.range = Iv::EMPTY;
                 d.rsteps = 0;
@@ -670,7 +681,7 @@ impl Model {
                 self.pending.take(&mut node.delta, &mut delta);
                 (
                     std::mem::take(&mut node.dprim),
-                    std::mem::take(&mut node.drange) && node.prim & prim::NUM != 0,
+                    std::mem::take(&mut node.drange) && node.prim & (prim::NUM | prim::STR) != 0,
                 )
             };
             if delta.is_empty() && dprim == 0 && !drange {
@@ -679,7 +690,11 @@ impl Model {
             // Only the interval grew: re-deliver the Numbers (their interval)
             // along the edges and re-run the rules that carry it, nothing else.
             let range_only = delta.is_empty() && dprim == 0;
-            let dprim = if drange { dprim | prim::NUM } else { dprim };
+            let dprim = if drange {
+                dprim | (self.nodes[n as usize].prim & (prim::NUM | prim::STR))
+            } else {
+                dprim
+            };
             // Sets change interned (`SetTable::extend`); one made outside
             // this solve (an earlier solve, whose index is gone) is interned
             // here, so covering below stays a pointer test.
@@ -706,7 +721,7 @@ impl Model {
             }
             // A value-copy edge delivers the source's Numbers with their
             // interval (`add_tokens`).
-            self.cur_range = Some(self.nodes[n as usize].range);
+            self.cur_range = Some(self.rg(n));
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
@@ -1643,6 +1658,54 @@ pub(crate) fn numeric_key(name: &str) -> bool {
 impl Model {
     /// An operand's interval for `range::eval`: its own while it holds only
     /// Numbers (nothing to coerce), empty while it holds nothing, else ⊤.
+    /// What a value-copy delivery from `n` carries beside its values.
+    pub(crate) fn rg(&self, n: NodeId) -> crate::model::Rg {
+        let nd = &self.nodes[n as usize];
+        crate::model::Rg {
+            num: nd.range,
+            chr: nd.crange,
+        }
+    }
+
+    /// The code interval of `x`'s Strings when it holds only Strings
+    /// (else ⊤; nothing: empty).
+    pub(crate) fn crange_input(&self, x: NodeId) -> Iv {
+        let nd = &self.nodes[x as usize];
+        if nd.pts.is_empty() && nd.prim == 0 {
+            Iv::EMPTY
+        } else if nd.pts.is_empty() && nd.prim == prim::STR {
+            nd.crange
+        } else {
+            Iv::TOP
+        }
+    }
+
+    /// `Number(x)` over everything `x` holds (`RangeOp::ToNumber`).
+    pub(crate) fn to_number_range(&self, x: NodeId) -> Iv {
+        let nd = &self.nodes[x as usize];
+        if !nd.pts.is_empty() || nd.prim & (prim::UNDEF | prim::BIGINT) != 0 {
+            return Iv::TOP;
+        }
+        let mut out = Iv::EMPTY;
+        if nd.prim & prim::NUM != 0 {
+            out = out.join(nd.range);
+        }
+        if nd.prim & prim::STR != 0 {
+            out = out.join(crate::model::range::chars_to_number(nd.crange));
+        }
+        if nd.prim & prim::BOOL != 0 {
+            out = out.join(Iv { lo: 0, hi: 1 });
+        }
+        if nd.prim & prim::NULL != 0 {
+            out = out.join(Iv { lo: 0, hi: 0 });
+        }
+        let known = prim::NUM | prim::STR | prim::BOOL | prim::NULL;
+        if nd.prim & !known != 0 {
+            return Iv::TOP;
+        }
+        out
+    }
+
     pub(crate) fn range_input(&self, x: NodeId) -> Iv {
         let nd = &self.nodes[x as usize];
         if nd.pts.is_empty() && nd.prim == 0 {
@@ -1657,6 +1720,25 @@ impl Model {
 
 /// Join `iv` into the node's interval; widen to ⊤ past `WIDEN_STEPS`
 /// growths. Whether it grew.
+/// Join `iv` into the node's code interval; past `WIDEN_STEPS` growths it
+/// is every one-unit String (`CHAR_ANY`), unless ⊤.
+pub(crate) fn grow_crange(node: &mut Node, iv: Iv) -> bool {
+    let joined = node.crange.join(iv);
+    if joined == node.crange {
+        return false;
+    }
+    node.csteps = node.csteps.saturating_add(1);
+    node.crange = if joined.is_top() || node.csteps <= crate::model::range::WIDEN_STEPS {
+        joined
+    } else if joined.within(crate::model::range::CHAR_ANY) {
+        crate::model::range::CHAR_ANY
+    } else {
+        Iv::TOP
+    };
+    node.drange = true;
+    true
+}
+
 pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
     let joined = node.range.join(iv);
     if joined == node.range {

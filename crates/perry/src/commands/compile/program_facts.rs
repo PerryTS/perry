@@ -519,6 +519,11 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             })
             .collect()
     };
+    if !interp {
+        for (offset, iv) in &mb.call_arg_ranges {
+            out.call_arg_ranges.insert(*offset, iv.clone());
+        }
+    }
     for (id, b) in &mb.locals {
         if !interp {
             if let Some(o) = &b.indexed_owner {

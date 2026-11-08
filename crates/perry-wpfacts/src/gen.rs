@@ -12,7 +12,7 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
-mod narrow;
+pub(crate) mod narrow;
 mod native_result;
 mod once;
 mod own_guard;
@@ -266,6 +266,14 @@ pub struct Gen<'a> {
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
+    /// The function body being walked and its locals a guard may narrow
+    /// (`narrow::scope_locals`).
+    pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    /// `(module, byte offset, argument nodes)` of each method call site
+    /// (`bindings::ModuleBindings::call_arg_ranges`).
+    pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
+    /// One-unit String literal nodes by code (`Gen::str_literal`).
+    pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
     /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
     /// local, counter local). Their `array[k]` binding is what the
@@ -601,6 +609,9 @@ impl<'a> Gen<'a> {
             binding_writes: FxHashMap::default(),
             for_binding: None,
             narrow: Vec::new(),
+            narrow_scope: None,
+            call_args_at: Vec::new(),
+            str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
             write_top: Default::default(),

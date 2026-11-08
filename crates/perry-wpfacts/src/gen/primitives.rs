@@ -43,6 +43,27 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// A String literal: of at most one code unit, a shared node with that
+    /// code (`Node::crange`); any other, the String primitive node.
+    pub fn str_literal(&mut self, s: &str) -> NodeId {
+        let iv = crate::model::range::char_literal(s);
+        if iv.is_top() {
+            return self.prim_node(prim::STR);
+        }
+        if let Some(&n) = self.str_lits.get(&iv.lo) {
+            return n;
+        }
+        let n = self.m.node_named("STRLIT", || format!("STRLIT{}", iv.lo));
+        {
+            let nd = &mut self.m.nodes[n as usize];
+            nd.cruled = true;
+            nd.crange = iv;
+        }
+        self.m.add_prim(n, prim::STR);
+        self.str_lits.insert(iv.lo, n);
+        n
+    }
+
     /// Register the interval rule of a numeric operator: `dst` takes its
     /// interval from `op` over `l` (and `r`). On both operands, so a growth
     /// of either re-evaluates it.

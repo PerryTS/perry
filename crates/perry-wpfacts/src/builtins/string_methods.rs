@@ -215,7 +215,19 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 "codePointAt" => prim::NUM | prim::UNDEF,
                 _ => prim::STR,
             };
+            // `charAt` and `at` read one code unit (or none: `""`,
+            // `undefined`).
+            let one_unit = matches!(name, "charAt" | "at");
+            let saved = one_unit.then(|| {
+                m.cur_range.replace(crate::model::Rg {
+                    num: crate::model::Iv::TOP,
+                    chr: crate::model::range::CHAR_ANY,
+                })
+            });
             ret_prim(m, call, r);
+            if let Some(saved) = saved {
+                m.cur_range = saved;
+            }
             return true;
         }
         // 22.1.3.28 / .30 / .10 / .31: no operand is read.
