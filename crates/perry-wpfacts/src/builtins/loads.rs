@@ -158,6 +158,14 @@ pub(crate) fn proto_own_native(
 /// or `Object.prototype`), else nothing (absent: `undefined`). A key the
 /// program may have written onto the namespace itself, or onto a builtin
 /// prototype of its chain, reads the opaque member.
+/// The node module object the realm declares under node module token `t`'s
+/// data property `key` (`node:inspector.default` for `default`).
+fn module_object(m: &Model, t: Tok, key: &str) -> Option<BuiltinNs> {
+    m.native_property(t, key)
+        .and_then(|p| p.object)
+        .and_then(super::node_module)
+}
+
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
     m.census_native_read(t, a, NativeMiss::Load(dst));
     let name = m.atoms[a as usize].clone();
@@ -455,8 +463,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         // A node module object: a key its realm declaration names as a
-        // native function reads it (or what the program stored there); any
-        // other key is not described: ⊤, named.
+        // native function reads it, a key it declares holding another node
+        // module object (`require("inspector")`'s `default`,
+        // `node:inspector.default`) reads that object (or, either way, what
+        // the program stored there); any other key is not described: ⊤,
+        // named.
         TokKind::Builtin(BuiltinNs::Module(module)) => match name.as_deref() {
             Some(n)
                 if !m.unit_mode
@@ -464,6 +475,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             {
                 let Key::Named(a) = key else { unreachable!() };
                 ns_load(m, t, BuiltinNs::Module(module), a, dst);
+            }
+            Some(n) if !m.unit_mode && module_object(m, t, n).is_some() => {
+                let Key::Named(a) = key else { unreachable!() };
+                let ns = module_object(m, t, n).expect("guarded");
+                if native_written(m, t, a) {
+                    return opaque_member(m, dst);
+                }
+                m.native_missing.push((t, a, NativeMiss::Load(dst)));
+                let o = m.tok(TokKind::Builtin(ns));
+                m.add_tok(dst, o);
             }
             _ => {
                 m.add_top(dst, |_| {

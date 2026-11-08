@@ -13,6 +13,9 @@ pub(crate) struct Property {
     /// The realm declares the key's value a host array of strings
     /// (`value = dynamic, elements = string`): the declaration's name.
     pub strings: Option<&'static str>,
+    /// The realm declares the key's value another node module object
+    /// (`node:inspector` `default`: `node:inspector.default`): its name.
+    pub object: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -123,6 +126,7 @@ impl Default for Declarations {
                 "getter-this" => property.getter_this = true,
                 "ns" => property.own_namespace = true,
                 "strings" => property.strings = value,
+                "object" => property.object = value,
                 _ => {}
             }
             if let Some(ns) = ns_by_name(owner) {
@@ -143,6 +147,9 @@ impl Default for Declarations {
                 }
                 if kind == "strings" {
                     p.strings = value;
+                }
+                if kind == "object" {
+                    p.object = value;
                 }
             }
         }
