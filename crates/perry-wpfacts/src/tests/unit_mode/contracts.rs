@@ -323,8 +323,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // escaped value, charged in each round that escapes it. SEEDKV: a
     // string literal is its own source node holding its constant
     // (`Gen::str_literal`), popped once: `a` and `m` hold "get" and "g",
-    // solved in rounds 0-2 (was [1719, 2122, 1854, 449]).
-    assert_eq!(pf.round_work, [1721, 2124, 1856, 449], "{:?}", pf.units);
+    // solved in rounds 0-2 (was [1719, 2122, 1854, 449]). NUMBIG: `BigInt`
+    // is its own namespace, one more declared shape on the realm's linear
+    // namespace and family searches (charged per step) (was [1721, 2124,
+    // 1856, 449]).
+    assert_eq!(pf.round_work, [1732, 2133, 1864, 452], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.
