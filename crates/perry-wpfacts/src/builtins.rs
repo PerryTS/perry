@@ -56,6 +56,23 @@ pub(crate) const NATIVE_ERRORS: [&str; 6] = [
     "URIError",
 ];
 
+/// The concrete typed-array constructors (ECMA-262 23.2.7 Table 71, with
+/// `Float16Array`), each its own namespace ([`BuiltinNs::TypedArrayKind`]).
+pub(crate) const TYPED_ARRAYS: [&str; 12] = [
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+];
+
 /// The builtin constructor that is `ns`'s [[Prototype]] (`Error` for
 /// `TypeError`), as its statics describe it.
 pub(crate) fn ns_parent(ns: BuiltinNs) -> Option<BuiltinNs> {
@@ -84,12 +101,13 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "AggregateError" => BuiltinNs::AggregateError,
         "Date" => BuiltinNs::Date,
         "RegExp" => BuiltinNs::RegExp,
-        "%TypedArray%" | "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array"
-        | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array"
-        | "BigInt64Array" | "BigUint64Array" | "Uint8ClampedArray" | "DataView" => {
-            BuiltinNs::TypedArray
+        "%TypedArray%" => BuiltinNs::TypedArray,
+        _ if TYPED_ARRAYS.contains(&name) => {
+            BuiltinNs::TypedArrayKind(TYPED_ARRAYS.into_iter().find(|n| *n == name)?)
         }
-        "ArrayBuffer" | "SharedArrayBuffer" => BuiltinNs::ArrayBuffer,
+        "DataView" => BuiltinNs::DataView,
+        "ArrayBuffer" => BuiltinNs::ArrayBuffer,
+        "SharedArrayBuffer" => BuiltinNs::SharedArrayBuffer,
         "Symbol" => BuiltinNs::Symbol,
         "Number" => BuiltinNs::Number,
         "BigInt" => BuiltinNs::BigInt,
@@ -1053,7 +1071,10 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::Date
         | BuiltinNs::RegExp
         | BuiltinNs::TypedArray
+        | BuiltinNs::TypedArrayKind(_)
+        | BuiltinNs::DataView
         | BuiltinNs::ArrayBuffer
+        | BuiltinNs::SharedArrayBuffer
         | BuiltinNs::Symbol
         | BuiltinNs::Number
         | BuiltinNs::BigInt
@@ -1158,7 +1179,12 @@ pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
         TokKind::Builtin(ns) if members::ns_chain(*ns) == Family::Function => {
             Some(BuiltinNs::Function)
         }
-        TokKind::NativeProto(n) if ns_by_name(n) == Some(BuiltinNs::TypedArray) => {
+        TokKind::NativeProto(n)
+            if matches!(
+                ns_by_name(n),
+                Some(BuiltinNs::TypedArray | BuiltinNs::TypedArrayKind(_))
+            ) =>
+        {
             Some(BuiltinNs::TypedArray)
         }
         _ => None,

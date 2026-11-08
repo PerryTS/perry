@@ -38,7 +38,13 @@ FN_KINDS = {"method", "function", "getter", "setter", "alias"}
 
 
 def namespace_holder(name, kind):
-    return kind in ("constructor", "namespace") and not any(c in name for c in ".%:")
+    """A global constructor or namespace object, or an intrinsic constructor
+    named by its intrinsic (`%TypedArray%`, the [[Prototype]] of each typed
+    array constructor): wpfacts reads their statics as a namespace's."""
+    intrinsic_ctor = (kind == "constructor" and name.startswith("%") and name.endswith("%")
+                      and "." not in name)
+    return intrinsic_ctor or (kind in ("constructor", "namespace")
+                              and not any(c in name for c in ".%:"))
 
 
 def member_properties(declarations, holder, inherited):

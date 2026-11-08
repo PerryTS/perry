@@ -1,4 +1,4 @@
-solve work=5237 aborted=false
+solve work=5753 aborted=false
 node 0 prim=0 dropped=false pts=[]
 node 1 prim=127 dropped=false pts=[0]
 node 2 prim=1 dropped=false pts=[]
@@ -550,7 +550,7 @@ node 547 prim=0 dropped=false pts=[4, 11]
 node 548 prim=127 dropped=false pts=[0]
 node 549 prim=0 dropped=false pts=[4, 7]
 activation fixed=true on=[(0, 0, ""), (0, 4294967295, "t.ts:A::<fields>"), (0, 4294967295, "t.ts:B::<fields>")] walked=[(0, 0, ""), (0, 4294967295, "t.ts:<init>"), (0, 4294967295, "t.ts:A::<fields>"), (0, 4294967295, "t.ts:A::<static>"), (0, 4294967295, "t.ts:B::<fields>"), (0, 4294967295, "t.ts:B::<static>")]
-solve work=297 aborted=false
+solve work=325 aborted=false
 node 0 prim=0 dropped=false pts=[]
 node 1 prim=127 dropped=false pts=[0]
 node 2 prim=1 dropped=false pts=[]
@@ -688,7 +688,7 @@ node 133 prim=16 dropped=false pts=[]
 node 134 prim=0 dropped=false pts=[]
 node 135 prim=0 dropped=false pts=[]
 activation fixed=true on=[(0, 0, ""), (0, 2, ""), (0, 4294967295, "t.ts:A::<fields>"), (0, 4294967295, "t.ts:G::<fields>")] walked=[(0, 0, ""), (0, 2, ""), (0, 4294967295, "t.ts:<init>"), (0, 4294967295, "t.ts:A::<fields>"), (0, 4294967295, "t.ts:A::<static>"), (0, 4294967295, "t.ts:G::<fields>"), (0, 4294967295, "t.ts:G::<static>")]
-solve work=482 aborted=false
+solve work=510 aborted=false
 node 0 prim=0 dropped=false pts=[]
 node 1 prim=127 dropped=false pts=[0]
 node 2 prim=1 dropped=false pts=[]
@@ -869,7 +869,7 @@ node 176 prim=16 dropped=false pts=[]
 node 177 prim=0 dropped=false pts=[]
 node 178 prim=16 dropped=false pts=[]
 activation fixed=true on=[(0, 0, ""), (0, 1, ""), (0, 2, ""), (0, 4294967295, "t.ts:__AnonShape_1803d982dc206938::<fields>"), (0, 4294967295, "t.ts:__AnonShape_202b4c5382de839c::<fields>"), (0, 4294967295, "t.ts:__AnonShape_58c24d9af3c0dc4f::<fields>")] walked=[(0, 0, ""), (0, 1, ""), (0, 2, ""), (0, 4294967295, "t.ts:<init>"), (0, 4294967295, "t.ts:__AnonShape_1803d982dc206938::<fields>"), (0, 4294967295, "t.ts:__AnonShape_1803d982dc206938::<static>"), (0, 4294967295, "t.ts:__AnonShape_202b4c5382de839c::<fields>"), (0, 4294967295, "t.ts:__AnonShape_202b4c5382de839c::<static>"), (0, 4294967295, "t.ts:__AnonShape_58c24d9af3c0dc4f::<fields>"), (0, 4294967295, "t.ts:__AnonShape_58c24d9af3c0dc4f::<static>")]
-solve work=401 aborted=false
+solve work=429 aborted=false
 node 0 prim=0 dropped=false pts=[]
 node 1 prim=127 dropped=false pts=[0]
 node 2 prim=1 dropped=false pts=[]

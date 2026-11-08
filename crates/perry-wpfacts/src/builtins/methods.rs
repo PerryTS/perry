@@ -283,6 +283,9 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                         *what,
                         "Date"
                             | "TypedArray"
+                            | "DataView"
+                            | "ArrayBuffer"
+                            | "SharedArrayBuffer"
                             | "Buffer"
                             | "URL"
                             | "URLSearchParams"

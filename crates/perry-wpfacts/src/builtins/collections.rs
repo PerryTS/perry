@@ -1298,7 +1298,8 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
         (
-            "Collection" | "TypedArray" | "Buffer" | "Promise" | "Error" | "IterResult",
+            "Collection" | "TypedArray" | "Buffer" | "Promise" | "Error" | "IterResult"
+            | "DataView" | "ArrayBuffer" | "SharedArrayBuffer",
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
@@ -1586,11 +1587,31 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, pb);
         }
         ("TypedArray", Some(n)) if typed_array_methods::method(m, t, n, call) => {}
-        ("TypedArray", Some("transfer" | "transferToFixedLength" | "resize" | "grow")) => {
+        ("ArrayBuffer", Some("slice")) if c.spread.is_empty() => {
+            typed_array_methods::buffer_slice(m, t, "ArrayBuffer", call)
+        }
+        ("SharedArrayBuffer", Some("slice")) if c.spread.is_empty() => {
+            typed_array_methods::buffer_slice(m, t, "SharedArrayBuffer", call)
+        }
+        (
+            "TypedArray" | "ArrayBuffer" | "SharedArrayBuffer",
+            Some("transfer" | "transferToFixedLength" | "resize" | "grow"),
+        ) => {
             let r = m.reason("B2 buffer transfer/resize");
             m.mark_hard(t, Hard::B2BufferResize, r);
             ret_tok(m, call, t);
             implicit_args(m, call, "buffer resize argument", Protocol::ToPrimitive);
+        }
+        // A method the buffer's or DataView's prototype chain declares
+        // (`getInt8`, `slice` spread, `toString`): its arguments converted,
+        // its result a primitive.
+        ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(n))
+            if !super::loads::buffer_member_absent(m, Some(what), n) =>
+        {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
         }
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);

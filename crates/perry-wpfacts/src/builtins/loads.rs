@@ -66,7 +66,11 @@ pub(super) fn family_load(
 ) {
     let name = m.atoms[a as usize].clone();
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
-        undescribed_member(m, dst);
+        if buffer_member_absent(m, what, &name) {
+            m.add_prim(dst, prim::UNDEF);
+        } else {
+            undescribed_member(m, dst);
+        }
         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
             opaque_member(m, dst);
         }
@@ -112,6 +116,24 @@ pub(super) fn family_load(
     }
 }
 
+/// Is `name` absent from the intrinsic chain of a `DataView`, `ArrayBuffer`
+/// or `SharedArrayBuffer` (its own prototype, then `Object.prototype`)? The
+/// realm declares those prototypes' string keys exactly and none of them an
+/// `@@iterator`; another symbol key is left undescribed.
+pub(super) fn buffer_member_absent(m: &Model, what: Option<&str>, name: &str) -> bool {
+    let Some(w @ ("DataView" | "ArrayBuffer" | "SharedArrayBuffer")) = what else {
+        return false;
+    };
+    if name.starts_with("@@") && name != "@@__perry_wk_iterator" {
+        return false;
+    }
+    let declared = |m: &Model, holder: Option<usize>| {
+        holder.is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    };
+    !declared(m, m.declarations.named(&format!("{w}.prototype"), m))
+        && !declared(m, m.declarations.family(Family::Object, m))
+}
+
 /// The family (and site kind) of the intrinsic prototype builtin namespace
 /// `ns` holds under `prototype` (the inverse of `family_ctor`), and the
 /// global binding that names `ns`; `None`: no described prototype, or not
@@ -136,8 +158,16 @@ pub(super) fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str
         BuiltinNs::AggregateError => (Family::Error, Some("AggregateError"), "AggregateError"),
         BuiltinNs::Date => (Family::Opaque, Some("Date"), "Date"),
         BuiltinNs::RegExp => (Family::Opaque, Some("RegExp"), "RegExp"),
-        BuiltinNs::TypedArray => (Family::Opaque, Some("TypedArray"), "Uint8Array"),
+        // A concrete typed array's own prototype holds `constructor`,
+        // `BYTES_PER_ELEMENT` (and `Uint8Array`'s base64/hex methods); the
+        // rest of its members are `%TypedArray%.prototype`'s.
+        BuiltinNs::TypedArray => (Family::Opaque, Some("TypedArray"), "%TypedArray%"),
+        BuiltinNs::TypedArrayKind(n) => (Family::Opaque, Some("TypedArray"), n),
+        BuiltinNs::DataView => (Family::Opaque, Some("DataView"), "DataView"),
         BuiltinNs::ArrayBuffer => (Family::Opaque, Some("ArrayBuffer"), "ArrayBuffer"),
+        BuiltinNs::SharedArrayBuffer => {
+            (Family::Opaque, Some("SharedArrayBuffer"), "SharedArrayBuffer")
+        }
         _ => return None,
     })
 }
@@ -519,7 +549,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
         TokKind::Builtin(ns) => match name.as_deref() {
             Some("@@__perry_wk_species")
-                if matches!(ns, BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer) =>
+                if matches!(
+                    ns,
+                    BuiltinNs::TypedArray
+                        | BuiltinNs::TypedArrayKind(_)
+                        | BuiltinNs::ArrayBuffer
+                        | BuiltinNs::SharedArrayBuffer
+                ) =>
             {
                 m.add_tok(dst, t);
                 let Key::Named(a) = key else { unreachable!() };
@@ -644,28 +680,45 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             TmplKind::BObj { what, .. } => {
                 let fam = members::bobj_family(what);
                 match (key, name.as_deref()) {
-                    (_, Some("constructor")) if what == "TypedArray" => {
-                        let ctor = m.tok(TokKind::Builtin(BuiltinNs::TypedArray));
-                        m.add_tok(dst, ctor);
+                    // A typed array's template does not keep its kind: its
+                    // `constructor` is any concrete typed-array constructor.
+                    // A buffer's or a DataView's is its own.
+                    (_, Some("constructor"))
+                        if matches!(
+                            what,
+                            "TypedArray" | "DataView" | "ArrayBuffer" | "SharedArrayBuffer"
+                        ) =>
+                    {
+                        if what == "TypedArray" {
+                            for n in TYPED_ARRAYS {
+                                let ctor = m.tok(TokKind::Builtin(BuiltinNs::TypedArrayKind(n)));
+                                m.add_tok(dst, ctor);
+                            }
+                        } else if let Some(ns) = ns_by_name(what) {
+                            let ctor = m.tok(TokKind::Builtin(ns));
+                            m.add_tok(dst, ctor);
+                        }
                         let Key::Named(a) = key else { unreachable!() };
                         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                             opaque_member(m, dst);
                         }
                     }
-                    (_, Some("buffer")) if matches!(what, "TypedArray" | "Buffer") => {
+                    (_, Some("buffer")) if matches!(what, "TypedArray" | "Buffer" | "DataView") => {
                         // B1: the backing buffer is observed (it can be
                         // transferred, detached or wrapped by another view).
                         let r = m.reason("B1 .buffer read");
                         m.mark_hard(t, Hard::B1Exposed, r);
                         m.add_tok(dst, t);
                     }
-                    (_, Some("byteOffset")) if matches!(what, "TypedArray" | "Buffer") => {
+                    (_, Some("byteOffset"))
+                        if matches!(what, "TypedArray" | "Buffer" | "DataView") =>
+                    {
                         let r = m.reason("B1 .byteOffset read");
                         m.mark_hard(t, Hard::B1Exposed, r);
                         m.add_prim(dst, prim::NUM)
                     }
-                    (_, Some("size" | "length" | "byteLength" | "byteOffset"))
-                        if fam == Family::Opaque =>
+                    (_, Some(n @ ("size" | "length" | "byteLength" | "byteOffset")))
+                        if fam == Family::Opaque && !buffer_member_absent(m, Some(what), n) =>
                     {
                         m.add_prim(dst, prim::NUM);
                         let Key::Named(a) = key else { unreachable!() };
