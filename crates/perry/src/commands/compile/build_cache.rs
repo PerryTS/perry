@@ -452,6 +452,13 @@ impl BuildCacheProbe {
         object_fingerprints: &[String],
         runtime_inputs: &[PathBuf],
     ) {
+        if ctx.has_build_time_execution {
+            // Source hashes cannot describe arbitrary build-time file reads.
+            // Remove an older non-macro manifest as well as refusing a new one.
+            let _ = fs::remove_file(&self.manifest_path);
+            stats.reason = "build-time-execution".to_string();
+            return;
+        }
         if std::env::var("PERRY_DISABLE_BUILD_CACHE").ok().as_deref() == Some("1") {
             stats.reason = "disabled-by-env".to_string();
             return;
