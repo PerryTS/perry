@@ -711,8 +711,7 @@ impl<'a> Gen<'a> {
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
-        let scope = self
-            .int_ranges
+        let scope = (self.int_ranges || self.guard_presence)
             .then(|| (fxi, narrow::scope_locals(&f.params, &f.body)));
         let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(&fx, &f.body);

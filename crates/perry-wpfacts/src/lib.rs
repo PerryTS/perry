@@ -74,6 +74,10 @@ pub struct FactsConfig {
     /// No guard narrowing, predicate summaries or String code intervals
     /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
     pub no_guard_ranges: bool,
+    /// No presence narrowing: a truthy or non-nullish guard leaves the
+    /// local's `null`/`undefined` (`gen::narrow` guards;
+    /// `PERRY_FACTS_GUARD_PRESENCE=0`).
+    pub no_guard_presence: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -445,6 +449,7 @@ fn generate<'a>(
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
+    g.guard_presence = !cfg.no_guard_presence;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());

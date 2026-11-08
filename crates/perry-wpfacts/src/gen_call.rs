@@ -473,8 +473,7 @@ impl<'a> Gen<'a> {
         }
         self.order_ok = true;
         let own = self.own_helper_shape(params, body, *is_async || *is_generator);
-        let scope = self
-            .int_ranges
+        let scope = (self.int_ranges || self.guard_presence)
             .then(|| (f, crate::gen::narrow::scope_locals(params, body)));
         let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(cfx, body);

@@ -348,6 +348,9 @@ pub struct Gen<'a> {
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
+    /// Guards narrow locals by presence: a truthy or non-nullish test
+    /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
+    pub guard_presence: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -668,6 +671,7 @@ impl<'a> Gen<'a> {
             int_ranges: true,
             arr_lengths: true,
             guard_ranges: true,
+            guard_presence: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),

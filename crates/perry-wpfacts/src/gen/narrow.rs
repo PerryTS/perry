@@ -23,6 +23,15 @@
 //! Only a local of the body being walked that no closure captures mutably
 //! (and no hoisted box holds) is narrowed (`scope_locals`).
 //!
+//! The same conditions narrow a local by presence (`Implied::Present`): a
+//! truthy test of it (`x`, `!x` false), `x != null` true or `x == null`
+//! false leave its values but `null` and `undefined` (`Cons::NotNullish`),
+//! and `x !== undefined` true or `x === undefined` false leave its values
+//! but `undefined` (`Cons::NotUndefined`). It is one predicate with the
+//! clips: what an `if` implies, `&&`, `||`, `?:`, a `while` and an early
+//! exit imply alike, and a write in the guarded code joins the written
+//! value back (the end node). `PERRY_FACTS_GUARD_PRESENCE=0` turns it off.
+//!
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
 //!
@@ -108,6 +117,10 @@ impl<'a> Gen<'a> {
         let simple = self.guard_ranges || matches!(cond, Expr::Compare { .. });
         let clips: Vec<(u8, Bound)> = facts
             .into_iter()
+            .filter_map(|f| match f {
+                Implied::Clip(l, k, b) => Some((l, k, b)),
+                Implied::Present(..) => None,
+            })
             .filter(|(l, _, b)| {
                 *l == id
                     && !matches!(b, Bound::Char(_))
@@ -450,17 +463,41 @@ impl Bound {
 /// A predicate function: one `return <expr>` over its plain parameters.
 pub(crate) type Predicate<'e> = (&'e [perry_hir::Param], &'e Expr);
 
-/// The clips condition `c` implies when it is `positive`ly true (false):
-/// `(local, clip kind, bound)` for each ordered comparison of a local.
-/// `pred` resolves a called function to its predicate body (`subst` maps
-/// its parameters to the caller's locals and literals).
+/// What a guard's outcome implies of one local.
+#[derive(Clone, Debug)]
+pub(crate) enum Implied {
+    /// `(local, clip kind, bound)`: an ordered comparison of the local.
+    Clip(u32, u8, Bound),
+    /// The local holds no value the presence excludes: a truthy test of
+    /// it, or a failed (passed) comparison of it with `null`/`undefined`.
+    Present(u32, Presence),
+}
+
+/// The values a guard proves a local is not.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Presence {
+    /// Neither `null` nor `undefined` (`Cons::NotNullish`): a truthy value,
+    /// or one that is not `== null`.
+    NotNullish,
+    /// Not `undefined` (`Cons::NotUndefined`): one that is not
+    /// `=== undefined`.
+    NotUndefined,
+}
+
+/// What condition `c` implies when it is `positive`ly true (false): a clip
+/// for each ordered comparison of a local, and a presence for each truthy
+/// test of a local or nullish comparison it decides. Both go through `&&`
+/// (true), `||` (false), `!` and predicates alike, the one rule of every
+/// guard (module docs, "Guards"). `pred` resolves a called function to its
+/// predicate body (`subst` maps its parameters to the caller's locals and
+/// literals).
 fn implied<'p>(
     c: &Expr,
     positive: bool,
     subst: &dyn Fn(u32) -> Option<Bound>,
     pred: &dyn Fn(u32) -> Option<Predicate<'p>>,
     depth: u8,
-    out: &mut Vec<(u32, u8, Bound)>,
+    out: &mut Vec<Implied>,
 ) {
     use crate::model::range::{CLIP_GE, CLIP_GT, CLIP_LE, CLIP_LT};
     use perry_hir::{LogicalOp, UnaryOp};
@@ -506,8 +543,40 @@ fn implied<'p>(
             };
             let mut found = Vec::new();
             implied(body, positive, &inner, pred, depth + 1, &mut found);
-            // Only a clip of a parameter that the call binds to a local.
+            // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
+        }
+        // A truthy local is neither `null` nor `undefined`.
+        Expr::LocalGet(_) if positive => {
+            if let Some(Bound::Local(id)) = bound_of(c, subst) {
+                out.push(Implied::Present(id, Presence::NotNullish));
+            }
+        }
+        // `local == null` (`undefined`) false, `local != null` true: not
+        // nullish. `local === undefined` false, `!==` true: not
+        // `undefined`. (`=== null` decides no presence a filter keeps.)
+        Expr::Compare { op, left, right }
+            if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
+                || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
+        {
+            let (x, nil) = match (left.as_ref(), right.as_ref()) {
+                (n @ (Expr::Undefined | Expr::Null), x) => (x, n),
+                (x, n) => (x, n),
+            };
+            let presence = match (op, positive) {
+                (CompareOp::LooseEq, false) | (CompareOp::LooseNe, true) => {
+                    Some(Presence::NotNullish)
+                }
+                (CompareOp::Eq, false) | (CompareOp::Ne, true)
+                    if matches!(nil, Expr::Undefined) =>
+                {
+                    Some(Presence::NotUndefined)
+                }
+                _ => None,
+            };
+            if let (Some(p), Some(Bound::Local(id))) = (presence, bound_of(x, subst)) {
+                out.push(Implied::Present(id, p));
+            }
         }
         Expr::Compare { op, left, right } => {
             // The clip of `local OP bound`, `OP` read for a true comparison.
@@ -531,14 +600,14 @@ fn implied<'p>(
             if let (Some(Bound::Local(id)), Some(b)) = (&l, &r) {
                 if !b.reads(*id) {
                     if let Some(kind) = k(op, positive) {
-                        out.push((*id, kind, b.clone()));
+                        out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
             }
             if let (Some(Bound::Local(id)), Some(b)) = (&r, &l) {
                 if !b.reads(*id) {
                     if let Some(kind) = k(&mirror(op), positive) {
-                        out.push((*id, kind, b.clone()));
+                        out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
             }
@@ -668,7 +737,7 @@ impl<'a> Gen<'a> {
     /// (false) for the code walked next (module docs, "Guards"); how many
     /// narrowings to pop after it (`narrow_pop`).
     pub(crate) fn narrow_guard(&mut self, fx: &Fx, cond: &Expr, positive: bool) -> usize {
-        if !self.guard_ranges {
+        if !self.guard_ranges && !self.guard_presence {
             return 0;
         }
         // The body being walked (`stmts` runs outside `stmt`'s `cur_fn`).
@@ -693,6 +762,13 @@ impl<'a> Gen<'a> {
             0,
             &mut facts,
         );
+        // Without guard ranges (`FactsConfig::no_guard_ranges`) no clip;
+        // without guard presence (`FactsConfig::no_guard_presence`) no
+        // presence.
+        facts.retain(|x| match x {
+            Implied::Clip(..) => self.guard_ranges,
+            Implied::Present(..) => self.guard_presence,
+        });
         if facts.is_empty() {
             return 0;
         }
@@ -703,11 +779,14 @@ impl<'a> Gen<'a> {
         pushed
     }
 
-    fn narrow_guard_facts(&mut self, fx: &Fx, facts: Vec<(u32, u8, Bound)>) -> usize {
+    fn narrow_guard_facts(&mut self, fx: &Fx, facts: Vec<Implied>) -> usize {
         let f = fx.f;
         let mi = fx.module;
         let mut pushed = 0;
-        for (id, kind, bound) in facts {
+        for fact in facts {
+            let id = match &fact {
+                Implied::Clip(id, ..) | Implied::Present(id, _) => *id,
+            };
             if !self
                 .narrow_scope
                 .as_ref()
@@ -715,18 +794,30 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
-            let is_char = matches!(bound, Bound::Char(_));
-            let b = self.bound_node(mi, bound);
-            let op = match is_char {
-                true => crate::model::RangeOp::SClip(kind),
-                false => crate::model::RangeOp::Clip(kind),
-            };
             let src = self
                 .narrowed_read(mi, id)
                 .unwrap_or_else(|| self.local(mi, id));
             let start = self.tmp("guard");
-            self.m.edge(src, start);
-            self.range_rule(op, src, Some(b), start);
+            match fact {
+                Implied::Clip(_, kind, bound) => {
+                    let is_char = matches!(bound, Bound::Char(_));
+                    let b = self.bound_node(mi, bound);
+                    let op = match is_char {
+                        true => crate::model::RangeOp::SClip(kind),
+                        false => crate::model::RangeOp::Clip(kind),
+                    };
+                    self.m.edge(src, start);
+                    self.range_rule(op, src, Some(b), start);
+                }
+                // The local's values but the ones the guard excludes: a
+                // filter of the program text, so a summary replays it.
+                Implied::Present(_, Presence::NotNullish) => {
+                    self.m.cons(src, Cons::NotNullish { dst: start })
+                }
+                Implied::Present(_, Presence::NotUndefined) => {
+                    self.m.cons(src, Cons::NotUndefined { dst: start })
+                }
+            }
             let end = self.tmp("guard-end");
             self.m.edge(start, end);
             self.narrow.push(Narrow {
