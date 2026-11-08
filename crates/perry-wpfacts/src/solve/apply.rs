@@ -415,9 +415,10 @@ impl Model {
                 }
                 if prim & !strip != 0 {
                     // A filter of the host's values: its Numbers keep the
-                    // host's interval.
+                    // host's interval, its strings the host's constants.
+                    let strs = self.nodes[n as usize].strs;
                     let saved = self.cur_range.replace(self.rg(n));
-                    self.add_prim(dst, prim & !strip);
+                    self.add_s(dst, &[], prim & !strip, strs);
                     self.cur_range = saved;
                 }
             }
@@ -1298,12 +1299,47 @@ impl Model {
             } => {
                 // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
                 // its ToString, a numeric name, `numeric_key`) writes an
-                // holder's numeric properties, never a nonnumeric name;
-                // every other value alternative retains an Any store.
+                // holder's numeric properties, never a nonnumeric name.
+                // A key's string constants (`Node::strs`, DESIGN SEEDKV)
+                // and `true`, `false`, `null`, `undefined` are the names
+                // they spell, an index string the numeric properties;
+                // any string, a symbol, a BigInt or an object retains an
+                // Any store.
+                let strs = self.nodes[n as usize].strs;
+                let mut index = prim & prim::NUM != 0;
+                let mut names: Vec<Atom> = Vec::new();
+                let mut index_strs: Vec<i64> = Vec::new();
+                if prim & prim::STR != 0 {
+                    for i in 0..self.str_atoms(strs).len() {
+                        let a = self.str_atoms(strs)[i];
+                        if super::strs::index_string(&self.atoms[a as usize]) {
+                            index = true;
+                            index_strs.push(self.atoms[a as usize].parse::<i64>().unwrap_or(-1));
+                        } else {
+                            names.push(a);
+                        }
+                    }
+                }
+                for (bit, keys) in [
+                    (prim::BOOL, &["true", "false"][..]),
+                    (prim::NULL, &["null"][..]),
+                    (prim::UNDEF, &["undefined"][..]),
+                ] {
+                    if prim & bit != 0 {
+                        names.extend(keys.iter().map(|k| self.atom(k)));
+                    }
+                }
+                // Every index store names its index interval before the
+                // element store below reaches the holders (`Cons::LenIndex`,
+                // `arr_len`): a Number key its interval, an index string
+                // its value.
+                let mut len_ivs: Vec<Iv> = Vec::new();
                 if prim & prim::NUM != 0 {
-                    // Before the element store below reaches the holders.
+                    len_ivs.push(self.range_input(n));
+                }
+                len_ivs.extend(index_strs.iter().map(|&v| Iv::int(v, v)));
+                for iv in len_ivs {
                     self.indexed_store_sites.insert(site);
-                    let iv = self.range_input(n);
                     if self.len_index_done.insert((site, o, iv.lo, iv.hi)) {
                         self.cons(
                             o,
@@ -1314,15 +1350,33 @@ impl Model {
                         );
                     }
                 }
-                if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
+                if index && self.index_store_done.insert((n, site, true)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
                     // `a[i] = v` may write past the end; `push` appends.
                     self.cons(o, Cons::IndexHole);
                 }
-                if (prim & !prim::NUM != 0 || !toks.is_empty())
-                    && self.index_store_done.insert((n, site, false))
-                {
+                let any = !toks.is_empty()
+                    || prim & (prim::SYMBOL | prim::BIGINT) != 0
+                    || (prim & prim::STR != 0 && strs == STRS_TOP);
+                // An Any store under the any-string shape (this pop's or an
+                // earlier one's) is every name's.
+                if shape == 0 && (any || self.index_store_done.contains(&(n, site, false))) {
+                    names.clear();
+                }
+                for a in names {
+                    if self.str_store_done.insert((n, site, a)) {
+                        self.cons(
+                            o,
+                            Cons::Store {
+                                key: Key::Named(a),
+                                src,
+                                site,
+                            },
+                        );
+                    }
+                }
+                if any && self.index_store_done.insert((n, site, false)) {
                     self.cons(
                         o,
                         Cons::Store {

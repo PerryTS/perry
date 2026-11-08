@@ -546,6 +546,18 @@ pub enum Cons {
 }
 
 impl Cons {
+    /// The rule reads the key node's string constants (`Node::strs`): a
+    /// pop where only they grew runs it (`Model::solve_fixpoint`).
+    pub fn carries_strs(&self) -> bool {
+        matches!(
+            self,
+            Cons::StoreIndexed { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::NotUndefined { .. }
+        )
+    }
+
     /// The rule delivers Numbers of its host with the host's interval
     /// (`model::range`): it re-runs when only that interval grows, so the
     /// interval it delivered keeps covering the host's.
