@@ -527,6 +527,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         for (offset, iv) in &mb.call_arg_ranges {
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
+        out.number_calls.extend(mb.number_calls.iter().copied());
         if element_reads_enabled() {
             for (offset, r) in &mb.element_reads {
                 out.element_reads.insert(

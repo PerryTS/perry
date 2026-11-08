@@ -1727,7 +1727,7 @@ idxset.bounded_numeric_merge.5:
             / "tier13_native_abi_evidence.sh"
         ).read_text(encoding="utf-8")
         smoke = (
-            REPO_ROOT / "tests" / "test_native_abi_evidence_packet_smoke.sh"
+            REPO_ROOT / "tests" / "integration" / "test_native_abi_evidence_packet_smoke.sh"
         ).read_text(encoding="utf-8")
         packet = (
             REPO_ROOT / "scripts" / "native_abi_evidence_packet.sh"

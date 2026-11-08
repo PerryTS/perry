@@ -256,7 +256,7 @@ Dynamic evaluation and CommonJS have supported paths, with limits on interpreter
 An import with `with { type: "macro" }` calls its exported functions during
 compilation and replaces each call with its JSON result:
 
-```typescript
+```typescript,no-test
 import { readTemplates } from "./templates.macro.ts" with { type: "macro" };
 const templates = await readTemplates();
 ```

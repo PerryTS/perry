@@ -328,6 +328,11 @@ pub struct ModuleBindings {
     /// Element reads by `IndexGet::element_offset` whose receiver is proven
     /// (`ElementRead`), joined over every copy of the read the program holds.
     pub element_reads: Vec<(u32, ElementRead)>,
+    /// Method call byte offsets whose result is a Number at every copy of
+    /// the call the program holds: every callee the site reaches returns
+    /// only Numbers (representation RFC §10.4, the call's return
+    /// representation). Sorted.
+    pub number_calls: Vec<u32>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
@@ -573,6 +578,20 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
             }
         }
         mb.call_arg_ranges = joined;
+    }
+    let mut results: Vec<Vec<(u32, bool)>> = vec![Vec::new(); out.len()];
+    for &(mi, offset, n) in &g.call_results_at {
+        let node = &g.m.nodes[n as usize];
+        let number = g.m.number_call_sabotage
+            || (node.prim == crate::model::prim::NUM && node.pts.is_empty());
+        results[mi as usize].push((offset, number));
+    }
+    for (mb, mut rs) in out.iter_mut().zip(results) {
+        rs.sort_unstable();
+        // A site is a Number call when every copy's result is (`false`
+        // sorts first, so the first entry of an offset decides).
+        rs.dedup_by_key(|(o, _)| *o);
+        mb.number_calls = rs.into_iter().filter(|(_, n)| *n).map(|(o, _)| o).collect();
     }
     for (mi, (_, m)) in g.modules.iter().enumerate() {
         fn pure(e: &perry_hir::Expr, params: &[u32]) -> bool {

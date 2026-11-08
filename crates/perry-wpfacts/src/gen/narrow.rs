@@ -323,6 +323,103 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     )
 }
 
+/// Whether running `ss` may reach its end: a function body that does
+/// returns `undefined` there. Conservative: a `return` or `throw` on every
+/// path (through `if`/`else`, `try`, a `switch` with a `default` and an
+/// infinite loop, none of them broken out of) ends it abruptly; anything
+/// else may complete.
+pub(crate) fn may_complete(ss: &[Stmt]) -> bool {
+    !ss.iter().any(|s| match s {
+        Stmt::Switch { cases, .. } => {
+            cases.iter().any(|c| c.test.is_none())
+                && !cases.iter().any(|c| breaks_out(&c.body))
+                && cases.last().is_some_and(|c| !may_complete(&c.body))
+        }
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body,
+        }
+        | Stmt::DoWhile {
+            condition: Expr::Bool(true),
+            body,
+        }
+        | Stmt::For {
+            condition: None,
+            body,
+            ..
+        } => !breaks_out(body),
+        Stmt::Return(_) | Stmt::Throw(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => !may_complete(then_branch) && !may_complete(else_branch),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            finally.as_deref().is_some_and(|f| !may_complete(f))
+                || (!may_complete(body) && catch.as_ref().is_none_or(|c| !may_complete(&c.body)))
+        }
+        _ => false,
+    })
+}
+
+/// Whether `ss` may leave the loop or `switch` it is the body of by a
+/// `break` (any labeled `break` counts, wherever it is).
+fn breaks_out(ss: &[Stmt]) -> bool {
+    fn labeled(ss: &[Stmt]) -> bool {
+        ss.iter().any(|s| match s {
+            Stmt::LabeledBreak(_) => true,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => labeled(then_branch) || else_branch.as_deref().is_some_and(labeled),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                labeled(body)
+            }
+            Stmt::Switch { cases, .. } => cases.iter().any(|c| labeled(&c.body)),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                labeled(body)
+                    || catch.as_ref().is_some_and(|c| labeled(&c.body))
+                    || finally.as_deref().is_some_and(labeled)
+            }
+            Stmt::Labeled { body, .. } => labeled(std::slice::from_ref(body)),
+            _ => false,
+        })
+    }
+    ss.iter().any(|s| match s {
+        Stmt::Break | Stmt::LabeledBreak(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => breaks_out(then_branch) || else_branch.as_deref().is_some_and(breaks_out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            breaks_out(body)
+                || catch.as_ref().is_some_and(|c| breaks_out(&c.body))
+                || finally.as_deref().is_some_and(breaks_out)
+        }
+        Stmt::Labeled { body, .. } => breaks_out(std::slice::from_ref(body)),
+        // An inner loop's or switch's own `break` stays inside it.
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            labeled(body)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| labeled(&c.body)),
+        _ => false,
+    })
+}
+
 /// A clip's bound: a literal, a local, a local's `length`, or a pure
 /// integer expression of those.
 #[derive(Clone, Debug)]
