@@ -41,10 +41,14 @@ fn a_fixed_length_field_array_read_is_proven() {
 
 #[test]
 fn a_literal_array_read_in_bounds_needs_no_bound() {
+    // A loop counter is narrowed in a function body (`gen::narrow`).
     let src = "const a = [1, 2, 3, 4];\n\
-               let s = 0;\n\
-               for (let i = 0; i < 4; i++) s += a[i];\n\
-               console.log(s);";
+               function sum(): number {\n\
+                 let s = 0;\n\
+                 for (let i = 0; i < 4; i++) s += a[i];\n\
+                 return s;\n\
+               }\n\
+               console.log(sum());";
     let r = reads(src, "a[i]").expect("proven read");
     assert_eq!(
         r,
@@ -75,11 +79,26 @@ fn an_index_store_past_the_length_is_growth() {
 }
 
 #[test]
-fn an_escaped_array_is_not_proven() {
+fn an_array_given_an_element_descriptor_is_not_proven() {
+    let src = "const a = [1, 2, 3];\n\
+               Object.defineProperty(a, 1, { get() { return 7; } });\n\
+               console.log(a[1]);";
+    assert_eq!(reads(src, "a[1]"), None);
+}
+
+#[test]
+fn an_array_reached_through_a_global_is_still_the_programs() {
+    // The program is closed: a global store is one more store it sees.
     let src = "const a = [1, 2, 3];\n\
                (globalThis as any).leak = a;\n\
                console.log(a[1]);";
-    assert_eq!(reads(src, "a[1]"), None);
+    assert_eq!(
+        reads(src, "a[1]"),
+        Some(ElementRead {
+            len: 3,
+            key_in_bounds: true
+        })
+    );
 }
 
 #[test]
@@ -92,9 +111,12 @@ fn a_receiver_that_may_be_another_object_is_not_proven() {
 #[test]
 fn a_key_outside_the_length_keeps_its_bound() {
     let src = "const a = [1, 2, 3, 4];\n\
-               let s = 0;\n\
-               for (let i = 0; i < 8; i++) s += a[i] ?? 0;\n\
-               console.log(s);";
+               function sum(): number {\n\
+                 let s = 0;\n\
+                 for (let i = 0; i < 8; i++) s += a[i] ?? 0;\n\
+                 return s;\n\
+               }\n\
+               console.log(sum());";
     let r = reads(src, "a[i]").expect("proven read");
     assert_eq!(
         r,
