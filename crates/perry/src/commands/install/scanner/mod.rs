@@ -40,11 +40,16 @@ impl ScannedPackage {
 /// Follow installed dependency names, including links into isolated stores.
 pub fn discover_packages(node_modules: &Path) -> Vec<ScannedPackage> {
     let mut out = Vec::new();
-    walk(node_modules, &mut out, &mut HashSet::new());
+    walk(node_modules, &mut out, &mut HashSet::new(), None);
     out
 }
 
-fn walk(node_modules: &Path, out: &mut Vec<ScannedPackage>, visited: &mut HashSet<PathBuf>) {
+fn walk(
+    node_modules: &Path,
+    out: &mut Vec<ScannedPackage>,
+    visited: &mut HashSet<PathBuf>,
+    excluded_package: Option<&Path>,
+) {
     let Ok(identity) = fs::canonicalize(node_modules) else {
         return;
     };
@@ -70,11 +75,17 @@ fn walk(node_modules: &Path, out: &mut Vec<ScannedPackage>, visited: &mut HashSe
             if let Ok(scope_entries) = fs::read_dir(&path) {
                 for scoped in scope_entries.flatten() {
                     let scoped_name = format!("{}/{}", name, scoped.file_name().to_string_lossy());
-                    record_and_recurse(&scoped.path(), &scoped_name, out, visited);
+                    record_and_recurse(
+                        &scoped.path(),
+                        &scoped_name,
+                        out,
+                        visited,
+                        excluded_package,
+                    );
                 }
             }
         } else {
-            record_and_recurse(&path, &name, out, visited);
+            record_and_recurse(&path, &name, out, visited, excluded_package);
         }
     }
 }
@@ -84,8 +95,15 @@ fn record_and_recurse(
     dir_name: &str,
     out: &mut Vec<ScannedPackage>,
     visited: &mut HashSet<PathBuf>,
+    excluded_package: Option<&Path>,
 ) {
     if !pkg_dir.is_dir() {
+        return;
+    }
+    let Ok(physical) = fs::canonicalize(pkg_dir) else {
+        return;
+    };
+    if excluded_package == Some(physical.as_path()) {
         return;
     }
     let manifest_path = pkg_dir.join("package.json");
@@ -106,8 +124,22 @@ fn record_and_recurse(
     }
     let nested = pkg_dir.join("node_modules");
     if nested.is_dir() {
-        walk(&nested, out, visited);
+        walk(&nested, out, visited, None);
     }
+    // Isolated dependencies are beside the physical package; its own store name is not an alias.
+    if let Some(container) = dependency_container(&physical) {
+        walk(container, out, visited, Some(&physical));
+    }
+}
+
+fn dependency_container(package: &Path) -> Option<&Path> {
+    let parent = package.parent()?;
+    let container = if parent.file_name()?.to_str()?.starts_with('@') {
+        parent.parent()?
+    } else {
+        parent
+    };
+    (container.file_name()? == "node_modules").then_some(container)
 }
 
 /// Run all enabled rules against a single package. Each rule module

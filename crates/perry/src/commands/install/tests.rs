@@ -161,6 +161,75 @@ fn lifecycle_follows_scoped_dependencies_without_looping_over_link_cycles() {
 }
 
 #[test]
+fn lifecycle_follows_dependencies_beside_isolated_packages() {
+    let _env = crate::test_env_lock::env_lock();
+    for store in [".bun", ".pnpm"] {
+        for physical_name in ["outer-fixture", "@source/original"] {
+            let root = TempDir::new().unwrap();
+            let container = format!("{store}/outer@1.0.0/node_modules");
+            let outer_path = format!("{container}/{physical_name}");
+            write_package(root.path(), &outer_path, "outer-fixture");
+            let modules = root.path().join("node_modules");
+            let outer = modules.join(outer_path);
+            std::os::unix::fs::symlink(&outer, modules.join("outer-alias")).unwrap();
+            let nested_path = format!("{store}/nested@1.0.0/node_modules/nested-fixture");
+            write_package(root.path(), &nested_path, "nested-fixture");
+            let nested = modules.join(nested_path);
+            let scope = modules.join(container).join("@approved");
+            fs::create_dir_all(&scope).unwrap();
+            std::os::unix::fs::symlink(&nested, scope.join("nested")).unwrap();
+
+            let summary = run(root.path(), &args(&["--run-scripts", "@approved/nested"]));
+            assert_eq!(summary.ran, ["@approved/nested"]);
+            assert_eq!(summary.skipped, ["outer-alias"]);
+            assert!(!outer.join("ran.txt").exists());
+            assert_eq!(
+                fs::read_to_string(nested.join("ran.txt")).unwrap(),
+                "approved"
+            );
+
+            fs::remove_file(nested.join("ran.txt")).unwrap();
+            let summary = run(root.path(), &args(&["--run-scripts", physical_name]));
+            assert!(summary.ran.is_empty());
+            assert!(!outer.join("ran.txt").exists());
+            assert!(!nested.join("ran.txt").exists());
+        }
+    }
+}
+
+#[test]
+fn lifecycle_resolution_error_identifies_package_and_prior_progress() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    for name in ["early-unapproved", "first-approved", "later-approved"] {
+        write_package(root.path(), name, name);
+    }
+    let mut packages = scanner::discover_packages(&root.path().join("node_modules"));
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+    fs::remove_dir_all(root.path().join("node_modules/later-approved")).unwrap();
+    let error = lifecycle::run_all(
+        &packages,
+        root.path(),
+        &args(&[
+            "--run-scripts",
+            "first-approved",
+            "--run-scripts",
+            "later-approved",
+        ]),
+    )
+    .err()
+    .expect("missing approved package must fail");
+    let message = error.to_string();
+    assert!(message.contains("later-approved@1.0.0"), "{message}");
+    assert!(message.contains("completed: [first-approved]"), "{message}");
+    assert!(message.contains("skipped: [early-unapproved]"), "{message}");
+    assert_eq!(
+        fs::read_to_string(root.path().join("node_modules/first-approved/ran.txt")).unwrap(),
+        "approved"
+    );
+}
+
+#[test]
 fn lifecycle_approval_uses_installed_identity_not_manifest_name() {
     let _env = crate::test_env_lock::env_lock();
     let root = TempDir::new().unwrap();

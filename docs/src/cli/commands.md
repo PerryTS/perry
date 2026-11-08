@@ -68,8 +68,9 @@ Typosquatting checks inspect the declared package name, but `--allow-risky`
 overrides select the installed name, just like script approvals.
 
 Discovery follows the installed dependency graph, including symlinks into Bun
-and pnpm stores. Hidden store entries do not independently grant script
-approval. Multiple approved aliases to one physical package execute its
+and pnpm stores and dependency links beside their physical packages. A cached
+package's own store name does not independently grant script approval.
+Multiple approved aliases to one physical package execute its
 lifecycle scripts once per invocation; dependency-link cycles terminate.
 
 `--run-scripts-all` explicitly approves every installed package. Neither form

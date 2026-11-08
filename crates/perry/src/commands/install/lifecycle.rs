@@ -10,7 +10,7 @@
 //! Approval grants host-shell execution with the user's environment and
 //! privileges; it does not sandbox scripts or authenticate their contents.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
@@ -44,7 +44,17 @@ pub fn run_all(
             continue;
         }
 
-        if !executed.insert(pkg.dir.canonicalize()?) {
+        let identity = pkg.dir.canonicalize().with_context(|| {
+            format!(
+                "cannot resolve approved package {}@{} at {}; completed: [{}]; skipped: [{}]",
+                pkg.name,
+                pkg.version,
+                pkg.dir.display(),
+                summary.ran.join(", "),
+                summary.skipped.join(", ")
+            )
+        })?;
+        if !executed.insert(identity) {
             continue;
         }
         run_package(pkg, project_root)?;
