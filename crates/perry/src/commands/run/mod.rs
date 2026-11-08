@@ -196,6 +196,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         define: Vec::new(),
         source_root: None,
         source_root_target: None,
+        macro_import_stack: Vec::new(),
         input: input.clone(),
         output: Some(PathBuf::from(&app_name)),
         keep_intermediates: false,
