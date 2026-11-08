@@ -409,7 +409,11 @@ impl Model {
                     self.add_tok(dst, t);
                 }
                 if prim & !strip != 0 {
+                    // A filter of the host's values: its Numbers keep the
+                    // host's interval.
+                    let saved = self.cur_range.replace(self.nodes[n as usize].range);
                     self.add_prim(dst, prim & !strip);
+                    self.cur_range = saved;
                 }
             }
             Cons::Falsy { dst } => {
@@ -426,7 +430,15 @@ impl Model {
                     }
                 }
                 if p != 0 {
+                    // The host's falsy Numbers: within its interval unless ⊤
+                    // or a marker adds falsy values of its own.
+                    let own = !toks.iter().any(|&t| t == TOP || self.is_marker(t));
+                    let saved = std::mem::replace(
+                        &mut self.cur_range,
+                        own.then(|| self.nodes[n as usize].range),
+                    );
                     self.add_prim(dst, p);
+                    self.cur_range = saved;
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {
@@ -1213,9 +1225,7 @@ impl Model {
                         (prim::UNDEF, &["undefined"][..]),
                     ] {
                         if prim & bit != 0
-                            && self
-                                .idx_done
-                                .insert((n, obj, call, IDX_CALL_NAMED + bit))
+                            && self.idx_done.insert((n, obj, call, IDX_CALL_NAMED + bit))
                         {
                             for k in keys {
                                 let a = self.atom(k);
@@ -1316,6 +1326,32 @@ impl Model {
                             setter,
                         },
                     );
+                }
+            }
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right,
+            } => {
+                let me = self.range_input(n);
+                let ot = if other == NO_NODE {
+                    Iv::EMPTY
+                } else {
+                    self.range_input(other)
+                };
+                let (l, r) = if right { (ot, me) } else { (me, ot) };
+                let iv = if self.range_sabotage && op == RangeOp::Add {
+                    l
+                } else {
+                    crate::model::range::eval(op, l, r)
+                };
+                if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
+                    let d = &mut self.nodes[dst as usize];
+                    if !d.in_wl {
+                        d.in_wl = true;
+                        self.wl.push_back(dst);
+                    }
                 }
             }
             Cons::Arith { dst } => {

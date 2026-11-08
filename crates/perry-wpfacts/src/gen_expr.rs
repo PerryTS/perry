@@ -664,7 +664,8 @@ impl<'a> Gen<'a> {
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
             Expr::Bool(_) => self.prim_node(prim::BOOL),
-            Expr::Number(_) | Expr::Integer(_) => self.prim_node(prim::NUM),
+            Expr::Number(v) => self.num_literal(*v),
+            Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
             Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
@@ -673,7 +674,10 @@ impl<'a> Gen<'a> {
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
-                _ => self.local(mi, *id),
+                _ => match self.narrowed_read(mi, *id) {
+                    Some(n) => n,
+                    None => self.local(mi, *id),
+                },
             },
             // Program code never writes a `const` (lowering throws
             // `Assignment to constant variable`): `undefined` written into
@@ -700,6 +704,7 @@ impl<'a> Gen<'a> {
                     ),
                     None => self.m.edge(vn, l),
                 }
+                self.narrowed_write(mi, *id, vn);
                 vn
             }
             Expr::ScopedTemp { id, value, body } => {
@@ -785,8 +790,11 @@ impl<'a> Gen<'a> {
                 }
                 v
             }
-            Expr::Update { id, .. } => {
-                let l = self.local(mi, *id);
+            Expr::Update { id, op, .. } => {
+                let l = match self.narrowed_read(mi, *id) {
+                    Some(n) => n,
+                    None => self.local(mi, *id),
+                };
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
                     l,
@@ -796,9 +804,15 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let out = self.tmp("update");
+                let step = match op {
+                    perry_hir::UpdateOp::Increment => 1,
+                    perry_hir::UpdateOp::Decrement => -1,
+                };
+                self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
                 self.m.cons(l, Cons::Arith { dst: out });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
+                self.narrowed_write(mi, *id, out);
                 out
             }
             Expr::Binary { op, left, right } => {
@@ -807,6 +821,28 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason("ToPrimitive operand");
                 let l = self.expr(fx, left);
                 let rv = self.expr(fx, right);
+                {
+                    use crate::model::RangeOp as R;
+                    use perry_hir::BinaryOp as B;
+                    let rop = match op {
+                        B::Add => Some(R::Add),
+                        B::Sub => Some(R::Sub),
+                        B::Mul => Some(R::Mul),
+                        B::Mod => Some(R::Mod),
+                        B::BitAnd => Some(R::BitAnd),
+                        B::BitOr => Some(R::BitOr),
+                        B::BitXor => Some(R::BitXor),
+                        B::Shl => Some(R::Shl),
+                        B::Shr => Some(R::Shr),
+                        B::UShr => Some(R::UShr),
+                        B::Div | B::Pow => None,
+                    };
+                    // Every Number `out` holds is the operator's: without a
+                    // rule (`/`, `**`) it is ⊤ by the fail-closed default.
+                    if let Some(rop) = rop {
+                        self.range_rule(rop, l, Some(rv), out);
+                    }
+                }
                 for v in [l, rv] {
                     self.m.cons(
                         v,
@@ -872,6 +908,11 @@ impl<'a> Gen<'a> {
                         },
                     );
                     let out = self.tmp("unary");
+                    let rop = match op {
+                        UnaryOp::Neg => crate::model::RangeOp::Neg,
+                        _ => crate::model::RangeOp::BitNot,
+                    };
+                    self.range_rule(rop, v, None, out);
                     self.m.cons(v, Cons::Arith { dst: out });
                     out
                 }
@@ -2102,27 +2143,13 @@ impl<'a> Gen<'a> {
 
 impl<'a> Gen<'a> {
     /// The shape of computed key `e` of module `mi`: its literal parts
-    /// (`KeyShape::of`), or for a call of one of the module's functions
+    /// (`KeyShape::of`), for a call of one of the module's functions
     /// (HIR `FuncRef`: a declaration the program reassigns is a local, so
     /// the call runs this body) what that body returns
-    /// (`KeyShape::of_returns`).
+    /// (`KeyShape::of_returns`), for a parameter what its calls pass
+    /// (`Gen::key_shape_of`).
     pub(crate) fn key_shape(&mut self, mi: u32, e: &Expr) -> KeyShapeId {
-        let s = match e {
-            Expr::Call { callee, .. } => match callee.as_ref() {
-                Expr::FuncRef(id)
-                    if !self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) =>
-                {
-                    self.modules[mi as usize]
-                        .1
-                        .functions
-                        .iter()
-                        .find(|f| f.id == *id)
-                        .and_then(crate::model::KeyShape::of_returns)
-                }
-                _ => None,
-            },
-            _ => crate::model::KeyShape::of(e),
-        };
-        self.m.key_shape(s)
+        let s = self.key_shape_of(mi, e, &mut Vec::new());
+        self.m.key_shape(s.filter(|s| !s.globs.is_empty()))
     }
 }

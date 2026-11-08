@@ -399,6 +399,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("iteratorRestAppend")
             || starts("cjsRequireEdge")
             || starts("unknown result alternative")
+            || starts("value a finally capability is resolved with")
         {
             UnmodeledConstruct
         } else {

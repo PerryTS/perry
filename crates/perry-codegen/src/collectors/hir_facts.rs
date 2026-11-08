@@ -550,6 +550,7 @@ pub(crate) fn collect_type_facts(
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
     module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
+    proven_int32: &HashSet<u32>,
 ) -> TypeFacts {
     // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
     // read rather than a property read. Computed once here because
@@ -648,6 +649,10 @@ pub(crate) fn collect_type_facts(
     // feed the stronger fact into its downstream consumers explicitly. This
     // is a consequence of the range proof, not an additional assumption.
     integer_locals.extend(loop_bounded_i32_locals.iter().copied());
+    // The whole-program interval proof (`codegen/facts_int32_locals.rs`):
+    // every value the local holds is an int32, so it is integer-valued and
+    // i32-bounded by that proof alone (beside the loop-bounded one above).
+    integer_locals.extend(proven_int32.iter().copied());
     let not_bigint_locals = not_bigint.into_locals();
     let (mut array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
@@ -669,7 +674,7 @@ pub(crate) fn collect_type_facts(
     } else {
         HashMap::new()
     };
-    let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
+    let mut strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
         &integer_locals,
         flat_const_ids,
@@ -677,6 +682,7 @@ pub(crate) fn collect_type_facts(
         strict_int_ta_views,
         &numeric_locals,
     );
+    strictly_i32_bounded_locals.extend(proven_int32.iter().copied());
     // #7128: the profitability half of canonical-i32 selection. Every term
     // above answers "may we?"; this one answers "should we?", and it is
     // computed here — after the storage facts it consults — rather than folded
@@ -1010,6 +1016,7 @@ pub(crate) fn collect_native_region_fact_graph(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
+    proven_int32: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_native_region_fact_graph_with_spec_params(
         stmts,
@@ -1029,6 +1036,7 @@ pub(crate) fn collect_native_region_fact_graph(
         &HashSet::new(),
         &HashSet::new(),
         module_global_proven_types,
+        proven_int32,
     )
 }
 
@@ -1054,6 +1062,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
     module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
+    proven_int32: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -1073,6 +1082,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
         spec_numeric_params,
         spec_number_array_params,
         module_global_proven_types,
+        proven_int32,
     )
 }
 
@@ -1104,6 +1114,7 @@ pub(crate) fn collect_hir_facts(
         &HashSet::new(),
         &HashSet::new(),
         &HashMap::new(),
+        &HashSet::new(),
     )
 }
 
@@ -2535,6 +2546,7 @@ mod tests {
             &[1].into_iter().collect(),
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
         )
     }
 
@@ -2702,6 +2714,7 @@ mod tests {
                 Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))),
             )]),
             &HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
@@ -2794,6 +2807,7 @@ mod tests {
             &HashMap::new(),
             &crate::collectors::ModuleDispatchFacts::default(),
             &HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(graph.integer_locals().contains(&1));

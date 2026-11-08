@@ -712,7 +712,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via one sitofp per write so non-int readers (e.g. `acc / K`)
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
-                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
+                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value)
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 // Within a stable-packed numeric clone, when `x` is a
                 // canonical raw Number, `x | 0` may feed the canonical i32
                 // slot directly: materializing a double here only to convert
