@@ -359,8 +359,8 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // Dispatch common/small handles (including crypto) here too: they fail the
     // heap-only is_pointer guard below and cannot reach its legacy handle-band
     // path. Use the same string-property dispatcher as reads, so numeric zero
-    // is present and an undefined result is absent. Symbol keys remain absent,
-    // and no native handle falls through to a heap dereference.
+    // is present and an undefined result is absent. Symbol presence walks
+    // property holders without reading values or invoking getters.
     if obj_val.is_handle() {
         let addr = obj_val.as_handle();
         if key_val.is_any_string() {
@@ -378,6 +378,46 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                         }
                     }
                 }
+            }
+        } else if crate::value::addr_class::is_small_handle(addr as usize)
+            && unsafe { crate::symbol::js_is_symbol(key) } != 0
+        {
+            if unsafe { crate::symbol::has_own_symbol_property(obj, key) } {
+                return nanbox_true;
+            }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let key = scope.root_nanbox_f64(key);
+            let prototype = super::super::prototype_chain::object_static_prototype(addr as usize)
+                .map(f64::from_bits)
+                .unwrap_or_else(|| super::super::object_ops::get_prototype_of_resolved(obj));
+            let mut prototype = scope.root_nanbox_f64(prototype);
+            loop {
+                let value = prototype.get_nanbox_f64();
+                if JSValue::from_bits(value.to_bits()).is_handle()
+                    || crate::object::class_ref_id(value).is_some()
+                {
+                    return js_object_has_property(value, key.get_nanbox_f64());
+                }
+                if !JSValue::from_bits(value.to_bits()).is_pointer() {
+                    break;
+                }
+                if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+                    return if crate::value::js_is_truthy(crate::proxy_hooks::proxy_has(
+                        value,
+                        key.get_nanbox_f64(),
+                    )) != 0
+                    {
+                        nanbox_true
+                    } else {
+                        nanbox_false
+                    };
+                }
+                if unsafe { crate::symbol::has_own_symbol_property(value, key.get_nanbox_f64()) } {
+                    return nanbox_true;
+                }
+                prototype = scope.root_nanbox_f64(
+                    super::super::object_ops::get_prototype_of_resolved(prototype.get_nanbox_f64()),
+                );
             }
         }
         return nanbox_false;
@@ -685,8 +725,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     // chain (node's members are on the intrinsic), never the
                     // Buffer method table.
                     if crate::buffer::buffer_has_own_prop(obj_addr as usize, name)
-                        || crate::object::get_accessor_descriptor(obj_addr as usize, name)
-                            .is_some()
+                        || crate::object::get_accessor_descriptor(obj_addr as usize, name).is_some()
                     {
                         return nanbox_true;
                     }
