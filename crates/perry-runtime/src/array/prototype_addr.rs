@@ -226,6 +226,20 @@ pub(crate) fn intrinsic_prototype_addr(
     realm_intrinsic_addr(&intrinsic_entry(identity).prototype)
 }
 
+/// This realm's intrinsic prototype of `identity` if the realm has bound it,
+/// else 0. Never builds the realm: a prototype that was never born cannot
+/// have been written either (the per-call `dv.get*` guard asks exactly that).
+#[inline]
+pub(crate) fn intrinsic_prototype_addr_if_bound(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let cell = &intrinsic_entry(identity).prototype;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
 /// This realm's original constructor of `identity` (`%Promise%`, …), or 0
 /// while the realm is being populated, under the same rule as
 /// [`intrinsic_prototype_addr`].

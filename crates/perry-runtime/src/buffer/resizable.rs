@@ -86,12 +86,17 @@ fn max_byte_length_option(options: f64) -> Option<i32> {
     )))
 }
 
-/// `new ArrayBuffer(length, options)`. Spec order: `ToIndex(length)`, then the
-/// `maxByteLength` option read + `ToIndex`, then the `length > max` RangeError.
-#[no_mangle]
-pub extern "C" fn js_array_buffer_new_with_options(
+/// `new ArrayBuffer(length, options)` / `new SharedArrayBuffer(length,
+/// options)` (ES2024 resizable / growable). Spec order: `ToIndex(length)`,
+/// then the `maxByteLength` option read + `ToIndex`, then the `length > max`
+/// RangeError. Without the option (or with `maxByteLength: undefined`) a
+/// fixed-length buffer. A growable SAB reserves `max` zeroed bytes in its
+/// process-global store; `grow` only moves the length within it, so the store
+/// never moves. One body for both kinds, so a program links it once.
+pub(crate) fn buffer_new_with_options(
     size_value: f64,
     options: f64,
+    shared: bool,
 ) -> *mut BufferHeader {
     // `ToIndex(length)` can run a user `valueOf`, i.e. collect: root the
     // options bag across it.
@@ -99,34 +104,14 @@ pub extern "C" fn js_array_buffer_new_with_options(
     let options = scope.root_nanbox_f64(options);
     let len = super::from::array_buffer_to_index(size_value);
     match max_byte_length_option(options.get_nanbox_f64()) {
+        None if shared => super::from::js_shared_array_buffer_new(len),
         None => super::from::js_array_buffer_new(len),
         Some(max) => {
             if len > max {
                 throw_invalid_length("Invalid array buffer max length");
             }
-            alloc_resizable_array_buffer(len, max)
-        }
-    }
-}
-
-/// `new SharedArrayBuffer(length, { maxByteLength })` (ES2024 growable SAB).
-/// Without the option (or with `maxByteLength: undefined`) a fixed-length
-/// SAB, exactly `js_shared_array_buffer_new_value`. A growable one reserves
-/// `max` zeroed bytes in its process-global store; `grow` only moves the
-/// length within it, so the store never moves.
-#[no_mangle]
-pub extern "C" fn js_shared_array_buffer_new_with_options(
-    size_value: f64,
-    options: f64,
-) -> *mut BufferHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let options = scope.root_nanbox_f64(options);
-    let len = super::from::array_buffer_to_index(size_value);
-    match max_byte_length_option(options.get_nanbox_f64()) {
-        None => super::from::js_shared_array_buffer_new(len),
-        Some(max) => {
-            if len > max {
-                throw_invalid_length("Invalid array buffer max length");
+            if !shared {
+                return alloc_resizable_array_buffer(len, max);
             }
             let buf = super::from::js_shared_array_buffer_new(max);
             unsafe {
@@ -141,6 +126,24 @@ pub extern "C" fn js_shared_array_buffer_new_with_options(
             buf
         }
     }
+}
+
+/// `new ArrayBuffer(length, options)`.
+#[no_mangle]
+pub extern "C" fn js_array_buffer_new_with_options(
+    size_value: f64,
+    options: f64,
+) -> *mut BufferHeader {
+    buffer_new_with_options(size_value, options, false)
+}
+
+/// `new SharedArrayBuffer(length, { maxByteLength })`.
+#[no_mangle]
+pub extern "C" fn js_shared_array_buffer_new_with_options(
+    size_value: f64,
+    options: f64,
+) -> *mut BufferHeader {
+    buffer_new_with_options(size_value, options, true)
 }
 
 /// `SharedArrayBuffer.prototype.grow(newLength)`: a growable SAB only, and

@@ -524,11 +524,11 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            let buf = if name == BuiltinConstructorIdentity::SharedArrayBuffer {
-                crate::buffer::js_shared_array_buffer_new_with_options(size, options)
-            } else {
-                crate::buffer::js_array_buffer_new_with_options(size, options)
-            };
+            let buf = crate::buffer::buffer_new_with_options(
+                size,
+                options,
+                name == BuiltinConstructorIdentity::SharedArrayBuffer,
+            );
             return Some(crate::value::js_nanbox_pointer(buf as i64));
         }
         // The Web Streams constructors reached as values (`const RS =

@@ -87,8 +87,8 @@ pub(crate) extern "C" fn shared_array_buffer_byte_length_getter_thunk(
 /// `SharedArrayBuffer.prototype.slice(start, end)`. The brand check (the `this`
 /// value must be a SharedArrayBuffer, never a plain ArrayBuffer or a
 /// non-object) lives here so `SharedArrayBuffer.prototype.slice.call(notSab)`
-/// throws a TypeError; the actual byte copy + ToIntegerOrInfinity arg coercion
-/// is shared with the instance dispatch in `buffer_dispatch`.
+/// throws a TypeError; the byte copy + ToIntegerOrInfinity arg coercion is
+/// `buffer_dispatch::array_buffer_slice`, shared with `ArrayBuffer`'s.
 pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -97,8 +97,7 @@ pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
 ) -> f64 {
     match shared_array_buffer_receiver_addr(this) {
         Some(addr) => unsafe {
-            let args = [start, end];
-            super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+            super::super::buffer_dispatch::array_buffer_slice(addr, &[start, end])
         },
         None => super::super::object_ops::throw_object_type_error(
             b"Method SharedArrayBuffer.prototype.slice called on incompatible receiver",
@@ -114,8 +113,7 @@ pub(crate) extern "C" fn array_buffer_slice_thunk(
 ) -> f64 {
     match array_buffer_receiver_addr(this) {
         Some(addr) => unsafe {
-            let args = [start, end];
-            super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+            super::super::buffer_dispatch::array_buffer_slice(addr, &[start, end])
         },
         None => super::super::object_ops::throw_object_type_error(
             b"Method ArrayBuffer.prototype.slice called on incompatible receiver",
@@ -123,11 +121,10 @@ pub(crate) extern "C" fn array_buffer_slice_thunk(
     }
 }
 
-/// `ArrayBuffer.prototype.{resize, transfer, transferToFixedLength}` reached
-/// reflectively (`ArrayBuffer.prototype.resize.call(ab, n)`). Instances
-/// dispatch through `buffer_dispatch` directly; these only brand-check the
-/// receiver and forward to the same arm, so the two cannot disagree (#10873).
-fn array_buffer_method_via_dispatch(
+/// `ArrayBuffer.prototype.{resize, transfer, transferToFixedLength}`: brand
+/// check (a plain ArrayBuffer, never a SharedArrayBuffer or a DataView), then
+/// the implementation. Instance calls reach these through the prototype member.
+fn array_buffer_method(
     this: crate::closure::JsThis,
     method: &'static str,
     arg: f64,
@@ -137,10 +134,14 @@ fn array_buffer_method_via_dispatch(
         Some(addr)
             if !crate::buffer::is_shared_array_buffer(addr)
                 && !crate::buffer::is_data_view(addr) =>
-        unsafe {
+        {
             let args = [arg];
-            super::super::buffer_dispatch::dispatch_buffer_method(addr, method, args.as_ptr(), 1)
-        },
+            if method == "resize" {
+                crate::buffer::array_buffer_resize(addr, &args)
+            } else {
+                crate::buffer::array_buffer_transfer(addr, &args, method == "transfer")
+            }
+        }
         _ => super::super::object_ops::throw_object_type_error(brand_error),
     }
 }
@@ -150,7 +151,7 @@ pub(crate) extern "C" fn array_buffer_resize_thunk(
     this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
-    array_buffer_method_via_dispatch(
+    array_buffer_method(
         this,
         "resize",
         new_length,
@@ -163,7 +164,7 @@ pub(crate) extern "C" fn array_buffer_transfer_thunk(
     this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
-    array_buffer_method_via_dispatch(
+    array_buffer_method(
         this,
         "transfer",
         new_length,
@@ -176,7 +177,7 @@ pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
     this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
-    array_buffer_method_via_dispatch(
+    array_buffer_method(
         this,
         "transferToFixedLength",
         new_length,
@@ -624,7 +625,8 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
             proto_obj,
             "buffer",
             mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_declared(0))),
-        );        install_builtin_getter(
+        );
+        install_builtin_getter(
             proto_obj,
             "byteLength",
             mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_length_getter_thunk, 0; with_declared(0))),
@@ -639,7 +641,6 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
             "length",
             mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_declared(0))),
         );
-
     }
 }
 
