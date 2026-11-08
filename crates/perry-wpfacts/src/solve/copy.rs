@@ -87,11 +87,16 @@ impl Model {
         }
         let covered = self.copy_coverage(a, b, Tokens::Slice(&toks)).0;
         self.bufs.push(toks);
+        // Registration is a value-copy delivery: `a`'s Numbers arrive with
+        // `a`'s interval.
+        let saved_range = self.cur_range.replace(self.nodes[a as usize].range);
         if covered {
             self.add_s(b, &[], prim, strs);
+            self.cur_range = saved_range;
             return;
         }
         if self.nodes[a as usize].pts.is_empty() && prim == 0 {
+            self.cur_range = saved_range;
             return;
         }
         let mut toks = self.bufs.pop().unwrap_or_default();
@@ -104,6 +109,7 @@ impl Model {
         self.cur_why = u32::MAX;
         self.copy_to(a, b, Tokens::Slice(&toks), prim, strs);
         (self.cur_src, self.cur_why) = saved;
+        self.cur_range = saved_range;
         self.bufs.push(toks);
     }
 

@@ -64,6 +64,9 @@ pub struct FactsConfig {
     pub diagnostics: bool,
     /// Record the constraint relations for the independent recomputation.
     pub relations: bool,
+    /// No integer intervals (`model::range`): every Number is ⊤
+    /// (`PERRY_FACTS_INT_RANGES=0`).
+    pub no_int_ranges: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -429,6 +432,8 @@ fn generate<'a>(
     g.export_sources = cfg.export_sources.clone();
     g.roots = cfg.roots.clone();
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
+    g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
+    g.int_ranges = !cfg.no_int_ranges;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());

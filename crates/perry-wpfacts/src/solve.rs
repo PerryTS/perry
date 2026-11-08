@@ -222,12 +222,18 @@ impl Model {
                 self.aborted = true;
             }
         }
+        let iv = self.cur_range.unwrap_or(Iv::TOP);
         let node = &mut self.nodes[n as usize];
         let newp = prim & !node.prim;
         if newp != 0 {
             node.prim |= newp;
             node.dprim |= newp;
             changed = true;
+        }
+        // A Number brings its interval: the delivering edge's, else ⊤. A
+        // rule's result takes its interval from the rule only.
+        if prim & prim::NUM != 0 && !node.ruled {
+            changed |= grow_range(node, iv);
         }
         if prim & prim::STR != 0 {
             let strs = if strs == STRS_NONE { STRS_TOP } else { strs };
@@ -649,6 +655,16 @@ impl Model {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
+        if let Cons::Range { dst, .. } = c {
+            // The rule's result is every Number the node can hold: what
+            // reached it before (an instance's seeds) is subsumed.
+            let d = &mut self.nodes[dst as usize];
+            if !d.ruled {
+                d.ruled = true;
+                d.range = Iv::EMPTY;
+                d.rsteps = 0;
+            }
+        }
         self.nodes[n as usize].cons.push(c);
         if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
             let cs = &self.nodes[n as usize].cons;
@@ -738,22 +754,28 @@ impl Model {
                     return;
                 }
             }
-            let (dprim, dstrs) = {
+            let (dprim, dstrs, drange) = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
                 self.pending.take(&mut node.delta, &mut delta);
                 (
                     std::mem::take(&mut node.dprim),
                     std::mem::take(&mut node.dstrs),
+                    std::mem::take(&mut node.drange) && node.prim & prim::NUM != 0,
                 )
             };
-            if delta.is_empty() && dprim == 0 && !dstrs {
+            if delta.is_empty() && dprim == 0 && !dstrs && !drange {
                 continue;
             }
-            // Grown string constants alone (`Node::strs`) reach the
-            // successors and the rules that read them (`Cons::carries_strs`).
-            let strs_only = delta.is_empty() && dprim == 0;
-            let sprim = dprim | if dstrs { prim::STR } else { 0 };
+            // Only a node's string constants (`Node::strs`) and/or its
+            // Number interval (`model::range`) grew: re-deliver them along the
+            // edges (STR with the constants, NUM with the interval) and re-run
+            // only the rules that read them (`Cons::carries_strs`,
+            // `Cons::carries_range`). Each lattice keeps its own predicate.
+            let meta_only = delta.is_empty() && dprim == 0;
+            let sprim = dprim
+                | if dstrs { prim::STR } else { 0 }
+                | if drange { prim::NUM } else { 0 };
             let sstrs = self.nodes[n as usize].strs;
             // Sets change interned (`SetTable::extend`); one made outside
             // this solve (an earlier solve, whose index is gone) is interned
@@ -779,6 +801,9 @@ impl Model {
             if self.past_work_bound() {
                 return;
             }
+            // A value-copy edge delivers the source's Numbers with their
+            // interval (`add_tokens`).
+            self.cur_range = Some(self.nodes[n as usize].range);
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
@@ -831,15 +856,18 @@ impl Model {
                 }
                 i += 1;
             }
+            self.cur_range = None;
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
                 let c = self.nodes[n as usize].cons[i];
-                let p = if dstrs && c.carries_strs() {
-                    sprim
-                } else {
-                    dprim
-                };
-                if strs_only && p == 0 {
+                let mut p = dprim;
+                if drange && (!meta_only || c.carries_range()) {
+                    p |= prim::NUM;
+                }
+                if dstrs && c.carries_strs() {
+                    p |= prim::STR;
+                }
+                if meta_only && p == 0 {
                     continue;
                 }
                 self.cur_src = n;
@@ -1657,6 +1685,12 @@ impl Model {
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Arith { dst } => format!("arith {n} {dst}"),
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right,
+            } => format!("range {n} {} {other} {dst} {}", op.name(), *right as u8),
             Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
@@ -1735,4 +1769,39 @@ impl Model {
 /// is safe: such a key reads the elements as well.
 pub(crate) fn numeric_key(name: &str) -> bool {
     name.parse::<f64>().is_ok() || matches!(name, "NaN" | "Infinity" | "-Infinity")
+}
+
+impl Model {
+    /// An operand's interval for `range::eval`: its own while it holds only
+    /// Numbers (nothing to coerce), empty while it holds nothing, else ⊤.
+    pub(crate) fn range_input(&self, x: NodeId) -> Iv {
+        let nd = &self.nodes[x as usize];
+        if nd.pts.is_empty() && nd.prim == 0 {
+            Iv::EMPTY
+        } else if nd.pts.is_empty() && nd.prim == prim::NUM {
+            nd.range
+        } else {
+            Iv::TOP
+        }
+    }
+}
+
+/// Join `iv` into the node's interval; widen to ⊤ past `WIDEN_STEPS`
+/// growths. Whether it grew.
+pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
+    let joined = node.range.join(iv);
+    if joined == node.range {
+        return false;
+    }
+    use crate::model::range::{widen, WIDEN_LIMIT, WIDEN_STEPS};
+    node.rsteps = node.rsteps.saturating_add(1);
+    node.range = if node.rsteps > WIDEN_LIMIT {
+        Iv::TOP
+    } else if node.rsteps > WIDEN_STEPS {
+        widen(node.range, joined)
+    } else {
+        joined
+    };
+    node.drange = true;
+    true
 }

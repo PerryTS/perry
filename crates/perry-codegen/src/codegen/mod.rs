@@ -257,6 +257,7 @@ mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod export_value_wrappers;
+pub(crate) mod facts_int32_locals;
 pub(crate) mod facts_number_locals;
 #[cfg(test)]
 mod facts_number_locals_tests;
@@ -272,6 +273,7 @@ mod guarded_undefined_method_tests;
 mod hoisted_callback_method_tests;
 #[cfg(test)]
 mod imported_global_order_tests;
+pub(crate) mod index_entry;
 #[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
@@ -380,8 +382,8 @@ pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, Sp
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, emit_typed_f64_guard,
     emit_typed_f64_to_raw_guarded, emit_typed_i1_guard, emit_typed_i32_plain_guard_and_raw,
-    emit_typed_string_guard, generic_closure_body_name, generic_function_body_name,
-    generic_method_body_name, nonnegative_index_fast_array_method_name,
+    emit_typed_i32_raw_assuming_guarded, emit_typed_string_guard, generic_closure_body_name,
+    generic_function_body_name, generic_method_body_name, nonnegative_index_fast_array_method_name,
     nonnegative_index_fast_array_params, nonnegative_index_method_name,
     typed_arg_is_guard_candidate, typed_f64_closure_name, typed_f64_function_name,
     typed_f64_method_name, typed_f64_receiver_method_info, typed_f64_receiver_method_name,
@@ -3667,8 +3669,17 @@ fn lower_module(
     // Bounded: one entry per function (the dominant tuple),
     // `PERRY_SPECIALIZED_ABI_MAX` per module.
     if spec_abi::spec_abi_enabled() {
-        let spec_facts =
-            crate::collectors::collect_spec_abi_facts_with(hir, &cross_module.definite_init);
+        let no_int32 = std::collections::BTreeSet::new();
+        let proven_int32 = if facts_int32_locals::enabled() {
+            &cross_module.wpfacts.int32_inputs
+        } else {
+            &no_int32
+        };
+        let spec_facts = crate::collectors::collect_spec_abi_facts_with(
+            hir,
+            &cross_module.definite_init,
+            proven_int32,
+        );
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
         for f in &hir.functions {

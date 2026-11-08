@@ -325,6 +325,17 @@ pub fn map_cons(
             setter,
         },
         Arith { dst } => Arith { dst: n(dst) },
+        Range {
+            op,
+            other,
+            dst,
+            right,
+        } => Range {
+            op,
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+            dst: n(dst),
+            right,
+        },
         Plus { str, num } => Plus {
             str: n(str),
             num: n(num),
@@ -459,6 +470,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | StoreIndexed { .. }
             | AccessorKeyed { .. }
             | Arith { .. }
+            | Range { .. }
             | Plus { .. }
             | ArrayLenArg { .. }
             | IterNext { .. }
@@ -492,6 +504,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }
         | Arith { dst }
+        | Range { dst, .. }
         | ArrayLenArg { dst }
         | IterNext { dst }
         | FromArrayLike { dst }

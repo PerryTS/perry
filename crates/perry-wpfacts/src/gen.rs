@@ -12,10 +12,12 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+mod narrow;
 mod native_result;
 mod once;
 mod own_guard;
 mod own_store;
+mod param_key;
 pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
@@ -263,6 +265,8 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// Loop-test narrowings being walked (`gen/narrow.rs`).
+    pub(crate) narrow: Vec<narrow::Narrow>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
     /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
     /// local, counter local). Their `array[k]` binding is what the
@@ -309,6 +313,9 @@ pub struct Gen<'a> {
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
     pub prim_const: [NodeId; 7],
+    /// One node per integer literal value, holding that Number with its
+    /// point interval (`Gen::num_literal`); shared like `prim_const`.
+    pub num_lits: FxHashMap<i64, NodeId>,
     pub(crate) shared_closures: shared_closures::SharedClosures<'a>,
     pub walked: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 225: the bodies not walked yet because they are not
@@ -322,6 +329,8 @@ pub struct Gen<'a> {
     /// The negative control (`PERRY_FACTS_SABOTAGE=dynimport`): `import()`
     /// sites skip their module mapping (DECISIONS 226).
     pub dynimport_sabotage: bool,
+    /// Integer intervals are generated (`FactsConfig::no_int_ranges`).
+    pub int_ranges: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -385,6 +394,9 @@ pub struct Gen<'a> {
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
     /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
     pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// Per module: its call-only functions' parameters and calls
+    /// (`Gen::key_shape_of`).
+    pub(crate) param_calls: FxHashMap<u32, param_key::ParamCalls<'a>>,
 }
 
 /// Per-function walking context.
@@ -603,6 +615,7 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            narrow: Vec::new(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
             write_top: Default::default(),
@@ -624,12 +637,14 @@ impl<'a> Gen<'a> {
             field_init_fn: FxHashMap::default(),
             static_init_fn: FxHashMap::default(),
             prim_const,
+            num_lits: FxHashMap::default(),
             walked: Default::default(),
             pending_walk: Default::default(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
             dynimport_sabotage: false,
+            int_ranges: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -653,6 +668,7 @@ impl<'a> Gen<'a> {
             for_in_key: Vec::new(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
+            param_calls: FxHashMap::default(),
         }
     }
 
