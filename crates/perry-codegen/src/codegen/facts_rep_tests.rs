@@ -83,15 +83,26 @@ fn ir_of(func: &str, proven: bool) -> String {
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&m, opts).expect("compiles")).expect("UTF-8");
-    let start = ir
-        .lines()
-        .position(|l| l.starts_with("define") && l.contains(&format!("perry_fn_fp__{func}(")))
-        .expect("function defined");
-    ir.lines()
-        .skip(start)
-        .take_while(|l| *l != "}")
-        .collect::<Vec<_>>()
-        .join("\n")
+    // Every body of the function: the public symbol and its clones
+    // (`$generic`, typed), which a trampoline may call.
+    let head = format!("perry_fn_fp__{func}");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for l in ir.lines() {
+        if l.starts_with("define") {
+            inside = l.split('@').nth(1).is_some_and(|n| {
+                n.starts_with(&head) && !n[head.len()..].starts_with(char::is_alphanumeric)
+            });
+        }
+        if inside {
+            out.push(l);
+            if l == "}" {
+                inside = false;
+            }
+        }
+    }
+    assert!(!out.is_empty(), "{func} defined");
+    out.join("\n")
 }
 
 #[test]
