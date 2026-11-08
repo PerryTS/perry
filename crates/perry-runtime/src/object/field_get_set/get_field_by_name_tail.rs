@@ -335,6 +335,12 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                     return JSValue::number(len as f64);
                 }
+                // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView is an
+                // ordinary object: own, then its [[Prototype]] chain (node's
+                // members live on the intrinsic). Never the Buffer table below.
+                if crate::buffer::is_non_indexed_buffer_view(obj as usize) {
+                    return super::buffer_own_prop::view_get(obj, key);
+                }
                 // An own property on the Buffer shadows the same-named prototype
                 // method; both reads live in `buffer_own_prop`.
                 if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(obj, key_bytes) {
@@ -398,7 +404,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // A DataView's constructor is inherited from its actual
                     // prototype, including user subclasses and overrides.
                     if crate::buffer::is_data_view(obj as usize) {
-                        return super::buffer_own_prop::data_view_constructor(obj, key);
+                        return super::buffer_own_prop::view_get(obj, key);
                     }
                     // An ArrayBuffer / SharedArrayBuffer answers with ITS
                     // constructor (`ta.buffer.constructor === ArrayBuffer`,

@@ -681,7 +681,23 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                             nanbox_false
                         };
                     }
+                    // #BUFNS: an ordinary object: own, else its [[Prototype]]
+                    // chain (node's members are on the intrinsic), never the
+                    // Buffer method table.
+                    if crate::buffer::buffer_has_own_prop(obj_addr as usize, name)
+                        || crate::object::get_accessor_descriptor(obj_addr as usize, name)
+                            .is_some()
+                    {
+                        return nanbox_true;
+                    }
                 }
+            }
+            if key_val.is_any_string() || unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+                let proto = crate::object::view_prototype_bits(obj_addr as usize);
+                if proto == crate::value::TAG_NULL {
+                    return nanbox_false;
+                }
+                return js_object_has_property(f64::from_bits(proto), key);
             }
         }
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
