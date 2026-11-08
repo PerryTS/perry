@@ -145,9 +145,10 @@ fn a_body_that_may_complete_returns_undefined() {
 #[test]
 fn a_sloppy_function_boxes_a_primitive_this() {
     // A sloppy function's `this` from `.call(7)` is a Number object, never
-    // the primitive (vf: test_gap_call_bind_native_forwarding).
+    // the primitive (vf: test_gap_call_bind_native_forwarding). The source
+    // is a script (no module syntax), so `sloppy` is sloppy.
     let src = "function strict(this: any) { 'use strict'; return this; }\n\
-               const sloppy = new Function('return this;');\n\
+               const sloppy = function (this: any) { return this; };\n\
                console.log(typeof sloppy.call(7), strict.call(7));";
     assert!(!number_call_at(src, "call(7), strict"));
     assert!(number_call_at(src, "call(7));"));

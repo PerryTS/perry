@@ -329,8 +329,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // 1856, 449]). MULTINS: `Error`, the six NativeErrors and
     // `AggregateError` are eight namespaces, the NativeErrors' chain
     // `Error`: seven more declared shapes on the same charged searches
-    // (was [1732, 2133, 1864, 452]).
-    assert_eq!(pf.round_work, [1799, 2188, 1913, 470], "{:?}", pf.units);
+    // (was [1732, 2133, 1864, 452]). A function expression whose body
+    // may complete returns `undefined` (`narrow::may_complete`): the `util`
+    // IIFE's result is one more popped kind in rounds 1-2 (was [1799,
+    // 2188, 1913, 470]).
+    assert_eq!(pf.round_work, [1799, 2191, 1916, 470], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.
