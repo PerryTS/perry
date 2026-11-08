@@ -102,6 +102,7 @@ def main():
     for name, wrong_claim, predicate in [
         ("receiver-negative", "unchecked", "F4 receiver set"),
         ("kind-negative", "kind:Box.v=num", "F2 kind"),
+        ("int32-negative", "range", "int32 input"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:

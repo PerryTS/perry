@@ -133,6 +133,10 @@ pub struct BindingFacts {
     pub class_object: Option<u32>,
     /// Allocation-derived owner kind and minimum extent; no escaped/hard token.
     pub indexed_owner: Option<IndexedOwner>,
+    /// The integer interval of the Numbers it holds (`model::range`): every
+    /// Number it holds is an integer, never `-0`, in `[lo, hi]`. `None`: no
+    /// such bound. Read beside `prims` and `other`.
+    pub int_range: Option<(i64, i64)>,
     /// It holds only strings and ordinary Array births: its `length` is a
     /// Number (a String's code-unit count, an Array's non-configurable
     /// `length`), whatever its declared type says.
@@ -313,6 +317,9 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
     out.indexed_owner = indexed_owner(g, n);
+    if !node.range.is_top() && !node.range.is_empty() {
+        out.int_range = Some((node.range.lo, node.range.hi));
+    }
     out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
     out
