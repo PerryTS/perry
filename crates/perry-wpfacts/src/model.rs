@@ -154,8 +154,16 @@ pub enum BuiltinNs {
     AggregateError,
     Date,
     RegExp,
+    /// `%TypedArray%` (ECMA-262 23.2.1), the [[Prototype]] of every
+    /// concrete typed-array constructor.
     TypedArray,
+    /// A concrete typed-array constructor (`Uint8Array`, ECMA-262 23.2.6),
+    /// by its global name: its own prototype object, its [[Prototype]]
+    /// `%TypedArray%`.
+    TypedArrayKind(&'static str),
+    DataView,
     ArrayBuffer,
+    SharedArrayBuffer,
     Symbol,
     Number,
     BigInt,
@@ -418,11 +426,18 @@ pub enum TmplKind {
 }
 
 impl TmplKind {
-    /// A typed array's storage (NUM elements, the B1 buffer rules): a
-    /// `%TypedArray%` instance or a host `Buffer` (`fs.readFileSync(path)`),
-    /// a `Uint8Array` whose prototype is `Buffer.prototype`.
+    /// Buffer storage (the B1 buffer rules, sealed buffer fields): a
+    /// `%TypedArray%` instance, a host `Buffer` (`fs.readFileSync(path)`, a
+    /// `Uint8Array` whose prototype is `Buffer.prototype`), a `DataView`, an
+    /// `ArrayBuffer` or a `SharedArrayBuffer`.
     pub fn typed_storage(&self) -> bool {
-        matches!(self, TmplKind::BObj { what: "TypedArray" | "Buffer", .. })
+        matches!(
+            self,
+            TmplKind::BObj {
+                what: "TypedArray" | "Buffer" | "DataView" | "ArrayBuffer" | "SharedArrayBuffer",
+                ..
+            }
+        )
     }
 
     /// Birth templates the facts are about (design section 2).
