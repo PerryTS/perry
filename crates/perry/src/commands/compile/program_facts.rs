@@ -131,6 +131,10 @@ pub(crate) fn run(
         diagnostics: dump.is_some(),
         birth_census: std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some(),
         relations,
+        no_int_ranges: matches!(
+            std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -526,6 +530,16 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
             if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
                 out.number_inputs.insert(*id);
+                // A Number binding whose interval proof lies in the int32
+                // range: every value it holds is an int32 (never -0).
+                if b.int_range
+                    .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
+                {
+                    out.int32_inputs.insert(*id);
+                    if b.int_range.is_some_and(|(lo, _)| lo >= 0) {
+                        out.nonneg_int32_inputs.insert(*id);
+                    }
+                }
             }
             if b.length_number {
                 out.length_number_inputs.insert(*id);
@@ -765,6 +779,10 @@ pub(crate) fn activation(
     let cfg = perry_wpfacts::FactsConfig {
         roots,
         // The facts' negative controls act on this pass (it is theirs).
+        no_int_ranges: matches!(
+            std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),

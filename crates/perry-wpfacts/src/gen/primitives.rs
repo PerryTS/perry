@@ -21,4 +21,100 @@ impl<'a> Gen<'a> {
             }
         }
     }
+
+    /// The node of a numeric literal: a shared node per integer value,
+    /// carrying its point interval (`model::range`), or the Number node.
+    pub fn num_literal(&mut self, v: f64) -> NodeId {
+        let iv = crate::model::Iv::literal(v);
+        if iv.is_top() || !self.int_ranges {
+            return self.prim_node(prim::NUM);
+        }
+        if let Some(&n) = self.num_lits.get(&iv.lo) {
+            return n;
+        }
+        let n = self.m.node_named("NUMLIT", || format!("NUMLIT{}", iv.lo));
+        {
+            let nd = &mut self.m.nodes[n as usize];
+            nd.ruled = true;
+            nd.range = iv;
+        }
+        self.m.add_prim(n, prim::NUM);
+        self.num_lits.insert(iv.lo, n);
+        n
+    }
+
+    /// Register the interval rule of a numeric operator: `dst` takes its
+    /// interval from `op` over `l` (and `r`). On both operands, so a growth
+    /// of either re-evaluates it.
+    pub fn range_rule(
+        &mut self,
+        op: crate::model::RangeOp,
+        l: NodeId,
+        r: Option<NodeId>,
+        dst: NodeId,
+    ) {
+        if !self.int_ranges {
+            return;
+        }
+        let other = r.unwrap_or(crate::model::NO_NODE);
+        self.m.cons(
+            l,
+            Cons::Range {
+                op,
+                other,
+                dst,
+                right: false,
+            },
+        );
+        if let Some(r) = r {
+            self.m.cons(
+                r,
+                Cons::Range {
+                    op,
+                    other: l,
+                    dst,
+                    right: true,
+                },
+            );
+        }
+    }
+
+    /// A Math builtin with an interval rule over its ToNumber'd operands (as
+    /// `prim_op`: each operand is a ToPrimitive operand, the result a
+    /// Number). A list of operands folds pairwise (`Math.min(a, b, c)`).
+    pub(crate) fn math_range(
+        &mut self,
+        fx: &Fx,
+        op: crate::model::RangeOp,
+        operands: &[&perry_hir::Expr],
+    ) -> NodeId {
+        let r = self.m.reason("ToNumber of a Math operand");
+        let mut nodes = Vec::with_capacity(operands.len());
+        for o in operands {
+            let v = self.expr(fx, o);
+            self.m.cons(
+                v,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
+            nodes.push(v);
+        }
+        let (first, rest) = nodes.split_first().expect("a Math call has an operand");
+        if rest.is_empty() {
+            let out = self.tmp("math");
+            self.range_rule(op, *first, None, out);
+            self.m.add_prim(out, prim::NUM);
+            return out;
+        }
+        let mut acc = *first;
+        for &n in rest {
+            let out = self.tmp("math");
+            self.range_rule(op, acc, Some(n), out);
+            self.m.add_prim(out, prim::NUM);
+            acc = out;
+        }
+        acc
+    }
 }

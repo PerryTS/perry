@@ -151,7 +151,8 @@ fn wrapper_proves_live_false_field_and_clone_erases_default_and_branch() {
     let index = format!("{base}$idx_u31_{INDEX}");
     let specialized = format!("{index}$default_false2");
     let wrapper = function_body(&ir, &format!("@{base}("));
-    let ordinary = function_body(&ir, &format!("@{index}("));
+    // The ordinary clone's body takes its index raw (`index_entry`).
+    let ordinary = function_body(&ir, &format!("@{index}$i32("));
     let false_default = function_body(&ir, &format!("@{specialized}("));
 
     assert!(wrapper.contains(&crate::nanbox::TAG_UNDEFINED_I64.to_string()));
@@ -161,7 +162,7 @@ fn wrapper_proves_live_false_field_and_clone_erases_default_and_branch() {
         .lines()
         .any(|l| l.starts_with("@perry_class_shape_id_") && l.contains("constant i32")));
     assert!(wrapper.contains(&format!("@{specialized}(")));
-    assert!(wrapper.contains(&format!("@{index}(")));
+    assert!(wrapper.contains(&format!("@{index}$i32(")));
     assert!(ordinary.contains("@js_is_truthy("), "{ordinary}");
     assert!(
         !false_default.contains("@js_is_truthy("),
