@@ -262,6 +262,7 @@ pub(crate) mod facts_int32_locals;
 pub(crate) mod facts_number_locals;
 #[cfg(test)]
 mod facts_number_locals_tests;
+pub(crate) mod facts_rep;
 pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
@@ -311,7 +312,7 @@ mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
     ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
-    FactsNumericFunction, FactsRecv, ProgramFactsView,
+    FactsNumericFunction, FactsRecv, FactsRep, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;

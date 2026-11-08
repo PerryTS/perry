@@ -1169,10 +1169,17 @@ pub(crate) fn lower_let(
     // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
     // where the mixed representation additionally costs the loop its
     // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
-    let unprofitable = ctx
-        .native_facts
-        .unprofitable_canonical_i32_locals()
-        .contains(&id);
+    // Representation RFC §10 (P1): the whole-program facts' representation
+    // is the decision for a local they cover (`codegen/facts_rep.rs`).
+    let facts_rep = crate::codegen::facts_rep::local(ctx, id);
+    let unprofitable = match facts_rep {
+        Some(crate::codegen::FactsRep::I32) => false,
+        Some(_) => true,
+        None => ctx
+            .native_facts
+            .unprofitable_canonical_i32_locals()
+            .contains(&id),
+    };
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.

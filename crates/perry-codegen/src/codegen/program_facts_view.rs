@@ -181,6 +181,14 @@ impl FactsNumericExpr {
         }
     }
 }
+/// A value's one representation (wpfacts `Rep`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FactsRep {
+    Boxed,
+    F64,
+    I32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FactsNumericFunction {
     pub params: Vec<u32>,
@@ -206,6 +214,10 @@ pub struct ElisionFacts {
     /// Number bindings whose every value is an int32, never `-0` (the
     /// wpfacts interval proof, `BindingFacts::int_range`).
     pub int32_inputs: std::collections::BTreeSet<u32>,
+    /// Local id → the representation the whole-program facts give it
+    /// (representation RFC §10.3, wpfacts `BindingFacts::rep`). A local the
+    /// facts cover takes exactly this one; codegen does not choose.
+    pub local_reps: std::collections::BTreeMap<u32, FactsRep>,
     /// The `int32_inputs` whose interval is non-negative.
     pub nonneg_int32_inputs: std::collections::BTreeSet<u32>,
     /// Local id → it holds only strings and ordinary Arrays: `x.length` is a
@@ -267,6 +279,7 @@ impl ElisionFacts {
         self.indexed_owners.is_empty()
             && self.number_inputs.is_empty()
             && self.int32_inputs.is_empty()
+            && self.local_reps.is_empty()
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
             && self.call_arg_ranges.is_empty()

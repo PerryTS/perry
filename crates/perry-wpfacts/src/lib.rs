@@ -21,6 +21,7 @@ mod builtins;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
+mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
@@ -41,7 +42,7 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
+pub use bindings::{BindingFacts, BodyRef, ModuleBindings, Rep};
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -850,6 +851,9 @@ fn compute_act<'a>(
     } else {
         derive::element_facts(&g)
     };
+    if !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
     let mut bindings = bindings::collect(&g);
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.

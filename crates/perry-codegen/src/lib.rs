@@ -119,9 +119,10 @@ pub use codegen::{
     AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
     CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsBody,
     FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv,
-    FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth,
-    NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
-    ProgramFactsView, ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
+    FactsRep, FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod,
+    ModuleBirth, NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate,
+    ProgramClassShapeIds, ProgramFactsView, ResolvedConstructorContracts, TypedMasks,
+    STATIC_SEED_FORMAT, TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
 pub use codegen::{set_worker_entries, worker_entries};

@@ -114,9 +114,36 @@ fn bodies_with_contracts(g: &Gen, n: NodeId) -> Vec<BodyRef> {
     out
 }
 
+/// The one representation of a value (representation RFC §10.3): what the
+/// whole-program facts give the binding, which codegen obeys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Rep {
+    /// Any value, NaN-boxed (⊤).
+    #[default]
+    Boxed,
+    /// Only Numbers: a canonical double.
+    F64,
+    /// Only int32 Numbers (never `-0`) with int demand (`demand`).
+    I32,
+}
+
+impl Rep {
+    pub fn name(self) -> &'static str {
+        match self {
+            Rep::Boxed => "boxed",
+            Rep::F64 => "f64",
+            Rep::I32 => "i32",
+        }
+    }
+}
+
 /// What one binding can hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BindingFacts {
+    /// Its representation (`Rep`).
+    pub rep: Rep,
+    /// One of its values can reach an int consumer (`demand`).
+    pub int_demand: bool,
     /// Diagnostic-only TOP provenance; never consumed by emitted-code decisions.
     pub top: bool,
     pub top_cause: Option<String>,
@@ -374,7 +401,25 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.const_length = const_length(m, n);
     out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
+    out.int_demand = node.int_demand;
+    out.rep = rep_of(&out);
     out
+}
+
+/// The representation the facts give: F64 for a binding of only Numbers,
+/// I32 for one of only int32 Numbers that an int consumer reads.
+fn rep_of(b: &BindingFacts) -> Rep {
+    if b.other || !b.class_ids.is_empty() || b.prims != crate::model::prim::NUM {
+        return Rep::Boxed;
+    }
+    let int32 = b
+        .int_range
+        .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX));
+    if int32 && b.int_demand {
+        Rep::I32
+    } else {
+        Rep::F64
+    }
 }
 
 /// The class id of the one class object node `n` holds when it holds
