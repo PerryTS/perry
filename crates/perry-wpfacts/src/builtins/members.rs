@@ -833,10 +833,15 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         // The model does not describe these namespaces' own members. They are
         // constructor tokens only, for the `new`/call summaries; naming them
         // here would claim a precision the model does not have.
-        BuiltinNs::Date | BuiltinNs::RegExp | BuiltinNs::ArrayBuffer => (NsProto::Function, None),
-        // The concrete typed-array constructors and %TypedArray% are one
-        // namespace here: undescribed.
-        BuiltinNs::TypedArray => (NsProto::Function, None),
+        BuiltinNs::Date
+        | BuiltinNs::RegExp
+        | BuiltinNs::ArrayBuffer
+        | BuiltinNs::SharedArrayBuffer
+        | BuiltinNs::DataView
+        | BuiltinNs::TypedArray => (NsProto::Function, None),
+        // ECMA-262 23.2.6: a concrete typed-array constructor's
+        // [[Prototype]] is `%TypedArray%`; its own statics are undescribed.
+        BuiltinNs::TypedArrayKind(_) => (NsProto::Constructor(BuiltinNs::TypedArray), None),
         BuiltinNs::Symbol => (
             NsProto::Function,
             Some(&[
