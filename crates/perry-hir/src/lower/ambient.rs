@@ -44,6 +44,15 @@ pub(crate) fn declarator_binds_nothing(var: &ast::VarDecl, decl: &ast::VarDeclar
     var.declare && !declarator_is_compile_time_constant(var, decl)
 }
 
+/// #8447: whether `f` is the ambient-typing idiom for the CommonJS loader,
+/// `declare function require(...)` (a body-less `require`). It names the
+/// compile-time require intrinsic, not a binding: `require(...)` stays the
+/// loader. An overload signature beside a `function require` with a body is
+/// erased the same way, and the implementation is the binding.
+pub(crate) fn fn_decl_types_the_loader(f: &ast::FnDecl) -> bool {
+    f.function.body.is_none() && &*f.ident.sym == "require"
+}
+
 /// Record the names of a declarator that [`declarator_binds_nothing`] as known
 /// globals, so a reference to them does not print the unknown-identifier
 /// warning. They use the same by-name runtime lookup as any other global.

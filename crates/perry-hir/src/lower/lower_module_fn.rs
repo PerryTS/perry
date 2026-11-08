@@ -1084,7 +1084,7 @@ pub fn lower_module_full_with_platform_globals(
                 // `require("node:fs")` to a call to that nonexistent symbol.
                 // A `function require(...)` WITH a body (e.g. the CJS wrap's
                 // synthetic require) still shadows via `register_func` below.
-                if func_name == "require" {
+                if super::ambient::fn_decl_types_the_loader(fn_decl) {
                     continue;
                 }
 
