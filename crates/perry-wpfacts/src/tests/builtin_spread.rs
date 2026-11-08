@@ -156,3 +156,60 @@ console.log(v.len());
     let pf = facts(src);
     assert!(!proven(&call_of(&pf, "len").verdict));
 }
+
+/// A namespace or constructor of the realm has no enumerable own property
+/// (ECMA-262 18): a spread or `Object.assign` of it copies only what the
+/// program stored on it, here nothing, so the copy's `cb` is no unknown
+/// function and `obj` stays the program's.
+#[test]
+fn a_spread_of_a_realm_namespace_copies_no_unknown_value() {
+    for ns in ["Object", "Math", "JSON", "Map", "Object.prototype.hasOwnProperty"] {
+        assert!(verdicts(ns, "{ a: obj, ...src }").1, "spread of {ns}");
+        assert!(verdicts(ns, "Object.assign({ a: obj }, src)").1, "assign of {ns}");
+    }
+}
+
+/// What the program stored on a realm namespace is copied, under its key.
+#[test]
+fn a_program_store_on_a_realm_namespace_is_copied() {
+    let src = r#"
+class V { k = 1; len() { return this.k; } }
+const obj = new V();
+(Object as any).cb = (x: any) => x.len();
+const o: any = { a: obj, ...(Object as any) };
+const f = o.cb;
+if (typeof f === "function") f(obj);
+console.log(obj.len(), typeof o.a);
+"#;
+    let pf = facts(src);
+    assert!(proven(&call_of(&pf, "len").verdict));
+}
+
+/// Sabotage twin: an unknown value stored on the namespace is copied, and
+/// the copy calls it with `obj`.
+#[test]
+fn an_unknown_value_stored_on_a_realm_namespace_stays_unproven() {
+    let program = unseen(
+        r#"
+class V { k = 1; len() { return this.k; } }
+const obj = new V();
+(Object as any).cb = (globalThis as any).ext;
+const o: any = { a: obj, ...(Object as any) };
+const f = o.cb;
+if (typeof f === "function") f(obj);
+console.log(obj.len(), typeof o.a);
+"#,
+    );
+    let pf = facts(&program);
+    assert!(!proven(&call_of(&pf, "len").verdict));
+}
+
+/// Controls: `Error` has the enumerable `stackTraceLimit` (V8), `console`
+/// and `process` are host objects with enumerable own members: the copy
+/// stays unknown.
+#[test]
+fn a_spread_of_error_or_a_host_namespace_stays_unproven() {
+    for ns in ["Error", "console", "process"] {
+        assert!(!verdicts(ns, "{ a: obj, ...src }").1, "spread of {ns}");
+    }
+}

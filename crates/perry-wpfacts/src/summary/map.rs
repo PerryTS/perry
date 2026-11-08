@@ -68,6 +68,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        Raise { region } => Raise { region: n(region) },
         RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
@@ -390,6 +391,7 @@ pub fn map_call(c: &CallSite, mut n: impl FnMut(NodeId) -> NodeId) -> CallSite {
         spread: c.spread.iter().map(|&x| n(x)).collect(),
         ret: n(c.ret),
         site: c.site,
+        region: n(c.region),
     }
 }
 
@@ -440,6 +442,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
+            | Raise { .. }
             | RuntimeStore { .. }
             | HandOver { .. }
             | ContractThis { .. }

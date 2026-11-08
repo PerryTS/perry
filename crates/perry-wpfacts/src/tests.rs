@@ -73,6 +73,7 @@ mod for_in_keys;
 mod for_of_yield;
 mod fresh_static_blocks;
 mod function_ctor_without_interp;
+mod indirect_eval_call;
 mod function_values;
 mod getter_contract;
 mod global_gc;
@@ -108,6 +109,7 @@ mod native_member;
 mod native_proto;
 mod native_target_accessor;
 mod native_user_code;
+mod own_values_proto;
 mod num_key;
 mod objproto_protocol;
 mod own_guarded_read;
@@ -131,6 +133,7 @@ mod protocol_keys;
 mod reach_accessor;
 mod receiver_slots;
 mod receiver_this;
+mod runtime_errors;
 mod reflect_construct;
 mod regexp_exec;
 mod relinked_parent;
@@ -1220,8 +1223,9 @@ fn cjs_cache_slot_holds_its_own_record() {
 /// is then a store on a record, not on a builtin (E20), and a call of it is
 /// no `Function(...)` call (E14). With `Object.prototype` as the prototype
 /// (`__perry_declared_keys_object`) the same read reaches the builtins: a
-/// store under a key they declare (`name`) sinks the value (E20); one under
-/// a key they do not declare (`parent`) is their field (rule R1).
+/// store of `__proto__` relinks one and the value's members escape (E6); a
+/// store under a key the realm does not read back (`name`, `parent`) is
+/// their own field (rule R1, `realm_reads_store`).
 fn null_proto_read(births: &str, key: &str) -> Option<String> {
     let pf = facts(&format!(
         r#"
@@ -1243,9 +1247,11 @@ fn null_proto_read(births: &str, key: &str) -> Option<String> {
 fn a_computed_read_of_a_null_prototype_record_stops_at_the_record() {
     assert_eq!(null_proto_read("__perry_declared_keys", "parent"), None);
     assert_eq!(null_proto_read("__perry_declared_keys", "name"), None);
-    let escape = null_proto_read("__perry_declared_keys_object", "name");
+    assert_eq!(null_proto_read("__perry_declared_keys", "__proto__"), None);
+    assert_eq!(null_proto_read("__perry_declared_keys_object", "name"), None);
+    let escape = null_proto_read("__perry_declared_keys_object", "__proto__");
     assert!(
-        escape.as_deref().is_some_and(|e| e.contains("E20")),
+        escape.as_deref().is_some_and(|e| e.contains("E6")),
         "{escape:?}"
     );
     assert_eq!(
@@ -1448,6 +1454,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: vec![p],
         rest: None,
@@ -1519,6 +1526,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: Vec::new(),
         rest: None,
@@ -1579,6 +1587,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: Vec::new(),
         rest: None,
@@ -1633,6 +1642,7 @@ fn marker_model() -> crate::model::Model {
         body_packet: Default::default(),
         module: 0,
         func_id: 0,
+        raise: u32::MAX,
         name: "f".into(),
         params: Vec::new(),
         rest: None,
@@ -1866,6 +1876,7 @@ mod constructor_values;
 mod cycle_e20_own_field;
 mod cycle_locked_member;
 mod date_methods;
+mod realm_read_static;
 mod declared_constructor;
 mod declared_global_write;
 mod delegate_step;
@@ -1877,12 +1888,14 @@ mod global_unresolved;
 mod helper_protocols;
 mod host_helpers;
 mod iter_result_array;
+mod key_fn_shape;
 mod key_shape;
 mod method_this_escape;
 mod native_parent;
 mod native_proto_member;
 mod native_push;
 mod native_value_call;
+mod static_native_parent;
 mod ns_receiver;
 mod primitive_this;
 mod proto_own_call;
@@ -1947,4 +1960,7 @@ mod shaped_key_proto_methods;
 mod uri_coercion;
 
 mod accessor_lookup_values;
+mod native_fs_effects;
+mod native_module_ref;
+mod host_fs_effects;
 mod native_process;

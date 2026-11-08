@@ -55,16 +55,6 @@ fn promise_from_sync_value(call: impl FnOnce() -> f64) -> f64 {
     }
 }
 
-fn promise_from_sync_undefined(call: impl FnOnce()) -> f64 {
-    match catch_fs_promises_throw(|| {
-        call();
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    }) {
-        Ok(_) => crate::fs::promise_undefined_fs(),
-        Err(err) => crate::fs::promise_rejected_fs(err),
-    }
-}
-
 fn promise_from_result_undefined(call: impl FnOnce() -> Result<(), f64>) -> f64 {
     match catch_fs_promises_throw(|| match call() {
         Ok(()) => crate::fs::promise_undefined_fs(),
@@ -279,9 +269,7 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdir(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_undefined(|| {
-        let _ = crate::fs::js_fs_mkdir_sync_options(path, options);
-    })
+    promise_from_sync_value(|| crate::fs::js_fs_mkdir_sync_options(path, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_readdir(

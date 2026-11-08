@@ -34,6 +34,21 @@ pub fn builtin_function(m: &Model, t: Tok) -> bool {
     }
 }
 
+/// May a store under `key` on built-in constructor or namespace `t` write a
+/// static the realm itself reads (`members::realm_read_statics`)? A
+/// namespace whose statics are undescribed may have any. Any other key is
+/// an own property of `t` (OrdinarySet) that only reads of `t` see: program
+/// code and the protocols the model runs on `t`, all through `t`'s fields.
+pub fn realm_reads_store(m: &Model, t: Tok, key: Key) -> bool {
+    let TokKind::Builtin(ns) = m.toks[t as usize] else {
+        return true;
+    };
+    members::ns_statics(ns).members.is_none()
+        || members::realm_read_statics(ns)
+            .iter()
+            .any(|n| m.key_may_name_str(key, n))
+}
+
 /// A described built-in object and its chain declare no such program key.
 pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
     if t == TOP || !field_key(m, a) {

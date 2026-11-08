@@ -1776,6 +1776,52 @@ impl Model {
         t
     }
 
+    /// The object a failed runtime operation throws (`exception::throw_core`:
+    /// TypeError, RangeError, SyntaxError, ReferenceError, URIError, the fs
+    /// errors): a fresh realm `Error` (family Error, as `new Error()`), one
+    /// for every kind. Its own `message`, `stack` and `name` are strings;
+    /// any other own key the runtime writes on it (`code`, `errno`,
+    /// `syscall`, `path`, ...: `set_error_user_prop`) holds a primitive.
+    pub(crate) fn runtime_error(&mut self) -> Tok {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: u32::MAX,
+                site: u32::MAX - 2,
+                what: "Error",
+            },
+            display: "runtime:Error".into(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        for k in ["message", "stack", "name"] {
+            let a = self.atom(k);
+            let f = self.field(t, a);
+            self.add_prim(f, prim::STR);
+        }
+        let fa = self.field_any(t);
+        self.add_prim(fa, prim::ALL);
+        t
+    }
+
     pub(super) fn marker_template(&mut self, display: String) -> TmplId {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {

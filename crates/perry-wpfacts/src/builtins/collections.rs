@@ -103,6 +103,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, None);
@@ -124,6 +125,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread,
                     ret: c.ret,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, None);
@@ -146,6 +148,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         Some("next" | "return" | "throw") | None if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
         {
             m.call_tok(call, t, Some(t));
+            // It rejects: the shared cell.
+            let thrown = m.thrown;
+            gen_throw_passes(m, name, thrown, &c.args, &c.spread);
         }
         // A sync generator's public `next`/`return`/`throw`: the step runs
         // with this = itself and hands back its raw value (step kind 0
@@ -166,6 +171,8 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 let key = m.elem_key();
                 m.cons(spread, Cons::Load { key, dst: arg });
             }
+            let region = m.calls[call as usize].region;
+            gen_throw_passes(m, name, region, &[arg], &[]);
             let args = if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].params.len() == 1)
             {
                 vec![arg]
@@ -185,6 +192,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: vec![],
                     ret: raw,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, Some(t));
@@ -212,6 +220,25 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
     }
 }
 
+/// A generator's `throw(v)` the runtime raises itself when the generator has
+/// not started or has finished (`generator_state.rs`, `throw_program_value`;
+/// an async one rejects with it): `v` is caught as it is. A computed method
+/// may be `throw`.
+/// `thrown` is the region of the `throw` call, or the shared cell for an
+/// async generator's (it rejects).
+fn gen_throw_passes(m: &mut Model, name: Option<&str>, thrown: NodeId, args: &[NodeId], spread: &[NodeId]) {
+    if !matches!(name, Some("throw") | None) {
+        return;
+    }
+    for &a in args {
+        m.edge(a, thrown);
+    }
+    for &s in spread {
+        let key = m.elem_key();
+        m.cons(s, Cons::Load { key, dst: thrown });
+    }
+}
+
 // ------------------------------------------------------------- arrays
 
 pub(super) fn cb_call(
@@ -232,6 +259,7 @@ pub(super) fn cb_call(
             spread: vec![],
             ret,
             site: call2,
+            region: m.thrown,
         },
     );
     m.cons(cb, Cons::Call { call: call2 });
@@ -281,6 +309,51 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
     );
 }
 
+/// `then`, `catch` and `finally` (27.2.5.1, 27.2.5.3, 27.2.5.4) take the
+/// result's constructor with SpeciesConstructor(p, %Promise%): `constructor`
+/// is read from the promise and its `@@species` from that value. A program
+/// species is constructed (NewCapability) with the runtime's executor, an
+/// opaque function that keeps the resolving functions it is given for the
+/// runtime to call; what it makes is the call's result. The realm's own
+/// promise constructors make the call's own promise (the rule below).
+fn promise_species(m: &mut Model, t: Tok, call: CallId) {
+    let recv = m.node_l("promise");
+    m.add_tok(recv, t);
+    let k = m.atom("constructor");
+    let cn = m.node_l("species-constructor");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    let sa = m.atom("@@__perry_wk_species");
+    let sp = m.node_l("species");
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sa),
+            dst: sp,
+        },
+    );
+    let exec = m.node_l("capability-executor");
+    m.add_tok(exec, TOP);
+    let c = m.calls[call as usize].clone();
+    let mc = m.solver_call(
+        call,
+        CallSite {
+            this: ThisArg::Undef,
+            args: vec![exec],
+            spread: vec![],
+            ret: c.ret,
+            site: c.site,
+            region: m.thrown,
+        },
+    );
+    m.cons(sp, Cons::NewProgram { call: mc });
+}
+
 /// `recv[name](...args)` where the algorithm looks the method up as a
 /// property: a method the program stored on the receiver runs, with the
 /// receiver as `this`.
@@ -303,6 +376,7 @@ pub(crate) fn method_call(
             spread: vec![],
             ret,
             site,
+            region: m.thrown,
         },
     );
     m.cons(
@@ -335,6 +409,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 spread: vec![],
                 ret,
                 site,
+                region: m.thrown,
             },
         );
         m.protocol_calls.insert(c2);
@@ -543,6 +618,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             spread: vec![],
             ret: made,
             site: c.site,
+            region: m.thrown,
         },
     );
     construct_into(m, sc, mc, out, made, c.ret);
@@ -1012,6 +1088,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     spread: vec![],
                     ret: r,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -1151,6 +1228,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_prim(m, call, prim::UNDEF);
         }
         ("Promise", Some("then" | "catch" | "finally")) => {
+            promise_species(m, t, call);
             let v = promise_value(m, t);
             let out = site_tmpl(m, call, "Promise");
             let ov = promise_value(m, out);
@@ -1243,6 +1321,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     spread: vec![],
                     ret: c.ret,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -1398,7 +1477,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "mapGroups",
+            | "fromEntries" | "mapGroups" | "hostrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

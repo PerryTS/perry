@@ -549,6 +549,19 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     attrs.configurable(),
                 );
             }
+            if kind == ExoticKind::Error && name == "cause" {
+                let err = addr as *const crate::error::ErrorHeader;
+                if (*err).flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0 {
+                    let attrs = super::get_property_attrs(addr, &name)
+                        .unwrap_or(PropertyAttrs::new(true, false, true));
+                    return OwnProperty::data(
+                        (*err).cause,
+                        attrs.writable(),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
+                }
+            }
             // Builtin own slots: RegExp `lastIndex` (writable, non-enum,
             // non-config) and Error `message`/`stack` (writable, non-enum,
             // configurable).
@@ -1910,79 +1923,71 @@ pub(crate) unsafe fn nm_get_own_descriptor(
     key_str: *const crate::string::StringHeader,
     key_name: Option<&str>,
 ) -> Option<f64> {
+    use super::NmMember;
     let module_name = read_native_module_name(obj)?;
     let key_name = key_name?;
-    if let Some(enumerable) =
-        super::native_module::zlib_readonly_property_enumerability(&module_name, key_name)
-    {
-        let value = js_object_get_field_by_name(obj, key_str);
-        return Some(build_data_descriptor(
-            f64::from_bits(value.bits()),
-            false,
-            enumerable,
-            false,
-        ));
-    }
-    if !native_module_has_enumerable_key(&module_name, key_name) {
-        return None;
-    }
-    if module_name == "fs" {
-        match key_name {
-            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" | "Utf8Stream" => {
-                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
-                let set = if key_name == "Utf8Stream" {
-                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                } else {
-                    super::native_module::fs_namespace_descriptor_setter_value(key_name)
-                };
-                return Some(build_accessor_descriptor(get, set, true, true));
-            }
-            "promises" => {
-                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
-                return Some(build_accessor_descriptor(
-                    get,
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                    true,
-                    true,
-                ));
-            }
-            "constants" => {
-                let value = js_object_get_field_by_name(obj, key_str);
-                return Some(build_data_descriptor(
-                    f64::from_bits(value.bits()),
-                    false,
-                    true,
-                    false,
-                ));
-            }
-            _ => {}
+    let member = nm_member(&module_name, key_name)?;
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    Some(match member {
+        NmMember::FsAccessor => {
+            let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
+            let set = if matches!(key_name, "Utf8Stream" | "promises") {
+                undefined
+            } else {
+                super::native_module::fs_namespace_descriptor_setter_value(key_name)
+            };
+            build_accessor_descriptor(get, set, true, true)
         }
-    }
-    let value = js_object_get_field_by_name(obj, key_str);
-    if matches!(
-        module_name.as_str(),
-        "process" | "process.namespace" | "process.default"
-    ) && key_name == "permission"
-    {
         // Through the `process` constant registry: a descriptor read needs the
         // `process` value, whose every source installs that registry row.
-        let value = super::native_module_registry::nm_const_lookup("process")
-            .and_then(|f| unsafe { f("process", "permission", 0.0, false) })
-            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-        return Some(build_data_descriptor(value, false, true, false));
+        NmMember::ReadonlyData if key_name == "permission" => {
+            let value = super::native_module_registry::nm_const_lookup("process")
+                .and_then(|f| unsafe { f("process", "permission", 0.0, false) })
+                .unwrap_or(undefined);
+            build_data_descriptor(value, false, true, false)
+        }
+        _ => {
+            let value = f64::from_bits(js_object_get_field_by_name(obj, key_str).bits());
+            match member {
+                NmMember::ZlibReadonly { enumerable } => {
+                    build_data_descriptor(value, false, enumerable, false)
+                }
+                NmMember::Data { configurable } => {
+                    build_data_descriptor(value, true, true, configurable)
+                }
+                _ => build_data_descriptor(value, false, true, false),
+            }
+        }
+    })
+}
+
+/// What the module's tables say about own member `key` of namespace `module`
+/// (`None`: no such member, or deleted, or hidden). Reached through
+/// `NmNamespaceOps::member` and from the descriptor above.
+#[inline(never)]
+pub(crate) fn nm_member(module: &str, key: &str) -> Option<super::NmMember> {
+    use super::NmMember;
+    if let Some(enumerable) =
+        super::native_module::zlib_readonly_property_enumerability(module, key)
+    {
+        return Some(NmMember::ZlibReadonly { enumerable });
     }
-    if matches!(module_name.as_str(), "module" | "async_hooks") {
-        return Some(build_data_descriptor(
-            f64::from_bits(value.bits()),
-            true,
-            true,
-            false,
-        ));
+    if !native_module_has_enumerable_key(module, key) {
+        return None;
     }
-    Some(build_data_descriptor(
-        f64::from_bits(value.bits()),
-        true,
-        true,
-        module_name != "vm",
-    ))
+    Some(match (module, key) {
+        (
+            "fs",
+            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" | "Utf8Stream"
+            | "promises",
+        ) => NmMember::FsAccessor,
+        ("fs", "constants")
+        | ("process" | "process.namespace" | "process.default", "permission") => {
+            NmMember::ReadonlyData
+        }
+        ("module" | "async_hooks" | "vm", _) => NmMember::Data {
+            configurable: false,
+        },
+        _ => NmMember::Data { configurable: true },
+    })
 }

@@ -173,12 +173,13 @@ pub(crate) fn worker_process_callable_disabled(module: &str, name: &str) -> bool
         && in_node_worker()
 }
 
-pub(crate) fn worker_process_member_hidden(module: &str, name: &str) -> bool {
+/// Is `process` member `name` hidden in this worker (when the program has not
+/// stored one)? Read through `native_namespace_member_absent`.
+pub(crate) fn worker_process_member_restricted(module: &str, name: &str) -> bool {
     is_process_namespace(module)
         && (worker_process_restriction(name) == Some(Restriction::Hidden)
             || (is_worker_ipc_member(name) && !WORKER_IPC_ENABLED.with(Cell::get)))
         && in_node_worker()
-        && crate::object::native_namespace_prop_override_get(module, name).is_none()
 }
 
 pub(crate) fn ensure_worker_operation_allowed(name: &str) {

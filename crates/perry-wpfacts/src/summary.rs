@@ -1236,11 +1236,7 @@ impl Model {
             // Beyond its publication (an export or a published literal's
             // field, DECISIONS 210, or known closed callers, DECISIONS 19),
             // unknown code calls it and retains its result.
-            if !contract
-                || (self.pub_reason != Some(reason)
-                    && self.field_fn_reason != Some(reason)
-                    && closed.is_none())
-            {
+            if self.unknown_caller(f, reason) {
                 self.sink_node(r, reason);
             }
         }

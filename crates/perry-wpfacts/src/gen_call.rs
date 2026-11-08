@@ -217,7 +217,7 @@ impl<'a> Gen<'a> {
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
                     Key::Any(_) => {
-                        let shape = self.m.key_shape(index);
+                        let shape = self.key_shape(fx.module, index);
                         self.m.cons(
                             o,
                             Cons::IdxMCall {
@@ -411,6 +411,16 @@ impl<'a> Gen<'a> {
 
     /// The body of closure `e` in its context `cfx` (once per function).
     pub(crate) fn walk_closure_body(&mut self, cfx: &Fx, e: &Expr) {
+        if self.walked.contains(&cfx.f) {
+            return;
+        }
+        let r = self.m.raise_of(cfx.f);
+        let region = std::mem::replace(&mut self.m.gen_region, Some(r));
+        self.walk_closure_body_region(cfx, e);
+        self.m.gen_region = region;
+    }
+
+    fn walk_closure_body_region(&mut self, cfx: &Fx, e: &Expr) {
         let f = cfx.f;
         if !self.walked.insert(f) {
             return;
@@ -970,8 +980,9 @@ impl<'a> Gen<'a> {
                 out
             }
             n if n.starts_with("js_throw_") => {
+                let r = self.region();
                 for a in &args {
-                    self.m.edge(*a, self.thrown);
+                    self.m.edge(*a, r);
                 }
                 self.prim_node(prim::UNDEF)
             }

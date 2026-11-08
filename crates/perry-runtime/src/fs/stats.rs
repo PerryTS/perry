@@ -27,7 +27,10 @@ pub(crate) unsafe fn make_stats_predicate(value: bool) -> f64 {
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let tag = if value { TAG_TRUE } else { TAG_FALSE };
     let closure =
-        crate::closure::js_closure_alloc(crate::fn_info!(stats_closure_return_captured, 0), 1);
+        crate::closure::js_closure_alloc(
+        crate::fn_info!(#[realm(realm_decl! { "%FsStatsPredicate%", provider = closure, effects = { returns(prim(bool)) } })] export crate::fs::stats::stats_closure_return_captured, 0),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(tag));
     // NaN-box the closure pointer with POINTER_TAG so the dynamic
     // dispatch path in `js_native_call_method` can unwrap it.
@@ -475,6 +478,19 @@ unsafe fn embedded_stats(path: &str, bigint: bool) -> Option<f64> {
     ))
 }
 
+/// Node `statSync`/`lstatSync` with `{ throwIfNoEntry: false }` (exactly
+/// `false`: node's binding checks `IsFalse()`) return `undefined` for ENOENT
+/// and ENOTDIR instead of throwing.
+unsafe fn stat_missing_returns_undefined(options_value: f64, err: &std::io::Error) -> bool {
+    let no_entry = matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    );
+    no_entry
+        && options_field_value(options_value, b"throwIfNoEntry")
+            .is_some_and(|v| v.bits() == crate::value::TAG_FALSE)
+}
+
 /// `fs.statSync(path)` — returns a Stats-like object with Node-compatible
 /// predicate methods and scalar fields, or throws a Node-shaped fs Error when
 /// metadata lookup fails.
@@ -483,6 +499,11 @@ pub extern "C" fn js_fs_stat_sync(path_value: f64) -> f64 {
     js_fs_stat_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+// The Stats object build_stats_object makes: own predicate closures, own
+// numbers, the four Date accessors of its class (data-like: get/set the slot).
+// node reads `bigint` and `throwIfNoEntry` of the options and returns
+// undefined for a missing entry when `throwIfNoEntry` is false.
+crate::realm_decl! { "node:fs.statSync", effects = { path(arg(0)); reads(field(arg(1), bigint)); reads(field(arg(1), throwIfNoEntry)); stores(fresh); returns(prim(undefined) | fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)})) } }
 #[no_mangle]
 pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
@@ -534,6 +555,9 @@ pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -
                 )
             }
             Err(err) => {
+                if stat_missing_returns_undefined(options_value, &err) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
                 let err_val = fs_error(&err, "stat", &path_str);
                 crate::exception::throw_core(err_val)
             }
@@ -548,6 +572,11 @@ pub extern "C" fn js_fs_lstat_sync(path_value: f64) -> f64 {
     js_fs_lstat_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+// The Stats object build_stats_object makes: own predicate closures, own
+// numbers, the four Date accessors of its class (data-like: get/set the slot).
+// node reads `bigint` and `throwIfNoEntry` of the options and returns
+// undefined for a missing entry when `throwIfNoEntry` is false.
+crate::realm_decl! { "node:fs.lstatSync", effects = { path(arg(0)); reads(field(arg(1), bigint)); reads(field(arg(1), throwIfNoEntry)); stores(fresh); returns(prim(undefined) | fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)})) } }
 #[no_mangle]
 pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
@@ -597,6 +626,9 @@ pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) 
                 )
             }
             Err(err) => {
+                if stat_missing_returns_undefined(options_value, &err) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
                 let err_val = fs_error(&err, "lstat", &path_str);
                 crate::exception::throw_core(err_val)
             }
