@@ -775,3 +775,92 @@ console.log(choose());
 let sum=0;const xs=[1,2,3];xs.forEach((v)=>{sum+=v;});console.log(sum);
 "#, "require('node:assert/strict').equal(tryDepth,0);require('node:assert/strict').equal(__memDispatch.has_exception(),0);"),"0\n1\ncorrect\n6");
 }
+
+#[test]
+fn host_interop_array_callbacks_receive_array_and_missing_arguments() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs = [2, 4];
+const result = xs.map((value, index, array, missing) => {
+  console.log(array === xs);
+  console.log(missing);
+  return value + index;
+});
+console.log(result.join(','));
+"#
+        ),
+        "true\nundefined\ntrue\nundefined\n2,5"
+    );
+}
+
+#[test]
+fn host_interop_nested_finalizers_have_linear_code_growth() {
+    fn source(depth: usize) -> String {
+        let mut body = "return 0;".to_string();
+        for i in 1..=depth {
+            body = format!("try {{ {body} }} finally {{ if (flag) return {i}; }}");
+        }
+        format!("function nested(flag: boolean) {{ {body} }} console.log(nested(false)); console.log(nested(true));")
+    }
+    fn size(depth: usize) -> usize {
+        let ast = perry_parser::parse_typescript(&source(depth), "nested.ts").unwrap();
+        let module = perry_hir::lower::lower_module(&ast, "nested", "nested.ts").unwrap();
+        emit::compile_to_wasm_with_async(&[("nested".into(), module)])
+            .wasm_bytes
+            .len()
+    }
+    let small_growth = size(4) - size(3);
+    let large_growth = size(9) - size(8);
+    assert!(
+        large_growth <= small_growth * 2,
+        "{large_growth} exceeds linear bound {small_growth}"
+    );
+    assert_eq!(run_ts(&source(9)), "0\n9");
+}
+
+#[test]
+fn host_interop_native_for_each_statement_has_balanced_stack() {
+    use perry_hir::{Expr, Stmt};
+    let ast = perry_parser::parse_typescript(
+        "const xs = [1, 2]; xs.forEach((value) => console.log(value));",
+        "scoped.ts",
+    )
+    .unwrap();
+    let mut module = perry_hir::lower::lower_module(&ast, "scoped", "scoped.ts").unwrap();
+    let mut replaced = false;
+    for stmt in &mut module.init {
+        if let Stmt::Expr(expr) = stmt {
+            if let Expr::ArrayForEach { array, callback } = expr {
+                *expr = Expr::NativeMethodCall {
+                    module: "array".into(),
+                    class_name: None,
+                    object: Some(array.clone()),
+                    method: "forEach".into(),
+                    args: vec![*callback.clone()],
+                };
+                replaced = true;
+            }
+        }
+    }
+    assert!(replaced, "fixture must exercise NativeMethodCall forEach");
+    assert_eq!(run_module(module), "1\n2");
+}
+
+#[test]
+fn host_interop_shared_finalizers_preserve_payloads_and_jumps() {
+    assert_eq!(run_ts_after(r#"
+const object={value:7};
+function payload(){try{return object;}finally{try{console.log('nested');}finally{console.log('nested final');}}}
+console.log(payload()===object);
+function override(){try{return object;}finally{try{return {value:8};}finally{console.log('override final');}}}
+console.log(override().value);
+function cleanupThrow(){try{return object;}finally{throw 9;}}
+try{cleanupThrow();}catch(e){console.log(e);}
+try{try{throw null;}finally{try{console.log('pending final');}finally{console.log('pending nested');}}}catch(e){console.log(e===null);}
+function jump(){outer:for(let i=0;i<3;i++){try{try{return 'wrong';}finally{console.log(i);continue outer;}}finally{console.log('outer');}}return 'done';}
+console.log(jump());
+function breaking(){outer:while(true){try{try{return 'wrong';}finally{break outer;}}finally{console.log('break final');}}return 'broken';}
+console.log(breaking());
+"#, "require('node:assert/strict').equal(tryDepth,0);require('node:assert/strict').equal(__memDispatch.has_exception(),0);"),"nested\nnested final\ntrue\noverride final\n8\n9\npending final\npending nested\ntrue\n0\nouter\n1\nouter\n2\nouter\ndone\nbreak final\nbroken");
+}

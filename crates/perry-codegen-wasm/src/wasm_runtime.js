@@ -556,7 +556,7 @@ function buildImports() {
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return nanboxPointer(allocHandle([]));
         const result = arr.map((v, i) => {
-          const r = fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
           return __bitsToJsValue(r);
         });
         return nanboxPointer(allocHandle(result));
@@ -568,7 +568,7 @@ function buildImports() {
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return nanboxPointer(allocHandle([]));
         const result = arr.filter((v, i) => {
-          const r = fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
           const rv = __bitsToJsValue(r);
           if (rv === true) return true;
           if (rv === false || rv === null || rv === undefined) return false;
@@ -582,7 +582,7 @@ function buildImports() {
         if (!arr || !cb || !wasmInstance) return;
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return;
-        arr.forEach((v, i) => fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)));
+        arr.forEach((v, i) => __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
       },
       array_reduce: (handle, cbHandle, initial) => {
         const arr = getHandle(handle);
@@ -593,7 +593,7 @@ function buildImports() {
         let acc = isUndefined(initial) ? __jsValueToBits(arr[0]) : f64ToU64(initial);
         const startIdx = isUndefined(initial) ? 1 : 0;
         for (let i = startIdx; i < arr.length; i++) {
-          acc = fn(...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i));
+          acc = __invokeWasmCallback(fn, ...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
         }
         return u64ToF64(acc);
       },
@@ -605,7 +605,7 @@ function buildImports() {
         if (!fn) return u64ToF64(TAG_UNDEFINED);
         for (let i = 0; i < arr.length; i++) {
           const vBits = __jsValueToBits(arr[i]);
-          const r = fn(...cb.captures, vBits, __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, vBits, __jsValueToBits(i), __jsValueToBits(arr));
           if (__bitsToJsValue(r)) return fromJsValue(arr[i]);
         }
         return u64ToF64(TAG_UNDEFINED);
@@ -617,7 +617,7 @@ function buildImports() {
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return -1;
         for (let i = 0; i < arr.length; i++) {
-          const r = fn(...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
           if (__bitsToJsValue(r)) return i;
         }
         return -1;
@@ -633,7 +633,7 @@ function buildImports() {
         if (!cb || !wasmInstance) { arr.sort(); return handle; }
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) { arr.sort(); return handle; }
-        arr.sort((a, b) => { const r = fn(...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
+        arr.sort((a, b) => { const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
         return handle;
       },
       array_some: (handle, cbHandle) => {
@@ -642,7 +642,7 @@ function buildImports() {
         if (!arr || !cb || !wasmInstance) return 0;
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return 0;
-        return arr.some((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+        return arr.some((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
       },
       array_every: (handle, cbHandle) => {
         const arr = getHandle(handle);
@@ -650,7 +650,7 @@ function buildImports() {
         if (!arr || !cb || !wasmInstance) return 0;
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return 0;
-        return arr.every((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+        return arr.every((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
       },
 
       // ===== Phase 3: Classes =====
@@ -1864,14 +1864,14 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return [];
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return [];
-    return arr.map((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i))));
+    return arr.map((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr))));
   },
   array_filter: (arr, cb) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return [];
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return [];
     return arr.filter((v, i) => {
-      const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i));
+      const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
       const rv = __bitsToJsValue(r);
       if (rv === true) return true;
       if (rv === false || rv === null || rv === undefined) return false;
@@ -1882,7 +1882,7 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return;
-    arr.forEach((v, i) => __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i)));
+    arr.forEach((v, i) => __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
   },
   array_reduce: (arr, cb, initial) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
@@ -1890,7 +1890,7 @@ const __memDispatch = {
     if (!fn) return undefined;
     let acc = initial === undefined ? __jsValueToBits(arr[0]) : __jsValueToBits(initial);
     const startIdx = initial === undefined ? 1 : 0;
-    for (let i = startIdx; i < arr.length; i++) acc = __invokeWasmCallback(fn, ...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i));
+    for (let i = startIdx; i < arr.length; i++) acc = __invokeWasmCallback(fn, ...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
     return __bitsToJsValue(acc);
   },
   array_find: (arr, cb) => {
@@ -1899,7 +1899,7 @@ const __memDispatch = {
     if (!fn) return undefined;
     for (let i = 0; i < arr.length; i++) {
       const vBits = __jsValueToBits(arr[i]);
-      if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, vBits, __jsValueToBits(i)))) return arr[i];
+      if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, vBits, __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
     }
     return undefined;
   },
@@ -1907,7 +1907,7 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return -1;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return -1;
-    for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i)))) return i; }
+    for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
   array_sort: (arr, cb) => {
@@ -1923,13 +1923,13 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return 0;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return 0;
-    return arr.some((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+    return arr.some((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
   },
   array_every: (arr, cb) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return 0;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return 0;
-    return arr.every((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+    return arr.every((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
   },
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
@@ -2650,7 +2650,7 @@ function uiAlloc(el) {
 function uiGet(h) { return uiHandles.get(h); }
 
 function __invokeWasmCallback(fn, ...bigintArgs) {
-  const result = fn(...bigintArgs);
+  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
   __memDispatch.propagate_exception(true);
   return result;
 }
