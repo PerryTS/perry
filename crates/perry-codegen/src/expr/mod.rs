@@ -157,7 +157,7 @@ pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
     lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, BufferAccessSpec,
+    lower_typed_array_store, BufferAccessSpec, OutOfBoundsArm,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -4895,6 +4895,8 @@ mod byte_prepass_tests;
 #[cfg(test)]
 mod array_layout_loop_tests;
 
+#[cfg(test)]
+mod buffer_bounds_source_tests;
 #[cfg(test)]
 mod sort_numeric_source_tests;
 

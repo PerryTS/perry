@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
 use super::{can_lower_expr_as_i32, lower_expr, lower_expr_as_i32, FnCtx};
-use crate::types::{DOUBLE, I32, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Return the HIR enum variant name for an expression. Uses Debug
 /// formatting and extracts the leading identifier so we get the actual
@@ -313,7 +313,11 @@ pub(crate) fn try_match_channel_reduction(
 /// the same as the scalar Uint8ArrayGet path and gives up the win.
 /// Caller (in `lower_stmts`) checks this and falls back to scalar
 /// lowering when absent.
-pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction) -> Result<()> {
+pub(crate) fn lower_channel_reduction(
+    ctx: &mut FnCtx<'_>,
+    r: &ChannelReduction,
+    scalar: &[perry_hir::Stmt],
+) -> Result<()> {
     let Some((ptr_slot, scope_idx)) = ctx.buffer_data_slots.get(&r.array_id).cloned() else {
         return Err(anyhow!(
             "lower_channel_reduction: array {} has no buffer_data_slot — caller should have skipped",
@@ -341,8 +345,14 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
     let base_idx_i32 = if base_idx_can_i32 {
         lower_expr_as_i32(ctx, &r.base_idx)?
     } else {
+        // `fptosi` of a double outside i32 (or NaN) is poison; freeze it so
+        // the bounds check below branches on a defined value.
         let d = lower_expr(ctx, &r.base_idx)?;
-        ctx.block().fptosi(DOUBLE, &d, I32)
+        let raw = ctx.block().fptosi(DOUBLE, &d, I32);
+        let frozen = ctx.block().fresh_reg();
+        ctx.block()
+            .emit_raw(format!("{} = freeze i32 {}", frozen, raw));
+        frozen
     };
     let k_can_i32 = can_lower_expr_as_i32(
         &r.k_expr,
@@ -384,10 +394,33 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
     // assume covering the highest offset is sufficient because
     // `inbounds(base + max_offset)` implies `inbounds(base + i)` for
     // `0 <= i <= max_offset`.
+    //
+    // Nothing proves the gathered offsets in bounds, so this is a real check,
+    // not an `llvm.assume`: out of range, the statements run through their
+    // ordinary scalar lowering, which reads `undefined` past the end exactly as
+    // JS does. Unsigned and in i64, so a negative `base_idx` or a
+    // `base_idx + max_offset` past `i32::MAX` fails it.
     let max_off = *r.offsets.last().unwrap();
-    let max_idx = blk.add(I32, &base_idx_i32, &max_off.to_string());
-    let in_bounds = blk.icmp_ult(I32, &max_idx, &len_i32);
-    blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
+    let base_i64 = blk.zext(I32, &base_idx_i32, I64);
+    let len_i64 = blk.zext(I32, &len_i32, I64);
+    let max_idx = blk.add(I64, &base_i64, &max_off.to_string());
+    let in_bounds = blk.icmp_ult(I64, &max_idx, &len_i64);
+    let fast_idx = ctx.new_block("channel.inbounds");
+    let scalar_idx = ctx.new_block("channel.scalar");
+    let join_idx = ctx.new_block("channel.join");
+    let fast_label = ctx.block_label(fast_idx);
+    let scalar_label = ctx.block_label(scalar_idx);
+    let join_label = ctx.block_label(join_idx);
+    ctx.block().cond_br(&in_bounds, &fast_label, &scalar_label);
+    ctx.current_block = scalar_idx;
+    for stmt in scalar {
+        crate::stmt::lower_stmt(ctx, stmt)?;
+    }
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&join_label);
+    }
+    ctx.current_block = fast_idx;
+    let blk = ctx.block();
     // Build the byte vector by N consecutive loads + insertelement. LLVM
     // SLP combines the scalar loads into a single vector load when the
     // addresses are contiguous (which they are after the assume above).
@@ -485,5 +518,7 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
             blk.store(DOUBLE, &dbl_val, &dbl_slot);
         }
     }
+    ctx.block().br(&join_label);
+    ctx.current_block = join_idx;
     Ok(())
 }

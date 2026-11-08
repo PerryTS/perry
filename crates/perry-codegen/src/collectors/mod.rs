@@ -22,6 +22,9 @@ mod escape_arrays;
 mod escape_check;
 mod escape_news;
 mod escape_objects;
+pub(crate) mod exact_i32_range;
+#[cfg(test)]
+mod exact_i32_range_source_tests;
 mod hir_facts;
 mod hoisted_callback_calls;
 mod hot_callees;
