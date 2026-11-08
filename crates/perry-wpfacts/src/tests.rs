@@ -149,6 +149,7 @@ mod spread_arguments;
 mod spread_elements;
 mod spread_iterable_args;
 mod summary;
+mod member_heritage;
 mod super_heritage;
 mod super_home_proto;
 mod super_key;
