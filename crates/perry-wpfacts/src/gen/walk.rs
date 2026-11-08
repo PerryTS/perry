@@ -671,7 +671,7 @@ impl<'a> Gen<'a> {
         self.m.note_walked(fxi);
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
-        let fx = Fx {
+        let mut fx = Fx {
             guard: None,
             module: mi,
             f: fxi,
@@ -682,27 +682,13 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor,
         };
-        self.params(&fx, &f.params);
-        if !f.is_strict && class.is_none() && ctor_of.is_none() {
-            // A sloppy function reads a nullish `this` as the global object
-            // and boxes a primitive one, an object the model does not hold:
-            // once a primitive arrives `this` is anything.
-            let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-            let global = self.tok_node(global_tok);
-            for (test, from) in [
-                (crate::model::guard::NULLISH, global),
-                (crate::model::guard::BOXED, self.m.top_tok_node),
-            ] {
-                self.m.cons(
-                    info.this,
-                    Cons::Guard {
-                        test,
-                        from,
-                        dst: info.this,
-                    },
-                );
-            }
+        if !f.is_strict && fn_ctor && crate::ctor_phase::body_mentions_this(&f.body) {
+            // The view belongs to the function's body, like its parameters.
+            let prev = std::mem::replace(&mut self.m.cur_fn, fxi);
+            fx.this = self.sloppy_this(info.this);
+            self.m.cur_fn = prev;
         }
+        self.params(&fx, &f.params);
         if f.is_async || f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
@@ -736,6 +722,32 @@ impl<'a> Gen<'a> {
         }
         self.narrow_scope = saved_scope;
         self.own_helper_finish(fxi, own);
+    }
+
+    /// The `this` a sloppy function's body reads: its callers' `this`,
+    /// where a nullish one is the global object and a primitive one is
+    /// boxed, an object the model does not hold (anything). The function's
+    /// own `this` node, its interface, stays what callers pass.
+    fn sloppy_this(&mut self, this: NodeId) -> NodeId {
+        let view = self.m.node_l("sloppy-this");
+        self.m.own(view);
+        self.m.edge(this, view);
+        let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let global = self.tok_node(global_tok);
+        for (test, from) in [
+            (crate::model::guard::NULLISH, global),
+            (crate::model::guard::BOXED, self.m.top_tok_node),
+        ] {
+            self.m.cons(
+                view,
+                Cons::Guard {
+                    test,
+                    from,
+                    dst: view,
+                },
+            );
+        }
+        view
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
