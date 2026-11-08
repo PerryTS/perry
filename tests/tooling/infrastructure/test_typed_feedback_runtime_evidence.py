@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SOURCE = REPO_ROOT / "tests" / "typed_feedback_runtime_evidence.ts"
+SOURCE = REPO_ROOT / "tests" / "integration" / "typed_feedback_runtime_evidence.ts"
 
 
 def resolve_perry() -> list[str]:

@@ -37,7 +37,7 @@ Like Node 26, `initMessageEvent` returns a new event rather than mutating its re
 
 Include every `MessagePort` reachable from a message in its transfer list:
 
-```typescript
+```typescript,no-test
 const channel = new MessageChannel();
 worker.postMessage({ port: channel.port1 }, [channel.port1]);
 ```
