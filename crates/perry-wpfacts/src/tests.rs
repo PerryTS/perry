@@ -1893,6 +1893,7 @@ mod key_shape;
 mod method_this_escape;
 mod native_parent;
 mod native_proto_member;
+mod param_key_shape;
 mod native_push;
 mod native_value_call;
 mod static_native_parent;
