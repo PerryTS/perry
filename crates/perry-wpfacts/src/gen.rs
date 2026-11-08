@@ -519,10 +519,24 @@ impl<'a> Gen<'a> {
         m.add_prim(all, prim::ALL);
         m.all_prim_node = all;
         let thrown = m.node_l("THROWN");
-        // Runtime-thrown errors are runtime objects: ⊤-origin.
-        m.add_top(thrown, |_| "thrown value (runtime errors)".into());
-        m.add_prim(thrown, prim::ALL);
+        // What a `catch` (or a rejection handler) receives beside the values
+        // the program throws (edges): the error object a failed runtime
+        // operation makes (`exception::throw_core`; codegen inserts such
+        // throws the model never sees, so every program can catch one). It is
+        // also the region of every call made outside generation (DESIGN SEEDE
+        // section 8); ⊤ reaches it only through such a region.
+        let rterr = m.runtime_error();
+        m.add_tok(thrown, rterr);
         m.thrown = thrown;
+        let esc = m.node_l("ESCRAISE");
+        let r = m.reason("thrown into unknown code");
+        m.sink_node(esc, r);
+        m.esc_raise = esc;
+        let acc = m.node_l("ESCACCESSORS");
+        let r = m.reason("accessor function of a value unknown code holds");
+        m.sink_node(acc, r);
+        m.esc_accessors = acc;
+        m.lazy_raise = m.node_l("LAZYRAISE");
         m.escaped_classes = m.node_l("ESCCLASSES");
         let cjs_registry = m.node_l("CJSREG");
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
@@ -1293,6 +1307,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: id,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: ps,
             rest,
@@ -1628,6 +1643,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: vec![],
             rest: None,
@@ -1726,7 +1742,7 @@ impl<'a> Gen<'a> {
     /// no parent value (its `extends` resolved statically, or none) cannot
     /// take one: its instances escape and `v` is sunk, as before.
     pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
-        let native = tm.and_then(|tm| self.native_parent_value(tm));
+        let native = tm.and_then(|tm| crate::builtins::native_parent_value(&mut self.m, tm));
         match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
             Some((tm, (pv, _))) => {
                 self.m.edge(v, pv);
@@ -1759,6 +1775,13 @@ impl<'a> Gen<'a> {
                 self.m.parent_unsettled.insert(tm);
                 let chk = self.m.node_l("native-parent-check");
                 self.m.edge(v, chk);
+                // The class object's [[Prototype]] is the evaluated `extends`
+                // value (ClassDefinitionEvaluation), as for any parent value:
+                // a static read or call on the class (`X.g()`) reaches what
+                // the program stored on that constructor.
+                let c = self.m.tok(TokKind::ClassObj(tm));
+                let cp = self.m.proto_node(c);
+                self.m.edge(v, cp);
                 let reason = self.m.reason(why);
                 self.m.cons(
                     chk,
@@ -1779,19 +1802,6 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-    }
-
-    /// The value of the global object's declared constructor that class `tm`'s
-    /// built-in parent names (`extends Error`: the realm's `Error`); `None`
-    /// when the class has no built-in parent or the global declares none
-    /// under that name (`EventEmitter` is a module export).
-    fn native_parent_value(&mut self, tm: TmplId) -> Option<Tok> {
-        let (_, name) = self.m.tmpls[tm as usize].native_parent.clone()?;
-        let identity = self
-            .m
-            .namespace_property(BuiltinNs::GlobalThis, &name)?
-            .native?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity })))
     }
 
     /// After the bodies: a parent value no evaluated parent fed takes the

@@ -371,7 +371,8 @@ pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
 pub(crate) use nm_namespace_hooks::{
-    arm_nm_ee_ops, arm_nm_namespace_ops, nm_ee_ops, nm_namespace_ops, NmEeOps, NmNamespaceOps,
+    arm_nm_ee_ops, arm_nm_namespace_ops, nm_delete_member, nm_ee_ops, nm_namespace_ops, NmEeOps,
+    NmMember, NmNamespaceOps,
 };
 pub use object_literal_ops::*;
 pub use object_ops::*;

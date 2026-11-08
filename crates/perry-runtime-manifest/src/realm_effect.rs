@@ -53,6 +53,11 @@ pub enum RealmProtocol {
     Json,
     HasInstance,
     OwnKeys,
+    /// Node's `util.inspect(v, { depth: -1 })` (an argument-type error's
+    /// message on an object without a named constructor): the
+    /// `[util.inspect.custom]` hook and the few labels printed before the
+    /// depth check; no own value is read.
+    ShallowInspect,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -79,8 +84,14 @@ pub enum RealmOperand {
     Fresh {
         proto: Cow<'static, str>,
         #[serde(default)]
-        elems: Cow<'static, [RealmSlot]>,
+        elems: Cow<'static, [RealmOperand]>,
+        /// Own data fields the call defines on the object, with their values.
+        #[serde(default)]
+        fields: Cow<'static, [RealmField]>,
     },
+    /// The host function value the realm declares at this path (a closure
+    /// the body makes); its own declaration says what calling it does.
+    Native(Cow<'static, str>),
     /// ArraySpeciesCreate on `of`: reads `of.constructor` and its
     /// `@@species`; a program constructor is run as `new C(...args)` and what
     /// it returns is the value, else a fresh Array. `elems` are defined into
@@ -99,6 +110,14 @@ pub enum RealmOperand {
     Bound,
     /// Any one of these values (at least two; no union inside a union).
     Union(Cow<'static, [RealmOperand]>),
+}
+
+/// One own data field of a fresh object: its key and its value.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RealmField {
+    pub key: Cow<'static, str>,
+    pub value: RealmOperand,
 }
 
 /// The verbs.
@@ -154,13 +173,27 @@ impl RealmOperand {
             Self::Prim(_) => Ok(()),
             Self::Slot(slot) => slot.validate(at),
             Self::Bound => Ok(()),
-            Self::Fresh { proto, elems } => {
+            Self::Fresh {
+                proto,
+                elems,
+                fields,
+            } => {
                 if !names(proto) {
                     return Err(format!(
                         "{at}: fresh object prototype {proto} is not a realm node"
                     ));
                 }
-                elems.iter().try_for_each(|slot| slot.validate(at))
+                if fields.iter().any(|f| f.key.is_empty()) {
+                    return Err(format!("{at}: fresh field key is empty"));
+                }
+                elems.iter().try_for_each(|e| e.validate(at, names))?;
+                fields.iter().try_for_each(|f| f.value.validate(at, names))
+            }
+            Self::Native(path) => {
+                if !names(path) {
+                    return Err(format!("{at}: native {path} is not a realm node"));
+                }
+                Ok(())
             }
             Self::Species { of, args, elems } => {
                 of.validate(at)?;
@@ -216,9 +249,12 @@ pub fn validate_effects(
     };
     fn slots_in<'a>(o: &'a RealmOperand, out: &mut Vec<&'a RealmSlot>) {
         match o {
-            RealmOperand::Prim(_) | RealmOperand::Bound => {}
+            RealmOperand::Prim(_) | RealmOperand::Bound | RealmOperand::Native(_) => {}
             RealmOperand::Slot(slot) => out.push(slot),
-            RealmOperand::Fresh { elems, .. } => out.extend(elems.iter()),
+            RealmOperand::Fresh { elems, fields, .. } => {
+                elems.iter().for_each(|e| slots_in(e, out));
+                fields.iter().for_each(|f| slots_in(&f.value, out));
+            }
             RealmOperand::Species { of, args, elems } => {
                 out.push(of);
                 args.iter().for_each(|a| slots_in(a, out));
@@ -300,10 +336,22 @@ pub mod emit {
             ),
             RealmOperand::Slot(s) => format!("{p}RealmOperand::Slot({})", slot(p, s)),
             RealmOperand::Bound => format!("{p}RealmOperand::Bound"),
-            RealmOperand::Fresh { proto, elems } => format!(
-                "{p}RealmOperand::Fresh {{ proto: ::std::borrow::Cow::Borrowed({proto:?}), elems: {} }}",
-                list(elems, |s| slot(p, s))
+            RealmOperand::Fresh {
+                proto,
+                elems,
+                fields,
+            } => format!(
+                "{p}RealmOperand::Fresh {{ proto: ::std::borrow::Cow::Borrowed({proto:?}), elems: {}, fields: {} }}",
+                list(elems, |e| operand(p, e)),
+                list(fields, |f| format!(
+                    "{p}RealmField {{ key: ::std::borrow::Cow::Borrowed({:?}), value: {} }}",
+                    f.key,
+                    operand(p, &f.value)
+                ))
             ),
+            RealmOperand::Native(path) => {
+                format!("{p}RealmOperand::Native(::std::borrow::Cow::Borrowed({path:?}))")
+            }
             RealmOperand::Species { of, args, elems } => format!(
                 "{p}RealmOperand::Species {{ of: {}, args: {}, elems: {} }}",
                 slot(p, of),

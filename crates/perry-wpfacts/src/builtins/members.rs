@@ -608,7 +608,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -625,7 +625,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// keeps as a container's) have no chain the model describes.
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
-        "json" | "descriptor" | "descriptors" | "fromEntries" => BoxChain::Object,
+        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
         "keys" | "arraybox" => BoxChain::Array,
         "groups" => BoxChain::Null,
         _ => BoxChain::Unknown,
@@ -931,7 +931,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
-        BuiltinNs::GlobalThis | BuiltinNs::Process => (NsProto::Object, None),
+        BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Module(_) => (NsProto::Object, None),
         BuiltinNs::Require | BuiltinNs::Other => (NsProto::Unknown(Family::Function), None),
     };
     NsStatics { members, prototype }

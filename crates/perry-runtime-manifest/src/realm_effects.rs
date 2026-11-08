@@ -6,18 +6,25 @@
 //! effects  := "{" effect (";" effect)* ";"? "}"
 //! effect   := reads(slot, ...) | coerce(slot, Protocol) | stores(slot -> slot) | stores(fresh)
 //!           | calls(slot, this = operand, args = [operand, ...])
-//!           | returns(operand) | open
+//!           | returns(operand) | open | path(slot)
 //! slot     := this | result | arg(N) | rest(N) | returned(N) | elems(slot) | field(slot, key)
 //! operand  := value ("|" value)*
-//! value    := slot | prim(kind | kind ...) | fresh(Realm.path, elems = [slot, ...])
+//! value    := slot | prim(kind | kind ...) | native(Realm.path)
+//!           | fresh(Realm.path, elems = [operand, ...], fields = {key: operand, ...})
 //!           | species(slot, args = [operand, ...], elems = [slot, ...])
 //!
 //! `returned(N)`: the value the N-th `calls` of this declaration (0-based)
 //! returned; a value only: an operand, a store source or a coerced slot
 //! (`sort` runs ToNumber on its comparator's result).
+//! `fresh(..)`: an object the call makes: elements and own data fields
+//! holding the operands. `native(path)`: the host function value the
+//! realm declares at `path` (its body declares its own effects).
 //! `species(..)`: ArraySpeciesCreate on the slot (see
 //! `RealmOperand::Species`).
-//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys
+//! `path(slot)`: what node does to a PathLike argument (getValidatedPath:
+//! `toPathIfFileURL`, then the type check), as the reads and coercions it
+//! stands for (`path_effects`).
+//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys | ShallowInspect
 //! kind     := undefined | null | bool | num | str | bigint | symbol
 //! ```
 use super::info;
@@ -149,27 +156,76 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
             Ok(tagged("prim", Value::Array(kinds)))
         }
         ("fresh", Some(inner)) => {
+            let usage = "fresh(Proto, elems = [operand, ...], fields = {key: operand, ...})";
             let parts = info::split(inner, ",");
-            let (proto, elems) = match parts.as_slice() {
-                [proto] => (proto, Vec::new()),
-                [proto, elems] => (
-                    proto,
-                    slots(bracketed("fresh elems", keyword("elems", elems)?)?)?,
-                ),
-                _ => {
-                    return Err(
-                        "fresh(Proto, elems = [slot, ...]) takes a prototype and elements".into(),
-                    )
-                }
+            let [proto, rest @ ..] = parts.as_slice() else {
+                return Err(format!("{usage} takes a prototype"));
             };
+            let mut elems: Option<Vec<Value>> = None;
+            let mut fields: Option<Vec<Value>> = None;
+            for part in rest {
+                match part.first().map(|t| t.text) {
+                    Some("elems") if elems.is_none() => {
+                        let list = bracketed("fresh elems", keyword("elems", part)?)?;
+                        elems = Some(if list.is_empty() {
+                            Vec::new()
+                        } else {
+                            info::split(list, ",")
+                                .into_iter()
+                                .map(operand)
+                                .collect::<Result<Vec<_>, _>>()?
+                        });
+                    }
+                    Some("fields") if fields.is_none() => {
+                        let block = match keyword("fields", part)? {
+                            [open, inner @ .., close] if open.text == "{" && close.text == "}" => {
+                                inner
+                            }
+                            _ => {
+                                return Err(
+                                    "fresh fields must be a {key: operand, ...} block".into()
+                                )
+                            }
+                        };
+                        let mut keys: Vec<String> = Vec::new();
+                        let mut list = Vec::new();
+                        for field in info::split(block, ",") {
+                            let malformed =
+                                || format!("malformed fresh field `{}`", info::text(field));
+                            let [key, colon, value @ ..] = field else {
+                                return Err(malformed());
+                            };
+                            if colon.text != ":" || value.is_empty() {
+                                return Err(malformed());
+                            }
+                            let key = key.text.trim_matches('"').to_string();
+                            if keys.contains(&key) {
+                                return Err(format!("fresh field `{key}` declared twice"));
+                            }
+                            list.push(object(vec![
+                                ("key", Value::String(key.clone())),
+                                ("value", operand(value)?),
+                            ]));
+                            keys.push(key);
+                        }
+                        fields = Some(list);
+                    }
+                    _ => return Err(format!("{usage}: unexpected `{}`", info::text(part))),
+                }
+            }
             Ok(tagged(
                 "fresh",
                 object(vec![
                     ("proto", Value::String(super::facts::path(proto)?)),
-                    ("elems", Value::Array(elems)),
+                    ("elems", Value::Array(elems.unwrap_or_default())),
+                    ("fields", Value::Array(fields.unwrap_or_default())),
                 ]),
             ))
         }
+        ("native", Some(inner)) => Ok(tagged(
+            "native",
+            Value::String(super::facts::path(inner)?),
+        )),
         ("bound", None) => Ok(Value::String("bound".into())),
         ("species", Some(inner)) => {
             let parts = info::split(inner, ",");
@@ -224,10 +280,11 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
                 "Json" => "json",
                 "HasInstance" => "has_instance",
                 "OwnKeys" => "own_keys",
+                "ShallowInspect" => "shallow_inspect",
                 "Any" => return Err("coerce(.., Any) is not declarable: name the protocol".into()),
                 p => {
                     return Err(format!(
-                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys)"
+                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys, ShallowInspect)"
                     ))
                 }
             };
@@ -282,11 +339,82 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
         "returns" => tagged("returns", operand(inner()?)?),
         _ => {
             return Err(format!(
-                "unknown effect `{}` (reads, coerce, calls, stores, returns, open)",
+                "unknown effect `{}` (reads, coerce, calls, stores, returns, open, path)",
                 info::text(ts)
             ))
         }
     })
+}
+
+/// `slot` one step further in: `field(slot, key)` or `elems(slot)`.
+fn step(slot: &Value, step: Value) -> Value {
+    let mut slot = slot.clone();
+    if let Value::Object(map) = &mut slot {
+        if let Some(Value::Array(steps)) = map.get_mut("steps") {
+            steps.push(step);
+        }
+    }
+    slot
+}
+
+fn field(slot: &Value, key: &str) -> Value {
+    step(slot, tagged("field", Value::String(key.into())))
+}
+
+/// `path(slot)`: node's getValidatedPath on a PathLike argument (node 22..26,
+/// lib/internal/url.js and lib/internal/errors.js; traced with a Proxy):
+/// - `isURL`: `href`, `protocol`, `auth`, `path` ([[Get]], truthiness only);
+/// - `fileURLToPath` of a URL-like value: `protocol`, `hostname`, `pathname`;
+///   the pathname's `length` and elements, and ToString of it
+///   (`decodeURIComponent`); on Windows ToString of `hostname`
+///   (`domainToUnicode`);
+/// - a value of another type throws ERR_INVALID_ARG_TYPE, whose message
+///   (`determineSpecificType`) reads `name` of a function, `constructor`
+///   and its `name` of an object (both ToString in a template), else runs
+///   `util.inspect(v, { depth: -1 })` on it (`ShallowInspect`; before the
+///   `[util.inspect.custom]` hook it reads the `prototype` of the
+///   constructor).
+/// A getter under any other key never runs.
+/// The body keeps nothing and calls nothing else.
+fn path_effects(s: &Value) -> Vec<Value> {
+    let pathname = field(s, "pathname");
+    let constructor = field(s, "constructor");
+    let reads = [
+        "href",
+        "protocol",
+        "auth",
+        "path",
+        "hostname",
+        "pathname",
+        "constructor",
+        "name",
+    ]
+    .into_iter()
+    .map(|k| field(s, k))
+    .chain([
+        field(&pathname, "length"),
+        step(&pathname, Value::String("elems".into())),
+        field(&constructor, "name"),
+        field(&constructor, "prototype"),
+    ])
+    .collect();
+    let coerce = |slot: Value, protocol: &str| {
+        tagged(
+            "coerce",
+            object(vec![
+                ("slot", slot),
+                ("protocol", Value::String(protocol.into())),
+            ]),
+        )
+    };
+    vec![
+        tagged("reads", Value::Array(reads)),
+        coerce(pathname, "to_primitive"),
+        coerce(field(s, "hostname"), "to_primitive"),
+        coerce(field(&constructor, "name"), "to_primitive"),
+        coerce(field(s, "name"), "to_primitive"),
+        coerce(s.clone(), "shallow_inspect"),
+    ]
 }
 
 /// The value of `effects = { ... }`: the list of effects, in source order.
@@ -295,11 +423,18 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Value, String> {
         [open, inner @ .., close] if open.text == "{" && close.text == "}" => inner,
         _ => return Err("effects must be a { verb(..); ... } block".into()),
     };
-    let effects = info::split(inner, ";")
+    let mut effects = Vec::new();
+    for e in info::split(inner, ";")
         .into_iter()
         .filter(|e| !e.is_empty())
-        .map(|e| effect(e).map_err(|err| format!("effects: {err}")))
-        .collect::<Result<Vec<_>, _>>()?;
+    {
+        match call(e) {
+            Ok(("path", Some(of))) => effects.extend(path_effects(
+                &slot(of).map_err(|err| format!("effects: path: {err}"))?,
+            )),
+            _ => effects.push(effect(e).map_err(|err| format!("effects: {err}"))?),
+        }
+    }
     if effects.is_empty() {
         return Err(
             "effects: empty block (omit `effects` for unknown code, or write `open`)".into(),
@@ -346,22 +481,52 @@ mod tests {
         );
         assert_eq!(
             parse_text("{ returns(prim(num | undefined)); returns(fresh(Array.prototype, elems = [elems(this)])); returns(field(this, \"k\")) }").unwrap(),
-            r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"root":"this","steps":["elems"]}],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
+            r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"slot":{"root":"this","steps":["elems"]}}],"fields":[],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
         );
         assert_eq!(parse_text("{ open }").unwrap(), r#"["open"]"#);
+        assert_eq!(
+            parse_text("{ coerce(arg(0), ShallowInspect) }").unwrap(),
+            r#"[{"coerce":{"protocol":"shallow_inspect","slot":{"root":{"arg":0},"steps":[]}}}]"#
+        );
+        // A slot more than one step deep.
+        assert_eq!(
+            parse_text("{ reads(field(field(arg(0), pathname), length)) }").unwrap(),
+            r#"[{"reads":[{"root":{"arg":0},"steps":[{"field":"pathname"},{"field":"length"}]}]}]"#
+        );
         assert_eq!(
             parse_text("{ reads(this); stores(fresh) }").unwrap(),
             r#"[{"reads":[{"root":"this","steps":[]}]},"stores_fresh"]"#
         );
         assert_eq!(
             parse_text("{ calls(arg(0), this = arg(1), args = [elems(this), prim(num) | elems(this)]); returns(fresh(Array.prototype, elems = [returned(0)])) }").unwrap(),
-            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"union":[{"prim":["num"]},{"slot":{"root":"this","steps":["elems"]}}]}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}},{"returns":{"fresh":{"elems":[{"root":{"returned":0},"steps":[]}],"proto":"Array.prototype"}}}]"#
+            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"union":[{"prim":["num"]},{"slot":{"root":"this","steps":["elems"]}}]}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}},{"returns":{"fresh":{"elems":[{"slot":{"root":{"returned":0},"steps":[]}}],"fields":[],"proto":"Array.prototype"}}}]"#
         );
         assert_eq!(
             parse_text("{ returns(species(this, args = [prim(num)], elems = [elems(this)])) }")
                 .unwrap(),
             r#"[{"returns":{"species":{"args":[{"prim":["num"]}],"elems":[{"root":"this","steps":["elems"]}],"of":{"root":"this","steps":[]}}}}]"#
         );
+    }
+
+    /// `path(slot)` is the reads and coercions node's getValidatedPath runs,
+    /// written out: the same effects as the long form.
+    #[test]
+    fn path_is_node_get_validated_path() {
+        let long = "{ reads(field(arg(0), href), field(arg(0), protocol), field(arg(0), auth), \
+            field(arg(0), path), field(arg(0), hostname), field(arg(0), pathname), \
+            field(arg(0), constructor), field(arg(0), name), field(field(arg(0), pathname), length), \
+            elems(field(arg(0), pathname)), field(field(arg(0), constructor), name), \
+            field(field(arg(0), constructor), prototype)); \
+            coerce(field(arg(0), pathname), ToPrimitive); coerce(field(arg(0), hostname), ToPrimitive); \
+            coerce(field(field(arg(0), constructor), name), ToPrimitive); \
+            coerce(field(arg(0), name), ToPrimitive); coerce(arg(0), ShallowInspect); returns(prim(bool)) }";
+        assert_eq!(
+            parse_text("{ path(arg(0)); returns(prim(bool)) }").unwrap(),
+            parse_text(long).unwrap()
+        );
+        assert!(parse_text("{ path(self) }")
+            .unwrap_err()
+            .contains("path: unknown effect slot `self`"));
     }
 
     #[test]
@@ -393,6 +558,30 @@ mod tests {
         ] {
             let err = parse_text(text).expect_err(text);
             assert!(err.contains(needle), "{text}: {err}");
+        }
+    }
+
+
+    /// `fresh(.., fields = {..})` and `native(..)`: own data fields with
+    /// their values, the host function a body makes.
+    #[test]
+    fn fresh_fields_and_native_parse() {
+        assert_eq!(
+            parse_text("{ returns(fresh(Object.prototype, fields = {isFile: native(\"%FsStatsPredicate%\"), size: prim(num)})) }").unwrap(),
+            r#"[{"returns":{"fresh":{"elems":[],"fields":[{"key":"isFile","value":{"native":"%FsStatsPredicate%"}},{"key":"size","value":{"prim":["num"]}}],"proto":"Object.prototype"}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(fresh(Array.prototype, elems = [prim(str)])) }").unwrap(),
+            r#"[{"returns":{"fresh":{"elems":[{"prim":["str"]}],"fields":[],"proto":"Array.prototype"}}}]"#
+        );
+        for (bad, why) in [
+            ("{ returns(fresh(Object.prototype, fields = {a: prim(num), a: prim(str)})) }", "declared twice"),
+            ("{ returns(fresh(Object.prototype, fields = {a prim(num)})) }", "malformed fresh field"),
+            ("{ returns(fresh(Object.prototype, fields = [a])) }", "fields must be"),
+            ("{ returns(fresh(Object.prototype, slots = [a])) }", "unexpected"),
+        ] {
+            let err = parse_text(bad).unwrap_err();
+            assert!(err.contains(why), "{bad}: {err}");
         }
     }
 }

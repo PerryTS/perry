@@ -80,6 +80,7 @@ impl Model {
                 self.packet_key(key),
                 act
             ),
+            Cons::Raise { region } => format!("Raise region={region}"),
             Cons::TopSink { reason } => {
                 format!("TopSink reason={:?}", self.reasons.get(reason as usize))
             }
