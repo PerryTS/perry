@@ -42,15 +42,17 @@ fn a_fixed_length_field_array_read_is_proven() {
 #[test]
 fn a_literal_array_read_in_bounds_needs_no_bound() {
     // A loop counter is narrowed in a function body (`gen::narrow`) by its
-    // test against the array's constant length. (A short constant loop is
-    // unrolled by HIR, its reads then see the counter's whole interval.)
-    let elems = (0..40)
+    // test against a local's `length`, the array's constant length. The
+    // interval widens to `2^k - 1` bounds, so the length is one of them. (A
+    // short constant loop is unrolled by HIR, its reads then see literal
+    // keys.)
+    let elems = (0..128)
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
         .join(", ");
     let src = format!(
-        "const a = [{elems}];\n\
-         function sum(): number {{\n\
+        "function sum(): number {{\n\
+           const a = [{elems}];\n\
            let s = 0;\n\
            for (let i = 0; i < a.length; i++) s += a[i];\n\
            return s;\n\
@@ -61,7 +63,7 @@ fn a_literal_array_read_in_bounds_needs_no_bound() {
     assert_eq!(
         r,
         ElementRead {
-            len: 40,
+            len: 128,
             key_in_bounds: true
         }
     );
