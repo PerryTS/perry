@@ -989,6 +989,12 @@ impl Model {
                 }
                 self.add_tok(n, objproto);
             }
+            // A builtin constructor whose [[Prototype]] is another one
+            // (`TypeError`'s is `Error`): that namespace.
+            TokKind::Builtin(ns) if crate::builtins::ns_parent(ns).is_some() => {
+                let p = self.tok(TokKind::Builtin(crate::builtins::ns_parent(ns).unwrap()));
+                self.add_tok(n, p);
+            }
             TokKind::Func(_, _)
             | TokKind::Bound(_)
             | TokKind::BuiltinFn(_)
