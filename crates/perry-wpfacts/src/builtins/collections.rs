@@ -348,6 +348,7 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId) {
             spread: vec![],
             ret: c.ret,
             site: c.site,
+            region: m.thrown,
         },
     );
     m.cons(sp, Cons::NewProgram { call: mc });
