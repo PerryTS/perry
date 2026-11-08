@@ -78,6 +78,12 @@ pub(crate) fn witness(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u32) {
         return;
     }
     note_consumed(id);
+    witness_exact(ctx, value, id);
+}
+
+/// Check mode: `value`, a proven Number held by local `id` as an int32,
+/// is an exact int32 double. A miss reports the false proof and exits 86.
+pub(crate) fn witness_exact(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u32) {
     if !crate::verify_facts::enabled() {
         return;
     }

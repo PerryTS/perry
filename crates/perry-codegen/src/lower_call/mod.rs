@@ -597,7 +597,10 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
     // The call's site offset, for every route that consults the call-site
     // argument intervals (`index_split::with_call_site`).
-    index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))
+    let value = index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))?;
+    // Check mode: a call the facts prove a Number returns a canonical double.
+    crate::codegen::facts_rep::witness_number_call(ctx, callee, &value);
+    Ok(value)
 }
 
 fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
