@@ -154,6 +154,7 @@ pub enum BuiltinNs {
     ArrayBuffer,
     Symbol,
     Number,
+    BigInt,
     String,
     Boolean,
     Function,
