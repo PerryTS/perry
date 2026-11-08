@@ -22,136 +22,74 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
-    let obj = ptr as *const crate::ObjectHeader;
-    let Some(keys_view) = super::super::stringify::object_keys_array_checked(obj) else {
-        // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
-        // reached here via a static TYPE_OBJECT hint). Node serializes those as
-        // `{}`; walking the slot as an ArrayHeader would fault.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_const_ptr(ptr as *const crate::ObjectHeader);
+    if object
+        .with_const_ptr(|obj| super::super::stringify::object_keys_array_checked(obj).is_none())
+    {
+        // Native cells without ObjectHeader storage have no ordinary members.
         buf.push_str("{}");
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
         return;
-    };
-    // A layout that keeps its own storage slots reads each key through them.
-    let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
-    if !slotted {
-        crate::object::key_attrs::debug_assert_positional(keys_view.arr(), keys_view.count());
-    }
-    let keys_len = keys_view.count();
-    let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
-    let fields_ptr =
-        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
-    // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
-    // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
-    let actual_fields = keys_len;
-
-    // Build a map of key_name -> field_value for the object. An own accessor
-    // (`get key()`) holds no value in its raw slot, so resolve it through the
-    // getter — matching the function-replacer walk (test262
-    // replacer-array-duplicates, whose whitelisted key is a getter).
-    // A per-object attribute (a builtin accessor installs no process gate)
-    // must filter too: an accessor key's slot holds its accessor pair
-    // (`accessor_pair.rs`), never a value to serialize.
-    let filter_non_enum =
-        crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
-            & crate::object::key_attrs::SUMMARY_KEY_BITS
-            != 0;
-    // An own key is hidden only on a class instance or a shape with a private
-    // entry (#11791); the shape answers once for the whole walk.
-    let hide_private =
-        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
-    let mut field_map: Vec<(String, f64)> = Vec::new();
-    // OrdinaryOwnPropertyKeys order: array indices ascending, then strings.
-    let key_order = crate::object::ecma_own_key_order(keys_view);
-    for j in 0..actual_fields {
-        let f = key_order.as_ref().map_or(j, |order| order[j as usize]);
-        // #9398: tombstoned slot from an O(1) delete — not a key, not
-        // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize))
-            || super::super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
-        {
-            continue;
-        }
-        // #11232: physical class capture/private slots are not JS properties.
-        // Filter before reading the value or invoking getters/replacers.
-        if hide_private
-            && crate::object::instance_private_key_hidden(
-                obj,
-                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-            )
-        {
-            continue;
-        }
-        let mut field_val = if f < alloc_limit && !slotted {
-            *fields_ptr.add(f as usize)
-        } else {
-            f64::from_bits(crate::object::field_get_set::js_object_get_key_field(obj, f).bits())
-        };
-        if filter_non_enum && f < keys_len {
-            if let Some(gv) =
-                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
-            {
-                field_val = gv;
-            }
-        }
-        let key_name = if f < keys_len {
-            let key_f64 = *keys_elements.add(f as usize);
-            let key_bits = key_f64.to_bits();
-            let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-            let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-                (key_bits & POINTER_MASK) as *const StringHeader
-            } else {
-                key_bits as *const StringHeader
-            };
-            str_from_header(key_ptr)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("field{}", f))
-        } else {
-            format!("field{}", f)
-        };
-        field_map.push((key_name, field_val));
     }
 
     buf.push('{');
     let mut first = true;
     for allowed_key in allowed_keys {
-        if let Some((_, field_val)) = field_map.iter().find(|(k, _)| k == allowed_key) {
-            let field_bits = field_val.to_bits();
-            if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
-                continue;
-            }
-            if !first {
-                buf.push(',');
-            }
-            first = false;
-            if use_pretty {
-                buf.push('\n');
-                let inner_indent_count = depth + 1;
-                for _ in 0..inner_indent_count {
-                    buf.push_str(indent);
+        let member_scope = crate::gc::RuntimeHandleScope::new();
+        let key =
+            member_scope.root_raw_const_ptr(crate::string::canonical_key(allowed_key.as_bytes()));
+        // PropertyList determines which Get operations run, and their order.
+        // Read each value immediately before serializing it: an earlier getter
+        // or nested serialization can change a later property or move storage.
+        let field_val = key.with_const_ptr(|key: *const StringHeader| {
+            object.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                if crate::object::instance_private_key_hidden(
+                    obj,
+                    JSValue::string_ptr(key.cast_mut()),
+                ) {
+                    JSValue::undefined()
+                } else {
+                    crate::object::js_object_get_field_by_name(obj, key)
                 }
-                write_escaped_string(buf, allowed_key);
-                buf.push_str(": ");
-                stringify_value_with_array_replacer(
-                    *field_val,
-                    allowed_keys,
-                    buf,
-                    indent,
-                    inner_indent_count,
-                    true,
-                );
-            } else {
-                write_escaped_string(buf, allowed_key);
-                buf.push(':');
-                stringify_value_with_array_replacer(
-                    *field_val,
-                    allowed_keys,
-                    buf,
-                    indent,
-                    depth,
-                    false,
-                );
+            })
+        });
+        let field_val = member_scope.root_nanbox_f64(f64::from_bits(field_val.bits()));
+        let field_bits = field_val.get_nanbox_f64().to_bits();
+        if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
+            continue;
+        }
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        if use_pretty {
+            buf.push('\n');
+            let inner_indent_count = depth + 1;
+            for _ in 0..inner_indent_count {
+                buf.push_str(indent);
             }
+            write_escaped_string(buf, allowed_key);
+            buf.push_str(": ");
+            stringify_value_with_array_replacer(
+                field_val.get_nanbox_f64(),
+                allowed_keys,
+                buf,
+                indent,
+                inner_indent_count,
+                true,
+            );
+        } else {
+            write_escaped_string(buf, allowed_key);
+            buf.push(':');
+            stringify_value_with_array_replacer(
+                field_val.get_nanbox_f64(),
+                allowed_keys,
+                buf,
+                indent,
+                depth,
+                false,
+            );
         }
     }
     if use_pretty && !first {
@@ -378,3 +316,7 @@ pub(super) unsafe fn json_property_list_key(elem: f64) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "property_list_tests.rs"]
+mod tests;
