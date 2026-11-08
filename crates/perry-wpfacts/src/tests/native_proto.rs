@@ -10,7 +10,7 @@ const PRELUDE: &str = r#"
     class C extends EventEmitter { constructor() { super(); } }
     const c: any = new C();
     const d = new D();
-    declare const k: string;
+    const k: string = process.argv[2];
 "#;
 
 fn d_escape(body: &str, cfg: FactsConfig) -> Option<String> {
