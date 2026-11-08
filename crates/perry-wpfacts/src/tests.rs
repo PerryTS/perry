@@ -62,6 +62,7 @@ mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
 mod element_sites;
+mod enum_member_type;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
