@@ -224,3 +224,93 @@ console.log((await Promise.all(pending)).join(','));
     );
     assert_eq!(output, "2\n7,9");
 }
+
+#[test]
+fn host_interop_extracted_functions_and_perry_closures() {
+    assert_eq!(
+        run_ts(
+            r#"
+const parse = globalThis.parseInt;
+console.log(parse('42'));
+const identity = (v: number) => v + 1;
+console.log(identity(4));
+"#
+        ),
+        "42\n5"
+    );
+}
+
+#[test]
+fn host_interop_callback_arity_and_array_fallback() {
+    assert_eq!(
+        run_ts(
+            r#"
+async function make(): Promise<number> { return 41; }
+make().then((v, omitted) => { console.log(v + 1); console.log(omitted); });
+const xs: any = [1, 2, 3];
+console.log(xs.findLast((v: number) => v < 3));
+"#
+        ),
+        "2\n42\nundefined"
+    );
+}
+
+#[test]
+fn host_interop_receiver_identity_getters_and_ui_dispatch() {
+    assert_eq!(
+        run_ts_after(
+            "",
+            r#"
+const assert = require('node:assert/strict');
+const originalGlobal = globalThis;
+const globalBits = __jsValueToBits(originalGlobal);
+for (let i = 0; i < 100; i++) assert.equal(__jsValueToBits(originalGlobal), globalBits);
+assert.equal(__classDispatch(new Headers({'x-test': 'value'}), 'get', ['x-test']), 'value');
+let reads = 0;
+const obj = {value: 7, get read() { reads++; return reads === 1 ? function() { return this.value; } : undefined; }};
+assert.equal(__classDispatch(obj, 'read', []), 7);
+assert.equal(reads, 1);
+const state = uiStateCreate(9);
+assert.equal(__classDispatch(state, 'get', []), 9);
+const native = v => v + 1;
+assert.equal(__classDispatch([1, 2], 'findLast', [native]), 2);
+console.log('ok');
+"#
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn host_interop_callback_identity_for_listener_removal() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const callback = () => { console.log('unexpected callback'); };
+globalThis.savedCallback = callback;
+"#,
+            r#"
+const assert = require('node:assert/strict');
+const target = new EventTarget();
+__classDispatch(target, 'addEventListener', ['test', globalThis.savedCallback]);
+__classDispatch(target, 'removeEventListener', ['test', globalThis.savedCallback]);
+assert.equal(target.dispatchEvent(new Event('test')), true);
+console.log('removed');
+"#
+        ),
+        "removed"
+    );
+}
+
+#[test]
+fn host_interop_bare_call_ignores_replaced_global_this_property() {
+    assert_eq!(
+        run_ts(
+            r#"
+globalThis.globalThis = {fetch: () => { console.log('wrong receiver'); }};
+fetch('data:text/plain,hello').then((r) => r.text()).then((text) => { console.log(text); });
+"#
+        ),
+        "hello"
+    );
+}

@@ -3,6 +3,8 @@
 // Handles NaN-boxing, string management, handle store, and browser API access.
 
 // NaN-boxing constants (matching perry-runtime/src/value.rs)
+const __hostGlobal = globalThis;
+
 const TAG_UNDEFINED = 0x7FFC_0000_0000_0001n;
 const TAG_NULL      = 0x7FFC_0000_0000_0002n;
 const TAG_FALSE     = 0x7FFC_0000_0000_0003n;
@@ -61,9 +63,13 @@ const stringTable = [];
 // Handle store — maps handle_id to JS objects/arrays/closures/etc.
 const handleStore = new Map();
 let nextHandleId = 1;
+const objectHandles = new WeakMap();
 
 function allocHandle(obj) {
+  const reference = obj !== null && (typeof obj === 'object' || typeof obj === 'function');
+  if (reference && objectHandles.has(obj)) return objectHandles.get(obj);
   const id = nextHandleId++;
+  if (reference) objectHandles.set(obj, id);
   handleStore.set(id, obj);
   return id;
 }
@@ -1800,6 +1806,7 @@ const __memDispatch = {
     return closure;
   },
   closure_call_0: (closure) => {
+    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [].map(__hostCallback));
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1808,6 +1815,7 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_1: (closure, a0) => {
+    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [a0].map(__hostCallback));
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1815,6 +1823,7 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_2: (closure, a0, a1) => {
+    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [a0, a1].map(__hostCallback));
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1822,6 +1831,7 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_3: (closure, a0, a1, a2) => {
+    if (typeof closure === 'function') return Reflect.apply(closure, undefined, [a0, a1, a2].map(__hostCallback));
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1830,6 +1840,7 @@ const __memDispatch = {
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
+    if (typeof closure === 'function') return Reflect.apply(closure, undefined, argArr.map(__hostCallback));
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -2106,8 +2117,8 @@ const __memDispatch = {
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
 
-  // A member of the unresolved-global sentinel: `Promise`, `Reflect`, `globalThis.foo`.
-  global_property: (name) => globalThis[name],
+  global_receiver: () => __hostGlobal,
+  global_property: (name) => __hostGlobal[name],
 
   // RegExp — args are plain JS values
   regexp_new: (pattern, flags) => { try { return new RegExp(String(pattern), String(flags)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
@@ -2304,6 +2315,7 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 const stringTable = [];
 const handleStore = new Map();
 let nextHandleId = 1;
+const objectHandles = new WeakMap();
 function allocHandle(obj) { const id = nextHandleId++; handleStore.set(id, obj); return id; }
 
 function __bitsToJsValue(bits) {
@@ -2632,7 +2644,8 @@ function callWasmClosure(closureVal, ...extraArgs) {
     // Extra args need to be BigInt (i64) for WASM functions. Captures are already BigInt.
     const wasmArgs = extraArgs.map(v => __jsValueToBits(v));
     if (fn) {
-      const result = fn(...(closure.captures || []), ...wasmArgs);
+      const captures = closure.captures || [];
+      const result = fn(...captures, ...__padBigintArgs(fn, captures.length, wasmArgs));
       return (typeof result === 'bigint') ? __bitsToJsValue(result) : undefined;
     }
   }
@@ -4854,7 +4867,7 @@ const __perryUiDispatch = {
 const __perryUi = __perryUiDispatch;
 
 // Unified method dispatch for class_call_N imports.
-// Tries: 1) class method table, 2) UI widget methods, 3) state methods.
+// Class methods precede host methods, then UI widget/state methods.
 // When called from mem_call, obj and args are plain JS values (decoded by __bitsToJsValue).
 const __uiMethodMap = {
   addChild: "perry_ui_widget_add_child", removeAllChildren: "perry_ui_widget_remove_all_children",
@@ -4896,6 +4909,17 @@ const __uiMethodMap = {
   addOverlay: "perry_ui_widget_add_overlay",
 };
 
+const hostCallbacks = new WeakMap();
+
+// Host APIs require a stable function identity for Perry closure objects.
+function __hostCallback(value) {
+  if (!value || typeof value !== 'object' || typeof value.funcIdx === 'undefined') return value;
+  if (!hostCallbacks.has(value)) {
+    hostCallbacks.set(value, (...args) => callWasmClosure(value, ...args));
+  }
+  return hostCallbacks.get(value);
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
   // objVal and rawArgs are already plain JS values (decoded by __bitsToJsValue in mem_call)
   // Primitive/built-in fast-path (Issue #133 item 1): plain strings/numbers have no
@@ -4912,7 +4936,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     // handle) are routed through __memDispatch before reaching here — this fallback
     // catches methods the codegen doesn't special-case (at, findLast, flat, etc.).
     const fn = Array.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs);
+    if (typeof fn === 'function') return fn.apply(objVal, rawArgs.map(__hostCallback));
   }
   // 1) Try class method table (for user-defined classes)
   // WASM functions use i64 (BigInt) params/returns
@@ -4931,6 +4955,12 @@ function __classDispatch(objVal, mname, rawArgs) {
       cls = classParentTable[cls] || null;
     }
   }
+  if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')) {
+    const method = objVal[mname];
+    if (typeof method === 'function') {
+      return Reflect.apply(method, objVal, rawArgs.map(__hostCallback));
+    }
+  }
   // 2) Try UI widget/state method dispatch
   const uiFnName = __uiMethodMap[mname];
   if (uiFnName) {
@@ -4938,19 +4968,6 @@ function __classDispatch(objVal, mname, rawArgs) {
     if (fn) {
       return fn(objVal, ...rawArgs);
     }
-  }
-  // 3) A host object's own method: Promise#then/catch/finally, Response#json, and the
-  // like, or a static method of a host constructor (`Promise.resolve`), whose receiver
-  // is a function. Without this arm `p.then(cb)` returns undefined and cb never runs,
-  // with no error anywhere. A Perry closure argument is an object, not a function, and
-  // a native method ignores a non-function callback, so each is wrapped before the call.
-  if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')
-      && typeof objVal[mname] === 'function') {
-    const args = rawArgs.map(a =>
-      (a && typeof a === 'object' && typeof a.funcIdx !== 'undefined')
-        ? (...cbArgs) => callWasmClosure(a, ...cbArgs)
-        : a);
-    return objVal[mname](...args);
   }
   return undefined;
 }

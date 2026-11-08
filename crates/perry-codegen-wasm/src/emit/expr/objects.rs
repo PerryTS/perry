@@ -142,9 +142,7 @@ impl<'a> FuncEmitCtx<'a> {
                         return true;
                     }
                 }
-                // A member of the unresolved-global sentinel (`Promise`, `Reflect`,
-                // `globalThis.foo`) is a property of globalThis. The sentinel alone lowers
-                // to undefined, so the generic arm below would read `undefined.Promise`.
+                // Unresolved-global members are properties of the host global.
                 if let Expr::GlobalGet(id) = object.as_ref() {
                     if !self.emitter.global_map.contains_key(id) {
                         let key_id = self

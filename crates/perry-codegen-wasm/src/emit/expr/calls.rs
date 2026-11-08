@@ -85,26 +85,26 @@ impl<'a> FuncEmitCtx<'a> {
                     // Fallback: class/UI method dispatch via mem_call with stack-based buffer.
                     {
                         let method_name = property.as_str();
-                        // A call on the unresolved-global sentinel (`fetch(url)` lowers to
-                        // `GlobalGet(0).fetch(url)`) has globalThis as its receiver. The
-                        // sentinel alone lowers to undefined, so read globalThis through the
-                        // `global_property` arm instead.
-                        let global_receiver;
-                        let receiver = match object.as_ref() {
-                            Expr::GlobalGet(id) if !self.emitter.global_map.contains_key(id) => {
-                                global_receiver = Expr::PropertyGet {
-                                    object: object.clone(),
-                                    property: "globalThis".to_string(),
-                                    byte_offset: 0,
-                                    byte_end: 0,
-                                };
-                                &global_receiver
-                            }
-                            _ => object.as_ref(),
-                        };
-                        // Slot 0 = object, slots 1..N = args
+                        let global_receiver = matches!(object.as_ref(), Expr::GlobalGet(id)
+                            if !self.emitter.global_map.contains_key(id));
+                        if global_receiver {
+                            // The host global is independent of its mutable globalThis property.
+                            self.emit_frame_begin(func, 0);
+                            self.emit_memcall(func, "global_receiver", 0);
+                            func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                        }
                         self.emit_frame_begin(func, (args.len() + 1) as u32);
-                        self.emit_store_arg(func, 0, receiver);
+                        if global_receiver {
+                            self.emit_slot_addr(func, 0);
+                            func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                                offset: 0,
+                                align: 3,
+                                memory_index: 0,
+                            }));
+                        } else {
+                            self.emit_store_arg(func, 0, object);
+                        }
                         for (i, arg) in args.iter().enumerate() {
                             self.emit_store_arg(func, (i + 1) as u32, arg);
                         }
