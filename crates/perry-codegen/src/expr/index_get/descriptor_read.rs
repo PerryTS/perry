@@ -407,7 +407,7 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
             continue;
         }
         let Some((rooted, handle, source)) =
-            crate::stmt::loops::create_poll_refreshed_receiver_cache(ctx, id)
+            crate::stmt::create_poll_refreshed_receiver_cache(ctx, id)
         else {
             continue;
         };
