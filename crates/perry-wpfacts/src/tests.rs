@@ -1969,3 +1969,4 @@ mod native_module_ref;
 mod host_fs_effects;
 mod host_fs_read_effects;
 mod native_process;
+mod number_bigint_ns;
