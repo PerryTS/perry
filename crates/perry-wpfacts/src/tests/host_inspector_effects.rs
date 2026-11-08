@@ -90,3 +90,32 @@ fn computed_key_on_module_object_reads_top() {
     ));
     assert!(site(&pf, "q").top, "{}", pf.dump_text());
 }
+
+/// S1 (soundness): `module._cache`, `http.globalAgent.sockets` and
+/// `util.inspect.colors` are runtime-owned data objects the realm now
+/// declares. A program object stored into one is reachable from the runtime
+/// and other modules, so it must still escape. C is the control: the same
+/// shape stored into a plain local object stays unescaped.
+#[test]
+fn object_stored_into_runtime_owned_data_object_escapes() {
+    let pf = facts(&format!(
+        r#"{PRELUDE}
+        class A {{ v = 1; }}
+        class B {{ v = 2; }}
+        class C {{ v = 3; }}
+        function put(k: string) {{
+            (require("module") as any)._cache[k] = new A();
+            (require("http") as any).globalAgent.sockets[k] = new B();
+            const local: any = {{}};
+            local[k] = new C();
+            return local[k].v;
+        }}
+        console.log(put(process.argv[2]));
+        export const keep = 1;
+    "#
+    ));
+    for t in ["A", "B"] {
+        assert!(tmpl(&pf, t).escape.is_some(), "{t}\n{}", pf.dump_text());
+    }
+    assert!(tmpl(&pf, "C").escape.is_none(), "{}", pf.dump_text());
+}
