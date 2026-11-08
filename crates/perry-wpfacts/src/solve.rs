@@ -32,6 +32,7 @@ mod store;
 mod escape;
 mod fields;
 mod shaped_keys;
+pub(crate) mod strs;
 mod virt;
 
 // Property-key ranges come from value deltas, not source annotations. Keep
@@ -62,6 +63,25 @@ impl Model {
         }
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
+
+    /// `add` with the string constants `strs` for a string in `prim` (a
+    /// copy of another node's value: `Node::strs`).
+    pub(crate) fn add_s(&mut self, n: NodeId, toks: &[Tok], prim: u16, strs: StrSet) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Seed(
+            n,
+            toks.to_vec(),
+            prim,
+        )) {
+            return;
+        }
+        self.add_tokens_s(n, Tokens::Slice(toks), prim, strs);
+    }
+
+    /// Adds the string constants `strs` (a string) to `n`.
+    pub(crate) fn add_strs(&mut self, n: NodeId, strs: StrSet) {
+        self.add_tokens_s(n, Tokens::Slice(&[]), prim::STR, strs);
+    }
     /// The work bound (`FactsConfig::max_work`, 0 = none). Past it a
     /// whole-program solve (`Model::widen`) is widened (`bind_layout`: no
     /// new calling contexts) and goes on to its fixpoint; past `WIDENED_WORK` times it, or past it
@@ -80,7 +100,13 @@ impl Model {
         self.aborted
     }
 
+    /// A string that is no copy of another node's is any string
+    /// (`Node::strs`).
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
+        self.add_tokens_s(n, toks, prim, STRS_TOP);
+    }
+
+    fn add_tokens_s(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16, strs: StrSet) {
         if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
             if !c.injecting
                 && self.cur_src != NO_NODE
@@ -208,6 +234,11 @@ impl Model {
             node.dprim |= newp;
             changed = true;
         }
+        if prim & prim::STR != 0 {
+            let strs = if strs == STRS_NONE { STRS_TOP } else { strs };
+            changed |= self.join_strs(n, strs);
+        }
+        let node = &mut self.nodes[n as usize];
         if changed && !node.in_wl {
             node.in_wl = true;
             self.wl.push_back(n);
@@ -712,15 +743,23 @@ impl Model {
                     return;
                 }
             }
-            let dprim = {
+            let (dprim, dstrs) = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
                 self.pending.take(&mut node.delta, &mut delta);
-                std::mem::take(&mut node.dprim)
+                (
+                    std::mem::take(&mut node.dprim),
+                    std::mem::take(&mut node.dstrs),
+                )
             };
-            if delta.is_empty() && dprim == 0 {
+            if delta.is_empty() && dprim == 0 && !dstrs {
                 continue;
             }
+            // Grown string constants alone (`Node::strs`) reach the
+            // successors and the rules that read them (`Cons::carries_strs`).
+            let strs_only = delta.is_empty() && dprim == 0;
+            let sprim = dprim | if dstrs { prim::STR } else { 0 };
+            let sstrs = self.nodes[n as usize].strs;
             // Sets change interned (`SetTable::extend`); one made outside
             // this solve (an earlier solve, whose index is gone) is interned
             // here, so covering below stays a pointer test.
@@ -748,7 +787,7 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.try_copy_delivery(n, s, i as u32, &delta, dprim) {
+                if self.try_copy_delivery(n, s, i as u32, &delta, sprim, sstrs) {
                     self.charge_work(1 + delivery_overhead);
                     if let Some(p) = self.prof.as_mut() {
                         p.step[1] += 1 + delivery_overhead;
@@ -784,9 +823,9 @@ impl Model {
                     return;
                 }
                 if covered {
-                    self.add_tokens(s, toks, dprim);
+                    self.add_tokens_s(s, toks, sprim, sstrs);
                 } else {
-                    let extra = self.copy_to(n, s, toks, dprim);
+                    let extra = self.copy_to(n, s, toks, sprim, sstrs);
                     self.charge_work(extra);
                     if let Some(p) = self.prof.as_mut() {
                         p.step[3] += extra;
@@ -800,9 +839,17 @@ impl Model {
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
                 let c = self.nodes[n as usize].cons[i];
+                let p = if dstrs && c.carries_strs() {
+                    sprim
+                } else {
+                    dprim
+                };
+                if strs_only && p == 0 {
+                    continue;
+                }
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
-                self.apply_tokens(n, &c, Tokens::Pending(&delta), dprim);
+                self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
             }
             delta.clear();
         }

@@ -76,6 +76,7 @@ impl Model {
             return;
         }
         let prim = self.nodes[a as usize].prim;
+        let strs = self.nodes[a as usize].strs;
         let mut toks = self.bufs.pop().unwrap_or_default();
         toks.clear();
         if self.nodes[a as usize]
@@ -87,7 +88,7 @@ impl Model {
         let covered = self.copy_coverage(a, b, Tokens::Slice(&toks)).0;
         self.bufs.push(toks);
         if covered {
-            self.add(b, &[], prim);
+            self.add_s(b, &[], prim, strs);
             return;
         }
         if self.nodes[a as usize].pts.is_empty() && prim == 0 {
@@ -101,7 +102,7 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = a;
         self.cur_why = u32::MAX;
-        self.copy_to(a, b, Tokens::Slice(&toks), prim);
+        self.copy_to(a, b, Tokens::Slice(&toks), prim, strs);
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
     }
@@ -114,8 +115,9 @@ impl Model {
         dst: NodeId,
         toks: Tokens<'_>,
         prim: u16,
+        strs: StrSet,
     ) -> u64 {
-        self.add_tokens(dst, toks, prim);
+        self.add_tokens_s(dst, toks, prim, strs);
         0
     }
     /// Points-to storage: (logical entries summed over nodes, entries
@@ -159,6 +161,7 @@ impl Model {
         successor: u32,
         delta: &Delta,
         prim: u16,
+        strs: StrSet,
     ) -> bool {
         let count = delta.delivery_len(successor);
         let source = &self.nodes[src as usize];
@@ -185,7 +188,7 @@ impl Model {
         }
         let batch = delta.batch_for(successor);
         let pts = self.nodes[src as usize].pts.clone();
-        self.adopt_delivery(src, dst, pts, &batch, prim);
+        self.adopt_delivery(src, dst, pts, &batch, prim, strs);
         true
     }
     fn adopt_delivery(
@@ -195,6 +198,7 @@ impl Model {
         pts: crate::pts::Pts,
         batch: &Batch,
         prim: u16,
+        strs: StrSet,
     ) {
         let top = (self.explain || self.diagnostic.is_some())
             && self.nodes[src as usize].pts.contains_tok(TOP)
@@ -225,7 +229,7 @@ impl Model {
                 self.aborted = true;
             }
         }
-        self.add(dst, &[], prim);
+        self.add_s(dst, &[], prim, strs);
         let node = &mut self.nodes[dst as usize];
         if !node.in_wl {
             node.in_wl = true;

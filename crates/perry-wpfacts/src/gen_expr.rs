@@ -666,7 +666,8 @@ impl<'a> Gen<'a> {
             Expr::Bool(_) => self.prim_node(prim::BOOL),
             Expr::Number(_) | Expr::Integer(_) => self.prim_node(prim::NUM),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
-            Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
+            Expr::String(s) => self.str_literal(s),
+            Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)

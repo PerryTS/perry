@@ -409,7 +409,8 @@ impl Model {
                     self.add_tok(dst, t);
                 }
                 if prim & !strip != 0 {
-                    self.add_prim(dst, prim & !strip);
+                    let strs = self.nodes[n as usize].strs;
+                    self.add_s(dst, &[], prim & !strip, strs);
                 }
             }
             Cons::Falsy { dst } => {
@@ -1284,17 +1285,56 @@ impl Model {
             } => {
                 // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
                 // its ToString, a numeric name, `numeric_key`) writes an
-                // holder's numeric properties, never a nonnumeric name;
-                // every other value alternative retains an Any store.
-                if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
+                // holder's numeric properties, never a nonnumeric name.
+                // A key's string constants (`Node::strs`, DESIGN SEEDKV)
+                // and `true`, `false`, `null`, `undefined` are the names
+                // they spell, an index string the numeric properties;
+                // any string, a symbol, a BigInt or an object retains an
+                // Any store.
+                let strs = self.nodes[n as usize].strs;
+                let mut index = prim & prim::NUM != 0;
+                let mut names: Vec<Atom> = Vec::new();
+                if prim & prim::STR != 0 {
+                    for i in 0..self.str_atoms(strs).len() {
+                        let a = self.str_atoms(strs)[i];
+                        if super::strs::index_string(&self.atoms[a as usize]) {
+                            index = true;
+                        } else {
+                            names.push(a);
+                        }
+                    }
+                }
+                for (bit, keys) in [
+                    (prim::BOOL, &["true", "false"][..]),
+                    (prim::NULL, &["null"][..]),
+                    (prim::UNDEF, &["undefined"][..]),
+                ] {
+                    if prim & bit != 0 {
+                        names.extend(keys.iter().map(|k| self.atom(k)));
+                    }
+                }
+                if index && self.index_store_done.insert((n, site, true)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
                     // `a[i] = v` may write past the end; `push` appends.
                     self.cons(o, Cons::IndexHole);
                 }
-                if (prim & !prim::NUM != 0 || !toks.is_empty())
-                    && self.index_store_done.insert((n, site, false))
-                {
+                for a in names {
+                    if self.str_store_done.insert((n, site, a)) {
+                        self.cons(
+                            o,
+                            Cons::Store {
+                                key: Key::Named(a),
+                                src,
+                                site,
+                            },
+                        );
+                    }
+                }
+                let any = !toks.is_empty()
+                    || prim & (prim::SYMBOL | prim::BIGINT) != 0
+                    || (prim & prim::STR != 0 && strs == STRS_TOP);
+                if any && self.index_store_done.insert((n, site, false)) {
                     self.cons(
                         o,
                         Cons::Store {

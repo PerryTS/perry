@@ -527,6 +527,18 @@ pub enum Cons {
 }
 
 impl Cons {
+    /// The rule reads the key node's string constants (`Node::strs`): a
+    /// pop where only they grew runs it (`Model::solve_fixpoint`).
+    pub fn carries_strs(&self) -> bool {
+        matches!(
+            self,
+            Cons::StoreIndexed { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::NotUndefined { .. }
+        )
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Load { .. } => "load",
