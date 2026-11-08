@@ -119,3 +119,135 @@ fn object_stored_into_runtime_owned_data_object_escapes() {
     }
     assert!(tmpl(&pf, "C").escape.is_none(), "{}", pf.dump_text());
 }
+
+/// R2 (main: the HIR fold `new inspector.Session()` is a receiver-less
+/// `NativeMethodCall`, whose result read ⊤ "result of native module
+/// inspector.Session", the first ⊤ of tssrc's solve): the fold is `new` of
+/// the realm constructor `node:inspector.Session`, whose declaration makes a
+/// session object (R3), over a module alias and over a named import alike.
+#[test]
+fn session_fold_is_new_of_the_realm_constructor() {
+    let alias = facts(&format!(
+        r#"{PRELUDE}
+        function enable() {{
+            const inspector: typeof import("inspector") = require("inspector");
+            const session = new inspector.Session();
+            return h(session);
+        }}
+        console.log(enable());
+        export const keep = 1;
+    "#
+    ));
+    let named = facts(
+        r#"
+        import { Session } from "inspector";
+        function h(v: any) { return v.q; }
+        function enable() {
+            const session = new Session();
+            return h(session);
+        }
+        console.log(enable());
+        export const keep = 1;
+    "#,
+    );
+    for pf in [&alias, &named] {
+        let q = site(pf, "q");
+        assert!(
+            !q.top
+                && !q.receivers.is_empty()
+                && q.receivers
+                    .iter()
+                    .all(|r| r.contains("node:inspector.Session.prototype")),
+            "{:?}\n{}",
+            q.receivers,
+            pf.dump_text()
+        );
+    }
+}
+
+/// R3 (main: `new` of a builtin function value read ⊤ "`new` of an opaque
+/// builtin function value"): `new` of the realm constructor's value, read off
+/// the module object, runs its declaration too.
+#[test]
+fn new_of_declared_realm_constructor_value_runs_its_declaration() {
+    let pf = facts(&format!(
+        r#"{PRELUDE}
+        function enable() {{
+            const inspector: typeof import("inspector") = require("inspector");
+            const S: any = inspector.Session;
+            const session = new S(1, {{ a: 2 }});
+            return h(session);
+        }}
+        console.log(enable());
+        export const keep = 1;
+    "#
+    ));
+    let q = site(&pf, "q");
+    assert!(
+        !q.top
+            && !q.receivers.is_empty()
+            && q.receivers
+                .iter()
+                .all(|r| r.contains("node:inspector.Session.prototype")),
+        "{:?}\n{}",
+        q.receivers,
+        pf.dump_text()
+    );
+}
+
+/// K4 (control): the fold calls the constructor's runtime function whatever
+/// the program stored under `Session` (codegen's native row), so a program
+/// class stored there is not what the fold makes; the class's own `new`
+/// still makes its instance.
+#[test]
+fn session_fold_ignores_a_program_store_under_the_name() {
+    let pf = facts(&format!(
+        r#"{PRELUDE}
+        class X {{ q = 1; }}
+        function enable() {{
+            const inspector: typeof import("inspector") = require("inspector");
+            (inspector as any).Session = X;
+            const session = new inspector.Session();
+            const S: any = inspector.Session;
+            const other = new S();
+            return [h(session), other.q];
+        }}
+        console.log(enable());
+        export const keep = 1;
+    "#
+    ));
+    let qs: Vec<_> = pf.sites.iter().filter(|s| s.key == "q").collect();
+    assert!(
+        qs.iter().any(|q| !q.top
+            && !q.receivers.is_empty()
+            && q.receivers
+                .iter()
+                .all(|r| r.contains("node:inspector.Session.prototype"))),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        qs.iter()
+            .any(|q| q.top || q.receivers.iter().any(|r| r.ends_with(":X"))),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// K5 (control): `new` of a realm constructor whose declaration says nothing
+/// of `new` stays the unknown constructor's result.
+#[test]
+fn new_of_undeclared_realm_constructor_stays_top() {
+    let pf = facts(&format!(
+        r#"{PRELUDE}
+        function make() {{
+            const events: any = require("events");
+            const E: any = events.EventEmitter;
+            return h(new E());
+        }}
+        console.log(make());
+        export const keep = 1;
+    "#
+    ));
+    assert!(site(&pf, "q").top, "{}", pf.dump_text());
+}
