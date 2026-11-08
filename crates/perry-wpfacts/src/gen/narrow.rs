@@ -69,44 +69,6 @@ fn writes(e: &Expr, id: u32) -> bool {
     matches!(e, Expr::LocalSet(l, _) | Expr::Update { id: l, .. } if *l == id)
 }
 
-/// The test's clip kind and bound when it compares `id` with a literal or a
-/// local: `id < e` (or `e > id`, ...).
-fn test_bound(c: &Expr, id: u32) -> Option<(u8, &Expr)> {
-    use crate::model::range::{CLIP_GE, CLIP_GT, CLIP_LE, CLIP_LT};
-    let Expr::Compare { op, left, right } = c else {
-        return None;
-    };
-    let is_id = |e: &Expr| matches!(e, Expr::LocalGet(l) if *l == id);
-    let (kind, bound) = if is_id(left) {
-        let k = match op {
-            CompareOp::Lt => CLIP_LT,
-            CompareOp::Le => CLIP_LE,
-            CompareOp::Gt => CLIP_GT,
-            CompareOp::Ge => CLIP_GE,
-            _ => return None,
-        };
-        (k, right.as_ref())
-    } else if is_id(right) {
-        let k = match op {
-            CompareOp::Gt => CLIP_LT,
-            CompareOp::Ge => CLIP_LE,
-            CompareOp::Lt => CLIP_GT,
-            CompareOp::Le => CLIP_GE,
-            _ => return None,
-        };
-        (k, left.as_ref())
-    } else {
-        return None;
-    };
-    let length_of_local = matches!(bound, Expr::PropertyGet { object, property, .. }
-        if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)));
-    (matches!(
-        bound,
-        Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_)
-    ) || length_of_local)
-        .then_some((kind, bound))
-}
-
 impl<'a> Gen<'a> {
     /// Start narrowing the counter of a `for` loop (see the module docs);
     /// whether it did. Called after the test is walked, before the update
@@ -126,47 +88,55 @@ impl<'a> Gen<'a> {
             return false;
         };
         let id = *id;
-        let Some((kind, bound)) = condition.and_then(|c| test_bound(c, id)) else {
+        // Every comparison of the counter the test implies (`implied`:
+        // through `&&`, predicates, pure bound expressions).
+        let Some(cond) = condition else {
             return false;
         };
-        if let Expr::LocalGet(b) = bound {
-            if *b == id {
-                return false;
-            }
+        let module: &'a perry_hir::Module = self.modules[fx.module as usize].1;
+        let pred = |fid: u32| -> Option<Predicate<'a>> {
+            module
+                .functions
+                .iter()
+                .find(|f| f.id == fid)
+                .and_then(predicate_of)
+        };
+        let mut facts = Vec::new();
+        implied(cond, true, &|l| Some(Bound::Local(l)), &pred, 0, &mut facts);
+        // Without guard ranges (`FactsConfig::no_guard_ranges`) only a test
+        // that is one comparison with a literal, a local or a `length`.
+        let simple = self.guard_ranges || matches!(cond, Expr::Compare { .. });
+        let clips: Vec<(u8, Bound)> = facts
+            .into_iter()
+            .filter(|(l, _, b)| {
+                *l == id
+                    && !matches!(b, Bound::Char(_))
+                    && (self.guard_ranges || !matches!(b, Bound::Op(..)))
+            })
+            .filter(|_| simple)
+            .map(|(_, k, b)| (k, b))
+            .collect();
+        if clips.is_empty() {
+            return false;
         }
         let closure = &mut |e: &Expr| matches!(e, Expr::Closure { .. });
         if body.iter().any(|s| stmt_has(s, closure))
             || update.is_some_and(|u| expr_has(u, closure))
-            || condition.is_some_and(|c| expr_has(c, closure))
+            || expr_has(cond, closure)
         {
             return false;
         }
         let mi = fx.module;
         let i = self.local(mi, id);
-        let b = match bound {
-            Expr::Integer(v) => self.num_literal(*v as f64),
-            Expr::Number(v) => self.num_literal(*v),
-            Expr::LocalGet(l) => self.local(mi, *l),
-            // `o.length`: a fresh read of it (an Array's carries its
-            // interval, `solve::arr_len`; any other value's is ⊤).
-            Expr::PropertyGet { object, .. } => {
-                let Expr::LocalGet(o) = object.as_ref() else {
-                    return false;
-                };
-                if *o == id {
-                    return false;
-                }
-                let on = self.local(mi, *o);
-                let len = self.tmp("narrow-length");
-                let key = crate::model::Key::Named(self.m.atom("length"));
-                self.m.cons(on, crate::model::Cons::Load { key, dst: len });
-                len
-            }
-            _ => return false,
-        };
-        let start = self.tmp("narrow");
-        self.m.edge(i, start);
-        self.range_rule(crate::model::RangeOp::Clip(kind), i, Some(b), start);
+        // One clip per comparison, chained: the reads see their meet.
+        let mut start = i;
+        for (kind, bound) in clips {
+            let b = self.bound_node(mi, bound);
+            let dst = self.tmp("narrow");
+            self.m.edge(start, dst);
+            self.range_rule(crate::model::RangeOp::Clip(kind), start, Some(b), dst);
+            start = dst;
+        }
         let end = self.tmp("narrow-end");
         self.m.edge(start, end);
         self.narrow.push(Narrow {
@@ -353,8 +323,9 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     )
 }
 
-/// A clip's bound: a literal, a local, or a local's `length`.
-#[derive(Clone, Copy, Debug)]
+/// A clip's bound: a literal, a local, a local's `length`, or a pure
+/// integer expression of those.
+#[derive(Clone, Debug)]
 pub(crate) enum Bound {
     Lit(f64),
     Local(u32),
@@ -362,6 +333,21 @@ pub(crate) enum Bound {
     /// A one-unit String literal (its code; `""` is -1): the clip is of
     /// the local's Strings (`RangeOp::SClip`).
     Char(i64),
+    /// `op` over bounds (`Math.min(7, file + 1)`): its node is the rules'
+    /// result, so an operand that may be anything but a Number makes it ⊤
+    /// (no clip).
+    Op(crate::model::RangeOp, std::rc::Rc<(Bound, Option<Bound>)>),
+}
+
+impl Bound {
+    /// Whether the bound reads local `id`.
+    fn reads(&self, id: u32) -> bool {
+        match self {
+            Bound::Local(l) | Bound::Length(l) => *l == id,
+            Bound::Lit(_) | Bound::Char(_) => false,
+            Bound::Op(_, ab) => ab.0.reads(id) || ab.1.as_ref().is_some_and(|b| b.reads(id)),
+        }
+    }
 }
 
 /// A predicate function: one `return <expr>` over its plain parameters.
@@ -419,7 +405,7 @@ fn implied<'p>(
                 params
                     .iter()
                     .position(|p| p.id == id)
-                    .and_then(|i| actual[i])
+                    .and_then(|i| actual[i].clone())
             };
             let mut found = Vec::new();
             implied(body, positive, &inner, pred, depth + 1, &mut found);
@@ -445,17 +431,17 @@ fn implied<'p>(
                 o => o.clone(),
             };
             let (l, r) = (bound_of(left, subst), bound_of(right, subst));
-            if let (Some(Bound::Local(id)), Some(b)) = (l, r) {
-                if !same_local(b, id) {
+            if let (Some(Bound::Local(id)), Some(b)) = (&l, &r) {
+                if !b.reads(*id) {
                     if let Some(kind) = k(op, positive) {
-                        out.push((id, kind, b));
+                        out.push((*id, kind, b.clone()));
                     }
                 }
             }
-            if let (Some(Bound::Local(id)), Some(b)) = (r, l) {
-                if !same_local(b, id) {
+            if let (Some(Bound::Local(id)), Some(b)) = (&r, &l) {
+                if !b.reads(*id) {
                     if let Some(kind) = k(&mirror(op), positive) {
-                        out.push((id, kind, b));
+                        out.push((*id, kind, b.clone()));
                     }
                 }
             }
@@ -464,13 +450,17 @@ fn implied<'p>(
     }
 }
 
-fn same_local(b: Bound, id: u32) -> bool {
-    matches!(b, Bound::Local(l) | Bound::Length(l) if l == id)
-}
-
 /// `e` as a bound: a literal, a local (through `subst` inside a
 /// predicate's body), or a local's `length`.
 fn bound_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>) -> Option<Bound> {
+    use crate::model::RangeOp;
+    use perry_hir::BinaryOp;
+    let pair = |op: RangeOp, a: &Expr, b: &Expr| -> Option<Bound> {
+        let x = bound_of(a, subst)?;
+        let y = bound_of(b, subst)?;
+        (!matches!(x, Bound::Char(_)) && !matches!(y, Bound::Char(_)))
+            .then(|| Bound::Op(op, std::rc::Rc::new((x, Some(y)))))
+    };
     match e {
         Expr::Integer(v) => Some(Bound::Lit(*v as f64)),
         Expr::Number(v) => Some(Bound::Lit(*v)),
@@ -488,6 +478,31 @@ fn bound_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>) -> Option<Bound> {
             },
             _ => None,
         },
+        Expr::Binary { op, left, right } => {
+            let op = match op {
+                BinaryOp::Add => RangeOp::Add,
+                BinaryOp::Sub => RangeOp::Sub,
+                BinaryOp::Mul => RangeOp::Mul,
+                BinaryOp::BitAnd => RangeOp::BitAnd,
+                BinaryOp::BitOr => RangeOp::BitOr,
+                BinaryOp::Shr => RangeOp::Shr,
+                _ => return None,
+            };
+            pair(op, left, right)
+        }
+        Expr::MathMin(xs) | Expr::MathMax(xs) if xs.len() == 2 => {
+            let op = if matches!(e, Expr::MathMin(_)) {
+                RangeOp::Min
+            } else {
+                RangeOp::Max
+            };
+            pair(op, &xs[0], &xs[1])
+        }
+        Expr::MathAbs(x) => {
+            let b = bound_of(x, subst)?;
+            (!matches!(b, Bound::Char(_)))
+                .then(|| Bound::Op(RangeOp::Abs, std::rc::Rc::new((b, None))))
+        }
         _ => None,
     }
 }
@@ -519,6 +534,15 @@ impl<'a> Gen<'a> {
     /// The node of bound `b` as read here.
     fn bound_node(&mut self, mi: u32, b: Bound) -> NodeId {
         match b {
+            Bound::Op(op, ab) => {
+                let (a, b2) = (*ab).clone();
+                let an = self.bound_node(mi, a);
+                let bn = b2.map(|b2| self.bound_node(mi, b2));
+                let dst = self.tmp("narrow-bound");
+                self.range_rule(op, an, bn, dst);
+                self.m.add_prim(dst, prim::NUM);
+                dst
+            }
             Bound::Lit(v) => self.num_literal(v),
             Bound::Char(c) => {
                 let s = if c < 0 {
@@ -594,10 +618,11 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
+            let is_char = matches!(bound, Bound::Char(_));
             let b = self.bound_node(mi, bound);
-            let op = match bound {
-                Bound::Char(_) => crate::model::RangeOp::SClip(kind),
-                _ => crate::model::RangeOp::Clip(kind),
+            let op = match is_char {
+                true => crate::model::RangeOp::SClip(kind),
+                false => crate::model::RangeOp::Clip(kind),
             };
             let src = self
                 .narrowed_read(mi, id)

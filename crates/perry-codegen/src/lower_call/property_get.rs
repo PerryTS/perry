@@ -338,9 +338,7 @@ pub fn try_lower_property_get_method_call(
         return own_override_guard::lower(ctx, callee, object, property, args, call_byte_offset)
             .map(Some);
     }
-    crate::lower_call::index_split::with_call_site(callee, || {
-        lower_method_call_chain(ctx, callee, object, property, args, call_byte_offset)
-    })
+    lower_method_call_chain(ctx, callee, object, property, args, call_byte_offset)
 }
 
 /// The ordered chain of specialised lowerings. Each arm proves something about

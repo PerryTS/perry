@@ -354,3 +354,41 @@ fn a_pop_moves_the_length() {
         r["p"]
     );
 }
+
+#[test]
+#[ignore]
+fn zz_callargs() {
+    let src = std::fs::read_to_string(std::env::var("PROBE").unwrap()).unwrap();
+    let module = perry_parser::parse_typescript(&src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &Default::default());
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    for (o, iv) in &mb.call_arg_ranges {
+        let line = src[..*o as usize].matches('\n').count() + 1;
+        let text: String = src[*o as usize..].chars().take(40).collect();
+        eprintln!("CALL line={line} {iv:?} {text:?}");
+    }
+}
+
+#[test]
+fn a_conjunction_and_an_expression_bound_a_for_counter() {
+    let r = ranges(
+        "function passed(square: number, up: boolean): number {\n\
+           const file = square & 7;\n\
+           let hits = 0;\n\
+           for (let rr = (square >> 4) + (up ? 1 : -1); rr >= 0 && rr < 8; rr += up ? 1 : -1) {\n\
+             for (let ff = Math.max(0, file - 1); ff <= Math.min(7, file + 1); ff++) {\n\
+               const idx = rr * 16 + ff;\n\
+               hits += idx;\n\
+             }\n\
+           }\n\
+           return hits;\n\
+         }\n\
+         console.log(passed(0x34, true), passed(0x61, false));",
+    );
+    assert!(
+        r["idx"].is_some_and(|(lo, hi)| lo >= 0 && hi <= 127),
+        "idx: {:?}",
+        r["idx"]
+    );
+}
