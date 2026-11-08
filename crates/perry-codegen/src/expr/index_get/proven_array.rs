@@ -42,9 +42,10 @@ pub(super) fn lower(
     numeric: bool,
 ) -> String {
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
-    crate::verify_facts::consumed(crate::verify_facts::Fact::ElementRead, || {
-        serde_json::json!({ "length": fact.len, "key_in_bounds": fact.key_in_bounds })
-    });
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ElementRead,
+        || serde_json::json!({ "length": fact.len, "key_in_bounds": fact.key_in_bounds }),
+    );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
         witness(ctx, arr_box, idx_i32, fact);
@@ -134,9 +135,10 @@ fn witness(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, fact: FactsElement
     crate::verify_facts::tick(ctx);
     ctx.block().cond_br(&ok, &next_l, &miss_l);
     ctx.current_block = miss;
-    crate::verify_facts::covered(crate::verify_facts::Fact::ElementRead, || {
-        serde_json::json!({ "length": fact.len, "key_in_bounds": fact.key_in_bounds })
-    });
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::ElementRead,
+        || serde_json::json!({ "length": fact.len, "key_in_bounds": fact.key_in_bounds }),
+    );
     let site = crate::verify_facts::site_arg(
         ctx,
         &format!("proven element read of length {}", fact.len),
