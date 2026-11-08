@@ -134,12 +134,19 @@ fn a_body_that_may_complete_returns_undefined() {
                  #p = 3;\n\
                  probe() { try { return this.#p; } catch (e) { console.log(e); } }\n\
                  both(k: number) { if (k > 1) { return 1; } else { return 2; } }\n\
+                 pick(k: number) { switch (k) { case 1: return 1; default: return 2; } }\n\
+                 open(k: number) { switch (k) { case 1: return 1; case 2: break; default: return 2; } }\n\
                  run() { return this.probe(); }\n\
-                 two(k: number) { return this.both(k); }\n\
+                 two(k: number) { return this.both(k) + this.pick(k); }\n\
+                 three(k: number) { return this.open(k); }\n\
                }\n\
-               const d = new D(); console.log(d.run(), d.two(3));";
+               const d = new D(); console.log(d.run(), d.two(3), d.three(2));";
     assert!(!number_call_at(src, "this.probe()"));
     assert!(number_call_at(src, "this.both(k)"));
+    // Every case of a `switch` with a `default` returns: no completion.
+    assert!(number_call_at(src, "this.pick(k)"));
+    // A `break` leaves the `switch`, and the body completes after it.
+    assert!(!number_call_at(src, "this.open(k)"));
 }
 
 #[test]
