@@ -678,6 +678,9 @@ impl Model {
                 }
             }
         }
+        if self.is_arr(t) {
+            self.arr_len_store(t, key, elem, site);
+        }
         // An index past the end, a computed key or a `length` store may
         // leave a hole; an append (`elem`) never does (`hole`).
         let index = match key {

@@ -667,6 +667,7 @@ impl<'a> Gen<'a> {
             Expr::Number(v) => self.num_literal(*v),
             Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
+            Expr::String(s) if self.guard_ranges => self.str_literal(s),
             Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
@@ -948,7 +949,13 @@ impl<'a> Gen<'a> {
                 };
                 let l = self.expr(fx, left);
                 let own = self.own_guard_arm(plan, l);
+                let k = match op {
+                    LogicalOp::And => self.narrow_guard(fx, left, true),
+                    LogicalOp::Or => self.narrow_guard(fx, left, false),
+                    LogicalOp::Coalesce => 0,
+                };
                 let r = self.expr(fx, right);
+                self.narrow_pop(k);
                 self.own_guard_done(own);
                 let out = self.tmp("logical");
                 // `l ?? r` is `l` when it is not nullish; `l && r` is `l`
@@ -983,9 +990,13 @@ impl<'a> Gen<'a> {
                 let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
                 let own = self.own_guard_arm(plan, t);
+                let k = self.narrow_guard(fx, condition, true);
                 let a = self.expr(fx, then_expr);
+                self.narrow_pop(k);
                 self.own_guard_done(own);
+                let k = self.narrow_guard(fx, condition, false);
                 let b = self.expr(fx, else_expr);
+                self.narrow_pop(k);
                 let out = self.tmp("cond");
                 self.m.cons(
                     t,
@@ -1035,7 +1046,13 @@ impl<'a> Gen<'a> {
                     // Symbol.hasInstance is a protocol method, called with
                     // the left-hand side.
                     let r = self.m.reason("Symbol.hasInstance");
-                    self.m.cons(tv, Cons::HasInstance { reason: r, arg: lhs });
+                    self.m.cons(
+                        tv,
+                        Cons::HasInstance {
+                            reason: r,
+                            arg: lhs,
+                        },
+                    );
                 }
                 self.prim_node(prim::BOOL)
             }
@@ -1580,6 +1597,9 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_birth(mi, "lit", true);
+                if self.arr_lengths {
+                    self.m.arr_birth_len.insert(tm, elems.len() as i64);
+                }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {

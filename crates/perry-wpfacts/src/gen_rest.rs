@@ -606,6 +606,23 @@ impl<'a> Gen<'a> {
             ),
             // The global conversions and predicates: the operation fixes the
             // kind of its result (ECMA-262; the HIR operation's contract).
+            // `Number(x)`: its interval follows the operand's Numbers and
+            // one-unit Strings (`RangeOp::ToNumber`).
+            Expr::NumberCoerce(x) if self.guard_ranges => {
+                let r = self.m.reason("ToNumber of a Number() operand");
+                let v = self.expr(fx, x);
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                let out = self.tmp("primop");
+                self.range_rule(crate::model::RangeOp::ToNumber, v, None, out);
+                self.m.add_prim(out, prim::NUM);
+                out
+            }
             Expr::ParseInt { .. } | Expr::ParseFloat(..) | Expr::NumberCoerce(..) => self
                 .prim_kids(
                     fx,

@@ -968,7 +968,7 @@ pub const INSPECT_CUSTOM_METHOD: &str = "__perry_inspect_custom__";
 mod cons;
 pub use cons::*;
 pub mod range;
-pub use range::{Iv, RangeOp};
+pub use range::{Iv, RangeOp, Rg};
 
 /// DECISIONS 118: (function, parameter, into its reach, via, key).
 pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Key);
@@ -1057,6 +1057,13 @@ pub struct Node {
     pub rsteps: u8,
     /// The result node of a `Cons::Range` rule: its interval is the rule's.
     pub ruled: bool,
+    /// The code interval of the Strings it holds (`range::CHAR_ANY`: each
+    /// is `""` or one code unit); ⊤ says nothing.
+    pub crange: range::Iv,
+    /// Growths of `crange` so far.
+    pub csteps: u8,
+    /// The result node of a code-interval rule (`RangeOp::SClip`).
+    pub cruled: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -1168,11 +1175,14 @@ pub struct Model {
     pub work: std::cell::Cell<u64>,
     /// The interval a Number arriving through `add_tokens` carries: the
     /// source's, while a value-copy edge delivers; `None` (⊤) otherwise.
-    pub cur_range: Option<Iv>,
+    pub cur_range: Option<range::Rg>,
     /// Test-only negative control (`FactsConfig::sabotage` = `range`): the
     /// `+` interval rule drops its right operand, a wrong transfer the
     /// int32 witnesses must catch.
     pub range_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
+    /// counts as one inside its array's birth length (`arr_len_index`).
+    pub arr_len_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -1198,6 +1208,15 @@ pub struct Model {
     pub all_fields: FxHashMap<Tok, NodeId>,
     /// `Model::hole`: what an Array's iteration reads at a hole.
     pub holes: FxHashMap<Tok, NodeId>,
+    /// `Model::arr_len`: the node of an Array token's `length`.
+    pub arr_len: FxHashMap<Tok, NodeId>,
+    /// The birth length of an array literal template (`solve::arr_len`).
+    pub arr_birth_len: FxHashMap<TmplId, i64>,
+    /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
+    /// judges against the birth length (`Model::arr_len_store`).
+    pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
+    /// `(site, holder, lo, hi)` index intervals already judged.
+    pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
     /// `builtins::arr_iterated`: what iterating Array `t` yields.
     pub arr_iterated: FxHashMap<Tok, NodeId>,
     /// `builtins::species_from`: the `constructor` ArraySpeciesCreate

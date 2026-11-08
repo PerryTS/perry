@@ -1473,7 +1473,11 @@ mod tests {
             let f = module.define_function(
                 "region_loops",
                 VOID,
-                vec![(PTR, "%p".to_string()), (PTR, "%q".to_string()), (I1, "%ok".to_string())],
+                vec![
+                    (PTR, "%p".to_string()),
+                    (PTR, "%q".to_string()),
+                    (I1, "%ok".to_string()),
+                ],
             );
             let entry = f.create_block("entry").label.clone();
             let fast_label = f.create_block("fast").label.clone();
@@ -1483,7 +1487,10 @@ mod tests {
                 f: &'f mut crate::function::LlFunction,
                 label: &str,
             ) -> &'f mut crate::block::LlBlock {
-                f.blocks_mut().into_iter().find(|b| b.label == label).unwrap()
+                f.blocks_mut()
+                    .into_iter()
+                    .find(|b| b.label == label)
+                    .unwrap()
             }
             block(f, &entry).cond_br_byte_view_version("%ok", &fast_label, &orig_label);
             let fast = block(f, &fast_label);
@@ -1557,9 +1564,11 @@ mod tests {
             2,
             "each latch keeps its own loop ID:\n{text}"
         );
-        assert_eq!(native, text, "native construction must build the text path's metadata");
+        assert_eq!(
+            native, text,
+            "native construction must build the text path's metadata"
+        );
     }
-
 
     /// #8087: the same construction-path comparison, pinned to an **ELF**
     /// target rather than the host's.

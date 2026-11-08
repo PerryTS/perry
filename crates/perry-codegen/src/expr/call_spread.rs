@@ -133,7 +133,11 @@ pub(crate) fn emit_spread_append(
         .then(|| crate::proto_constants::iterator_member_site(ctx, operand))
         .flatten();
     let Some(site) = site else {
-        acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, part_box)]);
+        acc.advance(
+            ctx,
+            "js_array_spread_append",
+            &[Arg::Plain(DOUBLE, part_box)],
+        );
         return;
     };
     let slow = ctx.new_block("spreaditer.generic");
@@ -141,10 +145,18 @@ pub(crate) fn emit_spread_append(
     let slow_l = ctx.block_label(slow);
     let merge_l = ctx.block_label(merge);
     let iter = crate::proto_constants::emit_iterator_call(ctx, part_box, &site, &slow_l);
-    acc.advance(ctx, "js_array_spread_append_iterator", &[Arg::Plain(DOUBLE, &iter)]);
+    acc.advance(
+        ctx,
+        "js_array_spread_append_iterator",
+        &[Arg::Plain(DOUBLE, &iter)],
+    );
     ctx.block().br(&merge_l);
     ctx.current_block = slow;
-    acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, part_box)]);
+    acc.advance(
+        ctx,
+        "js_array_spread_append",
+        &[Arg::Plain(DOUBLE, part_box)],
+    );
     ctx.block().br(&merge_l);
     ctx.current_block = merge;
 }

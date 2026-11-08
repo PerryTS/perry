@@ -34,7 +34,12 @@ fn runs(src: &str, class: &str, key: &str, setter: bool) -> bool {
 fn method_runs(src: &str, class: &str, name: &str) -> bool {
     let (hir, pf) = reach(src);
     let c = hir.classes.iter().find(|c| c.name == class).expect("class");
-    let id = c.methods.iter().find(|m| m.name == name).expect("method").id;
+    let id = c
+        .methods
+        .iter()
+        .find(|m| m.name == name)
+        .expect("method")
+        .id;
     active(&pf, id)
 }
 
@@ -92,7 +97,12 @@ Object.defineProperty(Box.prototype, "w", { get: wget, configurable: true });
 const b = new Box<number>(1);
 console.log((b as any).w);"#;
     let (hir, pf) = reach(src);
-    let id = hir.functions.iter().find(|f| f.name == "wget").expect("wget").id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "wget")
+        .expect("wget")
+        .id;
     assert!(active(&pf, id), "getter defined on Box.prototype inactive");
 }
 
@@ -115,6 +125,12 @@ console.log(f.call(b));"#;
 }
 const b = new Box<number>(1);
 console.log(b.foo());"#;
-    assert!(method_runs(read, "Box", "foo"), "origin method read inactive");
-    assert!(method_runs(call, "Box$num", "foo"), "specialized method inactive");
+    assert!(
+        method_runs(read, "Box", "foo"),
+        "origin method read inactive"
+    );
+    assert!(
+        method_runs(call, "Box$num", "foo"),
+        "specialized method inactive"
+    );
 }

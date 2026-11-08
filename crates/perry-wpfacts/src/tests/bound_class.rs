@@ -32,7 +32,11 @@ fn check(src: &str) {
     let sites: Vec<_> = pf.sites.iter().filter(|s| s.key == "s").collect();
     assert!(!sites.is_empty(), "{}", pf.dump_text());
     for s in sites {
-        let got: Vec<_> = s.receivers.iter().map(|r| r.rsplit(':').next().unwrap()).collect();
+        let got: Vec<_> = s
+            .receivers
+            .iter()
+            .map(|r| r.rsplit(':').next().unwrap())
+            .collect();
         assert!(!s.top && got == ["P"], "{s:?}\n{}", pf.dump_text());
     }
 }
@@ -75,6 +79,15 @@ const p = new B(6);
 console.log(p.s);
 "#,
     );
-    let id = hir.functions.iter().find(|f| f.name == "hit").expect("hit").id;
-    assert!(pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id), "{}", pf.dump_text());
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "hit")
+        .expect("hit")
+        .id;
+    assert!(
+        pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id),
+        "{}",
+        pf.dump_text()
+    );
 }

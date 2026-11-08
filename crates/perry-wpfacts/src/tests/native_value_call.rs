@@ -99,4 +99,3 @@ fn a_native_of_another_family_stays_unknown() {
     "#);
     assert!(!proven(&v), "{v:?}");
 }
-

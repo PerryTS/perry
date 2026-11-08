@@ -139,14 +139,22 @@ make(4).then((fill) => console.log(fill(4)));
 #[test]
 fn a_captured_const_of_an_async_fn_gets_the_typed_store() {
     let ir = ir_matching_node(CONST_AFTER_AWAIT);
-    assert_eq!(dynamic_stores(&ir), 0, "the const keeps its Float32Array fact");
+    assert_eq!(
+        dynamic_stores(&ir),
+        0,
+        "the const keeps its Float32Array fact"
+    );
     assert!(typed_stores(&ir) > 0, "the store is the typed-array store");
 }
 
 #[test]
 fn a_captured_let_never_reassigned_gets_the_typed_store() {
     let ir = ir_matching_node(&CONST_AFTER_AWAIT.replace("const buf", "let buf"));
-    assert_eq!(dynamic_stores(&ir), 0, "a let the body never writes is declared once");
+    assert_eq!(
+        dynamic_stores(&ir),
+        0,
+        "a let the body never writes is declared once"
+    );
     assert!(typed_stores(&ir) > 0, "the store is the typed-array store");
 }
 

@@ -12,7 +12,10 @@ fn verdict(src: &str) -> Verdict {
 
 fn proven(src: &str) -> bool {
     let v = verdict(src);
-    assert!(!matches!(v, Verdict::No(ref s) if s.starts_with("dead site")), "{v:?}");
+    assert!(
+        !matches!(v, Verdict::No(ref s) if s.starts_with("dead site")),
+        "{v:?}"
+    );
     !matches!(v, Verdict::No(_))
 }
 
@@ -39,13 +42,17 @@ fn const_key_names_its_field() {
 /// The literal it stands for: the same verdict.
 #[test]
 fn literal_key_names_its_field() {
-    assert!(proven(&program(r#"const k = "a"; void k; const j = 0; void j;"#).replace("box[k]", "box[\"a\"]")));
+    assert!(proven(
+        &program(r#"const k = "a"; void k; const j = 0; void j;"#).replace("box[k]", "box[\"a\"]")
+    ));
 }
 
 /// A binding that may be reassigned names no key.
 #[test]
 fn reassigned_key_names_none() {
-    assert!(!proven(&program(r#"let k = "a"; if (box.b === "t") k = "b";"#)));
+    assert!(!proven(&program(
+        r#"let k = "a"; if (box.b === "t") k = "b";"#
+    )));
 }
 
 /// A const holding a non-literal names no key.

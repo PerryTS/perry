@@ -225,13 +225,15 @@ export function pc(f: any, o: any, n: number): any { return pb(f, o, n); }"#;
 #[test]
 fn a_function_passed_back_and_forth_and_let_go_escapes() {
     // The global it stores into is where an unseen module's code reads.
-    let a = &crate::tests::unseen(r#"import { pb } from "./b";
+    let a = &crate::tests::unseen(
+        r#"import { pb } from "./b";
 class P { v = 1; }
 export function main() {
     function cb(x: any) { return x.v; }
     return pb(cb, new P(), 3);
 }
-console.log(main());"#);
+console.log(main());"#,
+    );
     let b = r#"import { pc } from "./c";
 export function pb(f: any, o: any, n: number): any { return n > 0 ? pc(f, o, n - 1) : f(o); }"#;
     let c = r#"import { pb } from "./b";
@@ -257,14 +259,16 @@ fn a_function_read_from_arguments_or_rest_stays_sound() {
 #[test]
 fn a_function_its_own_unit_lets_go_escapes() {
     // The global it stores into is where an unseen module's code reads.
-    let a = &crate::tests::unseen(r#"import { use } from "./b";
+    let a = &crate::tests::unseen(
+        r#"import { use } from "./b";
 class P { v = 1; }
 export function main() {
     function cb(x: any) { return x.v; }
     (globalThis as any).k = cb;
     return use(cb, new P());
 }
-console.log(main());"#);
+console.log(main());"#,
+    );
     let b = "export function use(f: any, o: any) { const h = { f }; return h.f(o); }";
     escapes(&[("a", a), ("b", b)]);
 }

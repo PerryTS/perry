@@ -130,8 +130,7 @@ fn pays(ctx: &FnCtx<'_>, kind: &str, nodes: usize, bare: usize) -> bool {
 /// than the region guard in front of the same access.
 fn one_record_access(ctx: &FnCtx<'_>, p: &Plan) -> bool {
     p.bare.len() == 1
-        && p
-            .bare_keys
+        && p.bare_keys
             .iter()
             .all(|k| crate::expr::layout_read::admitted(ctx, k).is_some())
 }
@@ -463,8 +462,9 @@ fn begin_with(
         .iter()
         .filter_map(|r| static_class_name(ctx, *r, None).map(|c| (*r, c)))
         .collect();
-    let first = plan(ctx, body, cands.clone(), &wide, Some((cond, update)), None)
-        .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len()) && !one_record_access(ctx, p));
+    let first = plan(ctx, body, cands.clone(), &wide, Some((cond, update)), None).filter(|p| {
+        pays(ctx, "loop", body_nodes(body), p.bare.len()) && !one_record_access(ctx, p)
+    });
     let inner: Option<(usize, Plan)> = None;
     // The guard is emitted now, in the context the plan was made in: a
     // receiver wider than a learned word must still name its class.
@@ -677,11 +677,9 @@ fn body_region_plan(
         if let Some(c) = static_class_name(ctx, Recv::Local(*id), Some(init)) {
             wide.insert(Recv::Local(*id), c);
         }
-        if let Some(p) = plan(ctx, tail, cands, &wide, None, None)
-            .filter(|p| {
-                pays(ctx, "body", body_nodes(tail), p.bare.len()) && !one_record_access(ctx, p)
-            })
-        {
+        if let Some(p) = plan(ctx, tail, cands, &wide, None, None).filter(|p| {
+            pays(ctx, "body", body_nodes(tail), p.bare.len()) && !one_record_access(ctx, p)
+        }) {
             return Some((i + 1, p));
         }
     }

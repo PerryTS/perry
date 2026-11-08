@@ -135,6 +135,14 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_lengths: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_ranges: matches!(
+            std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -515,6 +523,11 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             })
             .collect()
     };
+    if !interp {
+        for (offset, iv) in &mb.call_arg_ranges {
+            out.call_arg_ranges.insert(*offset, iv.clone());
+        }
+    }
     for (id, b) in &mb.locals {
         if !interp {
             if let Some(o) = &b.indexed_owner {
@@ -543,6 +556,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
             if b.length_number {
                 out.length_number_inputs.insert(*id);
+            }
+            if let Some(n) = b.const_length {
+                out.const_length_inputs.insert(*id, n);
             }
         }
         if let Some(r) = recv(b) {
@@ -781,6 +797,14 @@ pub(crate) fn activation(
         // The facts' negative controls act on this pass (it is theirs).
         no_int_ranges: matches!(
             std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_lengths: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_ranges: matches!(
+            std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")

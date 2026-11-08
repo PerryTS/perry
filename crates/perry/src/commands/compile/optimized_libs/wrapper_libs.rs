@@ -51,7 +51,9 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 refused: Some(message),
                 ..
             }) => {
-                eprintln!("error: `{module}` links the prebuilt wrapper archive `{filename}`; {message}");
+                eprintln!(
+                    "error: `{module}` links the prebuilt wrapper archive `{filename}`; {message}"
+                );
                 std::process::exit(1);
             }
             Err(_) => None,

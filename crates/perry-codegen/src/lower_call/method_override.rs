@@ -818,6 +818,7 @@ pub(super) fn emit_guarded_direct_method_call(
     shape_only_guard: bool,
     subclass_arms: &[SubclassDispatchArm],
     certificate: Option<&ConstantMethodSelection<'_>>,
+    call_byte_offset: u32,
 ) -> Option<String> {
     // `class C { m = fn; m() {} }` and an inherited field with the same name
     // both require ordinary own-property lookup. Falling back here reaches
@@ -1788,6 +1789,7 @@ pub(super) fn emit_guarded_direct_method_call(
                             receiver_class_name,
                             property,
                             source_args,
+                            call_byte_offset,
                         )
                     })
                     .flatten();

@@ -895,6 +895,53 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
     }
 
+    // A method that may move the receiver's length (`solve::arr_len`);
+    // these never do.
+    let keeps_length = matches!(
+        name,
+        Some(
+            WK_ITERATOR
+                | "next"
+                | "return"
+                | "throw"
+                | "at"
+                | "indexOf"
+                | "lastIndexOf"
+                | "includes"
+                | "join"
+                | "toString"
+                | "toLocaleString"
+                | "slice"
+                | "concat"
+                | "map"
+                | "filter"
+                | "forEach"
+                | "every"
+                | "some"
+                | "find"
+                | "findIndex"
+                | "findLast"
+                | "findLastIndex"
+                | "reduce"
+                | "reduceRight"
+                | "flat"
+                | "flatMap"
+                | "keys"
+                | "values"
+                | "entries"
+                | "fill"
+                | "copyWithin"
+                | "reverse"
+                | "sort"
+                | "toReversed"
+                | "toSorted"
+                | "toSpliced"
+                | "with"
+        )
+    );
+    if !keeps_length {
+        m.arr_len_top(t);
+    }
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     // Every method here reads or writes the receiver's indices through its

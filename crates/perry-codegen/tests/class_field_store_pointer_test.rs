@@ -263,12 +263,14 @@ fn compile_ir(module: &Module) -> String {
 /// its own.
 fn assert_store_site(ir: &str, strict: &str) {
     assert!(
-        ir.lines().any(|l| l.contains("call double @perry_store_or_put(")
-            && l.contains(&format!(", i32 {strict})"))),
+        ir.lines()
+            .any(|l| l.contains("call double @perry_store_or_put(")
+                && l.contains(&format!(", i32 {strict})"))),
         "the field store is one store-site call (Throw = {strict}):\n{ir}"
     );
     assert!(
-        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("call double @js_put_value_set("),
+        !ir.contains("call i32 @perry_probe_set(")
+            && !ir.contains("call double @js_put_value_set("),
         "the probe and [[Set]] are the store-site call's, not the site's:\n{ir}"
     );
     assert!(

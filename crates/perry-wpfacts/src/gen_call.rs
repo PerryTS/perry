@@ -89,6 +89,9 @@ impl<'a> Gen<'a> {
             }
         }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+            self.call_args_at.push((fx.module, byte_offset, a.clone()));
+        }
         self.call_lit_arg = if matches!(callee, Expr::PropertyGet { .. } | Expr::IndexGet { .. }) {
             args.first()
                 .and_then(|x| self.const_property_key(fx.module, x))
@@ -451,7 +454,12 @@ impl<'a> Gen<'a> {
         }
         self.order_ok = true;
         let own = self.own_helper_shape(params, body, *is_async || *is_generator);
+        let scope = self
+            .int_ranges
+            .then(|| (f, crate::gen::narrow::scope_locals(params, body)));
+        let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(cfx, body);
+        self.narrow_scope = saved_scope;
         self.own_helper_finish(f, own);
         #[cfg(test)]
         {
