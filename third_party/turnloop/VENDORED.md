@@ -67,3 +67,9 @@ acknowledgement with no PING outstanding, and SETTINGS that carry only the optio
 names. Touched: `turnloop-http/src/http2.rs`, `src/hpack.rs`, `tests/http2_settings.rs`,
 `tests/codecs.rs`; their hashes in `source-manifest.json` are the patched ones, and
 `cargo test -p turnloop-http` passes on this tree in a scratch workspace.
+
+Patched by Perry for Android: the epoll backend doesn't probe `epoll_pwait2` there. Android's
+app seccomp filter doesn't list the call, so the probe kills the process with SIGSYS instead
+of failing with ENOSYS; Android takes the timerfd path older kernels use. Touched:
+`turnloop/src/backend/epoll.rs`; its hash in `source-manifest.json` (`sourceFiles`) is the
+patched one.
