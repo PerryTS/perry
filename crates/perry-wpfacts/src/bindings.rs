@@ -338,7 +338,7 @@ pub struct ModuleBindings {
 /// through the prototype chain, which the read leaves to the generic path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ElementRead {
-    /// The length every receiver has (the least, over the copies).
+    /// The length every receiver has, at every copy.
     pub len: u32,
     /// The key is an integer Number in `[0, len)` at every copy.
     pub key_in_bounds: bool,
@@ -527,8 +527,8 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
             match joined.last_mut() {
                 Some((lo, prev)) if *lo == o => {
                     *prev = match (*prev, r) {
-                        (Some(a), Some(b)) => Some(ElementRead {
-                            len: a.len.min(b.len),
+                        (Some(a), Some(b)) if a.len == b.len => Some(ElementRead {
+                            len: a.len,
                             key_in_bounds: a.key_in_bounds && b.key_in_bounds,
                         }),
                         _ => None,

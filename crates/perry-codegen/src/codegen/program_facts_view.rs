@@ -358,7 +358,7 @@ pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, b
 }
 
 /// wpfacts `ElementRead`: every receiver of the read is a program Array of
-/// at least `len` elements whose length, storage and element descriptors no
+/// exactly `len` elements whose length, storage and element descriptors no
 /// operation of the program ever changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FactsElementRead {
