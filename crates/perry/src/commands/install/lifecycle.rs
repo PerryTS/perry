@@ -1,19 +1,14 @@
-//! Lifecycle-script execution. Only invoked after the scan passes
-//! (or its findings have been overridden). Runs `preinstall`,
-//! `install`, and `postinstall` for packages on a trust allowlist —
-//! the bundled one in [`allowlist`] plus any names the user opted
-//! into via `package.json -> perry.allowScripts` or the
-//! `--run-scripts` / `--run-scripts-all` CLI flags.
+//! Lifecycle scripts run only after the scan passes and the user explicitly
+//! approves their installed package names through `perry.allowScripts`,
+//! `--run-scripts`, or `--run-scripts-all`.
 //!
 //! Scripts are executed under the host shell (`sh -c` on Unix,
 //! `cmd /C` on Windows), in the package's directory, with PATH
 //! prefixed so `node_modules/.bin` binaries (typescript, node-gyp,
 //! prebuild-install, …) are reachable without absolute paths.
 //!
-//! v2 will run these in an OS sandbox with redacted env (no SSH /
-//! AWS / GitHub / npm tokens) and a tight filesystem + network
-//! profile. v1 trusts the allowlist: a compromised version of an
-//! allowlisted package's script WILL run.
+//! Approval grants host-shell execution with the user's environment and
+//! privileges; it does not sandbox scripts or authenticate their contents.
 
 use anyhow::{bail, Result};
 use serde_json::Value;
@@ -21,7 +16,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
-use super::allowlist;
 use super::scanner::ScannedPackage;
 use super::InstallArgs;
 
@@ -75,9 +69,6 @@ fn is_trusted(name: &str, user_opt_in: &BTreeSet<String>, args: &InstallArgs) ->
     if args.run_scripts_all {
         return true;
     }
-    if allowlist::is_bundled(name) {
-        return true;
-    }
     if user_opt_in.contains(name) {
         return true;
     }
@@ -89,8 +80,7 @@ fn is_trusted(name: &str, user_opt_in: &BTreeSet<String>, args: &InstallArgs) ->
 
 /// Read `perry.allowScripts` from the project root's package.json.
 /// Returns an empty set if the file or key is missing — this is the
-/// non-Perry-project case, where we just rely on the bundled
-/// allowlist + CLI flags.
+/// non-Perry-project case, where only explicit CLI approvals apply.
 fn read_user_allowscripts(project_root: &Path) -> BTreeSet<String> {
     let pkg_json = project_root.join("package.json");
     let content = match std::fs::read_to_string(&pkg_json) {
@@ -235,8 +225,8 @@ mod tests {
     }
 
     #[test]
-    fn trust_bundled() {
-        assert!(is_trusted("esbuild", &BTreeSet::new(), &args()));
+    fn known_package_names_are_not_implicit_approval() {
+        assert!(!is_trusted("esbuild", &BTreeSet::new(), &args()));
     }
 
     #[test]

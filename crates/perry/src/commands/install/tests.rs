@@ -1,0 +1,130 @@
+use super::{lifecycle, scanner, InstallArgs};
+use clap::Parser;
+use serde_json::json;
+use std::fs;
+use std::path::Path;
+use tempfile::TempDir;
+
+#[derive(Parser)]
+struct TestCli {
+    #[command(flatten)]
+    args: InstallArgs,
+}
+
+fn args(flags: &[&str]) -> InstallArgs {
+    TestCli::parse_from(std::iter::once("perry-install").chain(flags.iter().copied())).args
+}
+
+fn write_package(root: &Path, installed: &str, declared: &str) {
+    let dir = root.join("node_modules").join(installed);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("package.json"),
+        json!({
+            "name": declared,
+            "version": "1.0.0",
+            "scripts": {"postinstall": "printf approved > ran.txt"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+fn run(root: &Path, args: &InstallArgs) -> lifecycle::RunSummary {
+    let packages = scanner::discover_packages(&root.join("node_modules"));
+    let report = scanner::scan_packages(&packages, &[], false);
+    assert!(matches!(report.verdict, scanner::report::Verdict::Clean));
+    lifecycle::run_all(&packages, root, args).unwrap()
+}
+
+#[test]
+fn lifecycle_requires_explicit_approval_even_for_bundled_names() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    let names = ["esbuild", "lightningcss-unrelated", "@esbuild/unrelated"];
+    for name in names {
+        write_package(root.path(), name, name);
+    }
+
+    let summary = run(root.path(), &args(&[]));
+    assert!(summary.ran.is_empty());
+    let mut skipped = summary.skipped;
+    skipped.sort();
+    let mut expected = names.map(String::from);
+    expected.sort();
+    assert_eq!(skipped, expected);
+    for name in names {
+        assert!(!root
+            .path()
+            .join("node_modules")
+            .join(name)
+            .join("ran.txt")
+            .exists());
+    }
+}
+
+#[test]
+fn lifecycle_approval_uses_installed_identity_not_manifest_name() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    write_package(root.path(), "approved-fixture", "esbuild");
+    write_package(root.path(), "untrusted-fixture", "esbuild");
+
+    let summary = run(root.path(), &args(&["--run-scripts", "esbuild"]));
+    assert!(summary.ran.is_empty());
+    assert_eq!(summary.skipped.len(), 2);
+    for name in ["approved-fixture", "untrusted-fixture"] {
+        assert!(!root
+            .path()
+            .join("node_modules")
+            .join(name)
+            .join("ran.txt")
+            .exists());
+    }
+
+    let summary = run(root.path(), &args(&["--run-scripts", "approved-fixture"]));
+    assert_eq!(summary.ran, ["approved-fixture"]);
+    assert_eq!(summary.skipped, ["untrusted-fixture"]);
+    assert_eq!(
+        fs::read_to_string(root.path().join("node_modules/approved-fixture/ran.txt")).unwrap(),
+        "approved"
+    );
+    assert!(!root
+        .path()
+        .join("node_modules/untrusted-fixture/ran.txt")
+        .exists());
+}
+
+#[test]
+fn lifecycle_preserves_project_and_blanket_approvals() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    write_package(root.path(), "@approved/alias", "@source/original");
+    write_package(root.path(), "untrusted-fixture", "@source/original");
+    fs::write(
+        root.path().join("package.json"),
+        json!({"perry": {"allowScripts": ["@approved/alias"]}}).to_string(),
+    )
+    .unwrap();
+
+    let summary = run(root.path(), &args(&[]));
+    assert_eq!(summary.ran, ["@approved/alias"]);
+    assert_eq!(summary.skipped, ["untrusted-fixture"]);
+    assert_eq!(
+        fs::read_to_string(root.path().join("node_modules/@approved/alias/ran.txt")).unwrap(),
+        "approved"
+    );
+    assert!(!root
+        .path()
+        .join("node_modules/untrusted-fixture/ran.txt")
+        .exists());
+
+    let mut summary = run(root.path(), &args(&["--run-scripts-all"]));
+    summary.ran.sort();
+    assert_eq!(summary.ran, ["@approved/alias", "untrusted-fixture"]);
+    assert!(summary.skipped.is_empty());
+    assert_eq!(
+        fs::read_to_string(root.path().join("node_modules/untrusted-fixture/ran.txt")).unwrap(),
+        "approved"
+    );
+}

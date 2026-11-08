@@ -3,8 +3,7 @@
 //! Architecture: shell out to `bun install --ignore-scripts` (or `npm install
 //! --ignore-scripts` as fallback) to get a populated `node_modules/` with
 //! *no* lifecycle scripts run, then statically scan the tree for known
-//! malware patterns, then run scripts only for packages on a trust
-//! allowlist (or the user's explicit opt-in).
+//! malware patterns, then run scripts only with the user's explicit approval.
 //!
 //! The scan + script gate lives entirely in Perry. The
 //! fetch/resolve/lockfile/extract work is delegated to whichever installer
@@ -16,12 +15,14 @@ use std::path::{Path, PathBuf};
 
 use crate::OutputFormat;
 
-pub mod allowlist;
 pub mod detect;
 pub mod firewall;
 pub mod lifecycle;
 pub mod runner;
 pub mod scanner;
+
+#[cfg(all(test, unix))]
+mod tests;
 
 #[derive(Args, Debug)]
 pub struct InstallArgs {
@@ -70,8 +71,8 @@ pub struct InstallArgs {
     #[arg(long)]
     pub allow_risky_all: bool,
 
-    /// Run lifecycle scripts for one extra package beyond the bundled
-    /// allowlist (repeat for multiple).
+    /// Approve lifecycle scripts for an installed dependency name or alias
+    /// (repeat for multiple). Scripts run with full user privileges.
     #[arg(long = "run-scripts", value_name = "PKG")]
     pub run_scripts: Vec<String>,
 
@@ -153,8 +154,6 @@ pub fn run(args: InstallArgs, _format: OutputFormat, use_color: bool) -> Result<
         std::process::exit(1);
     }
 
-    // Scan passed (Clean or Overridden) — now run lifecycle scripts
-    // for packages on the trust gate.
     let summary = lifecycle::run_all(&packages, &project_root, &args)?;
     if !args.json {
         print_lifecycle_summary(&summary, use_color);
@@ -167,13 +166,13 @@ fn print_lifecycle_summary(summary: &lifecycle::RunSummary, use_color: bool) {
     if !summary.ran.is_empty() {
         if use_color {
             eprintln!(
-                "\x1b[2mperry install: ran lifecycle scripts for {} allowlisted package(s): {}\x1b[0m",
+                "\x1b[2mperry install: ran lifecycle scripts for {} explicitly approved package(s): {}\x1b[0m",
                 summary.ran.len(),
                 summary.ran.join(", ")
             );
         } else {
             eprintln!(
-                "perry install: ran lifecycle scripts for {} allowlisted package(s): {}",
+                "perry install: ran lifecycle scripts for {} explicitly approved package(s): {}",
                 summary.ran.len(),
                 summary.ran.join(", ")
             );
@@ -182,7 +181,7 @@ fn print_lifecycle_summary(summary: &lifecycle::RunSummary, use_color: bool) {
     if !summary.skipped.is_empty() {
         if use_color {
             eprintln!(
-                "\x1b[33m▲\x1b[0m perry install: skipped lifecycle scripts for {} non-allowlisted \
+                "\x1b[33m▲\x1b[0m perry install: skipped lifecycle scripts for {} unapproved \
                  package(s): {}",
                 summary.skipped.len(),
                 summary.skipped.join(", ")
@@ -192,7 +191,7 @@ fn print_lifecycle_summary(summary: &lifecycle::RunSummary, use_color: bool) {
             );
         } else {
             eprintln!(
-                "perry install: skipped lifecycle scripts for {} non-allowlisted package(s): {}",
+                "perry install: skipped lifecycle scripts for {} unapproved package(s): {}",
                 summary.skipped.len(),
                 summary.skipped.join(", ")
             );

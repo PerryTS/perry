@@ -21,6 +21,7 @@ use report::{Finding, ScanReport, Severity, Verdict};
 /// One discovered package on disk.
 #[derive(Debug, Clone)]
 pub struct ScannedPackage {
+    /// Installed dependency name, including its scope or alias.
     pub name: String,
     pub version: String,
     pub dir: PathBuf,
@@ -102,20 +103,13 @@ fn record_and_recurse(pkg_dir: &Path, dir_name: &str, out: &mut Vec<ScannedPacka
     let manifest_path = pkg_dir.join("package.json");
     if let Ok(content) = fs::read_to_string(&manifest_path) {
         if let Ok(manifest) = serde_json::from_str::<Value>(&content) {
-            // Prefer the manifest-declared name (handles renamed deps),
-            // but fall back to the directory name when missing.
-            let name = manifest
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(dir_name)
-                .to_string();
             let version = manifest
                 .get("version")
                 .and_then(|v| v.as_str())
                 .unwrap_or("?")
                 .to_string();
             out.push(ScannedPackage {
-                name,
+                name: dir_name.to_string(),
                 version,
                 dir: pkg_dir.to_path_buf(),
                 manifest,
