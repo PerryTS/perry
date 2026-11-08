@@ -1237,6 +1237,7 @@ pub(super) fn compile_method(
                                 &mut ctx,
                                 &facts_number_params,
                             );
+                            super::facts_rep::bind_params(&mut ctx, &facts_number_params);
                             stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
                                 format!("lowering body of method '{}::{}'", class.name, method.name)
                             })?;
@@ -1707,6 +1708,7 @@ pub(super) fn compile_method(
     crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
+    super::facts_rep::bind_params(&mut ctx, &facts_number_params);
     if !method.is_async && !method.is_generator {
         ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, method_body);
     }

@@ -1,0 +1,1 @@
+A parameter that whole-program facts give the I32 representation takes the canonical-i32 slot at function entry, so its body computes in i32 (representation RFC §10.4, phase P2, first slice). The calling convention is unchanged. `PERRY_WP_REP_P2=0` keeps parameters in their double slots.
