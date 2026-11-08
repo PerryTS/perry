@@ -116,13 +116,24 @@ at logout, or between accounts:
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `url` | `string` | — | Initial URL. Required. |
-| `allowedDomains` | `string[]` | `[]` | Hard host allowlist (exact OR subdomain). Empty / omitted = no host restriction. |
+| `allowedDomains` | `string[]` | `[]` | Navigation host filter (exact OR subdomain). Empty / omitted = no host restriction. |
 | `userAgent` | `string` | platform WebKit UA | Custom UA header. |
 | `ephemeral` | `boolean` | `true` | Cookie / storage isolation. See the table above. |
 | `onShouldNavigate` | `(url) => boolean \| void` | — | **Sync** intercept. Return `false` to cancel. |
 | `onLoaded` | `(url) => void` | — | Fires when a page finishes loading. |
 | `onError` | `(code, message) => void` | — | DNS / TLS / HTTP / cancellation. |
 | `width`, `height` | `number` | layout-engine controlled | Initial pixel bounds; layout engine still has final say. |
+
+Native navigation-decision callbacks share one destination-host policy. It
+parses the URL rather than interpreting credentials or path text as the host.
+Domain names are normalized for case and IDNA; IPv4 and bracketed IPv6 entries
+match addresses exactly. Entries are hosts, without schemes or ports. A URL
+containing credentials is checked against its actual destination host.
+
+This filter is not a network sandbox. It applies when the native engine
+delivers a navigation-decision callback; constructor ordering and
+platform-specific callback coverage are separate concerns. Use trusted content
+and do not rely on this option to confine arbitrary untrusted web code.
 
 ## Platform Notes
 
