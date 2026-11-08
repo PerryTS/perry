@@ -129,6 +129,8 @@ parses the URL rather than interpreting credentials or path text as the host.
 Domain names are normalized for case and IDNA; IPv4 and bracketed IPv6 entries
 match addresses exactly. Entries are hosts, without schemes or ports. A URL
 containing credentials is checked against its actual destination host.
+For `blob:` URLs, the filter checks the embedded HTTP(S) origin; opaque,
+nested-blob and disallowed origins are rejected when the list is non-empty.
 
 This filter is not a network sandbox. It applies when the native engine
 delivers a navigation-decision callback; constructor ordering and

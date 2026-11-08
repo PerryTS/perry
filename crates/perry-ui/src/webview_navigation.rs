@@ -1,12 +1,23 @@
 use url::{Host, Url};
 
-/// Match the parsed destination host, never URL credentials or path text.
+/// Match the destination host or blob creator origin, never URL credentials.
 pub fn navigation_allowed(url: &str, allowed_domains: &[String]) -> bool {
     if allowed_domains.is_empty() {
         return true;
     }
     let Ok(url) = Url::parse(url) else {
         return false;
+    };
+    let url = if url.scheme() == "blob" {
+        let Ok(origin) = Url::parse(url.path()) else {
+            return false;
+        };
+        if !matches!(origin.scheme(), "http" | "https") {
+            return false;
+        }
+        origin
+    } else {
+        url
     };
     let Some(host) = url.host() else {
         return false;
@@ -55,11 +66,42 @@ mod tests {
     }
 
     #[test]
+    fn blob_urls_use_their_embedded_http_origin() {
+        for url in [
+            "blob:https://allowed.example/id",
+            "blob:http://sub.allowed.example:8080/id",
+        ] {
+            assert!(allows(url, &["allowed.example"]), "{url}");
+        }
+        for url in [
+            "blob:https://attacker.test/id",
+            "blob:https://allowed.example:secret@attacker.test/id",
+            "blob:null/id",
+            "blob:blob:https://allowed.example/id",
+            "blob:ftp://allowed.example/id",
+            "blob:file://allowed.example/id",
+            "blob://allowed.example/id",
+        ] {
+            assert!(!allows(url, &["allowed.example"]), "{url}");
+        }
+    }
+
+    #[test]
+    fn matches_later_allowlist_entries() {
+        assert!(allows(
+            "https://second.example/",
+            &["first.example", "second.example"]
+        ));
+    }
+
+    #[test]
     fn exact_hosts_and_subdomains_match_but_suffix_lookalikes_do_not() {
         for url in [
             "https://allowed.example/",
             "https://sub.allowed.example/",
             "http://deep.sub.allowed.example:8080/path",
+            "ftp://allowed.example/path",
+            "custom://allowed.example/path",
         ] {
             assert!(allows(url, &["allowed.example"]), "{url}");
         }
