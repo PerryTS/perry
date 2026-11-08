@@ -95,7 +95,8 @@ fn a_read_of_a_declared_static_sees_the_store() {
 
 /// Controls: the stores the realm may read back keep the sink. A key that
 /// may name V8's stack hooks or `Promise.resolve`, an undescribed
-/// constructor's statics, a non-callable namespace, a prototype.
+/// constructor's statics (Date's are described from the realm: see
+/// `date_store_under_a_c_key_is_its_own_field`), a non-callable namespace, a prototype.
 #[test]
 fn realm_read_statics_still_sink() {
     let mut bad = Vec::new();
@@ -104,7 +105,6 @@ fn realm_read_statics_still_sink() {
         "(Error as any)[`p${k}`] = n;",
         "(AggregateError as any)[`s${k}`] = n;",
         "(Promise as any)[`r${k}`] = n;",
-        "(Date as any)[`c${k}`] = n;",
         "(Error as any).prepareStackTrace = n;",
         "(Error as any).stackTraceLimit = n;",
         "(Promise as any)[k] = n;",
@@ -117,6 +117,33 @@ fn realm_read_statics_still_sink() {
         let (p, _) = v_proven(&program(store), false);
         if p {
             bad.push(format!("{store}: n.v proven, the realm may read n"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Date is program-only and described from the realm: under node a key that
+/// starts with "c" is neither `__proto__` nor any Date static (now, parse,
+/// UTC, prototype), so the store adds an own data field no realm static reads.
+#[test]
+fn date_store_under_a_c_key_is_its_own_field() {
+    let (p, dump) = v_proven(&program("(Date as any)[`c${k}`] = n;"), false);
+    assert!(p, "n.v unproven (E20 sink)\n{}", &dump[..dump.len().min(4000)]);
+}
+
+/// Control for the test above: the same store, but `Date` is handed to code
+/// the solver cannot see (an unknown function): the callee may read any
+/// field of it, so `n.v` stays unproven.
+#[test]
+fn date_store_under_a_c_key_sinks_once_date_escapes() {
+    let mut bad = Vec::new();
+    for (store, interp) in [
+        ("(Date as any)[`c${k}`] = n; (globalThis as any).u(Date);", false),
+        ("(globalThis as any).u(Date); (Date as any)[`c${k}`] = n;", false),
+    ] {
+        let (p, _) = v_proven(&program(store), interp);
+        if p {
+            bad.push(format!("{store} (interp {interp}): n.v proven, Date escaped"));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
