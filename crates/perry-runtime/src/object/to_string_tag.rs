@@ -80,6 +80,8 @@ unsafe fn string_value_to_owned(value: f64) -> Option<String> {
 }
 
 unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
     let bits = value.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
         return None;
@@ -96,8 +98,8 @@ unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
     // Spec §20.1.3.6 step 6: Get(O, @@toStringTag) — own property first, then
     // the explicit prototype chain (set via Object.setPrototypeOf or the
     // runtime's object_set_static_prototype).
-    let tag_value = crate::symbol::own_symbol_property(value, sym_f64)
-        .or_else(|| crate::symbol::inherited_symbol_property(value, sym_f64))?;
+    let tag_value = crate::symbol::own_symbol_property(receiver.get_nanbox_f64(), sym_f64)
+        .or_else(|| crate::symbol::inherited_symbol_property(receiver.get_nanbox_f64(), sym_f64))?;
     string_value_to_owned(tag_value)
 }
 
@@ -146,6 +148,14 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
 /// if registered, otherwise `Object` (matching Node for plain objects).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
+    object_prototype_to_string(value)
+}
+
+/// Intrinsic entry for Rust callers whose exception boundary admits throwing
+/// tag getters, without crossing the non-unwinding C export wrapper.
+pub unsafe fn object_prototype_to_string(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
     use crate::value::JSValue;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -327,6 +337,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    let value = receiver.get_nanbox_f64();
+    let bits = value.to_bits();
+    let jsv = JSValue::from_bits(bits);
     // Intrinsic primitive-wrapper prototypes carry the corresponding internal
     // slot: `%Number.prototype%` has `[[NumberData]]` (+0), `%Boolean.prototype%`
     // has `[[BooleanData]]` (false), `%String.prototype%` has `[[StringData]]`

@@ -1311,14 +1311,16 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             use super::exotic_expando::ExoticKind;
             let mut names = match kind {
                 ExoticKind::Error => {
-                    // V8 creates the lazy own `stack` before Error's optional
-                    // `message`. The header keeps both payload slots, but only
-                    // `message` values supplied to the constructor are own
-                    // properties; `name` is always inherited until assigned.
+                    // Constructor diagnostics precede later expando keys;
+                    // assigned causes must keep their own insertion position.
                     let mut builtin = vec!["stack".to_string()];
                     let error = addr as *mut crate::error::ErrorHeader;
+                    let has_cause = (*error).flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0;
                     if crate::error::js_error_has_own_property(error, "message") {
                         builtin.push("message".to_string());
+                    }
+                    if has_cause {
+                        builtin.push("cause".to_string());
                     }
                     builtin
                 }
@@ -1990,4 +1992,44 @@ pub(crate) fn nm_member(module: &str, key: &str) -> Option<super::NmMember> {
         },
         _ => NmMember::Data { configurable: true },
     })
+}
+
+#[cfg(test)]
+mod error_name_tests {
+    use super::*;
+
+    #[test]
+    fn constructor_cause_names_precede_later_error_properties() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let message = crate::string::js_string_from_bytes(b"payload".as_ptr(), 7);
+        let error = crate::error::js_error_new_with_cause_from_value(
+            crate::js_nanbox_string(message as i64),
+            23.0,
+        );
+        let error = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+        let code = crate::string::js_string_from_bytes(b"code".as_ptr(), 4);
+        js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(error.get_nanbox_f64()) as *mut _,
+            code,
+            17.0,
+        );
+        let names = scope.root_nanbox_f64(js_object_get_own_property_names(error.get_nanbox_f64()));
+        let array = crate::value::js_nanbox_get_pointer(names.get_nanbox_f64())
+            as *const crate::ArrayHeader;
+        let keys: Vec<String> = (0..crate::array::js_array_length(array))
+            .map(|index| unsafe {
+                let key = crate::JSValue::from_bits(
+                    crate::array::js_array_get_f64(array, index).to_bits(),
+                );
+                let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
+                String::from_utf8(
+                    crate::string::js_string_key_bytes(key, &mut sso)
+                        .unwrap()
+                        .to_vec(),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(keys, ["stack", "message", "cause", "code"]);
+    }
 }
