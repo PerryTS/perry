@@ -20,7 +20,17 @@ pub(super) fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
             BuiltinNs::WeakSet,
         ],
         Family::Promise => &[BuiltinNs::Promise],
-        Family::Error => &[BuiltinNs::Error],
+        // An error object's template does not keep its kind.
+        Family::Error => {
+            for ns in [BuiltinNs::Error, BuiltinNs::AggregateError]
+                .into_iter()
+                .chain(NATIVE_ERRORS.map(BuiltinNs::NativeError))
+            {
+                let b = m.tok(TokKind::Builtin(ns));
+                m.add_tok(dst, b);
+            }
+            return;
+        }
         Family::Box => &[BuiltinNs::Object, BuiltinNs::Array],
         Family::Wrapper => &[
             BuiltinNs::Object,
@@ -76,8 +86,10 @@ pub(super) fn family_load(
             m.add_tok(dst, bf);
         }
         Some(Mem::Prim(p)) => m.add_prim(dst, p),
+        // An error object's template does not keep its kind (`error_tok`,
+        // the runtime's errors): its `constructor` is any Error-family one.
         Some(Mem::Ctor) => {
-            if let Some(n) = (!m.unit_mode)
+            if let Some(n) = (!m.unit_mode && fam != Family::Error)
                 .then(|| member_native(m, fam, what, &name))
                 .flatten()
             {
@@ -119,6 +131,9 @@ pub(super) fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str
         BuiltinNs::Set => (Family::Collection, Some("Set"), "Set"),
         BuiltinNs::WeakMap => (Family::Collection, Some("WeakMap"), "WeakMap"),
         BuiltinNs::WeakSet => (Family::Collection, Some("WeakSet"), "WeakSet"),
+        BuiltinNs::Error => (Family::Error, None, "Error"),
+        BuiltinNs::NativeError(n) => (Family::Error, Some(n), n),
+        BuiltinNs::AggregateError => (Family::Error, Some("AggregateError"), "AggregateError"),
         BuiltinNs::Date => (Family::Opaque, Some("Date"), "Date"),
         BuiltinNs::RegExp => (Family::Opaque, Some("RegExp"), "RegExp"),
         BuiltinNs::TypedArray => (Family::Opaque, Some("TypedArray"), "Uint8Array"),
