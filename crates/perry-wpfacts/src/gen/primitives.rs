@@ -78,6 +78,30 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The primitive type of an enum member's value. One lookup order, the
+    /// one codegen's enum table has: the module's own enum member by its
+    /// declaration (a string is a string, a number a number, a computed one
+    /// either). An `Expr::EnumMember` with no such own member is an imported
+    /// one that `perry_hir::fix_imported_enums` already resolved before this
+    /// walk: it writes `EnumMember` only for a numeric member (a string member
+    /// is inlined as `Expr::String`, a computed one is left a property read),
+    /// and any other member would fail codegen. So it is a number.
+    pub(crate) fn enum_member_prim(&self, mi: u32, enum_name: &str, member_name: &str) -> u16 {
+        use perry_hir::EnumValue;
+        match self.modules[mi as usize]
+            .1
+            .enums
+            .iter()
+            .filter(|e| e.name == enum_name)
+            .find_map(|e| e.members.iter().find(|m| m.name == member_name))
+            .map(|m| &m.value)
+        {
+            Some(EnumValue::String(_)) => prim::STR,
+            Some(EnumValue::Computed) => prim::NUM | prim::STR,
+            Some(EnumValue::Number(_)) | None => prim::NUM,
+        }
+    }
+
     /// The node of a numeric literal: a shared node per integer value,
     /// carrying its point interval (`model::range`), or the Number node.
     pub fn num_literal(&mut self, v: f64) -> NodeId {
