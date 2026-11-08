@@ -996,11 +996,11 @@ function buildImports() {
       try_start: () => { tryDepth++; },
       try_end: () => { if (tryDepth > 0) tryDepth--; },
       throw_value: (val) => { currentException = val; },
-      has_exception: () => currentException !== null ? 1 : 0,
+      has_exception: () => currentException !== NO_EXCEPTION ? 1 : 0,
       get_exception: () => {
         const e = currentException;
-        currentException = null;
-        return e !== null ? e : u64ToF64(TAG_UNDEFINED);
+        currentException = NO_EXCEPTION;
+        return e !== NO_EXCEPTION ? e : u64ToF64(TAG_UNDEFINED);
       },
 
       // ===== Phase 4: URL =====
@@ -2133,8 +2133,8 @@ const __memDispatch = {
   try_start: () => { tryDepth++; },
   try_end: () => { if (tryDepth > 0) tryDepth--; },
   throw_value: (val) => { currentException = val; },
-  has_exception: () => currentException !== null ? 1 : 0,
-  get_exception: () => { const e = currentException; currentException = null; return e !== null ? e : undefined; },
+  has_exception: () => currentException !== NO_EXCEPTION ? 1 : 0,
+  get_exception: () => { const e = currentException; currentException = NO_EXCEPTION; return e !== NO_EXCEPTION ? e : undefined; },
 
   // URL — args are plain JS values (u is the URL object itself)
   url_parse: (urlStr) => { try { return new URL(String(urlStr)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
@@ -2613,7 +2613,8 @@ self.onmessage = async function(e) {
 
 // Exception state for try/catch bridge
 let tryDepth = 0;
-let currentException = null;
+const NO_EXCEPTION = Symbol('no exception');
+let currentException = NO_EXCEPTION;
 
 // ===== Perry UI Runtime (DOM-based, for --target wasm) =====
 // Ported from perry-codegen-js/web_runtime.js — maps perry/ui widgets to DOM elements.
@@ -4916,9 +4917,9 @@ const __uiMethodMap = {
   addOverlay: "perry_ui_widget_add_overlay",
 };
 
-function __callHostFunction(fn, args) {
+function __callHostFunction(fn, args, receiver = undefined) {
   try {
-    return Reflect.apply(fn, undefined, args.map(__hostCallback));
+    return Reflect.apply(fn, receiver, args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
@@ -4938,22 +4939,18 @@ function __hostCallback(value) {
 }
 
 function __classDispatch(objVal, mname, rawArgs) {
-  // objVal and rawArgs are already plain JS values (decoded by __bitsToJsValue in mem_call)
-  // Primitive/built-in fast-path (Issue #133 item 1): plain strings/numbers have no
-  // __class__ and aren't in __uiMethodMap, so method calls like `str.charCodeAt(i)`
-  // previously fell through and returned undefined. Route to the native prototype.
   if (typeof objVal === 'string') {
     const fn = String.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs);
+    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (typeof objVal === 'number') {
     const fn = Number.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs);
+    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (Array.isArray(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure
     // handle) are routed through __memDispatch before reaching here — this fallback
     // catches methods the codegen doesn't special-case (at, findLast, flat, etc.).
     const fn = Array.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs.map(__hostCallback));
+    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   }
   // 1) Try class method table (for user-defined classes)
   // WASM functions use i64 (BigInt) params/returns
@@ -4973,9 +4970,13 @@ function __classDispatch(objVal, mname, rawArgs) {
     }
   }
   if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')) {
-    const method = objVal[mname];
-    if (typeof method === 'function') {
-      return Reflect.apply(method, objVal, rawArgs.map(__hostCallback));
+    try {
+      const method = objVal[mname];
+      if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
+    } catch (error) {
+      if (tryDepth === 0) throw error;
+      currentException = error;
+      return undefined;
     }
   }
   // 2) Try UI widget/state method dispatch

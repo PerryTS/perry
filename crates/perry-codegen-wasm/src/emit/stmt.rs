@@ -56,6 +56,9 @@ impl<'a> FuncEmitCtx<'a> {
                 } else if in_returning_func {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
+                for _ in &self.exception_handlers {
+                    func.instruction(&Instruction::Call(self.rt().try_end));
+                }
                 func.instruction(&Instruction::Return);
             }
             Stmt::If {
@@ -323,16 +326,19 @@ impl<'a> FuncEmitCtx<'a> {
                 catch,
                 finally,
             } => {
-                // Bridge-based exception handling:
-                // try_start(); <try body>; try_end();
-                // if has_exception(): <bind catch param>; <catch body>
-                // <finally body>
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall_void(func, "try_start", 0);
 
+                func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                self.block_depth += 1;
+                self.exception_handlers
+                    .push((self.block_depth, self.frame_bytes()));
                 for s in body {
                     self.emit_stmt(func, s, in_returning_func);
                 }
+                self.exception_handlers.pop();
+                self.block_depth -= 1;
+                func.instruction(&Instruction::End);
 
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall_void(func, "try_end", 0);

@@ -11,6 +11,29 @@ impl<'a> FuncEmitCtx<'a> {
         self.emitter.rt.as_ref().unwrap()
     }
 
+    pub(super) fn frame_bytes(&self) -> u32 {
+        (self.current_frame_size + self.frame_stack.iter().sum::<u32>()) * 8
+    }
+
+    pub(super) fn emit_exception_guard(&self, func: &mut Function) {
+        let Some(&(depth, entry_bytes)) = self.exception_handlers.last() else {
+            return;
+        };
+        func.instruction(&Instruction::Call(self.rt().has_exception));
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        // Abandon unfinished argument frames before transferring to the handler.
+        let unwind_bytes = self.frame_bytes() - entry_bytes;
+        if unwind_bytes > 0 {
+            let sp = self.emitter.nan_temp_global;
+            func.instruction(&Instruction::GlobalGet(sp));
+            func.instruction(&Instruction::I32Const(unwind_bytes as i32));
+            func.instruction(&Instruction::I32Sub);
+            func.instruction(&Instruction::GlobalSet(sp));
+        }
+        func.instruction(&Instruction::Br(self.block_depth - depth + 1));
+        func.instruction(&Instruction::End);
+    }
+
     /// Emit a bridge function call via WASM memory (Firefox NaN-safe, reentrant-safe).
     /// Call pattern: emit_store_arg(0, ..), emit_store_arg(1, ..), ..., emit_memcall(name, N).
     /// Handles stack pointer save/advance/restore automatically.
@@ -38,11 +61,7 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::Call(self.rt().mem_call));
         func.instruction(&Instruction::Drop);
-        // Read result from base_addr via i64, then convert to f64.
-        // NOTE: F64ReinterpretI64 canonicalizes NaN in Firefox, so NaN-boxed
-        // bridge results lose their payload here. This is acceptable for values
-        // that go to locals/arithmetic. For values that go to emit_store_arg,
-        // the store will re-read from memory via the slot address.
+        // Read tagged results as i64 so their NaN payload stays intact.
         func.instruction(&Instruction::GlobalGet(sp));
         func.instruction(&Instruction::I32Const(frame_bytes));
         func.instruction(&Instruction::I32Sub);
@@ -58,6 +77,12 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::GlobalSet(sp));
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
+        if !matches!(
+            bridge_fn_name,
+            "try_start" | "try_end" | "has_exception" | "get_exception" | "throw_value"
+        ) {
+            self.emit_exception_guard(func);
+        }
     }
 
     pub(super) fn emit_memcall_void(
@@ -87,6 +112,12 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::GlobalSet(sp));
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
+        if !matches!(
+            bridge_fn_name,
+            "try_start" | "try_end" | "has_exception" | "get_exception" | "throw_value"
+        ) {
+            self.emit_exception_guard(func);
+        }
     }
 
     pub(super) fn emit_memcall_i32(
@@ -115,5 +146,11 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::GlobalSet(sp));
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
+        if !matches!(
+            bridge_fn_name,
+            "try_start" | "try_end" | "has_exception" | "get_exception" | "throw_value"
+        ) {
+            self.emit_exception_guard(func);
+        }
     }
 }
