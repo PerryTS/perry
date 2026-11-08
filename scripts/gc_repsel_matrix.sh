@@ -566,6 +566,16 @@ for rec in "${ARMS[@]}"; do
     id="$(arm_field "$rec" 1)"
     case ",$SELECTED," in *",$id,"*) ;; *) continue ;; esac
     cenv="$(arm_field "$rec" 2)"
+    # Auto-optimized links install the GC diagnostics (the trace hook and the
+    # diagnostic minor collection that runs the evacuation verifier) only when
+    # the COMPILE asks for them (gc_diagnostics_requested). Every arm is
+    # measured through PERRY_GC_TRACE/PERRY_GC_DIAG at run time, so every arm
+    # must be compiled with PERRY_GC_DIAG=1 too, or the liveness gate measures
+    # a binary that cannot report and most cells are inert. PERRY_GC_TRACE is
+    # NOT set at compile time: it would switch the link to the _instr archives.
+    # shipped_default is the control: compiled with the old env (no GC env at
+    # all) so the shipped collector stays exercised; it is not liveness-gated.
+    if [ "$id" != shipped_default ]; then cenv="${cenv:+$cenv }PERRY_GC_DIAG=1"; fi
     slug="$(printf '%s' "${cenv:-_base}" | tr -c 'A-Za-z0-9' '_')"
     fixture_group=0
     # safepoint_minor has the same base compile env; never share its binaries
