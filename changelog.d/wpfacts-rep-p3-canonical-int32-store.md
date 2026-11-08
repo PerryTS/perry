@@ -1,0 +1,1 @@
+A local that whole-program facts prove is int32 stores its value with a plain `fptosi` and no INT32 tag test (representation RFC §10.5, phase P3: a proven Number is a canonical double). Check mode (`PERRY_VERIFY_FACTS=1`) now rejects an INT32 box at these stores. `PERRY_WP_REP_P3=0` restores the tag test.
