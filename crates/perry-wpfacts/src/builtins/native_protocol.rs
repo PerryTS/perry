@@ -702,19 +702,16 @@ pub(super) fn native_method(
         // methods); a key absent on both is no callee (the call throws).
         // Parked: a later write of the key onto `Array.prototype` (or one that
         // may reach it) replays the call as the opaque written member.
-        ("Array", n)
-            if members::own(Family::Array, n).is_none() && !native_written(m, np, a) =>
-        {
-            m.native_missing.push((np, a, NativeMiss::Call(origin, call)));
+        ("Array", n) if members::own(Family::Array, n).is_none() && !native_written(m, np, a) => {
+            m.native_missing
+                .push((np, a, NativeMiss::Call(origin, call)));
             match members::member(Family::Object, n) {
                 Some(Mem::Fn) => {
                     let op = m.tok(TokKind::ObjectProto);
                     proto_method(m, op, origin, Key::Named(a), call);
                 }
                 None => {}
-                Some(_) => {
-                    unknown_method(m, call, &format!("argument of native {native}.{name}"))
-                }
+                Some(_) => unknown_method(m, call, &format!("argument of native {native}.{name}")),
             }
         }
         (_, "toString") => ret_prim(m, call, prim::STR),

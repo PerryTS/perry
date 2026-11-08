@@ -24,6 +24,7 @@ use crate::model::*;
 
 #[path = "solve/apply.rs"]
 mod apply;
+mod arr_len;
 mod builtin_fields;
 
 #[path = "solve/store.rs"]
@@ -1294,9 +1295,8 @@ impl Model {
     /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
     /// passed to unknown code: it escapes.
     pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
-        let unknown = t == TOP
-            || self.is_marker(t)
-            || matches!(self.toks[t as usize], TokKind::Bound(_));
+        let unknown =
+            t == TOP || self.is_marker(t) || matches!(self.toks[t as usize], TokKind::Bound(_));
         if unknown {
             self.sink_node(lhs, reason);
             match self.toks[t as usize] {
@@ -1474,6 +1474,7 @@ impl Model {
             }
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
+            Cons::LenIndex { lo, hi } => format!("lenindex {n} {lo} {hi}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))

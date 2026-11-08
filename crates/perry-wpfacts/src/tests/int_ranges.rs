@@ -122,3 +122,123 @@ fn a_parameter_covers_every_call() {
     );
     assert!(covers(&r, "p", -2, 40), "p: {:?}", r["p"]);
 }
+
+#[test]
+fn an_array_literal_keeps_its_length_until_something_moves_it() {
+    let r = ranges(
+        "const K = [-33, -31, -18, -14, 14, 18, 31, 33];\n\
+         const G: number[] = [1, 2, 3];\n\
+         function f(sq: number): number {\n\
+           let s = 0;\n\
+           for (let j = 0; j < K.length; j++) { const kd = K[j]; s += kd * sq; }\n\
+           for (let h = 0; h < G.length; h++) { const gd = G[h]; s += gd; }\n\
+           return s;\n\
+         }\n\
+         G.push(4);\n\
+         K[3] = 7;\n\
+         console.log(f(2), f(3));",
+    );
+    // The in-range store `K[3] = 7` keeps K's length; widening stops the
+    // climb at the ladder's next step.
+    let (lo, hi) = r["j"].expect("j is bounded by K.length");
+    assert!(lo <= 0 && (8..=15).contains(&hi), "j: {:?}", r["j"]);
+    // `push` moves G's length: its counter has no bound.
+    assert_eq!(r["h"], None, "h: {:?}", r["h"]);
+}
+
+#[test]
+fn an_index_store_past_the_birth_length_moves_it() {
+    let r = ranges(
+        "const K = [1, 2, 3, 4];\n\
+         function g(i: number): number { let s = 0; for (let j = 0; j < K.length; j++) s += K[j]; return s + i; }\n\
+         function put(i: number): void { K[i] = 0; }\n\
+         put(2); put(9);\n\
+         console.log(g(1));",
+    );
+    assert_eq!(r["j"], None, "j: {:?}", r["j"]);
+}
+
+#[test]
+fn a_length_store_or_an_escape_moves_it() {
+    let r = ranges(
+        "const K = [1, 2, 3, 4];\n\
+         const L = [1, 2, 3, 4];\n\
+         function g(): number { let s = 0; for (let j = 0; j < K.length; j++) s += j; for (let q = 0; q < L.length; q++) s += q; return s; }\n\
+         K.length = 100;\n\
+         Object.defineProperty(L, \"length\", { value: 1 });\n\
+         console.log(g());",
+    );
+    assert_eq!(r["j"], None, "j: {:?}", r["j"]);
+    assert_eq!(r["q"], None, "q: {:?}", r["q"]);
+}
+
+#[test]
+fn an_array_unknown_code_holds_has_no_length() {
+    let r = ranges(
+        "const M = [1, 2, 3, 4];\n\
+         function g(): number { let s = 0; for (let w = 0; w < M.length; w++) s += w; return s; }\n\
+         (globalThis as any).someHostHook?.(M);\n\
+         setTimeout(() => console.log(g()), 0);",
+    );
+    assert_eq!(r["w"], None, "w: {:?}", r["w"]);
+}
+
+#[test]
+fn reflection_and_aliases_move_the_length() {
+    let r = ranges(
+        "const A = [1, 2, 3, 4];\n\
+         const B = [1, 2, 3, 4];\n\
+         const C = [1, 2, 3, 4];\n\
+         const D = [1, 2, 3, 4];\n\
+         const E = [1, 2];\n\
+         function lens(): number {\n\
+           let s = 0;\n\
+           for (let a = 0; a < A.length; a++) s += a;\n\
+           for (let b = 0; b < B.length; b++) s += b;\n\
+           const alias: number[] = C;\n\
+           for (let c = 0; c < C.length; c++) s += c;\n\
+           for (let d = 0; d < D.length; d++) s += d;\n\
+           const pick = s > 3 ? E : A;\n\
+           for (let e = 0; e < pick.length; e++) s += e;\n\
+           alias.splice(0, 0, 9, 9);\n\
+           return s;\n\
+         }\n\
+         Reflect.set(A, \"length\", 50);\n\
+         Object.assign(B, [0, 0, 0, 0, 0, 0, 0]);\n\
+         const k: string = String(Date.now() % 2);\n\
+         (D as any)[k + \"0\"] = 1;\n\
+         console.log(lens());",
+    );
+    assert_eq!(r["a"], None, "Reflect.set length: {:?}", r["a"]);
+    assert_eq!(r["b"], None, "Object.assign: {:?}", r["b"]);
+    assert_eq!(r["c"], None, "splice through an alias: {:?}", r["c"]);
+    assert_eq!(r["d"], None, "computed-key store: {:?}", r["d"]);
+    assert_eq!(
+        r["e"], None,
+        "a holder of two arrays, one moved: {:?}",
+        r["e"]
+    );
+}
+
+#[test]
+fn a_holder_of_two_fixed_arrays_joins_their_lengths() {
+    let r = ranges(
+        "const P = [1, 2];\n\
+         const Q = [1, 2, 3, 4, 5, 6, 7, 8];\n\
+         function f(x: number): number { const pick = x > 0 ? Q : P; let s = 0; for (let e = 0; e < pick.length; e++) s += pick[e]; return s; }\n\
+         console.log(f(1), f(-1));",
+    );
+    let (lo, hi) = r["e"].expect("e is bounded by both lengths");
+    assert!(lo <= 0 && hi >= 8, "e covers 0..=8: {:?}", r["e"]);
+}
+
+#[test]
+fn a_pop_moves_the_length() {
+    let r = ranges(
+        "const S: number[] = [1, 2, 3, 4, 5];\n\
+         function f(): number { let s = 0; for (let p = 0; p < S.length; p++) { s += p; S.pop(); } return s; }\n\
+         console.log(f());",
+    );
+    // Without the pop S's length would bound `p` to 0..=5.
+    assert!(r["p"].is_none_or(|(_, hi)| hi > 5), "p: {:?}", r["p"]);
+}

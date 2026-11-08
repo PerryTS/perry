@@ -241,6 +241,9 @@ fn holder_entry_follows_every_chain_change() {
         let lines: Vec<&str> = stdout.lines().collect();
         assert_eq!(lines.len(), 17, "n={n}: expected 17 checks:\n{stdout}");
         let failed: Vec<&&str> = lines.iter().filter(|l| !l.ends_with(" ok")).collect();
-        assert!(failed.is_empty(), "n={n}: wrong reads {failed:?}\n{stdout}\n{stderr}");
+        assert!(
+            failed.is_empty(),
+            "n={n}: wrong reads {failed:?}\n{stdout}\n{stderr}"
+        );
     }
 }

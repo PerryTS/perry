@@ -64,13 +64,22 @@ console.log(one(10), two(10));
 fn a_one_access_body_has_no_region_and_reads_through_the_record() {
     let ir = ir(MIXED);
     let one = function_body(&ir, "__one");
-    assert!(!has_label(&one, "rloop."), "one record access must not pay for a region:\n{one}");
-    assert!(has_label(&one, "l2c."), "the read goes through the record arm:\n{one}");
+    assert!(
+        !has_label(&one, "rloop."),
+        "one record access must not pay for a region:\n{one}"
+    );
+    assert!(
+        has_label(&one, "l2c."),
+        "the read goes through the record arm:\n{one}"
+    );
 }
 
 #[test]
 fn a_two_access_body_keeps_its_region() {
     let ir = ir(MIXED);
     let two = function_body(&ir, "__two");
-    assert!(has_label(&two, "rloop."), "two bare accesses keep the region:\n{two}");
+    assert!(
+        has_label(&two, "rloop."),
+        "two bare accesses keep the region:\n{two}"
+    );
 }

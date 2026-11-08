@@ -106,6 +106,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         buffer_alias::invalidate_buffer_alias_for_read(ctx, object, property);
     }
+    if let Some(value) = crate::codegen::facts_const_length::lower(ctx, expr)? {
+        return Ok(value);
+    }
     // `split("literal")[constant].length` on a scalar-replaced split can
     // read the precomputed numeric length directly. The split part itself was
     // never observable as a string, so materializing a StringHeader would only

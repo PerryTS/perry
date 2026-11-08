@@ -1035,7 +1035,13 @@ impl<'a> Gen<'a> {
                     // Symbol.hasInstance is a protocol method, called with
                     // the left-hand side.
                     let r = self.m.reason("Symbol.hasInstance");
-                    self.m.cons(tv, Cons::HasInstance { reason: r, arg: lhs });
+                    self.m.cons(
+                        tv,
+                        Cons::HasInstance {
+                            reason: r,
+                            arg: lhs,
+                        },
+                    );
                 }
                 self.prim_node(prim::BOOL)
             }
@@ -1580,6 +1586,9 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_birth(mi, "lit", true);
+                if self.arr_lengths {
+                    self.m.arr_birth_len.insert(tm, elems.len() as i64);
+                }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {

@@ -45,7 +45,12 @@ fn program(holders: &str, store: &str) -> String {
 
 #[test]
 fn number_key_store_on_builtin_is_own_field() {
-    for holders in ["Object, Math", "Object, Array", "Math, JSON", "Object.keys, Math"] {
+    for holders in [
+        "Object, Math",
+        "Object, Array",
+        "Math, JSON",
+        "Object.keys, Math",
+    ] {
         let (p, dump) = v_proven(&program(holders, "h[i] = n;"), "/*A*/");
         assert!(p, "[{holders}]: an own index, no sink: n.v proven\n{dump}");
     }
@@ -67,7 +72,11 @@ fn read_sees_the_stored_value() {
     assert!(p, "m is no stored value\n{dump}");
     let pf = facts_of(src);
     let at = src.find("back.v)").unwrap() as u32;
-    let s = pf.sites.iter().find(|s| s.key == "v" && s.byte_offset >= at).expect("back.v");
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "v" && s.byte_offset >= at)
+        .expect("back.v");
     assert!(
         !matches!(s.verdict, Verdict::No(ref w) if w.contains("no receiver")),
         "back.v reads the stored N\n{dump}"
