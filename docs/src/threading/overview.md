@@ -421,6 +421,12 @@ Message cloning preserves an Error's own data `cause`, including non-enumerable
 and explicitly undefined values, within the existing clone graph. Shared causes,
 back-references and self-references keep their identity. The data cause is
 captured before reentrant stack accessors run. Cause accessors are
-ignored without invoking their getters. Uncaught Worker diagnostic accessor and
-circular-reference formatting have a separate policy; this does not add support
-for those diagnostic cases.
+ignored without invoking their getters.
+
+Uncaught Worker diagnostics use a separate prototype-first property snapshot.
+Cause getters run with the original Error receiver, successful undefined values
+remain own properties, and descriptor attributes survive delivery. A failing
+cause getter falls back to ordinary cloning without custom diagnostic code.
+Synchronous eval-entry exceptions observe stack decoration before this snapshot;
+errors from later callbacks do not repeat that execution phase. Diagnostic getters
+run before agent cleanup, while cooperative Worker termination remains active.
