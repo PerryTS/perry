@@ -7,7 +7,76 @@
 use super::*;
 
 impl<'a> FuncEmitCtx<'a> {
+    fn emit_guarded_body(
+        &mut self,
+        func: &mut Function,
+        body: &[Stmt],
+        finally: Option<&[Stmt]>,
+        returning: bool,
+    ) {
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall_void(func, "try_start", 0);
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+        self.block_depth += 1;
+        self.exception_handlers.push((
+            self.block_depth,
+            self.frame_bytes(),
+            finally.map(<[Stmt]>::to_vec),
+        ));
+        for stmt in body {
+            self.emit_stmt(func, stmt, returning);
+        }
+        self.exception_handlers.pop();
+        self.block_depth -= 1;
+        func.instruction(&Instruction::End);
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall_void(func, "try_end", 0);
+    }
+
+    fn emit_exit_scopes(&mut self, func: &mut Function, target: u32, returning: bool) {
+        let handlers = self.exception_handlers.clone();
+        while self
+            .exception_handlers
+            .last()
+            .is_some_and(|(depth, _, _)| *depth > target)
+        {
+            let (_, _, finally) = self.exception_handlers.pop().unwrap();
+            func.instruction(&Instruction::Call(self.rt().try_end));
+            if let Some(body) = finally {
+                self.emit_guarded_body(func, &body, None, returning);
+                self.emit_exception_guard(func);
+            }
+        }
+        self.exception_handlers = handlers;
+    }
+
+    fn emit_finally(&mut self, func: &mut Function, body: &[Stmt], returning: bool) {
+        // Keep both presence and payload on the operand stack: nullish throws are valid.
+        func.instruction(&Instruction::Call(self.rt().has_exception));
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall(func, "get_exception", 0);
+        self.emit_guarded_body(func, body, None, returning);
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        func.instruction(&Instruction::Call(self.rt().has_exception));
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::I32And);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        self.block_depth += 1;
+        self.emit_frame_begin(func, 1);
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_memcall_void(func, "throw_value", 1);
+        self.block_depth -= 1;
+        func.instruction(&Instruction::End);
+    }
+
     pub(super) fn emit_stmt(&mut self, func: &mut Function, stmt: &Stmt, in_returning_func: bool) {
+        self.returns_value = in_returning_func;
         match stmt {
             Stmt::Let { id, init, .. } => {
                 if let Some(init_expr) = init {
@@ -56,9 +125,7 @@ impl<'a> FuncEmitCtx<'a> {
                 } else if in_returning_func {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
-                for _ in &self.exception_handlers {
-                    func.instruction(&Instruction::Call(self.rt().try_end));
-                }
+                self.emit_exit_scopes(func, 0, in_returning_func);
                 func.instruction(&Instruction::Return);
             }
             Stmt::If {
@@ -280,6 +347,7 @@ impl<'a> FuncEmitCtx<'a> {
                 // (each pushes block_depth without a matching break_depth), which
                 // in the worst case turns `break` into `continue` and hangs.
                 if let Some(&target) = self.break_depth.last() {
+                    self.emit_exit_scopes(func, target, in_returning_func);
                     let rel = self.block_depth.saturating_sub(target);
                     func.instruction(&Instruction::Br(rel));
                 } else {
@@ -288,6 +356,7 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Stmt::Continue => {
                 if let Some(&target) = self.loop_depth.last() {
+                    self.emit_exit_scopes(func, target, in_returning_func);
                     let rel = self.block_depth.saturating_sub(target);
                     func.instruction(&Instruction::Br(rel));
                 } else {
@@ -299,6 +368,7 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(&(_, break_d, _)) =
                     self.label_stack.iter().rev().find(|(l, _, _)| l == label)
                 {
+                    self.emit_exit_scopes(func, break_d, in_returning_func);
                     let rel = self.block_depth - break_d;
                     func.instruction(&Instruction::Br(rel));
                 }
@@ -307,79 +377,51 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(&(_, _, continue_d)) =
                     self.label_stack.iter().rev().find(|(l, _, _)| l == label)
                 {
+                    self.emit_exit_scopes(func, continue_d, in_returning_func);
                     let rel = self.block_depth - continue_d;
                     func.instruction(&Instruction::Br(rel));
                 }
             }
             Stmt::Throw(expr) => {
-                // Set exception in bridge and return
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, expr);
                 self.emit_memcall_void(func, "throw_value", 1);
-                if in_returning_func {
-                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                    func.instruction(&Instruction::Return);
-                }
+                self.emit_exception_guard(func);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall_void(func, "try_start", 0);
-
-                func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-                self.block_depth += 1;
-                self.exception_handlers
-                    .push((self.block_depth, self.frame_bytes()));
-                for s in body {
-                    self.emit_stmt(func, s, in_returning_func);
-                }
-                self.exception_handlers.pop();
-                self.block_depth -= 1;
-                func.instruction(&Instruction::End);
-
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall_void(func, "try_end", 0);
-
-                // Check for exception and execute catch block
+                self.emit_guarded_body(func, body, finally.as_deref(), in_returning_func);
                 if let Some(catch_clause) = catch {
-                    self.emit_frame_begin(func, 0);
-                    self.emit_memcall_i32(func, "has_exception", 0);
+                    func.instruction(&Instruction::Call(self.rt().has_exception));
                     func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
                     self.block_depth += 1;
-
-                    // Bind catch parameter
+                    self.emit_frame_begin(func, 0);
+                    self.emit_memcall(func, "get_exception", 0);
                     if let Some((param_id, _)) = &catch_clause.param {
-                        self.emit_frame_begin(func, 0);
-                        self.emit_memcall(func, "get_exception", 0);
-                        if let Some(&local_idx) = self.local_map.get(param_id) {
-                            func.instruction(&Instruction::LocalSet(local_idx));
+                        if let Some(&idx) = self.local_map.get(param_id) {
+                            func.instruction(&Instruction::LocalSet(idx));
                         } else {
                             func.instruction(&Instruction::Drop);
                         }
                     } else {
-                        // No param, just clear the exception
-                        self.emit_frame_begin(func, 0);
-                        self.emit_memcall(func, "get_exception", 0);
                         func.instruction(&Instruction::Drop);
                     }
-
-                    for s in &catch_clause.body {
-                        self.emit_stmt(func, s, in_returning_func);
-                    }
-
+                    self.emit_guarded_body(
+                        func,
+                        &catch_clause.body,
+                        finally.as_deref(),
+                        in_returning_func,
+                    );
                     self.block_depth -= 1;
                     func.instruction(&Instruction::End);
                 }
-
-                // Finally block (unconditional)
-                if let Some(finally_stmts) = finally {
-                    for s in finally_stmts {
-                        self.emit_stmt(func, s, in_returning_func);
-                    }
+                if let Some(body) = finally {
+                    self.emit_finally(func, body, in_returning_func);
                 }
+                self.emit_exception_guard(func);
             }
             Stmt::Switch {
                 discriminant,
@@ -497,7 +539,7 @@ pub(super) fn has_return(stmt: &Stmt) -> bool {
                 || catch
                     .as_ref()
                     .is_some_and(|c| c.body.iter().any(has_return))
-                || finally.as_ref().is_some_and(|f| f.iter().any(has_return))
+                || finally.as_deref().is_some_and(|f| f.iter().any(has_return))
         }
         Stmt::Switch { cases, .. } => cases.iter().any(|c| c.body.iter().any(has_return)),
         _ => false,

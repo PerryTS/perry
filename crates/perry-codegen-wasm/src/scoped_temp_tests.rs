@@ -7,7 +7,11 @@ fn run_module(module: Module) -> String {
 }
 
 fn run_module_after(module: Module, after: &str) -> String {
-    let output = emit::compile_to_wasm_with_async(&[("scoped".into(), module)]);
+    run_modules_after(&[("scoped".into(), module)], after)
+}
+
+fn run_modules_after(modules: &[(String, Module)], after: &str) -> String {
+    let output = emit::compile_to_wasm_with_async(modules);
     let b64 = BASE64.encode(output.wasm_bytes);
     let script = format!(
         r#"
@@ -531,5 +535,159 @@ assert.equal(__memDispatch.has_exception(),0);
 "#
         ),
         "0\n1\n2\n0\n6\nloop caught\ngood\nouter caught\n15"
+    );
+}
+
+#[test]
+fn host_interop_global_getters_and_unhandled_callees_stop_at_catch() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const create = globalThis.Function;
+const install = create('Object.defineProperty(globalThis, "failingGlobal", {get() { throw 9; }, configurable: true})');
+install();
+const configure = create('const d = Object.getOwnPropertyDescriptor(globalThis, "Promise"); Object.defineProperty(globalThis, "Promise", {get() { throw 10; }, configurable: true}); return () => Object.defineProperty(globalThis, "Promise", d)');
+const restore = configure();
+try { const P = Promise; console.log(P); }
+catch (error) { console.log(error); }
+restore();
+try { console.log(globalThis.failingGlobal); console.log('wrong getter'); }
+catch (error) { console.log(error); }
+const decode = globalThis.decodeURIComponent;
+function helper() { decode('%'); console.log('wrong helper'); }
+try { helper(); console.log('wrong caller'); }
+catch (error) { console.log('helper caught'); }
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "10\n9\nhelper caught"
+    );
+}
+
+#[test]
+fn host_interop_explicit_throw_and_loop_exits_release_try_scopes() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+function throws() {
+  try { throw 7; }
+  catch (error) { return error; }
+}
+console.log(throws());
+for (let i = 0; i < 3; i++) {
+  try { if (i === 0) continue; break; }
+  finally { console.log('cleanup'); }
+}
+try { for (let j = 0; j < 2; j++) { if (j === 0) continue; break; } throw 8; }
+catch (error) { console.log(error); }
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "7\ncleanup\ncleanup\n8"
+    );
+}
+
+#[test]
+fn host_interop_finally_preserves_and_replaces_pending_completion() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const decode = globalThis.decodeURIComponent;
+try {
+  try { decode('%'); }
+  finally { console.log('cleanup one'); console.log('cleanup two'); }
+} catch (error) { console.log('outer caught'); }
+try {
+  try { throw 3; }
+  finally { throw 4; }
+} catch (error) { console.log(error); }
+function returned() {
+  try { return 'value'; }
+  finally { console.log('return cleanup'); }
+}
+console.log(returned());
+function override() { try { return 'old'; } finally { return 'new'; } }
+console.log(override());
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "cleanup one\ncleanup two\nouter caught\n4\nreturn cleanup\nvalue\nnew"
+    );
+}
+
+#[test]
+fn host_interop_imported_callees_stop_before_following_effects() {
+    for import in [
+        "import { fail } from './helper';",
+        "import * as H from './helper';",
+    ] {
+        let call = if import.contains("* as") {
+            "H.fail()"
+        } else {
+            "fail()"
+        };
+        let sources = [
+            ("helper", "export function fail() { throw 7; console.log('wrong callee'); }".to_string()),
+            ("entry", format!("{import} try {{ {call}; console.log('wrong caller'); }} catch (error) {{ console.log(error); }}")),
+        ];
+        let modules: Vec<_> = sources
+            .iter()
+            .map(|(name, source)| {
+                let filename = format!("{name}.ts");
+                let ast = perry_parser::parse_typescript(source, &filename).unwrap();
+                let module = perry_hir::lower::lower_module(&ast, name, &filename).unwrap();
+                (name.to_string(), module)
+            })
+            .collect();
+        assert_eq!(
+            run_modules_after(
+                &modules,
+                "require('node:assert/strict').equal(tryDepth, 0);"
+            ),
+            "7"
+        );
+    }
+}
+
+#[test]
+fn host_interop_abrupt_scopes_and_function_signatures() {
+    assert_eq!(run_ts_after(r#"
+const decode = globalThis.decodeURIComponent;
+function noValue() { decode('%'); console.log('wrong void'); }
+function value() { decode('%'); return 'wrong value'; }
+try { noValue(); } catch (e) { console.log('void caught'); }
+try { console.log(value()); } catch (e) { console.log('value caught'); }
+class Fail { constructor() { decode('%'); console.log('wrong constructor'); } static run() { decode('%'); console.log('wrong static'); } }
+try { const f = new Fail(); } catch (e) { console.log('constructor caught'); }
+try { Fail.run(); } catch (e) { console.log('static caught'); }
+function nested() { try { try { return 1; } finally { console.log('inner final'); } } finally { console.log('outer final'); } }
+console.log(nested());
+try { try { throw 2; } catch (e) { throw 3; } finally { console.log('catch final'); } } catch (e) { console.log(e); }
+function overridden() { try { throw 4; } finally { return 5; } }
+console.log(overridden());
+outer: for (let i = 0; i < 2; i++) {
+ try { for (let j = 0; j < 2; j++) { if (j === 0) continue; break; } if (i === 0) continue outer; break outer; }
+ finally { console.log('label cleanup'); }
+}
+for(let i=0;i<2;i++) { try { throw 8; } finally { break; } }
+console.log('break suppressed');
+try { for(let i=0;i<2;i++) { if(i===0) continue; break; } throw 9; } catch(e) { console.log(e); }
+console.log(decode('done'));
+"#, r#"const a=require('node:assert/strict');a.equal(tryDepth,0);a.equal(__memDispatch.has_exception(),0);"#),"void caught\nvalue caught\nconstructor caught\nstatic caught\ninner final\nouter final\n1\ncatch final\n3\n5\nlabel cleanup\nlabel cleanup\nbreak suppressed\n9\ndone");
+}
+
+#[test]
+fn host_interop_throwing_callback_stops_the_host_iteration() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs: any = [1, 2, 3];
+let calls = 0;
+try { xs.findLast((value) => { calls++; throw 7; }); }
+catch (error) { console.log(error); }
+console.log(calls);
+"#
+        ),
+        "7\n1"
     );
 }

@@ -15,14 +15,15 @@ impl<'a> FuncEmitCtx<'a> {
         (self.current_frame_size + self.frame_stack.iter().sum::<u32>()) * 8
     }
 
-    pub(super) fn emit_exception_guard(&self, func: &mut Function) {
-        let Some(&(depth, entry_bytes)) = self.exception_handlers.last() else {
-            return;
-        };
+    pub(super) fn emit_exception_guard(&mut self, func: &mut Function) {
+        let handler = self
+            .exception_handlers
+            .last()
+            .map(|(depth, bytes, _)| (*depth, *bytes));
         func.instruction(&Instruction::Call(self.rt().has_exception));
         func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
         // Abandon unfinished argument frames before transferring to the handler.
-        let unwind_bytes = self.frame_bytes() - entry_bytes;
+        let unwind_bytes = self.frame_bytes() - handler.map_or(0, |(_, bytes)| bytes);
         if unwind_bytes > 0 {
             let sp = self.emitter.nan_temp_global;
             func.instruction(&Instruction::GlobalGet(sp));
@@ -30,7 +31,16 @@ impl<'a> FuncEmitCtx<'a> {
             func.instruction(&Instruction::I32Sub);
             func.instruction(&Instruction::GlobalSet(sp));
         }
-        func.instruction(&Instruction::Br(self.block_depth - depth + 1));
+        if let Some((depth, _)) = handler {
+            func.instruction(&Instruction::Br(self.block_depth - depth + 1));
+        } else {
+            self.emit_frame_begin(func, 0);
+            self.emit_memcall_void(func, "propagate_exception", 0);
+            if self.returns_value {
+                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+            }
+            func.instruction(&Instruction::Return);
+        }
         func.instruction(&Instruction::End);
     }
 
@@ -79,7 +89,12 @@ impl<'a> FuncEmitCtx<'a> {
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
         if !matches!(
             bridge_fn_name,
-            "try_start" | "try_end" | "has_exception" | "get_exception" | "throw_value"
+            "try_start"
+                | "try_end"
+                | "has_exception"
+                | "get_exception"
+                | "throw_value"
+                | "propagate_exception"
         ) {
             self.emit_exception_guard(func);
         }
@@ -114,7 +129,12 @@ impl<'a> FuncEmitCtx<'a> {
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
         if !matches!(
             bridge_fn_name,
-            "try_start" | "try_end" | "has_exception" | "get_exception" | "throw_value"
+            "try_start"
+                | "try_end"
+                | "has_exception"
+                | "get_exception"
+                | "throw_value"
+                | "propagate_exception"
         ) {
             self.emit_exception_guard(func);
         }
@@ -148,7 +168,12 @@ impl<'a> FuncEmitCtx<'a> {
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
         if !matches!(
             bridge_fn_name,
-            "try_start" | "try_end" | "has_exception" | "get_exception" | "throw_value"
+            "try_start"
+                | "try_end"
+                | "has_exception"
+                | "get_exception"
+                | "throw_value"
+                | "propagate_exception"
         ) {
             self.emit_exception_guard(func);
         }

@@ -62,6 +62,7 @@ impl WasmModuleEmitter {
         let wasm_returns_i64 =
             force_returning || hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.returns_value = wasm_returns_i64;
 
         for stmt in &hir_func.body {
             ctx.emit_stmt(&mut func, stmt, wasm_returns_i64);

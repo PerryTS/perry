@@ -177,6 +177,7 @@ impl WasmModuleEmitter {
             "error_message",
             "global_property",
             "global_receiver",
+            "propagate_exception",
             "regexp_new",
             "regexp_test",
             "number_coerce",
