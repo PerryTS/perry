@@ -738,11 +738,11 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
         TokKind::Func(f, _) => born_with_function_proto(m, *f).then_some(members::FN_PROTO_ONLY),
         _ => None,
     };
-    // A Map or Set iterator: past its own keys the chain reaches
-    // `%MapIteratorPrototype%` / `%SetIteratorPrototype%`, whose declared
-    // image members are locked (DEC 250); every other key may be added
-    // there: not final.
-    if let Some(holder) = what.and_then(members::iterator_prototype) {
+    // A Map or Set iterator, a RegExp, a Date: past its own keys the chain
+    // reaches `%MapIteratorPrototype%` / `%SetIteratorPrototype%` /
+    // `RegExp.prototype` / `Date.prototype`, whose declared image members
+    // are locked (DEC 250); every other key may be added there: not final.
+    if let Some(holder) = what.and_then(members::image_locked_prototype) {
         return image_member(m, holder, &m.atoms[a as usize]);
     }
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
@@ -825,8 +825,11 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         NativeFamily::Str => members::locked_read(Family::Str, None, name),
         NativeFamily::Array => members::locked_read(Family::Array, None, name),
         NativeFamily::Collection(w) => members::locked_read(Family::Collection, Some(w), name),
-        // RegExp.prototype is not in the lock: no member of it is final.
-        NativeFamily::RegExp => false,
+        // `RegExp.prototype` is sealed (DEC 250) and takes adds: an image
+        // member is final, an absent key is not (`locked_chain_read`'s
+        // predicate for a RegExp object).
+        NativeFamily::RegExp => members::image_locked_prototype("RegExp")
+            .is_some_and(|holder| image_member(m, holder, name)),
     }
 }
 

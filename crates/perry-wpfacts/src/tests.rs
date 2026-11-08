@@ -105,6 +105,7 @@ mod memo_context;
 mod named_accessors;
 mod native_accessor_get;
 mod native_array_proto;
+mod native_regexp_proto;
 mod native_coercion;
 mod native_construct;
 mod native_fs;
