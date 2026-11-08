@@ -874,7 +874,7 @@ fn emit_range_loop_accumulator_admission(
 /// Materialize the address half shared by packed clones and phase 3 ordinary
 /// counted loops. The returned box is a precise root, while the handle slot is
 /// refreshed from it after every fired loop poll.
-fn create_poll_refreshed_receiver_cache(
+pub(crate) fn create_poll_refreshed_receiver_cache(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
 ) -> Option<(String, String, String)> {
@@ -7973,6 +7973,13 @@ fn lower_for_after_init_impl(
         } else {
             false
         };
+    // b2: cold-arm descriptors for the loop's other array reads.
+    let cold_arm_installed = if !in_call_free_clone && !ordinary_receiver_descriptor_installed {
+        let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+        crate::expr::descriptor_read::install(ctx, body, &controls)
+    } else {
+        crate::expr::descriptor_read::Installed::none()
+    };
 
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
     // detect the simpler `i < n` shape where `n` is a statically proven
@@ -8375,6 +8382,7 @@ fn lower_for_after_init_impl(
 
     ctx.loop_targets.pop();
 
+    crate::expr::descriptor_read::uninstall(ctx, cold_arm_installed);
     if ordinary_receiver_descriptor_installed {
         let arr_id = hoisted_length_arr_id.expect("installed descriptor has a length receiver");
         let removed = ctx.receiver_descriptors.dematerialize(arr_id);
@@ -10488,7 +10496,10 @@ pub(crate) fn lower_while(
     }
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_while_impl(ctx, condition, body)
+        let installed = crate::expr::descriptor_read::install(ctx, body, &[condition]);
+        let r = lower_while_impl(ctx, condition, body);
+        crate::expr::descriptor_read::uninstall(ctx, installed);
+        r
     });
     super::region_loop::end(ctx, region);
     lowered
@@ -10575,7 +10586,10 @@ pub(crate) fn lower_do_while(
 ) -> Result<()> {
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_do_while_impl(ctx, body, condition)
+        let installed = crate::expr::descriptor_read::install(ctx, body, &[condition]);
+        let r = lower_do_while_impl(ctx, body, condition);
+        crate::expr::descriptor_read::uninstall(ctx, installed);
+        r
     });
     super::region_loop::end(ctx, region);
     lowered
