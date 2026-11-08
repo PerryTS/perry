@@ -687,7 +687,8 @@ impl<'a> Gen<'a> {
             // A sloppy function reads a nullish `this` as the global object
             // and boxes a primitive one, an object the model does not hold:
             // once a primitive arrives `this` is anything.
-            let global = self.tok_node(self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis)));
+            let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let global = self.tok_node(global_tok);
             for (test, from) in [
                 (crate::model::guard::NULLISH, global),
                 (crate::model::guard::BOXED, self.m.top_tok_node),
