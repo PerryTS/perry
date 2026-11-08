@@ -1,0 +1,1 @@
+Compose teardown reuses one container snapshot after session rollback for service and orphan discovery, preserving reverse dependency order, replica cleanup and project ownership. Containers arriving after the snapshot are discovered by a subsequent teardown; concurrent deployment and teardown require serialization or a repeated call.
