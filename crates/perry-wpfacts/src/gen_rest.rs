@@ -156,6 +156,32 @@ impl<'a> Gen<'a> {
                         }
                     }
                     self.prim_node(prim::NUM)
+                } else if let Some(recv) =
+                    o.filter(|_| perry_hir::folded_call::fs_receiver_dispatch(module, method))
+                {
+                    // A folded fs receiver's method no stream arm lowers is
+                    // the runtime dispatch on the receiver value: the method
+                    // call `recv.method(..args)`. The dispatch returns 0 for
+                    // a nullish receiver (no TypeError), reads a member of a
+                    // string or host handle for a call without arguments,
+                    // and gives undefined where it resolves no callee.
+                    let key = Key::Named(self.m.atom(method));
+                    let ret = self.mcall(recv, key, a, vec![]);
+                    let num = self.prim_node(prim::NUM);
+                    self.m.cons(
+                        recv,
+                        Cons::Guard {
+                            test: guard::NULLISH,
+                            from: num,
+                            dst: ret,
+                        },
+                    );
+                    if args.is_empty() {
+                        let member = self.load(recv, key);
+                        self.m.edge(member, ret);
+                    }
+                    self.m.add_prim(ret, prim::UNDEF);
+                    ret
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");

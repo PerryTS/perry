@@ -170,6 +170,22 @@ fn an_index_store_past_the_birth_length_moves_it() {
 }
 
 #[test]
+fn an_index_string_key_past_the_birth_length_moves_it() {
+    // The key holds Number 1 first and the constant "9" only later (through
+    // calls): the element store is already there when "9" arrives, so the
+    // index string itself must name its index (`Cons::LenIndex`).
+    let r = ranges(
+        "const K = [1, 2, 3, 4];\n\
+         function g(): number { let s = 0; for (let j = 0; j < K.length; j++) s += K[j]; return s; }\n\
+         function id(x: any): any { return x; }\n\
+         function put(k: any): void { K[k] = 0; }\n\
+         put(1); put(id(id(id(\"9\"))));\n\
+         console.log(g());",
+    );
+    assert!(unbounded(&r, "j"), "j: {:?}", r["j"]);
+}
+
+#[test]
 fn a_length_store_or_an_escape_moves_it() {
     let r = ranges(
         "const K = [1, 2, 3, 4];\n\

@@ -413,6 +413,13 @@ pub enum TmplKind {
 }
 
 impl TmplKind {
+    /// A typed array's storage (NUM elements, the B1 buffer rules): a
+    /// `%TypedArray%` instance or a host `Buffer` (`fs.readFileSync(path)`),
+    /// a `Uint8Array` whose prototype is `Buffer.prototype`.
+    pub fn typed_storage(&self) -> bool {
+        matches!(self, TmplKind::BObj { what: "TypedArray" | "Buffer", .. })
+    }
+
     /// Birth templates the facts are about (design section 2).
     pub fn is_fact_unit(&self) -> bool {
         matches!(
@@ -647,6 +654,16 @@ pub enum Key {
     Named(Atom),
     Any(KeyShapeId),
 }
+
+/// The string constants a node holds (`Node::strs`): `STRS_NONE`,
+/// `STRS_TOP` or `STRS_SET0 + i` for the interned atom set
+/// `Model::str_sets[i]` (sorted, at most `STRS_K` atoms).
+pub type StrSet = u32;
+pub const STRS_NONE: StrSet = 0;
+pub const STRS_TOP: StrSet = 1;
+pub const STRS_SET0: StrSet = 2;
+/// Past this many constants a node holds any string.
+pub const STRS_K: usize = 8;
 
 /// An interned key shape (`Model::key_shapes`); 0: any string.
 pub type KeyShapeId = u32;
@@ -1004,6 +1021,13 @@ pub struct Node {
     pub own_refuted: bool,
     pub delta: crate::delta::Pending,
     pub dprim: u16,
+    /// The string constants the node may hold (`StrSet`): `STRS_NONE`
+    /// without a string, `STRS_TOP` for any string, else an interned set of
+    /// at most `STRS_K` atoms (`Model::str_sets`). Nonzero exactly when
+    /// `prim` has `prim::STR`. It only grows.
+    pub strs: StrSet,
+    /// `strs` grew since the node was last popped.
+    pub dstrs: bool,
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
     pub in_wl: bool,
@@ -1493,6 +1517,9 @@ pub struct Model {
     pub bound_synth: crate::pts::FxHashSet<CallId>,
     /// (bound value, `new`) → its merged call.
     pub bound_merged: FxHashMap<(u32, bool), CallId>,
+    /// (receiver, member) → the one call a builtin method makes of that
+    /// member of the receiver (`collections::recv_call`).
+    pub recv_calls: FxHashMap<(Tok, Atom), CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,
@@ -1590,6 +1617,14 @@ pub struct Model {
     /// for: `true` the index store, `false` the computed-key one. A shared
     /// body's replay has its own key node.
     pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, bool)>,
+    /// (key node, store site, atom) a `StoreIndexed` named store has been
+    /// added for, by a string constant of the key (`Node::strs`).
+    pub str_store_done: crate::pts::FxHashSet<(NodeId, SiteId, Atom)>,
+    /// The interned string-constant sets (`StrSet`) and their index.
+    pub str_sets: Vec<Box<[Atom]>>,
+    pub str_set_index: crate::pts::FxHashMap<Box<[Atom]>, StrSet>,
+    /// One source node per string literal atom (`Gen::str_literal`).
+    pub str_literals: crate::pts::FxHashMap<Atom, NodeId>,
     /// For-in bodies that define a property under their key.
     pub for_in_defines: crate::pts::FxHashSet<FnIdx>,
     /// The key variable of every for-in body: a run's copy of it holds the

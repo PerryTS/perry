@@ -320,8 +320,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // so the bodies holding them keep their summaries: [1482, 1763, 1479,
     // 395]. Every escaped value's accessor functions escape (descriptor
     // reads, ESCACCESSORS): a getter and a setter descriptor walk per
-    // escaped value, charged in each round that escapes it.
-    assert_eq!(pf.round_work, [1719, 2122, 1854, 449], "{:?}", pf.units);
+    // escaped value, charged in each round that escapes it. SEEDKV: a
+    // string literal is its own source node holding its constant
+    // (`Gen::str_literal`), popped once: `a` and `m` hold "get" and "g",
+    // solved in rounds 0-2 (was [1719, 2122, 1854, 449]).
+    assert_eq!(pf.round_work, [1721, 2124, 1856, 449], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

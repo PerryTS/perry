@@ -667,8 +667,8 @@ impl<'a> Gen<'a> {
             Expr::Number(v) => self.num_literal(*v),
             Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
-            Expr::String(s) if self.guard_ranges => self.str_literal(s),
-            Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
+            Expr::String(s) => self.str_literal(s),
+            Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
@@ -1739,7 +1739,13 @@ impl<'a> Gen<'a> {
             }
             Expr::NewTarget => self.m.top_val("new.target"),
             Expr::ClassRef(name) => self.class_value(mi, name),
-            Expr::EnumMember { .. } => self.prim_node(prim::NUM | prim::STR),
+            Expr::EnumMember {
+                enum_name,
+                member_name,
+            } => {
+                let p = self.enum_member_prim(mi, enum_name, member_name);
+                self.prim_node(p)
+            }
             Expr::StaticFieldGet {
                 class_name,
                 field_name,
