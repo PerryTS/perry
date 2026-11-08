@@ -538,6 +538,29 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     );
                 }
             }
+            // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
+            // constructor (born with its statics, `install_builtin_constructor_statics`)
+            // and its prototype, matching Node's descriptor
+            // `{ value, writable:false, enumerable:false, configurable:false }`
+            // and its own-key position (`constructor`, `BYTES_PER_ELEMENT`, then
+            // `Uint8Array`'s base64/hex methods).
+            // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
+            // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
+            // `hasOwnProperty`, and the chained `Float64Array.prototype
+            // .BYTES_PER_ELEMENT` — resolve off these installed own properties.
+            if let Some(bytes) = super::install_static::typed_array_bytes_per_element(name) {
+                let bpe_key = crate::string::js_string_from_bytes(
+                    b"BYTES_PER_ELEMENT".as_ptr(),
+                    b"BYTES_PER_ELEMENT".len() as u32,
+                );
+                super::super::define_builtin_data_property(
+                    proto_obj,
+                    bpe_key,
+                    bytes,
+                    "BYTES_PER_ELEMENT".to_string(),
+                    super::super::PropertyAttrs::new(false, false, false),
+                );
+            }
             // #6674: the TC39 base64/hex conversion methods
             // (`toBase64`/`toHex`/`setFromBase64`/`setFromHex`) are Uint8Array-ONLY
             // (they don't exist on other typed arrays), so install them as own
@@ -550,36 +573,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 super::super::typed_array_proto_thunks::install_uint8array_base64_hex_proto_methods(
                     proto_obj,
                 );
-            }
-            // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
-            // constructor and its prototype, matching Node's descriptor
-            // `{ value, writable:false, enumerable:false, configurable:false }`.
-            // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
-            // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
-            // `hasOwnProperty`, and the chained `Float64Array.prototype
-            // .BYTES_PER_ELEMENT` — resolve off these installed own properties.
-            let ta_bytes_per_element = match name {
-                "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => Some(1.0),
-                "Int16Array" | "Uint16Array" | "Float16Array" => Some(2.0),
-                "Int32Array" | "Uint32Array" | "Float32Array" => Some(4.0),
-                "Float64Array" | "BigInt64Array" | "BigUint64Array" => Some(8.0),
-                _ => None,
-            };
-            if let Some(bytes) = ta_bytes_per_element {
-                let bpe_attrs = super::super::PropertyAttrs::new(false, false, false);
-                for target in [closure_ptr as *mut ObjectHeader, proto_obj] {
-                    let bpe_key = crate::string::js_string_from_bytes(
-                        b"BYTES_PER_ELEMENT".as_ptr(),
-                        b"BYTES_PER_ELEMENT".len() as u32,
-                    );
-                    super::super::define_builtin_data_property(
-                        target,
-                        bpe_key,
-                        bytes,
-                        "BYTES_PER_ELEMENT".to_string(),
-                        bpe_attrs,
-                    );
-                }
             }
             if name != "Array" {
                 // Its own keys are in: return the room it did not use.

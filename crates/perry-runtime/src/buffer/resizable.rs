@@ -109,7 +109,6 @@ pub extern "C" fn js_array_buffer_new_with_options(
     }
 }
 
-/// `ArrayBuffer.prototype.resize(newLength)`.
 /// `new SharedArrayBuffer(length, { maxByteLength })` (ES2024 growable SAB).
 /// Without the option (or with `maxByteLength: undefined`) a fixed-length
 /// SAB, exactly `js_shared_array_buffer_new_value`. A growable one reserves
@@ -172,6 +171,7 @@ pub(crate) fn shared_array_buffer_grow(addr: usize, args: &[f64]) -> f64 {
     undefined
 }
 
+/// `ArrayBuffer.prototype.resize(newLength)`.
 pub(crate) fn array_buffer_resize(addr: usize, args: &[f64]) -> f64 {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let handles = crate::gc::RuntimeHandleScope::new();
