@@ -214,6 +214,64 @@ impl Model {
         }
     }
 
+    /// Whether operation `c` on a ⊤ operand may run unknown code (DESIGN
+    /// SEEDE section 8): every kind but tests, escapes and call plumbing.
+    fn may_run_code(c: &Cons) -> bool {
+        !matches!(
+            c,
+            Cons::Raise { .. }
+                | Cons::Guard { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::Falsy { .. }
+                | Cons::NotUndefined { .. }
+                | Cons::TopSink { .. }
+                | Cons::RuntimeStore { .. }
+                | Cons::BirthField { .. }
+                | Cons::ThisTo { .. }
+                | Cons::CallArgs { .. }
+                | Cons::RetInto { .. }
+                | Cons::ArgInto { .. }
+                | Cons::ThisInst { .. }
+                | Cons::NativeThis { .. }
+                | Cons::HolderStep { .. }
+                | Cons::VisitHolders { .. }
+                | Cons::VisitStop { .. }
+        )
+    }
+
+    /// The throw region of function `f`'s body (DESIGN SEEDE section 8),
+    /// made on first use. Per unit any function may be called by another
+    /// unit's code, whose `catch` reads the shared cell: its region feeds
+    /// `thrown` (the cell the unit boundary publishes).
+    pub fn raise_of(&mut self, f: FnIdx) -> NodeId {
+        let r = self.funcs[f as usize].raise;
+        if r != u32::MAX {
+            return r;
+        }
+        let r = self.node_l("RAISE");
+        self.funcs[f as usize].raise = r;
+        if self.unit_mode {
+            let t = self.thrown;
+            self.edge(r, t);
+        }
+        r
+    }
+
+    /// Unknown code may run in `region` (a ⊤ or opaque callee, an operation
+    /// on ⊤, a native handing a value to unknown code): it may throw anything
+    /// it holds there.
+    pub fn raise_top(&mut self, region: NodeId, from: NodeId, why: &'static str) {
+        if region == u32::MAX || self.nodes[region as usize].pts.contains_tok(TOP) {
+            return;
+        }
+        let saved = (self.cur_src, self.cur_why);
+        self.cur_src = from;
+        self.cur_why = self.reason(why);
+        self.add_tokens(region, Tokens::Slice(&[TOP]), prim::ALL);
+        (self.cur_src, self.cur_why) = saved;
+    }
+
     /// Charge the work since the last mark to what it was spent for, and
     /// from now on to `n` (a popped node) or, with `NO_NODE`, to `phase`
     /// (PERRY_FACTS_PROFILE only).
@@ -566,6 +624,13 @@ impl Model {
             self.rel(|| line);
         }
         self.nodes[n as usize].cons.push(c);
+        if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
+            let cs = &self.nodes[n as usize].cons;
+            let seen = cs.iter().rev().take(4).any(|x| matches!(x, Cons::Raise { region: r } if *r == region));
+            if !seen {
+                self.cons(n, Cons::Raise { region });
+            }
+        }
         if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
             self.cell_woken.push(n);
         }
@@ -1183,6 +1248,10 @@ impl Model {
 
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
+        if let Some(c) = self.cur_native_call {
+            let region = self.calls[c as usize].region;
+            self.raise_top(region, n, "a native hands a value to unknown code, which may throw");
+        }
         if self.sunk_nodes.insert(n) {
             self.cons(n, Cons::TopSink { reason });
         }
@@ -1341,6 +1410,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
+            region: self.thrown,
         });
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
@@ -1396,6 +1466,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::Raise { region } => format!("raise {n} {region}"),
             Cons::RuntimeStore { reason, retained } => {
                 format!("runtimestore {n} {retained} {reason}")
             }

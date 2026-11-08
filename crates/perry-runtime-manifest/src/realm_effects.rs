@@ -9,12 +9,16 @@
 //!           | returns(operand) | open | path(slot)
 //! slot     := this | result | arg(N) | rest(N) | returned(N) | elems(slot) | field(slot, key)
 //! operand  := value ("|" value)*
-//! value    := slot | prim(kind | kind ...) | fresh(Realm.path, elems = [slot, ...])
+//! value    := slot | prim(kind | kind ...) | native(Realm.path)
+//!           | fresh(Realm.path, elems = [operand, ...], fields = {key: operand, ...})
 //!           | species(slot, args = [operand, ...], elems = [slot, ...])
 //!
 //! `returned(N)`: the value the N-th `calls` of this declaration (0-based)
 //! returned; a value only: an operand, a store source or a coerced slot
 //! (`sort` runs ToNumber on its comparator's result).
+//! `fresh(..)`: an object the call makes: elements and own data fields
+//! holding the operands. `native(path)`: the host function value the
+//! realm declares at `path` (its body declares its own effects).
 //! `species(..)`: ArraySpeciesCreate on the slot (see
 //! `RealmOperand::Species`).
 //! `path(slot)`: what node does to a PathLike argument (getValidatedPath:
@@ -152,27 +156,76 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
             Ok(tagged("prim", Value::Array(kinds)))
         }
         ("fresh", Some(inner)) => {
+            let usage = "fresh(Proto, elems = [operand, ...], fields = {key: operand, ...})";
             let parts = info::split(inner, ",");
-            let (proto, elems) = match parts.as_slice() {
-                [proto] => (proto, Vec::new()),
-                [proto, elems] => (
-                    proto,
-                    slots(bracketed("fresh elems", keyword("elems", elems)?)?)?,
-                ),
-                _ => {
-                    return Err(
-                        "fresh(Proto, elems = [slot, ...]) takes a prototype and elements".into(),
-                    )
-                }
+            let [proto, rest @ ..] = parts.as_slice() else {
+                return Err(format!("{usage} takes a prototype"));
             };
+            let mut elems: Option<Vec<Value>> = None;
+            let mut fields: Option<Vec<Value>> = None;
+            for part in rest {
+                match part.first().map(|t| t.text) {
+                    Some("elems") if elems.is_none() => {
+                        let list = bracketed("fresh elems", keyword("elems", part)?)?;
+                        elems = Some(if list.is_empty() {
+                            Vec::new()
+                        } else {
+                            info::split(list, ",")
+                                .into_iter()
+                                .map(operand)
+                                .collect::<Result<Vec<_>, _>>()?
+                        });
+                    }
+                    Some("fields") if fields.is_none() => {
+                        let block = match keyword("fields", part)? {
+                            [open, inner @ .., close] if open.text == "{" && close.text == "}" => {
+                                inner
+                            }
+                            _ => {
+                                return Err(
+                                    "fresh fields must be a {key: operand, ...} block".into()
+                                )
+                            }
+                        };
+                        let mut keys: Vec<String> = Vec::new();
+                        let mut list = Vec::new();
+                        for field in info::split(block, ",") {
+                            let malformed =
+                                || format!("malformed fresh field `{}`", info::text(field));
+                            let [key, colon, value @ ..] = field else {
+                                return Err(malformed());
+                            };
+                            if colon.text != ":" || value.is_empty() {
+                                return Err(malformed());
+                            }
+                            let key = key.text.trim_matches('"').to_string();
+                            if keys.contains(&key) {
+                                return Err(format!("fresh field `{key}` declared twice"));
+                            }
+                            list.push(object(vec![
+                                ("key", Value::String(key.clone())),
+                                ("value", operand(value)?),
+                            ]));
+                            keys.push(key);
+                        }
+                        fields = Some(list);
+                    }
+                    _ => return Err(format!("{usage}: unexpected `{}`", info::text(part))),
+                }
+            }
             Ok(tagged(
                 "fresh",
                 object(vec![
                     ("proto", Value::String(super::facts::path(proto)?)),
-                    ("elems", Value::Array(elems)),
+                    ("elems", Value::Array(elems.unwrap_or_default())),
+                    ("fields", Value::Array(fields.unwrap_or_default())),
                 ]),
             ))
         }
+        ("native", Some(inner)) => Ok(tagged(
+            "native",
+            Value::String(super::facts::path(inner)?),
+        )),
         ("bound", None) => Ok(Value::String("bound".into())),
         ("species", Some(inner)) => {
             let parts = info::split(inner, ",");
@@ -428,7 +481,7 @@ mod tests {
         );
         assert_eq!(
             parse_text("{ returns(prim(num | undefined)); returns(fresh(Array.prototype, elems = [elems(this)])); returns(field(this, \"k\")) }").unwrap(),
-            r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"root":"this","steps":["elems"]}],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
+            r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"slot":{"root":"this","steps":["elems"]}}],"fields":[],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
         );
         assert_eq!(parse_text("{ open }").unwrap(), r#"["open"]"#);
         assert_eq!(
@@ -446,7 +499,7 @@ mod tests {
         );
         assert_eq!(
             parse_text("{ calls(arg(0), this = arg(1), args = [elems(this), prim(num) | elems(this)]); returns(fresh(Array.prototype, elems = [returned(0)])) }").unwrap(),
-            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"union":[{"prim":["num"]},{"slot":{"root":"this","steps":["elems"]}}]}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}},{"returns":{"fresh":{"elems":[{"root":{"returned":0},"steps":[]}],"proto":"Array.prototype"}}}]"#
+            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"union":[{"prim":["num"]},{"slot":{"root":"this","steps":["elems"]}}]}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}},{"returns":{"fresh":{"elems":[{"slot":{"root":{"returned":0},"steps":[]}}],"fields":[],"proto":"Array.prototype"}}}]"#
         );
         assert_eq!(
             parse_text("{ returns(species(this, args = [prim(num)], elems = [elems(this)])) }")
@@ -505,6 +558,30 @@ mod tests {
         ] {
             let err = parse_text(text).expect_err(text);
             assert!(err.contains(needle), "{text}: {err}");
+        }
+    }
+
+
+    /// `fresh(.., fields = {..})` and `native(..)`: own data fields with
+    /// their values, the host function a body makes.
+    #[test]
+    fn fresh_fields_and_native_parse() {
+        assert_eq!(
+            parse_text("{ returns(fresh(Object.prototype, fields = {isFile: native(\"%FsStatsPredicate%\"), size: prim(num)})) }").unwrap(),
+            r#"[{"returns":{"fresh":{"elems":[],"fields":[{"key":"isFile","value":{"native":"%FsStatsPredicate%"}},{"key":"size","value":{"prim":["num"]}}],"proto":"Object.prototype"}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(fresh(Array.prototype, elems = [prim(str)])) }").unwrap(),
+            r#"[{"returns":{"fresh":{"elems":[{"prim":["str"]}],"fields":[],"proto":"Array.prototype"}}}]"#
+        );
+        for (bad, why) in [
+            ("{ returns(fresh(Object.prototype, fields = {a: prim(num), a: prim(str)})) }", "declared twice"),
+            ("{ returns(fresh(Object.prototype, fields = {a prim(num)})) }", "malformed fresh field"),
+            ("{ returns(fresh(Object.prototype, fields = [a])) }", "fields must be"),
+            ("{ returns(fresh(Object.prototype, slots = [a])) }", "unexpected"),
+        ] {
+            let err = parse_text(bad).unwrap_err();
+            assert!(err.contains(why), "{bad}: {err}");
         }
     }
 }

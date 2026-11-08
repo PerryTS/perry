@@ -77,8 +77,26 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "Set" => BuiltinNs::Set,
         "WeakMap" => BuiltinNs::WeakMap,
         "WeakSet" => BuiltinNs::WeakSet,
-        _ => return None,
+        _ => return node_module(name),
     })
+}
+
+/// The node module object the realm declares as `name` (`node:fs`).
+fn node_module(name: &str) -> Option<BuiltinNs> {
+    if !name.starts_with("node:") {
+        return None;
+    }
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == name && e.kind == perry_hir::realm_manifest::RealmKind::Namespace)
+        .map(|e| BuiltinNs::Module(e.name))
+}
+
+/// The node module object `require(m)` or a namespace import of `m` names,
+/// when the realm declares it (`fs` and `node:fs` alike).
+pub(crate) fn node_module_ns(m: &str) -> Option<BuiltinNs> {
+    let bare = m.strip_prefix("node:").unwrap_or(m);
+    node_module(&format!("node:{bare}"))
 }
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.
@@ -113,6 +131,9 @@ pub fn interpreted_code_runs(m: &mut Model) {
     note_native_write(m, gt, None, "interpreted code may run");
     let r = m.reason("thrown where interpreted code can catch it");
     let thrown = m.thrown;
+    // It throws what it holds too.
+    m.add_top(thrown, |_| "thrown by interpreted code".into());
+    m.add_prim(thrown, prim::ALL);
     m.thrown_reason = Some(r);
     m.sink_node(thrown, r);
 }
@@ -411,6 +432,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
+        raise: u32::MAX,
         name: "<resolver>".into(),
         params: vec![p],
         rest: None,
@@ -462,6 +484,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
+        raise: u32::MAX,
         name: "<another unit's accessor>".into(),
         params: vec![p],
         rest: None,
@@ -523,6 +546,7 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     let then = m.atom("then");
@@ -842,7 +866,7 @@ pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
 /// Does receiver token `r` have the family of native member `(fam, what)`,
 /// so that the member called on it runs `own_method(r, key)`, the model a
 /// call `r.key()` runs: a site builtin object of the same kind, a function
-/// value for `Function.prototype`'s. `Array.prototype`'s methods are generic
+/// value (a class object too) for `Function.prototype`'s. `Array.prototype`'s methods are generic
 /// over `this` (ECMA-262 23.1.3: ToObject(this), its `length` and indices
 /// through [[Get]]/[[Set]], ArraySpeciesCreate): they run on any object,
 /// an array or not (`native_prototype_call`).
@@ -859,7 +883,9 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
             TmplKind::BObj { what: w, .. } => what == Some(*w) && members::bobj_family(w) == fam,
             _ => false,
         },
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => fam == Family::Function,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::ClassObj(_) => {
+            fam == Family::Function
+        }
         TokKind::Builtin(_) => fam == Family::Function && builtin_function(m, r),
         _ => false,
     }
@@ -966,6 +992,53 @@ pub(crate) fn is_collection(what: &str) -> bool {
 /// its internal entries, or has no `@@iterator`.
 pub(crate) fn iterates_indices(what: &str) -> bool {
     members::bobj_family(what) == Family::Box
+}
+
+/// Does the realm give the namespace or constructor `ns` no enumerable own
+/// property, so that a copy of its own enumerable properties (`{...ns}`,
+/// `Object.assign`, `Object.values`) reads only what the program put on it
+/// (`Model::own_props_modelled`)? ECMA-262 18: every property the
+/// specification gives a built-in object is non-enumerable (its methods,
+/// constants, `prototype`, `length`, `name`), and a [[Set]] of such a key
+/// keeps it so. V8 adds one enumerable data property, `Error.stackTraceLimit`.
+/// Host objects have enumerable own properties: `console`'s methods,
+/// `process`'s, the global object's, `require.resolve`/`cache`, the stdio
+/// streams', and a node module's exports (`{...require("fs")}` copies them).
+pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
+    match ns {
+        BuiltinNs::Object
+        | BuiltinNs::Reflect
+        | BuiltinNs::Array
+        | BuiltinNs::Json
+        | BuiltinNs::Math
+        | BuiltinNs::Promise
+        | BuiltinNs::AggregateError
+        | BuiltinNs::Date
+        | BuiltinNs::RegExp
+        | BuiltinNs::TypedArray
+        | BuiltinNs::ArrayBuffer
+        | BuiltinNs::Symbol
+        | BuiltinNs::Number
+        | BuiltinNs::String
+        | BuiltinNs::Boolean
+        | BuiltinNs::Function
+        | BuiltinNs::Map
+        | BuiltinNs::Set
+        | BuiltinNs::WeakMap
+        | BuiltinNs::WeakSet
+        | BuiltinNs::ObjectProtoMethod
+        | BuiltinNs::ObjectProtoOwn(_) => true,
+        BuiltinNs::Error
+        | BuiltinNs::Console
+        | BuiltinNs::GlobalThis
+        | BuiltinNs::Process
+        | BuiltinNs::Require
+        | BuiltinNs::Stdout
+        | BuiltinNs::Stderr
+        | BuiltinNs::Stdin
+        | BuiltinNs::Module(_)
+        | BuiltinNs::Other => false,
+    }
 }
 
 /// A builtin object whose template is a container the model fills
@@ -1482,6 +1555,18 @@ fn ns_method_inner(
             }
             ret_prim(m, call, prim::UNDEF);
         }
+        // A call of the realm's `eval` function under any spelling that is
+        // not a direct eval (`(0, eval)(s)`, `const e = eval; e(s)`,
+        // `globalThis.eval(s)`, `eval?.(s)`) is an indirect eval: with the
+        // interpreter linked it runs its string argument as global code
+        // (`global_this_eval_thunk`), which reads and calls what the program
+        // stored on the global object (DECISIONS 150/235), as a call of the
+        // Function constructor does. Without the interpreter it runs no
+        // program code.
+        (BuiltinNs::Other, "eval") if m.interp_linked => {
+            set_dyn_eval(m, "E14 indirect eval call");
+            unknown_method(m, call, "E14 dynamic code");
+        }
         // The runtime's `gc([force])`: the argument is ignored.
         (BuiltinNs::Other, "gc") => ret_prim(m, call, prim::UNDEF),
         // A method of the global object named by one of the runtime's global
@@ -1519,14 +1604,10 @@ fn ns_method_inner(
         (BuiltinNs::Object, "values" | "entries") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
+            // Own enumerable values only (EnumerableOwnProperties): no
+            // inherited member is among them.
             if let Some(o) = arg(m, call, 0) {
-                m.cons(
-                    o,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: fa,
-                    },
-                );
+                m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
             if name == "entries" {
@@ -1618,6 +1699,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret,
                         site: call2,
+                        region: m.thrown,
                     },
                 );
                 m.cons(f, Cons::Call { call: call2 });
@@ -1649,6 +1731,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret: made,
                         site: c.site,
+                        region: m.thrown,
                     },
                 );
                 construct_into(m, this, mc, arr, made, c.ret);
@@ -1709,6 +1792,7 @@ fn ns_method_inner(
                             spread: vec![],
                             ret,
                             site: call2,
+                            region: m.thrown,
                         },
                     );
                     m.cons(rv, Cons::Call { call: call2 });
@@ -1784,6 +1868,19 @@ fn ns_method_inner(
             } else {
                 m.edge(settled, v);
             }
+            if name == "any" {
+                // Every item rejected: an AggregateError whose `errors` are
+                // the reasons (rejections are what `thrown` holds).
+                let e = error_tok(m, call);
+                let errs = site_tmpl(m, call, "Array");
+                let efa = m.field_any(errs);
+                let thrown = m.thrown;
+                m.edge(thrown, efa);
+                let ea = m.atom("errors");
+                let f = m.field(e, ea);
+                m.add_tok(f, errs);
+                m.add_tok(thrown, e);
+            }
             ret_tok(m, call, p);
         }
         // An Array of the target's own keys.
@@ -1855,6 +1952,9 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
         BuiltinNs::Require => {
+            // The path registry may run a lazy module body inside the call.
+            let (lazy, region) = (m.lazy_raise, m.calls[call as usize].region);
+            m.edge(lazy, region);
             // `require('module')` is the node:module namespace, which hands
             // out `Module._cache`: the cache reaches code nothing models.
             if m.call_lit

@@ -774,7 +774,15 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // `new` (result, arguments, instance), 16 entries fewer at every n.
         // HOST-P: the runtime-made `process.execArgv` array, like `argv`, is one
         // more entry at every n -> (943, 2591, 8191).
-        (943, 2591, 8191),
+        // SEEDE: the runtime error object and the throw regions are eight
+        // entries more at every n (951, 2599, 8199; the `Raise` constraints
+        // are summary constraints, `summary::map::gen_kind`). Unknown code
+        // holding a value holds its accessor functions (descriptor reads,
+        // ESCACCESSORS): each escaped `{ v }` gets a getter and a setter
+        // descriptor walk (`walk-getter`/`walk-setter` nodes), two entries
+        // per literal, plus eight once (measured at n = 8, 16, 32):
+        // 2n + 8 more -> the pin. The n^2 growth is unchanged.
+        (975, 2639, 8271),
         "entries {e8} {e16} {e32}"
     );
 }

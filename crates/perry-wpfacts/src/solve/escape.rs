@@ -15,6 +15,11 @@ impl Model {
     }
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if let Some(c) = self.cur_native_call {
+            let region = self.calls[c as usize].region;
+            let ret = self.calls[c as usize].ret;
+            self.raise_top(region, ret, "a native hands a value to unknown code, which may throw");
+        }
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {
             return;
@@ -316,6 +321,35 @@ impl Model {
         self.esc_bits[w] |= 1 << (t & 63);
     }
 
+    /// Unknown code holding `t` runs every accessor on its chain: a setter
+    /// with `w` (the unknown value), a getter whose result escapes. It also
+    /// holds the accessor functions themselves (`Object.getOwnPropertyDescriptor`,
+    /// `__lookupGetter__` on `t` or its chain): they escape, so unknown code
+    /// may call them with any receiver and catch what they throw
+    /// (`escape_fn_params`: their throw region feeds ESCRAISE).
+    fn escaped_accessor_runs(&mut self, t: Tok, w: NodeId, reason: u32) {
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
+        let r = self.node_l("escaped-load");
+        self.sink_node(r, reason);
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        let fns = self.esc_accessors;
+        for setter in [false, true] {
+            self.accessor_walk(t, t, Key::any(), ChainAct::Lookup { dst: fns, setter });
+        }
+    }
+
+    /// Escaped `f` (`reason`) has callers in unknown code, which retain its
+    /// result and may catch what it throws: true unless it is a contract
+    /// function published through its contract (an export or a published
+    /// literal's field, DECISIONS 210) or with known closed callers
+    /// (DECISIONS 19), whose callers are the units' modeled calls.
+    pub(crate) fn unknown_caller(&self, f: FnIdx, reason: u32) -> bool {
+        !self.contract_fns.contains(&f)
+            || (self.pub_reason != Some(reason)
+                && self.field_fn_reason != Some(reason)
+                && !(self.closed_pub_reason == Some(reason) && self.closed_params.contains_key(&f)))
+    }
+
     /// Unknown code calls `f`: unknown arguments, the result escapes.
     pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
@@ -325,6 +359,16 @@ impl Model {
             return;
         }
         let f = self.tok_fn(ft);
+        // What a call returns or throws goes to its caller. Where unknown
+        // code calls it (its result escapes: no contract publication, no
+        // known closed callers), it may catch what it throws: the throw
+        // region feeds ESCRAISE, the escape sink of escape-made calls
+        // (DESIGN SEEDE section 8).
+        if self.unknown_caller(f, reason) {
+            let raise = self.raise_of(f);
+            let esc = self.esc_raise;
+            self.edge(raise, esc);
+        }
         if self.summarized(f) {
             self.escape_summarized(ft, reason);
             return;
@@ -386,13 +430,7 @@ impl Model {
             }
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));
-            // Beyond its publication (an export or a published literal's
-            // field, DECISIONS 210, or known closed callers, DECISIONS 19),
-            // unknown code calls it and retains its result.
-            if self.pub_reason != Some(reason)
-                && self.field_fn_reason != Some(reason)
-                && closed.is_none()
-            {
+            if self.unknown_caller(f, reason) {
                 self.sink_node(fi.ret, reason);
             }
             return;
@@ -648,6 +686,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
+            region: self.esc_raise,
         });
         self.contract_new.insert(call);
         self.construct(call, cobj);
@@ -707,6 +746,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
+            region: self.esc_raise,
         });
         self.construct(call, t);
         self.sink_node(ret, reason);
@@ -759,10 +799,7 @@ impl Model {
             )
         });
         self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.escaped_accessor_runs(t, w, reason);
     }
 
     /// A named property `n` of function `t` whose properties left
@@ -971,10 +1008,7 @@ impl Model {
             )
         });
         self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.escaped_accessor_runs(t, w, reason);
         match self.toks[t as usize].clone() {
             TokKind::Func(f, _) => {
                 let fi = self.funcs[f as usize].clone();
@@ -1007,6 +1041,7 @@ impl Model {
                     spread: vec![],
                     ret,
                     site: 0,
+                    region: self.esc_raise,
                 });
                 self.construct(call, t);
                 let esc = self.escaped_classes;

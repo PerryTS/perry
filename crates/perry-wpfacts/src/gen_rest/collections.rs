@@ -126,12 +126,12 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectValues(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::any());
+                let el = self.own_values(v);
                 self.new_arr_from(mi, "values", &[el])
             }
             Expr::ObjectEntries(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::any());
+                let el = self.own_values(v);
                 let s = self.prim_node(prim::STR);
                 let pair = self.new_arr_from(mi, "entry", &[el, s]);
                 self.new_arr_from(mi, "entries", &[pair])
