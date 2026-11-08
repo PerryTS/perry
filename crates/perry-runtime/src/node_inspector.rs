@@ -1651,11 +1651,18 @@ pub extern "C" fn js_node_inspector_session_call_without_new() -> f64 {
     ))
 }
 
+// `new Session(...)` makes a session object whose [[Prototype]] is
+// `Session.prototype`: it ignores its arguments and keeps nothing of the
+// program's; what it stores goes into the session it creates
+// (`stores(fresh)`).
+crate::realm_decl! { "node:inspector.Session", effects = { stores(fresh); returns(fresh("node:inspector.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_new() -> f64 {
     session_new(false)
 }
 
+// The `node:inspector/promises` session, as `node:inspector.Session`.
+crate::realm_decl! { "node:inspector/promises.Session", effects = { stores(fresh); returns(fresh("node:inspector/promises.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_promises_session_new() -> f64 {
     session_new(true)
