@@ -182,6 +182,20 @@ impl<'a> Gen<'a> {
                     }
                     self.m.add_prim(ret, prim::UNDEF);
                     ret
+                } else if let Some(ctor) = object
+                    .is_none()
+                    .then(|| self.native_construct_fold(module, method))
+                    .flatten()
+                {
+                    // The HIR's fold of `new <module>.<method>(..args)`:
+                    // `new` of the realm constructor itself, whatever the
+                    // program stored under the name (codegen calls its
+                    // runtime function directly). The construct runs what
+                    // the constructor's declaration says (`construct`).
+                    let callee = self.tok_node(ctor);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::New { call });
+                    ret
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");

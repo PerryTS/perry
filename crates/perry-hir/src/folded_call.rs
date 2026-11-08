@@ -69,6 +69,20 @@ pub fn fs_receiver_dispatch(module: &str, method: &str) -> bool {
     matches!(module, "fs" | "node:fs") && !FS_STREAM_METHODS.contains(&method)
 }
 
+/// Is `NativeMethodCall { module, object: None, method }` the HIR's fold of
+/// `new <module>.<method>(..args)`, `new` of the realm constructor
+/// `node:<module>.<method>`? Both lowering sites (`new inspector.Session()`
+/// over a module alias, `new Session()` over a named import) fold exactly
+/// when this holds, and wpfacts models such a node as that construct. Codegen
+/// calls the constructor's runtime function directly, whatever the program
+/// stored under the name.
+pub fn native_construct_fold(module: &str, method: &str) -> bool {
+    matches!(
+        (module, method),
+        ("inspector" | "inspector/promises", "Session")
+    )
+}
+
 /// The folded builtin-method nodes that are calls, and what each one is a
 /// call of: codegen guards each (`perry-codegen expr/folded_builtin_override.rs`,
 /// `Expr::ArrayPush` through its own slow arms) so an own or inherited user

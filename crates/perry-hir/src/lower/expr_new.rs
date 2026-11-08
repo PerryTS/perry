@@ -606,21 +606,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            let inspector_session_module = ctx.lookup_native_module(&class_name).and_then(
-                |(module_name, export_name)| match (module_name, export_name) {
-                    ("inspector" | "inspector/promises", Some("Session")) => {
-                        Some(module_name.to_string())
-                    }
-                    _ => None,
-                },
-            );
-            if let Some(module_name) = inspector_session_module {
+            let construct_fold =
+                ctx.lookup_native_module(&class_name)
+                    .and_then(|(module_name, export_name)| {
+                        let export_name = export_name?;
+                        crate::folded_call::native_construct_fold(module_name, export_name)
+                            .then(|| (module_name.to_string(), export_name.to_string()))
+                    });
+            if let Some((module_name, export_name)) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NativeMethodCall {
                     module: module_name,
                     class_name: None,
                     object: None,
-                    method: "Session".to_string(),
+                    method: export_name,
                     args,
                 });
             }

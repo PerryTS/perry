@@ -667,6 +667,17 @@ impl Model {
             // (TypeError): nothing flows.
             TokKind::BuiltinFn(Native::Member { .. })
                 if !builtins::native_constructible(self, t) => {}
+            // A realm constructor whose declaration says what `new` does
+            // (declared at the body its dispatch arm calls): the declaration
+            // runs, as for a global constructor by name. Any value of it
+            // (`const S = inspector.Session; new S()`) is that constructor.
+            TokKind::BuiltinFn(Native::Member { identity })
+                if !self.unit_mode && builtins::declared_construct(identity).is_some() =>
+            {
+                let e = builtins::declared_construct(identity).expect("guarded");
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_construct(m, e, call));
+            }
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;

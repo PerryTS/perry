@@ -110,6 +110,14 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
     (interpretable(e.effects) && !names_this(e.effects)).then_some(e)
 }
 
+/// The declaration of the bound_method constructor `name`
+/// (`node:inspector.Session`) whose effects the runtime declares at its
+/// body (`declared_member`): what `new` of it does, in forms `run_construct`
+/// runs.
+pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
+    declared_member(name).filter(|e| e.kind == RealmKind::Constructor)
+}
+
 fn by_proto() -> &'static ByProto {
     &index().0
 }
