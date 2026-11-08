@@ -78,6 +78,48 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The primitive type of an enum member's value, resolved as codegen
+    /// resolves `Expr::EnumMember` (the enum table in codegen/mod.rs): the
+    /// module's own enum of that name first, else the imported enum. An import
+    /// is named by its local name, so the imported side is every module's enum
+    /// of that name, their members' types joined. A numeric member is a
+    /// number, a string member a string; a computed, missing or unresolved
+    /// member is either.
+    pub(crate) fn enum_member_prim(&self, mi: u32, enum_name: &str, member_name: &str) -> u16 {
+        use perry_hir::EnumValue;
+        let either = prim::NUM | prim::STR;
+        let of = |e: &perry_hir::Enum| -> Option<u16> {
+            if e.name != enum_name {
+                return None;
+            }
+            Some(
+                match e
+                    .members
+                    .iter()
+                    .find(|m| m.name == member_name)
+                    .map(|m| &m.value)
+                {
+                    Some(EnumValue::Number(_)) => prim::NUM,
+                    Some(EnumValue::String(_)) => prim::STR,
+                    Some(EnumValue::Computed) | None => either,
+                },
+            )
+        };
+        if let Some(p) = self.modules[mi as usize].1.enums.iter().find_map(of) {
+            return p;
+        }
+        match self
+            .modules
+            .iter()
+            .flat_map(|(_, m)| m.enums.iter())
+            .filter_map(of)
+            .fold(0, |a, b| a | b)
+        {
+            0 => either,
+            p => p,
+        }
+    }
+
     /// The node of a numeric literal: a shared node per integer value,
     /// carrying its point interval (`model::range`), or the Number node.
     pub fn num_literal(&mut self, v: f64) -> NodeId {
