@@ -570,7 +570,7 @@ impl<'a> Gen<'a> {
             // kind of its result (ECMA-262; the HIR operation's contract).
             // `Number(x)`: its interval follows the operand's Numbers and
             // one-unit Strings (`RangeOp::ToNumber`).
-            Expr::NumberCoerce(x) if self.int_ranges => {
+            Expr::NumberCoerce(x) if self.guard_ranges => {
                 let r = self.m.reason("ToNumber of a Number() operand");
                 let v = self.expr(fx, x);
                 self.m.cons(

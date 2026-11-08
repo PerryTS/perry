@@ -547,7 +547,7 @@ impl<'a> Gen<'a> {
     /// (false) for the code walked next (module docs, "Guards"); how many
     /// narrowings to pop after it (`narrow_pop`).
     pub(crate) fn narrow_guard(&mut self, fx: &Fx, cond: &Expr, positive: bool) -> usize {
-        if !self.int_ranges {
+        if !self.guard_ranges {
             return 0;
         }
         // The body being walked (`stmts` runs outside `stmt`'s `cur_fn`).

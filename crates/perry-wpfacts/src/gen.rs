@@ -341,6 +341,9 @@ pub struct Gen<'a> {
     /// Array literals record their birth length (`solve::arr_len`;
     /// `FactsConfig::no_array_lengths`).
     pub arr_lengths: bool,
+    /// Guards narrow locals and one-unit Strings carry codes
+    /// (`FactsConfig::no_guard_ranges`).
+    pub guard_ranges: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -642,6 +645,7 @@ impl<'a> Gen<'a> {
             dynimport_sabotage: false,
             int_ranges: true,
             arr_lengths: true,
+            guard_ranges: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
