@@ -51,14 +51,17 @@ fn pick_ir() -> String {
     let m = lower(SRC);
     let offsets = at_offsets(&m);
     assert!(!offsets.is_empty(), "{m:?}");
+    let elision = ElisionFacts {
+        call_arg_ranges: offsets
+            .into_iter()
+            .map(|o| (o, vec![Some((0, 64))]))
+            .collect(),
+        ..Default::default()
+    };
     let opts = CompileOptions {
         emit_ir_only: true,
         program_facts: ProgramFactsView {
-            elision: Arc::new(ElisionFacts::default()),
-            call_arg_ranges: offsets
-                .into_iter()
-                .map(|o| (o, vec![Some((0, 64))]))
-                .collect(),
+            elision: Arc::new(elision),
             ..Default::default()
         },
         ..Default::default()

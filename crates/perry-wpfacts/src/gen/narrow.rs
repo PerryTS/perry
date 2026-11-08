@@ -323,6 +323,30 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     )
 }
 
+/// Whether running `ss` may reach its end: a function body that does
+/// returns `undefined` there. Conservative: only a `return` or `throw` on
+/// every path (through `if`/`else` and `try`) ends it abruptly; a loop or
+/// `switch` may complete.
+pub(crate) fn may_complete(ss: &[Stmt]) -> bool {
+    !ss.iter().any(|s| match s {
+        Stmt::Return(_) | Stmt::Throw(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => !may_complete(then_branch) && !may_complete(else_branch),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            finally.as_deref().is_some_and(|f| !may_complete(f))
+                || (!may_complete(body) && catch.as_ref().is_none_or(|c| !may_complete(&c.body)))
+        }
+        _ => false,
+    })
+}
+
 /// A clip's bound: a literal, a local, a local's `length`, or a pure
 /// integer expression of those.
 #[derive(Clone, Debug)]

@@ -125,3 +125,30 @@ fn a_call_whose_every_callee_returns_a_number_is_a_number_call() {
     assert!(number_call_at(src, "this.at(i)"));
     assert!(!number_call_at(src, "this.name(5)"));
 }
+
+#[test]
+fn a_body_that_may_complete_returns_undefined() {
+    // `probe` returns `this.#p` or, when the read throws, completes after
+    // the catch: its result may be `undefined` (vf: test_gap_11791).
+    let src = "class D {\n\
+                 #p = 3;\n\
+                 probe() { try { return this.#p; } catch (e) { console.log(e); } }\n\
+                 both(k: number) { if (k > 1) { return 1; } else { return 2; } }\n\
+                 run() { return this.probe(); }\n\
+                 two(k: number) { return this.both(k); }\n\
+               }\n\
+               const d = new D(); console.log(d.run(), d.two(3));";
+    assert!(!number_call_at(src, "this.probe()"));
+    assert!(number_call_at(src, "this.both(k)"));
+}
+
+#[test]
+fn a_sloppy_function_boxes_a_primitive_this() {
+    // A sloppy function's `this` from `.call(7)` is a Number object, never
+    // the primitive (vf: test_gap_call_bind_native_forwarding).
+    let src = "function strict(this: any) { 'use strict'; return this; }\n\
+               const sloppy = new Function('return this;');\n\
+               console.log(typeof sloppy.call(7), strict.call(7));";
+    assert!(!number_call_at(src, "call(7), strict"));
+    assert!(number_call_at(src, "call(7));"));
+}

@@ -680,6 +680,19 @@ impl<'a> Gen<'a> {
             fn_ctor,
         };
         self.params(&fx, &f.params);
+        if !f.is_strict && class.is_none() && ctor_of.is_none() {
+            // A sloppy function boxes a primitive `this` and reads a
+            // nullish one as the global object: an object the model does
+            // not hold, so once a primitive arrives `this` is anything.
+            self.m.cons(
+                info.this,
+                Cons::Guard {
+                    test: crate::model::guard::PRIM,
+                    from: self.m.top_tok_node,
+                    dst: info.this,
+                },
+            );
+        }
         if f.is_async || f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
@@ -707,6 +720,10 @@ impl<'a> Gen<'a> {
             .then(|| (fxi, narrow::scope_locals(&f.params, &f.body)));
         let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(&fx, &f.body);
+        if narrow::may_complete(&f.body) {
+            // The body's normal completion returns `undefined`.
+            self.m.add_prim(info.ret, prim::UNDEF);
+        }
         self.narrow_scope = saved_scope;
         self.own_helper_finish(fxi, own);
     }
