@@ -472,6 +472,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | AccessorKeyed { .. }
             | Arith { .. }
             | Range { .. }
+            | LenIndex { .. }
             | Plus { .. }
             | ArrayLenArg { .. }
             | IterNext { .. }
