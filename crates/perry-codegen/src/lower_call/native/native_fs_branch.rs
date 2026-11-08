@@ -1,6 +1,11 @@
 
 {
-    if (module == "fs" || module == "node:fs") && object.is_some() {
+    // Only the stream arms below; any other method of a folded fs receiver
+    // runs the runtime dispatch on the receiver (`fs_receiver_dispatch`).
+    if (module == "fs" || module == "node:fs")
+        && object.is_some()
+        && perry_hir::folded_call::FS_STREAM_METHODS.contains(&method)
+    {
         let recv = object.unwrap();
         let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         match method {

@@ -26,6 +26,49 @@ pub struct FoldedCall<'a> {
     pub args: Vec<&'a Expr>,
 }
 
+/// The methods codegen lowers to a host fs stream operation when the HIR
+/// folds `recv.m(..)` into `NativeMethodCall { module: "fs", object: Some(recv) }`
+/// (`perry-codegen lower_call/native/native_fs_branch.rs` matches only these
+/// names). Any other method of such a node runs the runtime method dispatch
+/// on the receiver value (`js_native_call_method_nullsafe`): the node is the
+/// call `recv.m(..args)` ([`fs_receiver_dispatch`]).
+pub const FS_STREAM_METHODS: &[&str] = &[
+    "write",
+    "flush",
+    "flushSync",
+    "end",
+    "destroy",
+    "close",
+    "reopen",
+    "on",
+    "addListener",
+    "once",
+    "off",
+    "removeListener",
+    "removeAllListeners",
+    "listenerCount",
+    "emit",
+    "append",
+    "contentMode",
+    "fd",
+    "file",
+    "fsync",
+    "maxLength",
+    "minLength",
+    "mkdir",
+    "mode",
+    "periodicFlush",
+    "sync",
+    "writing",
+    "destroyed",
+];
+
+/// Is `NativeMethodCall { module, object: Some(recv), method }` lowered to
+/// the runtime method dispatch on `recv` (no fs stream arm takes it)?
+pub fn fs_receiver_dispatch(module: &str, method: &str) -> bool {
+    matches!(module, "fs" | "node:fs") && !FS_STREAM_METHODS.contains(&method)
+}
+
 /// The folded builtin-method nodes that are calls, and what each one is a
 /// call of: codegen guards each (`perry-codegen expr/folded_builtin_override.rs`,
 /// `Expr::ArrayPush` through its own slow arms) so an own or inherited user
