@@ -152,11 +152,36 @@ fn a_body_that_may_complete_returns_undefined() {
 #[test]
 fn a_sloppy_function_boxes_a_primitive_this() {
     // A sloppy function's `this` from `.call(7)` is a Number object, never
-    // the primitive (vf: test_gap_call_bind_native_forwarding). The source
-    // is a script (no module syntax), so `sloppy` is sloppy.
-    let src = "function strict(this: any) { 'use strict'; return this; }\n\
+    // the primitive (vf: test_gap_call_bind_native_forwarding). `t.ts` has
+    // the module goal here, so the test marks `sloppy` sloppy in the HIR.
+    let src = "const strict = function (this: any) { return this; };\n\
                const sloppy = function (this: any) { return this; };\n\
                console.log(typeof sloppy.call(7), strict.call(7));";
-    assert!(!number_call_at(src, "call(7), strict"));
-    assert!(number_call_at(src, "call(7));"));
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let mut hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let mut marked = 0;
+    for st in &mut hir.init {
+        if let perry_hir::Stmt::Let {
+            name,
+            init: Some(perry_hir::Expr::Closure { is_strict, .. }),
+            ..
+        } = st
+        {
+            if name == "sloppy" {
+                *is_strict = false;
+                marked += 1;
+            }
+        }
+    }
+    assert_eq!(marked, 1, "{:?}", hir.init);
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &Default::default());
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    let at = |needle: &str| {
+        let start = src.find(needle).expect("call in source") as u32 + 1;
+        mb.number_calls
+            .iter()
+            .any(|o| (start..start + needle.len() as u32).contains(o))
+    };
+    assert!(!at("call(7), strict"));
+    assert!(at("call(7));"));
 }
