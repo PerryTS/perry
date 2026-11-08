@@ -143,14 +143,14 @@ pub fn checked_ids(module: &Module) -> HashSet<LocalId> {
 /// members, closure bodies), parents before children.
 /// Every expression of an item, nested closure bodies included (the
 /// pieces of [`for_each_module_expr`]).
-pub fn for_each_expr_in(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+pub fn for_each_expr_in<'a>(e: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
     f(e);
     if let Expr::Closure { body, .. } = e {
         for_each_stmts_expr(body, f);
     }
     walk_expr_children(e, &mut |child| for_each_expr_in(child, f));
 }
-pub fn for_each_stmts_expr(list: &[Stmt], f: &mut dyn FnMut(&Expr)) {
+pub fn for_each_stmts_expr<'a>(list: &'a [Stmt], f: &mut dyn FnMut(&'a Expr)) {
     for stmt in list {
         for_each_stmt_part(stmt, &mut |part| match part {
             Part::Expr(e) => for_each_expr_in(e, f),
@@ -158,7 +158,7 @@ pub fn for_each_stmts_expr(list: &[Stmt], f: &mut dyn FnMut(&Expr)) {
         });
     }
 }
-pub fn for_each_function_expr(func: &Function, f: &mut dyn FnMut(&Expr)) {
+pub fn for_each_function_expr<'a>(func: &'a Function, f: &mut dyn FnMut(&'a Expr)) {
     for param in &func.params {
         if let Some(default) = &param.default {
             for_each_expr_in(default, f);
@@ -166,7 +166,7 @@ pub fn for_each_function_expr(func: &Function, f: &mut dyn FnMut(&Expr)) {
     }
     for_each_stmts_expr(&func.body, f);
 }
-pub fn for_each_class_expr(c: &Class, f: &mut dyn FnMut(&Expr)) {
+pub fn for_each_class_expr<'a>(c: &'a Class, f: &mut dyn FnMut(&'a Expr)) {
     for decorator in &c.decorators {
         for arg in &decorator.args {
             for_each_expr_in(arg, f);

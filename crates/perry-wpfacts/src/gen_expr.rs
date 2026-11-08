@@ -2102,27 +2102,13 @@ impl<'a> Gen<'a> {
 
 impl<'a> Gen<'a> {
     /// The shape of computed key `e` of module `mi`: its literal parts
-    /// (`KeyShape::of`), or for a call of one of the module's functions
+    /// (`KeyShape::of`), for a call of one of the module's functions
     /// (HIR `FuncRef`: a declaration the program reassigns is a local, so
     /// the call runs this body) what that body returns
-    /// (`KeyShape::of_returns`).
+    /// (`KeyShape::of_returns`), for a parameter what its calls pass
+    /// (`Gen::key_shape_of`).
     pub(crate) fn key_shape(&mut self, mi: u32, e: &Expr) -> KeyShapeId {
-        let s = match e {
-            Expr::Call { callee, .. } => match callee.as_ref() {
-                Expr::FuncRef(id)
-                    if !self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) =>
-                {
-                    self.modules[mi as usize]
-                        .1
-                        .functions
-                        .iter()
-                        .find(|f| f.id == *id)
-                        .and_then(crate::model::KeyShape::of_returns)
-                }
-                _ => None,
-            },
-            _ => crate::model::KeyShape::of(e),
-        };
-        self.m.key_shape(s)
+        let s = self.key_shape_of(mi, e, &mut Vec::new());
+        self.m.key_shape(s.filter(|s| !s.globs.is_empty()))
     }
 }
