@@ -716,8 +716,10 @@ impl<'a> Gen<'a> {
             .then(|| (fxi, narrow::scope_locals(&f.params, &f.body)));
         let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(&fx, &f.body);
-        if narrow::may_complete(&f.body) {
-            // The body's normal completion returns `undefined`.
+        if ctor_of.is_none() && narrow::may_complete(&f.body) {
+            // The body's normal completion returns `undefined` (a class
+            // constructor's completion is never its result: `new` and
+            // `super()` yield `this`).
             self.m.add_prim(info.ret, prim::UNDEF);
         }
         self.narrow_scope = saved_scope;
@@ -728,7 +730,7 @@ impl<'a> Gen<'a> {
     /// where a nullish one is the global object and a primitive one is
     /// boxed, an object the model does not hold (anything). The function's
     /// own `this` node, its interface, stays what callers pass.
-    fn sloppy_this(&mut self, this: NodeId) -> NodeId {
+    pub(crate) fn sloppy_this(&mut self, this: NodeId) -> NodeId {
         let view = self.m.node_l("sloppy-this");
         self.m.own(view);
         self.m.edge(this, view);

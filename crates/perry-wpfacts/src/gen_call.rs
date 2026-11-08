@@ -435,12 +435,27 @@ impl<'a> Gen<'a> {
             body,
             is_async,
             is_generator,
+            is_arrow,
+            is_strict,
             ..
         } = e
         else {
             return;
         };
         let ret = self.m.funcs[f as usize].ret;
+        // A sloppy function expression's body reads its `this` through the
+        // view (`sloppy_this`); an arrow's `this` is its creator's.
+        let sloppy = !*is_strict && !*is_arrow && crate::ctor_phase::body_mentions_this(body);
+        let mut sfx;
+        let cfx = if sloppy {
+            sfx = cfx.clone();
+            let prev = std::mem::replace(&mut self.m.cur_fn, f);
+            sfx.this = self.sloppy_this(cfx.this);
+            self.m.cur_fn = prev;
+            &sfx
+        } else {
+            cfx
+        };
         // RPG1b: its statements are ordered in its own body; a parameter
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
@@ -463,6 +478,10 @@ impl<'a> Gen<'a> {
             .then(|| (f, crate::gen::narrow::scope_locals(params, body)));
         let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
         self.stmts(cfx, body);
+        if crate::gen::narrow::may_complete(body) {
+            // The body's normal completion returns `undefined`.
+            self.m.add_prim(ret, prim::UNDEF);
+        }
         self.narrow_scope = saved_scope;
         self.own_helper_finish(f, own);
         #[cfg(test)]
