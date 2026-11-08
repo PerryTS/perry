@@ -444,6 +444,15 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         } if matches!(object.as_ref(), Expr::This) && this_field_read_is_load(ctx, property) => {
             false
         }
+        // A field of a scalar-replaced object is an alloca load (or the
+        // constant undefined for a field the shape lacks): no getter, no
+        // helper call, nothing that allocates. Whether the VALUE read needs a
+        // slot across a later collecting window is the consumer's question.
+        Expr::PropertyGet { object, .. }
+            if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.scalar_replaced.contains_key(id)) =>
+        {
+            false
+        }
         Expr::Unary { .. } | Expr::Compare { .. } | Expr::Binary { .. } => {
             !expr_is_inert_primitive(ctx, expr)
         }
