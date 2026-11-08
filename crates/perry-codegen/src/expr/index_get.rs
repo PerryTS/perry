@@ -551,6 +551,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
 
     let repair_slot = receiver_repair_slot(ctx, object);
     if !numeric_index_has_integer_array_index_proof(ctx, index) {
+        let proven = proven_array::fact(ctx, *element_offset);
         return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
             lower_array_index_get_via_canonical_i32_split(
                 ctx,
@@ -561,6 +562,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
                 true,
                 false,
                 repair_slot.as_deref(),
+                proven,
             )
             .map(Some)
         });
@@ -1409,6 +1411,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // string, symbol, object and rejected number key.
                     let repair_slot = receiver_repair_slot(ctx, object);
                     let confined = confined_receiver(ctx, object);
+                    let proven = proven_array::fact(ctx, *element_offset);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         with_confined_read(ctx, confined, |ctx| {
                             lower_array_index_get_via_canonical_i32_split(
@@ -1420,6 +1423,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 true,
                                 repair_slot.as_deref(),
+                                proven,
                             )
                         })
                     });
@@ -1433,6 +1437,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // canonical signed-i32 keys (notably branded number IDs).
                     let repair_slot = receiver_repair_slot(ctx, object);
                     let confined = confined_receiver(ctx, object);
+                    let proven = proven_array::fact(ctx, *element_offset);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         with_confined_read(ctx, confined, |ctx| {
                             lower_array_index_get_via_canonical_i32_split(
@@ -1444,6 +1449,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 false,
                                 repair_slot.as_deref(),
+                                proven,
                             )
                         })
                     });
