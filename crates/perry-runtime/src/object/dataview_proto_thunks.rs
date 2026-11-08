@@ -116,49 +116,50 @@ fn rest_first_arg(rest: f64) -> f64 {
     crate::array::js_array_get_f64(arr, 0)
 }
 
-fn dataview_get(this: crate::closure::JsThis, suffix: &str, offset: f64, rest: f64) -> f64 {
+// One shared body per direction: a thunk only names its kind, so the accessor
+// code is not specialized into every member.
+#[inline(never)]
+fn dataview_get(
+    this: crate::closure::JsThis,
+    kind: crate::buffer::DataViewKind,
+    offset: f64,
+    rest: f64,
+) -> f64 {
     let addr = require_dataview_receiver(this);
-    let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
-        Some(k) => k,
-        None => return undef(),
-    };
     let little = crate::value::js_is_truthy(rest_first_arg(rest)) != 0;
     let buf_f64 = f64::from_bits(crate::value::JSValue::pointer(addr as *mut u8).bits());
     crate::buffer::js_data_view_get(buf_f64, offset, kind, little)
 }
 
+#[inline(never)]
 fn dataview_set(
     this: crate::closure::JsThis,
-    suffix: &str,
+    kind: crate::buffer::DataViewKind,
     offset: f64,
     value: f64,
     rest: f64,
 ) -> f64 {
     let addr = require_dataview_receiver(this);
-    let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
-        Some(k) => k,
-        None => return undef(),
-    };
     let little = crate::value::js_is_truthy(rest_first_arg(rest)) != 0;
     let buf_f64 = f64::from_bits(crate::value::JSValue::pointer(addr as *mut u8).bits());
     crate::buffer::js_data_view_set(buf_f64, offset, value, kind, little)
 }
 
 macro_rules! dataview_get_thunk {
-    ($name:ident, $suffix:literal) => {
+    ($name:ident, $kind:ident) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
             offset: f64,
             rest: f64,
         ) -> f64 {
-            dataview_get(this, $suffix, offset, rest)
+            dataview_get(this, crate::buffer::DataViewKind::$kind, offset, rest)
         }
     };
 }
 
 macro_rules! dataview_set_thunk {
-    ($name:ident, $suffix:literal) => {
+    ($name:ident, $kind:ident) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
@@ -166,34 +167,40 @@ macro_rules! dataview_set_thunk {
             value: f64,
             rest: f64,
         ) -> f64 {
-            dataview_set(this, $suffix, offset, value, rest)
+            dataview_set(
+                this,
+                crate::buffer::DataViewKind::$kind,
+                offset,
+                value,
+                rest,
+            )
         }
     };
 }
 
-dataview_get_thunk!(dv_get_int8, "Int8");
-dataview_get_thunk!(dv_get_uint8, "Uint8");
-dataview_get_thunk!(dv_get_int16, "Int16");
-dataview_get_thunk!(dv_get_uint16, "Uint16");
-dataview_get_thunk!(dv_get_int32, "Int32");
-dataview_get_thunk!(dv_get_uint32, "Uint32");
-dataview_get_thunk!(dv_get_float32, "Float32");
-dataview_get_thunk!(dv_get_float64, "Float64");
-dataview_get_thunk!(dv_get_bigint64, "BigInt64");
-dataview_get_thunk!(dv_get_biguint64, "BigUint64");
-dataview_get_thunk!(dv_get_float16, "Float16");
+dataview_get_thunk!(dv_get_int8, Int8);
+dataview_get_thunk!(dv_get_uint8, Uint8);
+dataview_get_thunk!(dv_get_int16, Int16);
+dataview_get_thunk!(dv_get_uint16, Uint16);
+dataview_get_thunk!(dv_get_int32, Int32);
+dataview_get_thunk!(dv_get_uint32, Uint32);
+dataview_get_thunk!(dv_get_float32, Float32);
+dataview_get_thunk!(dv_get_float64, Float64);
+dataview_get_thunk!(dv_get_bigint64, BigInt64);
+dataview_get_thunk!(dv_get_biguint64, BigUint64);
+dataview_get_thunk!(dv_get_float16, Float16);
 
-dataview_set_thunk!(dv_set_int8, "Int8");
-dataview_set_thunk!(dv_set_uint8, "Uint8");
-dataview_set_thunk!(dv_set_int16, "Int16");
-dataview_set_thunk!(dv_set_uint16, "Uint16");
-dataview_set_thunk!(dv_set_int32, "Int32");
-dataview_set_thunk!(dv_set_uint32, "Uint32");
-dataview_set_thunk!(dv_set_float32, "Float32");
-dataview_set_thunk!(dv_set_float64, "Float64");
-dataview_set_thunk!(dv_set_bigint64, "BigInt64");
-dataview_set_thunk!(dv_set_biguint64, "BigUint64");
-dataview_set_thunk!(dv_set_float16, "Float16");
+dataview_set_thunk!(dv_set_int8, Int8);
+dataview_set_thunk!(dv_set_uint8, Uint8);
+dataview_set_thunk!(dv_set_int16, Int16);
+dataview_set_thunk!(dv_set_uint16, Uint16);
+dataview_set_thunk!(dv_set_int32, Int32);
+dataview_set_thunk!(dv_set_uint32, Uint32);
+dataview_set_thunk!(dv_set_float32, Float32);
+dataview_set_thunk!(dv_set_float64, Float64);
+dataview_set_thunk!(dv_set_bigint64, BigInt64);
+dataview_set_thunk!(dv_set_biguint64, BigUint64);
+dataview_set_thunk!(dv_set_float16, Float16);
 
 /// Install the `DataView.prototype` accessors + numeric methods. Called from
 /// `global_this::populate_builtin_prototype_methods`'s `"DataView"` arm.
@@ -218,14 +225,14 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
         if bf != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "buffer", bf);
             let bl = mk(crate::fn_info!(#[realm("DataView.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_length_getter_thunk, 0; with_declared(0)));
-        if bl != 0 {
-            super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
+            if bl != 0 {
+                super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
+            }
+            let bo = mk(crate::fn_info!(#[realm("DataView.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_offset_getter_thunk, 0; with_declared(0)));
+            if bo != 0 {
+                super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
+            }
         }
-        let bo = mk(crate::fn_info!(#[realm("DataView.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_offset_getter_thunk, 0; with_declared(0)));
-        if bo != 0 {
-            super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
-        }
-    }
     }
 
     // get* methods: spec `.length === 1`, fixed call arity 1 (`byteOffset`),

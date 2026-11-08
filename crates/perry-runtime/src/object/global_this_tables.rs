@@ -140,7 +140,7 @@ builtin_constructors! {
     BigUint64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_BIGUINT64_ARRAY),
     ArrayBuffer => CONSTRUCT_ONLY_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0025),
     SharedArrayBuffer => CONSTRUCT_ONLY_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF002E),
-    DataView => CONSTRUCT_ONLY_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF002B),
+    DataView => CONSTRUCT_ONLY_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE; instance BuiltinInstanceIdentity::Class(0xFFFF002B),
     TextEncoder => NOOP_CONSTRUCTOR_INFO,
     TextDecoder => NOOP_CONSTRUCTOR_INFO,
     TextEncoderStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_TEXT_ENCODER_STREAM),
