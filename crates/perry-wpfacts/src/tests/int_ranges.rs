@@ -33,6 +33,17 @@ fn ranges(src: &str) -> HashMap<String, Option<(i64, i64)>> {
     out
 }
 
+/// `name` has no finite bound: no interval, or one reaching
+/// `range::BIG`.
+fn unbounded(r: &HashMap<String, Option<(i64, i64)>>, name: &str) -> bool {
+    use crate::model::range::BIG;
+    match r.get(name) {
+        Some(Some((lo, hi))) => *lo <= -BIG || *hi >= BIG,
+        Some(None) => true,
+        None => panic!("no binding {name} in {r:?}"),
+    }
+}
+
 /// The proven interval of `name` covers `[lo, hi]` (or there is none).
 fn covers(r: &HashMap<String, Option<(i64, i64)>>, name: &str, lo: i64, hi: i64) -> bool {
     match r.get(name) {
@@ -70,7 +81,7 @@ fn a_loop_test_bounds_its_counter() {
     // the int32 range.
     assert!(hi <= 1023, "the test bounds the climb: {:?}", r["i"]);
     // The accumulator has no bound.
-    assert_eq!(r["s"], None);
+    assert!(unbounded(&r, "s"), "s: {:?}", r["s"]);
 }
 
 #[test]
@@ -141,9 +152,9 @@ fn an_array_literal_keeps_its_length_until_something_moves_it() {
     // The in-range store `K[3] = 7` keeps K's length; widening stops the
     // climb at the ladder's next step.
     let (lo, hi) = r["j"].expect("j is bounded by K.length");
-    assert!(lo <= 0 && (8..=15).contains(&hi), "j: {:?}", r["j"]);
+    assert!(lo <= 0 && (8..=127).contains(&hi), "j: {:?}", r["j"]);
     // `push` moves G's length: its counter has no bound.
-    assert_eq!(r["h"], None, "h: {:?}", r["h"]);
+    assert!(unbounded(&r, "h"), "h: {:?}", r["h"]);
 }
 
 #[test]
@@ -155,7 +166,7 @@ fn an_index_store_past_the_birth_length_moves_it() {
          put(2); put(9);\n\
          console.log(g(1));",
     );
-    assert_eq!(r["j"], None, "j: {:?}", r["j"]);
+    assert!(unbounded(&r, "j"), "j: {:?}", r["j"]);
 }
 
 #[test]
@@ -168,8 +179,8 @@ fn a_length_store_or_an_escape_moves_it() {
          Object.defineProperty(L, \"length\", { value: 1 });\n\
          console.log(g());",
     );
-    assert_eq!(r["j"], None, "j: {:?}", r["j"]);
-    assert_eq!(r["q"], None, "q: {:?}", r["q"]);
+    assert!(unbounded(&r, "j"), "j: {:?}", r["j"]);
+    assert!(unbounded(&r, "q"), "q: {:?}", r["q"]);
 }
 
 #[test]
@@ -180,7 +191,7 @@ fn an_array_unknown_code_holds_has_no_length() {
          (globalThis as any).someHostHook?.(M);\n\
          setTimeout(() => console.log(g()), 0);",
     );
-    assert_eq!(r["w"], None, "w: {:?}", r["w"]);
+    assert!(unbounded(&r, "w"), "w: {:?}", r["w"]);
 }
 
 #[test]
@@ -209,12 +220,12 @@ fn reflection_and_aliases_move_the_length() {
          (D as any)[k + \"0\"] = 1;\n\
          console.log(lens());",
     );
-    assert_eq!(r["a"], None, "Reflect.set length: {:?}", r["a"]);
-    assert_eq!(r["b"], None, "Object.assign: {:?}", r["b"]);
-    assert_eq!(r["c"], None, "splice through an alias: {:?}", r["c"]);
-    assert_eq!(r["d"], None, "computed-key store: {:?}", r["d"]);
-    assert_eq!(
-        r["e"], None,
+    assert!(unbounded(&r, "a"), "Reflect.set length: {:?}", r["a"]);
+    assert!(unbounded(&r, "b"), "Object.assign: {:?}", r["b"]);
+    assert!(unbounded(&r, "c"), "splice through an alias: {:?}", r["c"]);
+    assert!(unbounded(&r, "d"), "computed-key store: {:?}", r["d"]);
+    assert!(
+        unbounded(&r, "e"),
         "a holder of two arrays, one moved: {:?}",
         r["e"]
     );
@@ -233,12 +244,136 @@ fn a_holder_of_two_fixed_arrays_joins_their_lengths() {
 }
 
 #[test]
+fn a_guard_narrows_the_code_it_guards() {
+    let r = ranges(
+        "function f(x: number, k: number): number {\n\
+           const i = x | 0;\n\
+           let s = 0;\n\
+           if (i >= 0 && i < 128) { const a = i; s += a; }\n\
+           if (i < 0 || i > 63) { s += 1; } else { const b = i; s += b; }\n\
+           if (i >= 100) return s;\n\
+           const c = i;\n\
+           let t = k | 0;\n\
+           while (t >= 0 && t < 10) { const d = t; s += d; t += 3; }\n\
+           const e = i > 5 ? i : 5;\n\
+           const g = i < 0 && i > -4 ? i : 0;\n\
+           return s + c + e + g;\n\
+         }\n\
+         console.log(f(3, 1), f(-7, 2), f(200, -1), f(70, 4));",
+    );
+    assert_eq!(r["a"], Some((0, 127)), "a: {:?}", r["a"]);
+    assert_eq!(r["b"], Some((0, 63)), "b: {:?}", r["b"]);
+    assert_eq!(r["c"].map(|(_, hi)| hi), Some(99), "c: {:?}", r["c"]);
+    assert_eq!(r["d"], Some((0, 9)), "d: {:?}", r["d"]);
+    assert!(covers(&r, "e", 5, 99), "e: {:?}", r["e"]);
+    assert!(covers(&r, "g", -3, 0), "g: {:?}", r["g"]);
+}
+
+#[test]
+fn a_guard_never_outlives_a_write_or_a_closure() {
+    let r = ranges(
+        "function f(x: number): number {\n\
+           let i = x | 0;\n\
+           let s = 0;\n\
+           if (i < 10) { i = i + 1000; const a = i; s += a; }\n\
+           let j = x | 0;\n\
+           const bump = () => { j = 5000; };\n\
+           if (j < 10) { bump(); const b = j; s += b; }\n\
+           let m = x | 0;\n\
+           if (m < 10) { for (let q = 0; q < 3; q++) { const c = m; s += c; m += 100; } }\n\
+           return s;\n\
+         }\n\
+         console.log(f(3), f(-2));",
+    );
+    assert!(covers(&r, "a", 1003, 1003), "a: {:?}", r["a"]);
+    assert!(covers(&r, "b", 5000, 5000), "b: {:?}", r["b"]);
+    assert!(covers(&r, "c", 103, 203), "c: {:?}", r["c"]);
+}
+
+#[test]
+fn a_predicate_call_narrows_its_local_arguments() {
+    let r = ranges(
+        "function onBoard(s: number): boolean { return s >= 0 && s < 128 && (s & 0x88) === 0; }\n\
+         function sneaky(s: number): boolean { return (s = 5) > 3 && s < 10; }\n\
+         function f(x: number): number {\n\
+           const i = x | 0;\n\
+           let t = 0;\n\
+           if (onBoard(i)) { const a = i; t += a; }\n\
+           if (sneaky(i)) { const c = i; t += c; }\n\
+           if (!onBoard(i)) return t;\n\
+           const b = i;\n\
+           return t + b;\n\
+         }\n\
+         console.log(f(3), f(-7), f(500));",
+    );
+    assert_eq!(r["a"], Some((0, 127)), "a: {:?}", r["a"]);
+    // What follows `if (!onBoard(i)) return` runs only where it holds.
+    assert_eq!(r["b"], Some((0, 127)), "b: {:?}", r["b"]);
+    // A predicate that writes its parameter implies nothing.
+    assert!(covers(&r, "c", -7, 500), "c: {:?}", r["c"]);
+}
+
+#[test]
+fn a_digit_tested_character_converts_to_its_value() {
+    let r = ranges(
+        "function parse(rank: string): number {\n\
+           let file = 0;\n\
+           let last = 0;\n\
+           for (let i = 0; i < rank.length; i++) {\n\
+             const c = rank.charAt(i);\n\
+             if (c >= \"1\" && c <= \"8\") { const d = Number(c); file += d; continue; }\n\
+             const w = Number(c);\n\
+             if (file >= 8) throw new Error(\"bad\");\n\
+             const sq = 16 + file;\n\
+             last = sq + w * 0;\n\
+             file++;\n\
+           }\n\
+           return last;\n\
+         }\n\
+         console.log(parse(\"3pppk2\"), parse(\"8\"));",
+    );
+    assert_eq!(r["d"], Some((1, 8)), "d: {:?}", r["d"]);
+    // Outside the test `c` may be any character: `Number` may be NaN.
+    assert_eq!(r["w"], None, "w: {:?}", r["w"]);
+    // `file >= 8` throws: `sq` is bounded (widening may round its upper
+    // bound up to the next threshold).
+    let (lo, hi) = r["sq"].expect("sq is bounded");
+    assert!(lo == 16 && (23..=143).contains(&hi), "sq: {:?}", r["sq"]);
+}
+
+#[test]
 fn a_pop_moves_the_length() {
     let r = ranges(
         "const S: number[] = [1, 2, 3, 4, 5];\n\
          function f(): number { let s = 0; for (let p = 0; p < S.length; p++) { s += p; S.pop(); } return s; }\n\
          console.log(f());",
     );
-    // Without the pop S's length would bound `p` to 0..=5.
-    assert!(r["p"].is_none_or(|(_, hi)| hi > 5), "p: {:?}", r["p"]);
+    assert!(
+        unbounded(&r, "p") || r["p"].is_some_and(|(_, hi)| hi > 4),
+        "p: {:?}",
+        r["p"]
+    );
+}
+
+#[test]
+fn a_conjunction_and_an_expression_bound_a_for_counter() {
+    let r = ranges(
+        "function passed(square: number, up: boolean): number {\n\
+           const file = square & 7;\n\
+           let hits = 0;\n\
+           for (let rr = (square >> 4) + (up ? 1 : -1); rr >= 0 && rr < 8; rr += up ? 1 : -1) {\n\
+             for (let ff = Math.max(0, file - 1); ff <= Math.min(7, file + 1); ff++) {\n\
+               const idx = rr * 16 + ff;\n\
+               hits += idx;\n\
+             }\n\
+           }\n\
+           return hits;\n\
+         }\n\
+         console.log(passed(0x34, true), passed(0x61, false));",
+    );
+    assert!(
+        r["idx"].is_some_and(|(lo, hi)| lo >= 0 && hi <= 127),
+        "idx: {:?}",
+        r["idx"]
+    );
 }

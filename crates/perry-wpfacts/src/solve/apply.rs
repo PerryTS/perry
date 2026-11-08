@@ -416,7 +416,7 @@ impl Model {
                 if prim & !strip != 0 {
                     // A filter of the host's values: its Numbers keep the
                     // host's interval.
-                    let saved = self.cur_range.replace(self.nodes[n as usize].range);
+                    let saved = self.cur_range.replace(self.rg(n));
                     self.add_prim(dst, prim & !strip);
                     self.cur_range = saved;
                 }
@@ -438,10 +438,8 @@ impl Model {
                     // The host's falsy Numbers: within its interval unless ⊤
                     // or a marker adds falsy values of its own.
                     let own = !toks.iter().any(|&t| t == TOP || self.is_marker(t));
-                    let saved = std::mem::replace(
-                        &mut self.cur_range,
-                        own.then(|| self.nodes[n as usize].range),
-                    );
+                    let host = own.then(|| self.rg(n));
+                    let saved = std::mem::replace(&mut self.cur_range, host);
                     self.add_prim(dst, p);
                     self.cur_range = saved;
                 }
@@ -1354,17 +1352,41 @@ impl Model {
                 dst,
                 right,
             } => {
-                let me = self.range_input(n);
-                let ot = if other == NO_NODE {
-                    Iv::EMPTY
+                // A code rule clips the operand's Strings by the literal's
+                // code; its result is a code interval (`Node::crange`).
+                if let RangeOp::SClip(k) = op {
+                    let me = self.crange_input(n);
+                    let ot = if other == NO_NODE {
+                        Iv::TOP
+                    } else {
+                        self.crange_input(other)
+                    };
+                    let (l, r) = if right { (ot, me) } else { (me, ot) };
+                    let iv = crate::model::range::eval(RangeOp::Clip(k), l, r);
+                    if crate::solve::grow_crange(&mut self.nodes[dst as usize], iv) {
+                        let d = &mut self.nodes[dst as usize];
+                        if !d.in_wl {
+                            d.in_wl = true;
+                            self.wl.push_back(dst);
+                        }
+                    }
+                    return;
+                }
+                let iv = if op == RangeOp::ToNumber {
+                    self.to_number_range(n)
                 } else {
-                    self.range_input(other)
-                };
-                let (l, r) = if right { (ot, me) } else { (me, ot) };
-                let iv = if self.range_sabotage && op == RangeOp::Add {
-                    l
-                } else {
-                    crate::model::range::eval(op, l, r)
+                    let me = self.range_input(n);
+                    let ot = if other == NO_NODE {
+                        Iv::EMPTY
+                    } else {
+                        self.range_input(other)
+                    };
+                    let (l, r) = if right { (ot, me) } else { (me, ot) };
+                    if self.range_sabotage && op == RangeOp::Add {
+                        l
+                    } else {
+                        crate::model::range::eval(op, l, r)
+                    }
                 };
                 if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
                     let d = &mut self.nodes[dst as usize];
@@ -1466,7 +1488,13 @@ impl Model {
                     self.call_args(call, t);
                 }
             }
-            Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
+            Cons::RetInto { call, run } => {
+                // The run's result is the call's: its Numbers keep their
+                // interval.
+                let saved = self.cur_range.replace(self.rg(n));
+                self.ret_into(call, run, toks, prim);
+                self.cur_range = saved;
+            }
             Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
                 // A primitive source copies no key surely (`null`,

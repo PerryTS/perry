@@ -554,6 +554,7 @@ impl Cons {
             self,
             Cons::Range { .. }
                 | Cons::StoreIndexed { .. }
+                | Cons::RetInto { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }

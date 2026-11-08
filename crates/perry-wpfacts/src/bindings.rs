@@ -293,6 +293,22 @@ pub struct ModuleBindings {
     /// Numeric leaf functions: evaluating the expression on numeric arguments
     /// has no calls, allocation, mutation or user coercion.
     pub numeric_functions: Vec<(u32, Vec<u32>, perry_hir::Expr)>,
+    /// Method call sites by byte offset: each argument's integer interval
+    /// at the call (after narrowing: `gen::narrow`), joined over every copy
+    /// of the call the program holds (inlining duplicates a site); `None`
+    /// for an argument that may be anything but such a Number.
+    pub call_arg_ranges: Vec<(u32, Vec<Option<(i64, i64)>>)>,
+}
+
+/// Node `n` holds only Numbers, each an integer in this interval. An empty
+/// node proves nothing (it may be one the solve left unpopulated).
+fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
+    let node = &m.nodes[n as usize];
+    if node.prim != crate::model::prim::NUM || !node.pts.is_empty() {
+        return None;
+    }
+    let r = node.range;
+    (!r.is_top() && !r.is_empty()).then_some((r.lo, r.hi))
 }
 
 fn facts_of(g: &Gen, n: u32) -> BindingFacts {
@@ -408,6 +424,32 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         }
         let b = facts_of(g, f.this);
         out[f.module as usize].this_of.push((f.func_id, b));
+    }
+    for &(mi, offset, ref args) in &g.call_args_at {
+        let iv: Vec<Option<(i64, i64)>> = args.iter().map(|&n| number_range(&g.m, n)).collect();
+        out[mi as usize].call_arg_ranges.push((offset, iv));
+    }
+    for mb in &mut out {
+        mb.call_arg_ranges.sort_by_key(|(o, _)| *o);
+        let mut joined: Vec<(u32, Vec<Option<(i64, i64)>>)> = Vec::new();
+        for (o, iv) in std::mem::take(&mut mb.call_arg_ranges) {
+            match joined.last_mut() {
+                Some((lo, prev)) if *lo == o => {
+                    if prev.len() != iv.len() {
+                        prev.iter_mut().for_each(|p| *p = None);
+                        continue;
+                    }
+                    for (p, q) in prev.iter_mut().zip(iv) {
+                        *p = match (*p, q) {
+                            (Some((a, b)), Some((c, d))) => Some((a.min(c), b.max(d))),
+                            _ => None,
+                        };
+                    }
+                }
+                _ => joined.push((o, iv)),
+            }
+        }
+        mb.call_arg_ranges = joined;
     }
     for (mi, (_, m)) in g.modules.iter().enumerate() {
         fn pure(e: &perry_hir::Expr, params: &[u32]) -> bool {

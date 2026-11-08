@@ -662,7 +662,11 @@ fn lower_instance_method_call(
                         // clone split instead of the public dispatcher.
                         let split = impl_owner[i].as_deref().and_then(|owner| {
                             crate::lower_call::index_split::number_index_positions(
-                                ctx, owner, property, args,
+                                ctx,
+                                owner,
+                                property,
+                                args,
+                                call_byte_offset,
                             )
                         });
                         match split {
@@ -1752,6 +1756,7 @@ fn lower_instance_method_call(
                             &class_name,
                             property,
                             args,
+                            call_byte_offset,
                         )
                     })
                     .flatten();
@@ -1834,6 +1839,7 @@ fn lower_instance_method_call(
                     shape_only_guard,
                     &subclass_arms,
                     certificate.as_ref(),
+                    call_byte_offset,
                 ) {
                     roots.release(ctx);
                     return Ok(Some(guarded));

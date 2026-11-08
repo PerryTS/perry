@@ -774,7 +774,13 @@ impl Model {
             let saved = (self.cur_src, self.cur_why);
             self.cur_src = s.orig.get(slot as usize).copied().unwrap_or(NO_NODE);
             self.cur_why = u32::MAX;
+            // The seed's Numbers are values its original node held when the
+            // summary was built: that node's interval covers them (it only
+            // grows).
+            let saved_range = self.cur_range;
+            self.cur_range = (self.cur_src != NO_NODE).then(|| self.rg(self.cur_src));
             self.add(base[slot as usize], toks, prim);
+            self.cur_range = saved_range;
             if refuted {
                 self.refute_own_test(base[slot as usize]);
             }

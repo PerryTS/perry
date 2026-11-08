@@ -34,11 +34,67 @@ fn enabled() -> bool {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IndexArg {
     pub pos: usize,
-    pub proven: Option<u32>,
+    pub proven: Option<Proof>,
 }
 
 /// The local `arg` reads when it is an admitted int32 `let` whose interval is
 /// non-negative.
+/// How an index argument is known to be a non-negative int32.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Proof {
+    /// An admitted int32 local with a non-negative interval
+    /// (`facts_int32_locals`).
+    Local(u32),
+    /// The call site's interval for this argument (wpfacts
+    /// `call_arg_ranges`, after narrowing); the local it reads, if any.
+    Site(Option<u32>),
+}
+
+/// The wpfacts interval of argument `pos` at the call at `offset` lies in
+/// `[0, i32::MAX]`.
+fn site_nonneg(ctx: &FnCtx<'_>, offset: u32, pos: usize) -> bool {
+    crate::codegen::index_entry::raw_i32_enabled()
+        && site_args_enabled()
+        && !ctx.wpfacts_off
+        && offset != 0
+        && ctx
+            .wpfacts
+            .call_arg_ranges
+            .get(&offset)
+            .and_then(|v| v.get(pos).copied().flatten())
+            .is_some_and(|(lo, hi)| lo >= 0 && hi <= i64::from(i32::MAX))
+}
+
+thread_local! {
+    /// The source offset of the method call being lowered (its callee's
+    /// `PropertyGet::byte_offset`, the key of wpfacts `call_arg_ranges`).
+    static SITE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Lower method call `callee` with `f`, its site offset visible to the
+/// index split (`site_nonneg`); nested calls in its arguments set theirs.
+pub(crate) fn with_call_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
+    let offset = match callee {
+        Expr::PropertyGet { byte_offset, .. } => *byte_offset,
+        _ => 0,
+    };
+    let saved = SITE.with(|s| s.replace(offset));
+    let out = f();
+    SITE.with(|s| s.set(saved));
+    out
+}
+
+/// `PERRY_FACTS_SITE_ARGS=0`: no call-site argument intervals.
+fn site_args_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_SITE_ARGS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 fn proven_nonneg_local(ctx: &FnCtx<'_>, arg: &Expr) -> Option<u32> {
     let Expr::LocalGet(id) = arg else {
         return None;
@@ -59,6 +115,7 @@ pub(crate) fn number_index_positions(
     class_name: &str,
     property: &str,
     args: &[Expr],
+    call_byte_offset: u32,
 ) -> Option<(Vec<IndexArg>, Vec<u32>)> {
     if !enabled() {
         return None;
@@ -79,13 +136,64 @@ pub(crate) fn number_index_positions(
     for id in params {
         let pos = method.params.iter().position(|p| p.id == *id)?;
         let arg = args.get(pos)?;
-        let proven = proven_nonneg_local(ctx, arg);
+        let site = SITE.with(std::cell::Cell::get);
+        let _ = call_byte_offset;
+        let proven = proven_nonneg_local(ctx, arg).map(Proof::Local).or_else(|| {
+            site_nonneg(ctx, site, pos).then(|| match arg {
+                Expr::LocalGet(id) => Proof::Site(Some(*id)),
+                _ => Proof::Site(None),
+            })
+        });
         if proven.is_none() && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, arg) {
             return None;
         }
         positions.push(IndexArg { pos, proven });
     }
     Some((positions, params.clone()))
+}
+
+/// Check mode (`PERRY_VERIFY_FACTS=1`): the argument the proof covers is an
+/// exact int32 (a plain double or an INT32 box, never `-0`) and not
+/// negative (fact `index argument`).
+fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::IndexArgument,
+        || serde_json::json!({ "proof": format!("{proof:?}") }),
+    );
+    crate::facts_consumed::used();
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    let blk = ctx.block();
+    let (exact, int) = crate::codegen::emit_typed_i32_guard_and_raw(blk, value);
+    let nonnegative = blk.icmp_sge(I32, &int, "0");
+    let ok = blk.and(I1, &exact, &nonnegative);
+    crate::verify_facts::tick(ctx);
+    let miss = ctx.new_block("index.arg.verify_miss");
+    let next = ctx.new_block("index.arg.admitted");
+    let miss_l = ctx.block_label(miss);
+    let next_l = ctx.block_label(next);
+    ctx.block().cond_br(&ok, &next_l, &miss_l);
+    ctx.current_block = miss;
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::IndexArgument,
+        || serde_json::json!({ "proof": format!("{proof:?}") }),
+    );
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("index argument {proof:?}"),
+        crate::verify_facts::Fact::IndexArgument,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(crate::types::DOUBLE, value)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
 }
 
 /// The i32 of a proven non-negative int32 local: its canonical i32 slot, or
@@ -113,8 +221,14 @@ pub(crate) fn emit_number_index_split(
     let mut raws: Vec<String> = Vec::with_capacity(positions.len());
     for arg in positions {
         let value = arg_slices[arg.pos + 1].1.to_string();
-        if let Some(id) = arg.proven {
-            let raw = proven_raw(ctx, id, &value);
+        if let Some(proof) = arg.proven {
+            witness_nonneg(ctx, &value, proof);
+            let raw = match proof {
+                Proof::Local(id) | Proof::Site(Some(id)) => proven_raw(ctx, id, &value),
+                Proof::Site(None) => {
+                    crate::codegen::emit_typed_i32_raw_assuming_guarded(ctx.block(), &value)
+                }
+            };
             raws.push(raw);
             continue;
         }

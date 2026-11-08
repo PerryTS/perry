@@ -69,7 +69,9 @@ pub(super) fn tower_pshape_route(
         (pshape_fn, fname.to_string())
     };
     let number_index = (!index_proven)
-        .then(|| crate::lower_call::index_split::number_index_positions(ctx, owner, property, args))
+        .then(|| {
+            crate::lower_call::index_split::number_index_positions(ctx, owner, property, args, 0)
+        })
         .flatten();
     Some(TowerPshapeRoute {
         clone_fn,

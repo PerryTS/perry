@@ -595,6 +595,12 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // The call's site offset, for every route that consults the call-site
+    // argument intervals (`index_split::with_call_site`).
+    index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))
+}
+
+fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
     let _callee_cause = crate::fallback_diag::callee_cause(ctx, callee);
     // A static field used as a callee remains a property Reference:
     // P.f() binds P. Read-only StaticFieldGet lowering otherwise loses it.

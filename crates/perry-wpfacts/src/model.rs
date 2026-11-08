@@ -961,7 +961,7 @@ pub const INSPECT_CUSTOM_METHOD: &str = "__perry_inspect_custom__";
 mod cons;
 pub use cons::*;
 pub mod range;
-pub use range::{Iv, RangeOp};
+pub use range::{Iv, RangeOp, Rg};
 
 /// DECISIONS 118: (function, parameter, into its reach, via, key).
 pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Key);
@@ -1050,6 +1050,13 @@ pub struct Node {
     pub rsteps: u8,
     /// The result node of a `Cons::Range` rule: its interval is the rule's.
     pub ruled: bool,
+    /// The code interval of the Strings it holds (`range::CHAR_ANY`: each
+    /// is `""` or one code unit); ⊤ says nothing.
+    pub crange: range::Iv,
+    /// Growths of `crange` so far.
+    pub csteps: u8,
+    /// The result node of a code-interval rule (`RangeOp::SClip`).
+    pub cruled: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -1161,7 +1168,7 @@ pub struct Model {
     pub work: std::cell::Cell<u64>,
     /// The interval a Number arriving through `add_tokens` carries: the
     /// source's, while a value-copy edge delivers; `None` (⊤) otherwise.
-    pub cur_range: Option<Iv>,
+    pub cur_range: Option<range::Rg>,
     /// Test-only negative control (`FactsConfig::sabotage` = `range`): the
     /// `+` interval rule drops its right operand, a wrong transfer the
     /// int32 witnesses must catch.
