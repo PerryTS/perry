@@ -477,6 +477,39 @@ extern "C" fn buffer_constructor_thunk(
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
+/// `Buffer.prototype.toString(encoding, start, end)` as a value
+/// (`Buffer.prototype.toString.call(buf, ..)`): the decode `buf.toString(..)`
+/// runs, on a Buffer or a plain `Uint8Array` (Node decodes any Uint8Array
+/// receiver's bytes). Any other receiver throws Node's TypeError
+/// (`argument must be a buffer`). Node also decodes the other typed arrays
+/// and (without arguments) a DataView; perry throws there.
+pub(crate) extern "C" fn buffer_prototype_to_string(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
+) -> f64 {
+    let this_bits = this.bits();
+    let addr = (this_bits & crate::value::POINTER_MASK) as usize;
+    if !(crate::value::JSValue::from_bits(this_bits).is_pointer()
+        && addr != 0
+        && crate::buffer::is_uint8_view_buffer(addr))
+    {
+        crate::collection_iter::throw_type_error("argument must be a buffer");
+    }
+    let args = if args.is_null() || argc == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(args, argc) }
+    };
+    unsafe {
+        crate::object::buffer_dispatch::buffer_to_string_call(
+            addr as *mut crate::buffer::BufferHeader,
+            args,
+        )
+    }
+}
+
 extern "C" fn buffer_prototype_method_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
