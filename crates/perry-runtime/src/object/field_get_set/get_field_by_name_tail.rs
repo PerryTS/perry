@@ -335,81 +335,20 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                     return JSValue::number(len as f64);
                 }
+                // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView is an
+                // ordinary object: own, then its [[Prototype]] chain (node's
+                // members live on the intrinsic). Never the Buffer table below.
+                if crate::buffer::is_non_indexed_buffer_view(obj as usize) {
+                    return super::buffer_own_prop::view_get(obj, key);
+                }
                 // An own property on the Buffer shadows the same-named prototype
                 // method; both reads live in `buffer_own_prop`.
                 if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(obj, key_bytes) {
                     return v;
                 }
-                // `ab.resize` / `ab.transfer` read as VALUES (`typeof ab.resize`,
-                // `const r = ab.resize`): bound methods, on ArrayBuffer only —
-                // a Uint8Array / DataView / SharedArrayBuffer has none of them.
-                if crate::buffer::is_array_buffer(obj as usize)
-                    && !crate::buffer::is_data_view(obj as usize)
-                    && !crate::buffer::is_shared_array_buffer(obj as usize)
-                {
-                    if let Some(method) = std::str::from_utf8(key_bytes).ok().and_then(
-                        crate::object::buffer_dispatch::array_buffer_only_method_name_static,
-                    ) {
-                        let bound = crate::object::js_class_method_bind(
-                            crate::value::js_nanbox_pointer(obj as i64),
-                            method.as_ptr(),
-                            method.len(),
-                        );
-                        return JSValue::from_bits(bound.to_bits());
-                    }
-                }
-                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters
-                // (#10873). A fixed-length buffer answers `false` and its
-                // `byteLength`; a resizable one answers `true` and the
-                // `maxByteLength` it was constructed with (0 once detached).
-                // These live only on ArrayBuffer (not DataView /
-                // SharedArrayBuffer / typed arrays), which return `undefined`
-                // for them in Node — so scope to a plain registered ArrayBuffer.
-                if (key_bytes == b"resizable"
-                    || key_bytes == b"maxByteLength"
-                    || key_bytes == b"detached")
-                    && crate::buffer::is_array_buffer(obj as usize)
-                    && !crate::buffer::is_data_view(obj as usize)
-                    && !crate::buffer::is_shared_array_buffer(obj as usize)
-                {
-                    if key_bytes == b"resizable" {
-                        return JSValue::bool(crate::buffer::is_resizable_buffer(obj as usize));
-                    }
-                    if key_bytes == b"maxByteLength" {
-                        if let Some(max) = crate::buffer::resizable_max_byte_length(obj as usize) {
-                            let detached = crate::buffer::is_detached_buffer(obj as usize);
-                            return JSValue::number(if detached { 0.0 } else { max as f64 });
-                        }
-                    }
-                    // `detached` (ES2024) — true after a successful
-                    // `transfer`/`transferToFixedLength`/structuredClone
-                    // transfer.
-                    if key_bytes == b"detached" {
-                        return JSValue::bool(crate::buffer::is_detached_buffer(obj as usize));
-                    }
-                    let b = obj as *const crate::buffer::BufferHeader;
-                    return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
-                }
                 if key_bytes == b"constructor" {
                     if crate::buffer::crypto_key_meta(obj as usize).is_some() {
                         let ctor = super::super::builtin_constructor_value("CryptoKey");
-                        return JSValue::from_bits(ctor.to_bits());
-                    }
-                    // A DataView's constructor is inherited from its actual
-                    // prototype, including user subclasses and overrides.
-                    if crate::buffer::is_data_view(obj as usize) {
-                        return super::buffer_own_prop::data_view_constructor(obj, key);
-                    }
-                    // An ArrayBuffer / SharedArrayBuffer answers with ITS
-                    // constructor (`ta.buffer.constructor === ArrayBuffer`,
-                    // test262 ctors/buffer-arg/typedarray-backed-by-
-                    // sharedarraybuffer).
-                    if crate::buffer::is_shared_array_buffer(obj as usize) {
-                        let ctor = super::super::builtin_constructor_value("SharedArrayBuffer");
-                        return JSValue::from_bits(ctor.to_bits());
-                    }
-                    if crate::buffer::is_any_array_buffer(obj as usize) {
-                        let ctor = super::super::builtin_constructor_value("ArrayBuffer");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {

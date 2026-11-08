@@ -538,22 +538,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     );
                 }
             }
-            // #6674: the TC39 base64/hex conversion methods
-            // (`toBase64`/`toHex`/`setFromBase64`/`setFromHex`) are Uint8Array-ONLY
-            // (they don't exist on other typed arrays), so install them as own
-            // methods on the `Uint8Array` per-kind prototype — not the shared
-            // `%TypedArray%.prototype` intrinsic. This materializes the value read
-            // `typeof Uint8Array.prototype.toBase64 === "function"`; the static
-            // factories `fromBase64`/`fromHex` are installed on the constructor by
-            // `install_builtin_constructor_statics`.
-            if name == "Uint8Array" {
-                super::super::typed_array_proto_thunks::install_uint8array_base64_hex_proto_methods(
-                    proto_obj,
-                );
-            }
             // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
             // constructor and its prototype, matching Node's descriptor
             // `{ value, writable:false, enumerable:false, configurable:false }`.
+            // On the prototype it precedes `Uint8Array`'s base64/hex methods,
+            // node's own-key order.
             // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
             // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
             // `hasOwnProperty`, and the chained `Float64Array.prototype
@@ -580,6 +569,19 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                         bpe_attrs,
                     );
                 }
+            }
+            // #6674: the TC39 base64/hex conversion methods
+            // (`toBase64`/`toHex`/`setFromBase64`/`setFromHex`) are Uint8Array-ONLY
+            // (they don't exist on other typed arrays), so install them as own
+            // methods on the `Uint8Array` per-kind prototype — not the shared
+            // `%TypedArray%.prototype` intrinsic. This materializes the value read
+            // `typeof Uint8Array.prototype.toBase64 === "function"`; the static
+            // factories `fromBase64`/`fromHex` are installed on the constructor by
+            // `install_builtin_constructor_statics`.
+            if name == "Uint8Array" {
+                super::super::typed_array_proto_thunks::install_uint8array_base64_hex_proto_methods(
+                    proto_obj,
+                );
             }
             if name != "Array" {
                 // Its own keys are in: return the room it did not use.

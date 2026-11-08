@@ -254,6 +254,16 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             // so the MockBuffer no-op swap never happened and the packet-sizing
             // pass wrote into a zero-length Buffer (RangeError
             // [ERR_OUT_OF_RANGE] at the MySQL handshake).
+            // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView reads
+            // own, then its [[Prototype]] chain, never the Buffer table.
+            if crate::buffer::is_non_indexed_buffer_view(raw as usize) {
+                if let Some(name) = buffer_key_name(idx) {
+                    let key =
+                        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    let v = crate::object::view_get(raw as *const crate::object::ObjectHeader, key);
+                    return f64::from_bits(v.bits());
+                }
+            }
             if let Some(name) = buffer_key_name(idx) {
                 if let Some(v) = crate::buffer::buffer_read_own_prop(raw as usize, &name) {
                     return v;

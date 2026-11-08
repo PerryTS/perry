@@ -3757,6 +3757,7 @@ js_shape_ordinary_inline_slot_for_key	i32s	i32u,i64
 js_shape_run_static_seed	void	
 js_shared_array_buffer_new	ptr	i32s
 js_shared_array_buffer_new_value	ptr	f64
+js_shared_array_buffer_new_with_options	ptr	f64,f64
 js_sharp_auto_orient	i64	i64
 js_sharp_avif	i64	i64,f64
 js_sharp_blur	i64	i64,f64
