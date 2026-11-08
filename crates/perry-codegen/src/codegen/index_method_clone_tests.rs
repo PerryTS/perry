@@ -606,7 +606,11 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
     let _native = crate::codegen::helpers::NativeRootsPin::native();
     let ir = emit();
     let clone_symbol = "perry_method_index_method_clone_ts__Reader__read$idx_u31_12";
-    let clone = function_body(&ir, &format!("@{clone_symbol}("));
+    // The clone's body takes the proved index raw (`index_entry`); its own
+    // symbol is the boxed-ABI adapter that converts it.
+    let adapter = function_body(&ir, &format!("@{clone_symbol}("));
+    let raw_symbol = format!("{clone_symbol}$i32");
+    let clone = function_body(&ir, &format!("@{raw_symbol}("));
     let public_symbol = "perry_method_index_method_clone_ts__Reader__read";
     let public = function_body(&ir, &format!("@{public_symbol}("));
     let generic = function_body(&ir, &format!("@{public_symbol}$generic("));
@@ -625,10 +629,15 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
 
     assert!(
         !clone.contains("js_typed_i32_arg_to_raw")
-            && clone.contains("fptosi double")
+            && clone.lines().next().is_some_and(|line| line.contains("i32 %argi12"))
             && clone.contains("arr.guard.deref")
             && clone.contains("call double @perry_array_read_cold_shared("),
-        "the clone must decode the established integer proof inline and use a guarded direct-slot tier:\n{clone}"
+        "the clone must take the established integer proof raw and use a guarded direct-slot tier:\n{clone}"
+    );
+    assert!(
+        adapter.contains("fptosi double")
+            && adapter.contains(&format!("call double @{raw_symbol}(")),
+        "the boxed-ABI adapter decodes the integer proof inline once:\n{adapter}"
     );
     assert!(
         !clone.contains("js_array_get_index_or_string"),
@@ -653,7 +662,7 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
             && public.contains("icmp sge i32")
             && public.contains("nonnegative_index_method.fast")
             && public.contains("nonnegative_index_method.generic")
-            && public.contains(&format!("call double @{clone_symbol}("))
+            && public.contains(&format!("call double @{raw_symbol}("))
             && public.contains(&format!("call double @{public_symbol}$generic(")),
         "the stable public entry must guard erased live values once and preserve a generic miss:\n{public}"
     );
@@ -682,7 +691,8 @@ fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback()
     let combined = format!("{pshape}$idx_u31_{INDEX_ID}");
     let wrapper = function_body(&ir, &format!("@{pshape}("));
     let generic = function_body(&ir, &format!("@{pshape_generic}("));
-    let fast = function_body(&ir, &format!("@{combined}("));
+    let adapter = function_body(&ir, &format!("@{combined}("));
+    let fast = function_body(&ir, &format!("@{combined}$i32("));
 
     assert!(
         wrapper
@@ -693,7 +703,7 @@ fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback()
             && !wrapper.contains("js_typed_i32_arg_to_raw")
             && wrapper.contains("@llvm.fptosi.sat.i32.f64(double")
             && wrapper.contains("-9223372036854775808")
-            && wrapper.contains(&format!("call double @{combined}("))
+            && wrapper.contains(&format!("call double @{combined}$i32("))
             && wrapper.contains(&format!("call double @{pshape_generic}(")),
         "the published receiver-shape capability must guard the live index and retain its receiver-safe miss:\n{wrapper}"
     );
@@ -706,9 +716,12 @@ fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback()
     assert!(
         !fast.contains("js_array_get_index_or_string")
             && !fast.contains("js_object_get_field_by_name")
-            && !fast.contains("js_typed_i32_arg_to_raw")
-            && fast.contains("fptosi double"),
+            && !fast.contains("js_typed_i32_arg_to_raw"),
         "the composed clone must consume both proofs in the same body:\n{fast}"
+    );
+    assert!(
+        adapter.contains("fptosi double"),
+        "the composed clone's boxed-ABI adapter decodes the index:\n{adapter}"
     );
 }
 
@@ -719,7 +732,7 @@ fn combined_receiver_and_u31_clone_fuses_property_array_push() {
     let public = "perry_method_shaped_push_method_clone_ts__PackedOwner__append";
     let pshape = crate::collectors::pshape_method_name(public);
     let combined = format!("{pshape}$idx_u31_{INDEX_ID}");
-    let fast = function_body(&ir, &format!("@{combined}("));
+    let fast = function_body(&ir, &format!("@{combined}$i32("));
     let generic = function_body(&ir, &format!("@{pshape}$generic("));
 
     // The fused entry is allocate-but-never-reenter and answers null for
@@ -765,7 +778,7 @@ fn u31_bitset_clone_uses_one_guarded_uint32_load_and_keeps_dynamic_miss() {
 
     let ir = emit_bitset();
     let public = "perry_method_u32_bitset_method_clone_ts__Bitset__has";
-    let clone = function_body(&ir, &format!("@{public}$idx_u31_{BIT_INDEX_ID}("));
+    let clone = function_body(&ir, &format!("@{public}$idx_u31_{BIT_INDEX_ID}$i32("));
     let generic = function_body(&ir, &format!("@{public}$generic("));
 
     assert!(
@@ -1035,7 +1048,7 @@ fn guarded_read_sends_forwarding_and_holes_to_shared_runtime() {
     let ir = emit();
     let clone = function_body(
         &ir,
-        "@perry_method_index_method_clone_ts__Reader__read$idx_u31_12(",
+        "@perry_method_index_method_clone_ts__Reader__read$idx_u31_12$i32(",
     );
     // Type/forwarding remain guarded; a program without descriptor writers
     // has no named-layout or element-kind guard on its element read.

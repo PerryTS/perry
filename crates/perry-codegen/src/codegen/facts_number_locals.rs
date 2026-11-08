@@ -142,7 +142,7 @@ pub(crate) fn accept_let_value(
     source: &perry_hir::Expr,
     value: String,
 ) -> String {
-    if !ctx.facts_number_locals.contains(&id) {
+    if !ctx.facts_number_locals.contains(&id) && !ctx.facts_int32_locals.contains(&id) {
         return value;
     }
     // The HIR's release of an initialized const (`IteratorRecordPlan::release`
@@ -152,6 +152,10 @@ pub(crate) fn accept_let_value(
     // Any other `undefined` write would have put UNDEF in the binding's node,
     // so a proven binding meets a literal `undefined` only here.
     if matches!(source, perry_hir::Expr::Undefined) {
+        return value;
+    }
+    super::facts_int32_locals::witness(ctx, &value, id);
+    if !ctx.facts_number_locals.contains(&id) {
         return value;
     }
     note_consumed(id);

@@ -1143,10 +1143,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     // twice) unite their receivers.
     let mut first: FxHashMap<(u32, u32, u32, bool, bool), usize> = FxHashMap::default();
     let mut groups: Vec<(usize, Vec<u32>, Vec<FnIdx>)> = Vec::new();
-    // The functions only the runtime has (a promise's resolvers). Every
-    // other function token is a body: compiled here, or another unit's,
-    // held by its contract (a stand-in, a foreign class's method).
-    let runtime: FxHashSet<FnIdx> = m.resolvers.values().map(|&t| m.tok_fn(t)).collect();
+    // The functions only the runtime has (a promise's resolvers, a promise
+    // capability's executor). Every other function token is a body:
+    // compiled here, or another unit's, held by its contract (a stand-in, a
+    // foreign class's method).
+    let runtime: FxHashSet<FnIdx> = m
+        .resolvers
+        .values()
+        .chain(m.executors.values())
+        .map(|&t| m.tok_fn(t))
+        .collect();
     for (i, s) in g.read_sites.iter().enumerate() {
         let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call);
         match first.get(&k) {

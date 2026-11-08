@@ -312,11 +312,11 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
 /// `then`, `catch` and `finally` (27.2.5.1, 27.2.5.3, 27.2.5.4) take the
 /// result's constructor with SpeciesConstructor(p, %Promise%): `constructor`
 /// is read from the promise and its `@@species` from that value. A program
-/// species is constructed (NewCapability) with the runtime's executor, an
-/// opaque function that keeps the resolving functions it is given for the
-/// runtime to call; what it makes is the call's result. The realm's own
-/// promise constructors make the call's own promise (the rule below).
-fn promise_species(m: &mut Model, t: Tok, call: CallId) {
+/// species is constructed (NewPromiseCapability, 27.2.1.5) with the
+/// capability's executor `executor` (`capability_executor`); what it makes is
+/// the call's result. The realm's own promise constructors make the call's
+/// own promise (the rule below).
+fn promise_species(m: &mut Model, t: Tok, call: CallId, executor: Tok) {
     let recv = m.node_l("promise");
     m.add_tok(recv, t);
     let k = m.atom("constructor");
@@ -338,7 +338,7 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId) {
         },
     );
     let exec = m.node_l("capability-executor");
-    m.add_tok(exec, TOP);
+    m.add_tok(exec, executor);
     let c = m.calls[call as usize].clone();
     let mc = m.solver_call(
         call,
@@ -352,6 +352,75 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId) {
         },
     );
     m.cons(sp, Cons::NewProgram { call: mc });
+}
+
+/// The executor NewPromiseCapability (27.2.1.5) hands `new C(executor)`: a
+/// runtime function (GetCapabilitiesExecutor, 27.2.1.5.1) whose closure is
+/// the capability. Called with `(resolve, reject)` it keeps them in the
+/// capability and returns `undefined`; a call after one was kept throws a
+/// TypeError, the runtime error every catch already holds (`gen`'s
+/// THROWN). The reaction jobs (27.2.2.1) then call what it kept: resolve
+/// with the value the derived promise is resolved with (`settled`: a
+/// handler's result, or the receiver's value passed through), reject with
+/// a rejection reason (THROWN). For `finally` (27.2.5.3) resolve gets the
+/// result of `then` invoked on PromiseResolve(C, onFinally()), a call of
+/// the species' own `then` the model does not follow: any value
+/// (`unknown`). One executor per capability (its `settled` node).
+fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool) -> Tok {
+    if let Some(&t) = m.executors.get(&settled) {
+        return t;
+    }
+    let fx = m.funcs.len() as FnIdx;
+    let tok = m.tok(TokKind::Func(fx, NO_CTX));
+    let this = m.node_l("this(capability executor)");
+    let ret = m.node_l("ret(capability executor)");
+    let args_all = m.node_l("args(capability executor)");
+    let res = m.node_l("capability-resolve");
+    let rej = m.node_l("capability-reject");
+    m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
+        module: 0,
+        func_id: u32::MAX,
+        raise: u32::MAX,
+        name: "<capability executor>".into(),
+        params: vec![res, rej],
+        rest: None,
+        this,
+        ret,
+        args_all,
+        has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
+        token: tok,
+        ctor_of: None,
+        lexical_this: true,
+        no_summary: false,
+        gen_proto: None,
+        gen_fn_protos: None,
+        gen_async: false,
+        gen_reyields: false,
+        proto: None,
+        captures: Vec::new(),
+        forwards_super: false,
+        parent: NO_FN,
+        forwarded: false,
+    });
+    m.add_prim(ret, prim::UNDEF);
+    m.executors.insert(settled, tok);
+    let value = if unknown {
+        let v = m.node_l("finally-settled");
+        m.edge(settled, v);
+        m.add_top(v, |_| {
+            "value a finally capability is resolved with: the species' own then result".into()
+        });
+        v
+    } else {
+        settled
+    };
+    let thrown = m.thrown;
+    let _ = cb_call(m, by, res, ThisArg::Undef, vec![value]);
+    let _ = cb_call(m, by, rej, ThisArg::Undef, vec![thrown]);
+    tok
 }
 
 /// `recv[name](...args)` where the algorithm looks the method up as a
@@ -1189,10 +1258,11 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_prim(m, call, prim::UNDEF);
         }
         ("Promise", Some("then" | "catch" | "finally")) => {
-            promise_species(m, t, call);
             let v = promise_value(m, t);
             let out = site_tmpl(m, call, "Promise");
             let ov = promise_value(m, out);
+            let exec = capability_executor(m, call, ov, name == Some("finally"));
+            promise_species(m, t, call, exec);
             let thrown = m.thrown;
             let (on_ok, on_err) = match name {
                 Some("then") => (c.args.first().copied(), c.args.get(1).copied()),

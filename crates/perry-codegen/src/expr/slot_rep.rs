@@ -680,6 +680,12 @@ pub(crate) fn store_canonical_local_from_double(
     let Some((slot, _rep)) = canonical_local_i32_slot(ctx, id) else {
         return false;
     };
+    // An interval-proven int32 local: the value is an exact int32.
+    if let Some(v_i32) = crate::codegen::facts_int32_locals::store_from_double(ctx, value, id, rhs)
+    {
+        ctx.block().store(I32, &v_i32, &slot);
+        return true;
+    }
     let known_i32_range = rhs.is_some_and(|e| super::is_known_i32_range(ctx, e));
     let v_i32 = if known_i32_range {
         let v_i64 = ctx.block().fptosi(DOUBLE, value, I64);
