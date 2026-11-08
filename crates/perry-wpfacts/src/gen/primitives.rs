@@ -136,6 +136,12 @@ impl<'a> Gen<'a> {
         if !self.int_ranges {
             return;
         }
+        if crate::demand::int_operands(op) {
+            self.m.nodes[l as usize].int_use = true;
+            if let Some(r) = r {
+                self.m.nodes[r as usize].int_use = true;
+            }
+        }
         let other = r.unwrap_or(crate::model::NO_NODE);
         self.m.cons(
             l,

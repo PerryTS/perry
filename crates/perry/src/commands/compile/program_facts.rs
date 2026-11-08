@@ -554,6 +554,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     }
                 }
             }
+            out.local_reps.insert(
+                *id,
+                match b.rep {
+                    perry_wpfacts::Rep::Boxed => perry_codegen::FactsRep::Boxed,
+                    perry_wpfacts::Rep::F64 => perry_codegen::FactsRep::F64,
+                    perry_wpfacts::Rep::I32 => perry_codegen::FactsRep::I32,
+                },
+            );
             if b.length_number {
                 out.length_number_inputs.insert(*id);
             }

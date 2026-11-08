@@ -1086,6 +1086,11 @@ pub struct Node {
     pub csteps: u8,
     /// The result node of a code-interval rule (`RangeOp::SClip`).
     pub cruled: bool,
+    /// The node is an int consumer's operand: an element key, a bitwise
+    /// operand (`demand`).
+    pub int_use: bool,
+    /// One of its values can reach an int consumer (`demand::solve`).
+    pub int_demand: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for

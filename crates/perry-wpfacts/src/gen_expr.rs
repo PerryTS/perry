@@ -1291,6 +1291,7 @@ impl<'a> Gen<'a> {
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
+                self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
                     i,
@@ -1366,6 +1367,7 @@ impl<'a> Gen<'a> {
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
+                self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
                     i,
@@ -1407,6 +1409,7 @@ impl<'a> Gen<'a> {
             Expr::IndexUpdate { object, index, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
+                self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
                     i,
