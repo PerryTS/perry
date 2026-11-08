@@ -1,6 +1,12 @@
 //! Annex B descriptor queries return accessor function values, without [[Get]].
 use super::*;
 
+/// The getters and setters of the realm's own accessor properties, one
+/// value: each is an ordinary built-in function object that is no
+/// constructor and has no realm declaration, so it is no other builtin.
+/// Its fields are its own; a call of it is an opaque builtin call.
+const REALM_ACCESSOR: &str = "%RealmAccessor%";
+
 /// The same transfer serves intrinsic dispatch and the direct runtime lowering.
 /// `None` is a primitive wrapper: its native descriptors are not represented by
 /// program accessor records, so its result remains conservative.
@@ -51,6 +57,17 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
     } else {
         Key::any()
     };
+    // B.2.2.4/5: an own accessor of a holder on the chain answers its
+    // [[Get]]/[[Set]], a data property or the end of the chain `undefined`.
+    // Under a key that may name any property that includes the realm's own
+    // accessors (`Object.prototype.__proto__`, `Map.prototype.size`, ...),
+    // whose functions only the realm holds: the call hands them out.
+    if key.is_any() {
+        let f = m.tok(TokKind::BuiltinFn(Native::Member {
+            identity: REALM_ACCESSOR,
+        }));
+        m.add_tok(c.ret, f);
+    }
     let act = ChainAct::Lookup { dst: c.ret, setter };
     m.accessor_walk(origin, origin, key, act);
     m.builtin_field_use(origin, key, act);
@@ -101,15 +118,13 @@ pub(crate) fn lookup_native_descriptor(
     }
 }
 
-/// B.2.2.4/5 under a key that may name any property, on an intrinsic holder
-/// of the chain: an own accessor answers its [[Get]]/[[Set]], a data
-/// property or the end of the chain `undefined`. The realm's own accessors
-/// (`Object.prototype.__proto__`, `Map.prototype.size`, ...) are builtin
-/// functions, never values of the program; program accessors installed on a
-/// modeled holder come from the walk itself (`accessor_hit`). Only a write
-/// the model does not place on the holder (through ⊤, or onto it under any
-/// key) may have installed a program function: that write answers ⊤, now or
-/// when it arrives (`NativeMiss::Lookup`).
+/// A descriptor query under a key that may name any property, on an
+/// intrinsic holder of the chain: program accessors installed on a modeled
+/// holder come from the walk itself (`accessor_hit`); the realm's own
+/// accessors are the realm's (`annexb_lookup`), not the holder's. Only a
+/// write the model does not place on the holder (through ⊤, or onto it under
+/// any key) may have installed a program function: that write answers ⊤,
+/// now or when it arrives (`NativeMiss::Lookup`).
 fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
     match m.toks[holder as usize] {
         TokKind::BuiltinFn(Native::Any) => {
@@ -128,6 +143,4 @@ fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
         return;
     }
     m.native_missing.push((holder, star, NativeMiss::Lookup(dst)));
-    let f = builtin_fn(m, "native accessor of an Annex B lookup");
-    m.add_tok(dst, f);
 }
