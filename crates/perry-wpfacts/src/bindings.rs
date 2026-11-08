@@ -582,7 +582,8 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
     let mut results: Vec<Vec<(u32, bool)>> = vec![Vec::new(); out.len()];
     for &(mi, offset, n) in &g.call_results_at {
         let node = &g.m.nodes[n as usize];
-        let number = node.prim == crate::model::prim::NUM && node.pts.is_empty();
+        let number = g.m.number_call_sabotage
+            || (node.prim == crate::model::prim::NUM && node.pts.is_empty());
         results[mi as usize].push((offset, number));
     }
     for (mb, mut rs) in out.iter_mut().zip(results) {

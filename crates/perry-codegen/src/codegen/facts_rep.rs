@@ -76,24 +76,73 @@ pub(crate) fn typed_params() -> bool {
 /// The method call whose callee is `callee` is a Number by the facts: a
 /// canonical double (module docs).
 pub(crate) fn number_call(ctx: &crate::expr::FnCtx<'_>, callee: &perry_hir::Expr) -> bool {
-    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
+    let Some(byte_offset) = claimed_call(ctx, callee) else {
         return false;
     };
-    if !typed_params()
-        || !canonical_numbers()
-        || ctx.wpfacts_off
-        || ctx.wpfacts.interp_guard
-        || *byte_offset == 0
-        || !ctx.wpfacts.number_calls.contains(byte_offset)
-    {
-        return false;
-    }
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::NumericResult,
         || serde_json::json!({ "call": byte_offset }),
     );
     crate::facts_consumed::used();
     true
+}
+
+/// The site offset of the method call through `callee` when the facts
+/// prove it a Number call and this body may use that proof.
+fn claimed_call(ctx: &crate::expr::FnCtx<'_>, callee: &perry_hir::Expr) -> Option<u32> {
+    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
+        return None;
+    };
+    let usable = typed_params()
+        && canonical_numbers()
+        && !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && *byte_offset != 0
+        && ctx.wpfacts.number_calls.contains(byte_offset);
+    usable.then_some(*byte_offset)
+}
+
+/// Check mode: `value`, the result of the call through `callee` that
+/// `number_call` proves a Number, is a canonical double, neither a tagged
+/// value nor an INT32 box. A miss reports the false proof and exits 86.
+pub(crate) fn witness_number_call(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    callee: &perry_hir::Expr,
+    value: &str,
+) {
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    let Some(byte_offset) = claimed_call(ctx, callee) else {
+        return;
+    };
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::NumericResult,
+        || serde_json::json!({ "call": byte_offset }),
+    );
+    let plain = super::typed_entry::emit_plain_number_test(ctx.block(), value);
+    crate::verify_facts::tick(ctx);
+    let miss = ctx.new_block("number.call.verify_miss");
+    let next = ctx.new_block("number.call.admitted");
+    let miss_l = ctx.block_label(miss);
+    let next_l = ctx.block_label(next);
+    ctx.block().cond_br(&plain, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("number call @{byte_offset}"),
+        crate::verify_facts::Fact::NumericResult,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, value)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
 }
 
 /// Give each parameter in `number_params` (proven Number on every entry,

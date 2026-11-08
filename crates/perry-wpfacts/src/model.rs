@@ -422,7 +422,13 @@ impl TmplKind {
     /// `%TypedArray%` instance or a host `Buffer` (`fs.readFileSync(path)`),
     /// a `Uint8Array` whose prototype is `Buffer.prototype`.
     pub fn typed_storage(&self) -> bool {
-        matches!(self, TmplKind::BObj { what: "TypedArray" | "Buffer", .. })
+        matches!(
+            self,
+            TmplKind::BObj {
+                what: "TypedArray" | "Buffer",
+                ..
+            }
+        )
     }
 
     /// Birth templates the facts are about (design section 2).
@@ -1210,6 +1216,10 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
     /// counts as one inside its array's birth length (`arr_len_index`).
     pub arr_len_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
+    /// call is a Number call (`ModuleBindings::number_calls`), a wrong
+    /// claim the call-result witness must catch.
+    pub number_call_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
