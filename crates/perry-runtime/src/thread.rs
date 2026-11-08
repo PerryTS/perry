@@ -1462,3 +1462,11 @@ mod literal_launch_tests;
 #[cfg(test)]
 #[path = "thread/shape_clone_tests.rs"]
 mod shape_clone_tests;
+
+#[cfg(test)]
+#[path = "thread/error_stack_clone_tests.rs"]
+mod error_stack_clone_tests;
+
+#[cfg(test)]
+#[path = "thread/error_cause_clone_tests.rs"]
+mod error_cause_clone_tests;

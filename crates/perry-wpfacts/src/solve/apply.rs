@@ -132,6 +132,11 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
+            Cons::Raise { region } => {
+                if toks.contains(&TOP) {
+                    self.raise_top(region, n, "unknown code may throw in the region (an operation on ⊤)");
+                }
+            }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
                 let retained = if let Cons::RuntimeStore { retained, .. } = c {
                     Some(*retained)
@@ -782,8 +787,13 @@ impl Model {
                         self.mark_hard(origin, Hard::E6SetPrototypeOf, reason);
                     }
                 }
+                // The realm's constructor the built-in parent names runs as
+                // the native summary (`Cons::SuperCtor`); any other value of
+                // the class's [[Prototype]] runs as itself.
+                let native = crate::builtins::native_parent_value(self, class);
                 for &parent in toks {
                     match self.toks[parent as usize] {
+                        _ if Some(parent) == native => {}
                         TokKind::ClassObj(tm) => {
                             // Record the link before the parent's stores
                             // reach the instance (§17.2 item 2).

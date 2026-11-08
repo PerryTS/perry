@@ -284,6 +284,164 @@ fn tokenize(source: &str, lexical: bool) -> Result<Vec<Token<'_>>, String> {
 /// The `export` form names its static from the fully qualified body and ABI
 /// builders. Read the same tokens at the owning declaration; no linker-name
 /// inventory or source-file-to-Rust-module guess is needed.
+/// `realm_decl! { "node:m.k", effects = { ... } }` directly above a fn item:
+/// the effects of the body a `provider = bound_method` member runs (the
+/// callee of its native_module_dispatch arm). The block is bound to the
+/// next fn item; `merge_effects` puts its effects on the member's entry.
+/// `None`: not this form.
+fn effects_at_body(
+    entries: &[Token<'_>],
+    ts: &[Token<'_>],
+    end: usize,
+    source: &str,
+    path: &str,
+    resolve: &mut impl FnMut(&str) -> Result<(String, String), String>,
+) -> Result<Option<Value>, String> {
+    let parts = info::split(entries, ",");
+    let [name, effects] = parts.as_slice() else {
+        return Ok(None);
+    };
+    if effects.first().is_none_or(|t| t.text != "effects") || name.len() != 1 {
+        return Ok(None);
+    }
+    let human = facts::parse(entries)?;
+    let effects = human
+        .effects
+        .ok_or("effects-only realm_decl! has no effects")?;
+    // Directly above: only the item's attributes and qualifiers between
+    // the block and `fn`.
+    let mut at = end + 1;
+    let function = loop {
+        let t = ts.get(at).ok_or_else(|| {
+            format!(
+                "{}: effects-only realm_decl! has no fn item after it",
+                human.name
+            )
+        })?;
+        match t.text {
+            "fn" => break ts.get(at + 1).ok_or("missing fn name")?.text,
+            ";" | "{" | "}" | "=" | "realm_decl" | "fn_info" => {
+                return Err(format!(
+                    "{}: effects-only realm_decl! must sit directly above the fn it declares",
+                    human.name
+                ))
+            }
+            _ => at += 1,
+        }
+    };
+    let (_, symbol) = resolve(function)?;
+    let line = source[..ts[end].start]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count()
+        + 1;
+    Ok(Some(Value::Object(BTreeMap::from([
+        ("name".into(), Value::String(human.name)),
+        ("effects_only".into(), Value::String(function.into())),
+        ("effects".into(), effects),
+        ("effects_body".into(), Value::String(symbol)),
+        ("source".into(), Value::String(path.replace('\\', "/"))),
+        ("line".into(), Value::Number(line.to_string())),
+    ]))))
+}
+
+/// Puts each effects-only block's effects on the `provider = bound_method`
+/// entry of its name: `effects` and `effects_body` (the body's symbol, the
+/// function the call-graph check runs on). Refused: no such member, a
+/// member of another provider, a second effects clause, a dispatch arm for
+/// (module, key) that does not call the body (`arm`: the arm's text).
+fn merge_effects(
+    all: &mut Vec<Value>,
+    arm: impl Fn(&str, &str) -> Option<String>,
+) -> Result<(), String> {
+    let (blocks, rest): (Vec<_>, Vec<_>) = std::mem::take(all)
+        .into_iter()
+        .partition(|d| d.get("effects_only").is_some());
+    *all = rest;
+    for block in blocks {
+        let Value::Object(mut block) = block else {
+            unreachable!()
+        };
+        let name = block
+            .remove("name")
+            .and_then(|v| v.string().map(str::to_owned))
+            .unwrap();
+        let function = block
+            .remove("effects_only")
+            .and_then(|v| v.string().map(str::to_owned))
+            .unwrap();
+        let at = format!(
+            "{name} ({}:{})",
+            block
+                .get("source")
+                .and_then(Value::string)
+                .unwrap_or_default(),
+            block.get("line").map(|l| l.encode()).unwrap_or_default()
+        );
+        let entry = all
+            .iter_mut()
+            .find(|d| d.get("name").and_then(Value::string) == Some(name.as_str()))
+            .ok_or_else(|| format!("{at}: effects for an undeclared member"))?;
+        if entry
+            .get("function_info")
+            .and_then(|f| f.get("native_method"))
+            .is_none_or(|v| v.encode() != "true")
+        {
+            return Err(format!(
+                "{at}: effects-only declaration names a member that is no bound_method"
+            ));
+        }
+        let Value::Object(entry) = entry else {
+            unreachable!()
+        };
+        if entry.contains_key("effects") {
+            return Err(format!("{at}: a second effects clause"));
+        }
+        let (module, key) = name
+            .strip_prefix("node:")
+            .and_then(|n| n.rsplit_once('.'))
+            .ok_or_else(|| format!("{at}: not a node module member"))?;
+        let text = arm(module, key)
+            .ok_or_else(|| format!("{at}: no native_module_dispatch arm ({module:?}, {key:?})"))?;
+        if !text.contains(&format!("{function}(")) {
+            return Err(format!(
+                "{at}: the dispatch arm ({module:?}, {key:?}) does not call {function}: {}",
+                text.trim()
+            ));
+        }
+        entry.insert("effects".into(), block.remove("effects").unwrap());
+        entry.insert("effects_body".into(), block.remove("effects_body").unwrap());
+    }
+    Ok(())
+}
+
+/// The text of the native_module_dispatch arm `("module", "key") => ...`:
+/// its first line and the lines indented deeper under it.
+fn dispatch_arm(sources: &[(PathBuf, String)], module: &str, key: &str) -> Option<String> {
+    let head = format!("({module:?}, {key:?}) =>");
+    sources
+        .iter()
+        .filter(|(f, _)| {
+            f.components()
+                .any(|c| c.as_os_str() == "native_module_dispatch")
+        })
+        .find_map(|(_, s)| {
+            let at = s.find(&head)?;
+            let line_start = s[..at].rfind('\n').map_or(0, |i| i + 1);
+            let indent = at - line_start;
+            let mut text = String::new();
+            for (i, line) in s[line_start..].lines().enumerate() {
+                let deeper = line.len() - line.trim_start().len() > indent;
+                if i > 0 && !deeper {
+                    break;
+                }
+                text.push_str(line);
+                text.push('\n');
+            }
+            Some(text)
+        })
+}
+
 pub(super) fn image_info_symbol(
     ts: &[Token<'_>],
     body_start: usize,
@@ -384,6 +542,12 @@ fn declarations(
         &mut Vec::new(),
         &native::runtime_abi()?,
     )?;
+    // One file: its own text holds the dispatch arms an effects-only block names.
+    let file = [(
+        PathBuf::from("native_module_dispatch").join(path),
+        source.to_owned(),
+    )];
+    merge_effects(&mut all, |module, key| dispatch_arm(&file, module, key))?;
     derive::finish(&mut all)?;
     Ok(all)
 }
@@ -698,6 +862,15 @@ fn declarations_with_receivers(
             } else {
                 None
             };
+            if native_key.is_none() && owned_info.is_none() {
+                if let Some(declaration) =
+                    effects_at_body(entries, &ts, end, source, path, &mut resolve)?
+                {
+                    out.push(declaration);
+                    skip_until = end + 1;
+                    continue;
+                }
+            }
             for entry in info::split(entries, ";") {
                 let mut human = facts::parse(entry)?;
                 if let Some(key) = &native_key {
@@ -945,6 +1118,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     for (source, path, package) in export_sources {
         exports.read(&source, &path, &package, &needed)?;
     }
+    merge_effects(&mut all, |module, key| dispatch_arm(&sources, module, key))?;
     native::resolve_receivers(&mut all, &native_receivers)?;
     derive::finish(&mut all)?;
     exports.link(&mut all)?;
@@ -1216,6 +1390,75 @@ mod tests {
             Some("connection")
         );
         assert!(inline(&source.replace("connection.<get>", "connection")).is_err());
+    }
+
+    /// An effects-only block directly above the body a bound_method member
+    /// runs puts its effects, and the body the call-graph check runs on, on
+    /// the member's entry.
+    #[test]
+    fn effects_only_block_declares_the_dispatch_callee() {
+        let member = r#"realm_decl! { "node:example.has", provider = bound_method, receiver = "node:example"; }"#;
+        let arm = r#"fn d() { match (m, k) { ("example", "has") => bool_to_f64(crate::example::js_example_has(arg(0))), _ => 0 } }"#;
+        let block = r#"crate::realm_decl! { "node:example.has", effects = { path(arg(0)); returns(prim(bool)) } }"#;
+        let body = "#[no_mangle]\npub extern \"C\" fn js_example_has(p: f64) -> i32 { 0 }";
+        let source = format!("{member}\n{arm}\n{block}\n{body}");
+        let ds = inline(&source).unwrap();
+        assert_eq!(ds.len(), 1, "the block is no declaration of its own");
+        let d = &ds[0];
+        assert_eq!(
+            d.get("effects_body").and_then(Value::string),
+            Some("source:js_example_has")
+        );
+        let effects = d.get("effects").unwrap().array().unwrap();
+        assert_eq!(
+            effects.last().unwrap().encode(),
+            r#"{"returns":{"prim":["bool"]}}"#
+        );
+        assert!(effects.len() > 2, "path() is written out");
+
+        for (bad, needle) in [
+            // Not directly above a fn item.
+            (
+                format!("{member}\n{arm}\n{block}\nconst X: u8 = 0;\n{body}"),
+                "directly above",
+            ),
+            (format!("{member}\n{arm}\n{block}"), "no fn item after it"),
+            // No member of that name.
+            (format!("{arm}\n{block}\n{body}"), "undeclared member"),
+            // A member of another provider.
+            (
+                format!(
+                    "{}\n{arm}\n{block}\n{body}",
+                    member.replace(
+                        "provider = bound_method, receiver = \"node:example\"",
+                        "value = 1.0"
+                    )
+                ),
+                "no bound_method",
+            ),
+            // The dispatch arm calls another function.
+            (
+                format!(
+                    "{member}\n{}\n{block}\n{body}",
+                    arm.replace("js_example_has(", "js_example_other(")
+                ),
+                "does not call js_example_has",
+            ),
+            // A second effects clause.
+            (
+                format!(
+                    "{member}\n{arm}\n{block}\n{body}\n{}\nfn js_example_has2() {{}}",
+                    block
+                ),
+                "a second effects clause",
+            ),
+        ] {
+            let err = inline(&bad).expect_err(needle);
+            assert!(err.contains(needle), "{needle}: {err}");
+        }
+        // Everywhere else effects still belong to the fn_info! of the body.
+        let err = inline(r#"realm_decl! { "node:example.has", provider = bound_method, receiver = "node:example", effects = { returns(prim(bool)) }; }"#).unwrap_err();
+        assert!(err.contains("effects belong to the fn_info!"), "{err}");
     }
 
     #[test]

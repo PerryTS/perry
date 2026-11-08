@@ -103,6 +103,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, None);
@@ -124,6 +125,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread,
                     ret: c.ret,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, None);
@@ -146,6 +148,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         Some("next" | "return" | "throw") | None if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
         {
             m.call_tok(call, t, Some(t));
+            // It rejects: the shared cell.
+            let thrown = m.thrown;
+            gen_throw_passes(m, name, thrown, &c.args, &c.spread);
         }
         // A sync generator's public `next`/`return`/`throw`: the step runs
         // with this = itself and hands back its raw value (step kind 0
@@ -166,6 +171,8 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 let key = m.elem_key();
                 m.cons(spread, Cons::Load { key, dst: arg });
             }
+            let region = m.calls[call as usize].region;
+            gen_throw_passes(m, name, region, &[arg], &[]);
             let args = if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].params.len() == 1)
             {
                 vec![arg]
@@ -185,6 +192,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: vec![],
                     ret: raw,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, Some(t));
@@ -212,6 +220,25 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
     }
 }
 
+/// A generator's `throw(v)` the runtime raises itself when the generator has
+/// not started or has finished (`generator_state.rs`, `throw_program_value`;
+/// an async one rejects with it): `v` is caught as it is. A computed method
+/// may be `throw`.
+/// `thrown` is the region of the `throw` call, or the shared cell for an
+/// async generator's (it rejects).
+fn gen_throw_passes(m: &mut Model, name: Option<&str>, thrown: NodeId, args: &[NodeId], spread: &[NodeId]) {
+    if !matches!(name, Some("throw") | None) {
+        return;
+    }
+    for &a in args {
+        m.edge(a, thrown);
+    }
+    for &s in spread {
+        let key = m.elem_key();
+        m.cons(s, Cons::Load { key, dst: thrown });
+    }
+}
+
 // ------------------------------------------------------------- arrays
 
 pub(super) fn cb_call(
@@ -232,6 +259,7 @@ pub(super) fn cb_call(
             spread: vec![],
             ret,
             site: call2,
+            region: m.thrown,
         },
     );
     m.cons(cb, Cons::Call { call: call2 });
@@ -303,6 +331,7 @@ pub(crate) fn method_call(
             spread: vec![],
             ret,
             site,
+            region: m.thrown,
         },
     );
     m.cons(
@@ -335,6 +364,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 spread: vec![],
                 ret,
                 site,
+                region: m.thrown,
             },
         );
         m.protocol_calls.insert(c2);
@@ -543,6 +573,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             spread: vec![],
             ret: made,
             site: c.site,
+            region: m.thrown,
         },
     );
     construct_into(m, sc, mc, out, made, c.ret);
@@ -1012,6 +1043,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     spread: vec![],
                     ret: r,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -1243,6 +1275,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     spread: vec![],
                     ret: c.ret,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -1398,7 +1431,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "mapGroups",
+            | "fromEntries" | "mapGroups" | "hostrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

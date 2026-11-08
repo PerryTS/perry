@@ -3,10 +3,16 @@
 use super::*;
 use perry_runtime::gc::RuntimeHandleScope;
 
+fn cloned_diagnostic(value: f64) -> Option<SerializedValue> {
+    perry_runtime::exception::catch_js_throw(|| clone::try_clone_message(value, js_undefined()))
+        .ok()
+        .and_then(Result::ok)
+}
+
 fn cloned_error(thrown: f64) -> SerializedValue {
     let scope = RuntimeHandleScope::new();
     let thrown = scope.root_nanbox_f64(thrown);
-    if let Ok(message) = clone::try_clone_message(thrown.get_nanbox_f64(), js_undefined()) {
+    if let Some(message) = cloned_diagnostic(thrown.get_nanbox_f64()) {
         return message;
     }
     use perry_runtime::error::*;
@@ -30,12 +36,15 @@ fn cloned_error(thrown: f64) -> SerializedValue {
     let Some(name) = family else {
         return plain_error_message(b"the worker threw a value that could not be cloned").value;
     };
-    let get = |key: &str| unsafe {
-        perry_runtime::value::js_dynamic_object_get_property(
-            thrown.get_nanbox_f64(),
-            key.as_ptr().cast(),
-            key.len(),
-        )
+    let get = |key: &str| {
+        perry_runtime::exception::catch_js_throw(|| unsafe {
+            perry_runtime::value::js_dynamic_object_get_property(
+                thrown.get_nanbox_f64(),
+                key.as_ptr().cast(),
+                key.len(),
+            )
+        })
+        .unwrap_or_else(|_| js_undefined())
     };
     // Each read can collect; keep only owned bytes between reads.
     let message = diagnostic_string(get("message"));
@@ -44,9 +53,7 @@ fn cloned_error(thrown: f64) -> SerializedValue {
     let cause = if is_undefined(cause) {
         None
     } else {
-        clone::try_clone_message(cause, js_undefined())
-            .ok()
-            .map(Box::new)
+        cloned_diagnostic(cause).map(Box::new)
     };
     SerializedValue::Error {
         name: name.to_vec(),
@@ -101,14 +108,17 @@ pub(super) fn worker_error_message(thrown: f64) -> WorkerErrorMessage {
         // Use the ordinary named getter: it includes native Node diagnostics,
         // whereas the dynamic Error getter covers only its standard slots.
         let key = js_string_from_bytes(b"code".as_ptr(), 4);
-        let code = perry_runtime::object::js_object_get_field_by_name_f64(
-            perry_runtime::value::js_nanbox_get_pointer(thrown.get_nanbox_f64()) as *mut _,
-            key,
-        );
+        let code = perry_runtime::exception::catch_js_throw(|| {
+            perry_runtime::object::js_object_get_field_by_name_f64(
+                perry_runtime::value::js_nanbox_get_pointer(thrown.get_nanbox_f64()) as *mut _,
+                key,
+            )
+        })
+        .unwrap_or_else(|_| js_undefined());
         if is_undefined(code) {
             None
         } else {
-            clone::try_clone_message(code, js_undefined()).ok()
+            cloned_diagnostic(code)
         }
     } else {
         None

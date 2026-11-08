@@ -192,6 +192,12 @@ pub enum BuiltinNs {
     Stdout,
     Stderr,
     Stdin,
+    /// A node module object (`require("fs")`, `import * as fs from "fs"`):
+    /// the realm's namespace declaration of that name (`node:fs`), one object
+    /// per program (node: `require("fs") === require("node:fs")`). Its
+    /// members are the realm's declared natives until a store reaches the
+    /// key; it describes no other key (an undeclared key reads ⊤).
+    Module(&'static str),
     Other,
 }
 
@@ -513,6 +519,9 @@ pub enum OwnTestBody {
 
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
+    /// The function body's throw region (DESIGN SEEDE section 8): what a
+    /// call of it may throw; `u32::MAX` until first used (`Model::raise_of`).
+    pub raise: NodeId,
     #[cfg(test)]
     pub(crate) body_packet: std::rc::Rc<crate::summary::packet::BodyPacket>,
     pub module: u32,
@@ -602,6 +611,10 @@ pub struct CallSite {
     pub spread: Vec<NodeId>,
     pub ret: NodeId,
     pub site: SiteId,
+    /// The throw region the call runs in (DESIGN SEEDE section 8): what the
+    /// callee throws reaches this node. A call made outside generation runs
+    /// in `Model::thrown`, the shared cell every catch reads.
+    pub region: NodeId,
 }
 
 /// What a published class's method did to its receiver (`Model::recv_log`).
@@ -765,6 +778,19 @@ pub enum Protocol {
     /// or `toJSON` returns) is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
     Inspect,
+    /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
+    /// error's message runs on an object without a named constructor
+    /// (lib/internal/errors.js `determineSpecificType`; node 26
+    /// lib/internal/util/inspect.js `formatValue` / `formatRaw`): the
+    /// `[util.inspect.custom]` hook (what it returns is formatted the same
+    /// way), `@@toStringTag`, and for the types it prints before the depth
+    /// check an Error's `stack` / `message` / `name` / `errors`, an
+    /// ArrayBuffer's `byteLength`, a URL's `href`. Each value read is
+    /// formatted the same way and ToString'd. No other key is read: own
+    /// values are not shown at depth -1. To name the value it runs
+    /// `v instanceof C` for the `constructor` data values on its chain
+    /// (`getConstructorName`; `instance_of_reads`).
+    ShallowInspect,
     /// StructuredSerialize (HTML 2.7.3), what `structuredClone` runs: a
     /// [[Get]] of every own value (own getters run), each serialized in
     /// turn; it calls nothing else (a function or a Proxy throws).
@@ -790,6 +816,7 @@ impl Protocol {
                 "toString",
                 "toJSON",
             ],
+            Protocol::ShallowInspect => &[INSPECT_CUSTOM_METHOD],
             Protocol::IterResult | Protocol::OwnKeys | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
@@ -799,6 +826,41 @@ impl Protocol {
     pub fn reads(self) -> &'static [&'static str] {
         match self {
             Protocol::IterResult => &["done", "value"],
+            Protocol::ShallowInspect => &[
+                WK_TO_STRING_TAG,
+                "stack",
+                "message",
+                "name",
+                "errors",
+                "byteLength",
+                "href",
+            ],
+            _ => &[],
+        }
+    }
+
+    /// The keys whose values on the touched value's chain the touch runs
+    /// InstanceofOperator on, the touched value on the left (a user
+    /// `@@hasInstance` gets it as its argument). Node's `getConstructorName`
+    /// (lib/internal/util/inspect.js) does so for each own data
+    /// `constructor` of the value and its prototypes that is a named
+    /// function, until one holds; the read here is the `[[Get]]`'s values
+    /// on the whole chain, a superset.
+    pub fn instance_of_reads(self) -> &'static [&'static str] {
+        match self {
+            Protocol::ShallowInspect => &["constructor"],
+            _ => &[],
+        }
+    }
+
+    /// The protocols run on each value the touch reads (`reads`, or every
+    /// own value under `reads_all`).
+    pub fn read_touches(self) -> &'static [Protocol] {
+        match self {
+            Protocol::Json => &[Protocol::Json],
+            Protocol::Inspect => &[Protocol::Inspect],
+            Protocol::Clone => &[Protocol::Clone],
+            Protocol::ShallowInspect => &[Protocol::ShallowInspect, Protocol::ToPrimitive],
             _ => &[],
         }
     }
@@ -819,6 +881,7 @@ impl Protocol {
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
             Protocol::Json
             | Protocol::Inspect
+            | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
             | Protocol::Any => MARK_TOUCH,
@@ -846,6 +909,7 @@ impl Protocol {
             Protocol::IterNext => Some(Protocol::IterResult),
             Protocol::Json => Some(Protocol::Json),
             Protocol::Inspect => Some(Protocol::Inspect),
+            Protocol::ShallowInspect => Some(Protocol::ShallowInspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
             | Protocol::IterResult
@@ -865,6 +929,7 @@ impl Protocol {
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
             Protocol::Inspect => "inspect",
+            Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",
         }
@@ -887,6 +952,7 @@ pub const DESCRIPTOR_KEYS: [&str; 6] = [
 /// (`Gen::read_key`).
 pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
 pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
+pub const WK_TO_STRING_TAG: &str = "@@__perry_wk_toStringTag";
 /// A class's `[util.inspect.custom]()` as HIR names it (perry-hir
 /// lower_decl/class_members.rs); the formatter calls it by that name
 /// (`class_method_slot_target`, perry-runtime builtins/formatting.rs).
@@ -1377,6 +1443,22 @@ pub struct Model {
     /// `derive::constant_statics`).
     pub static_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub thrown: NodeId,
+    /// The throw region generation is in (the walked body's `FuncInfo::raise`,
+    /// a try body's node); `None` outside generation of a body.
+    pub gen_region: Option<NodeId>,
+    /// The region of calls unknown code makes to escaped functions: what they
+    /// throw goes to unknown code (sunk; no catch reads it).
+    pub esc_raise: NodeId,
+    /// The accessor functions of escaped values (unknown code reads them
+    /// with `Object.getOwnPropertyDescriptor`): sunk, no one reads it.
+    pub esc_accessors: NodeId,
+    /// What a module body run lazily may throw (a deferred CommonJS target,
+    /// a factory the path registry re-runs): the region of a call that can
+    /// run one (a require through the path registry) holds it.
+    pub lazy_raise: NodeId,
+    /// The native call being dispatched: a value it hands to unknown code
+    /// may run there, throwing into the call's region.
+    pub cur_native_call: Option<CallId>,
     /// The class objects unknown code can reach (escaped): a `Reflect.construct`
     /// whose target may be unknown constructs each of them (`Cons::ReflectNew` here).
     pub escaped_classes: NodeId,

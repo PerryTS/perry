@@ -514,7 +514,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(aw, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
-                self.callback(s, vec![arg, b])
+                self.async_callback(s, vec![arg, b])
             }
             Expr::AsyncStepResumeNow {
                 value,
@@ -547,7 +547,7 @@ impl<'a> Gen<'a> {
                 let s = self.expr(fx, step_closure);
                 let u = self.prim_node(prim::UNDEF);
                 let b = self.prim_node(prim::BOOL);
-                let r = self.callback(s, vec![u, b]);
+                let r = self.async_callback(s, vec![u, b]);
                 self.promise_of(mi, r)
             }
             Expr::AsyncGenResume {
@@ -561,7 +561,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
-                let r = self.callback(s, vec![arg, b]);
+                let r = self.async_callback(s, vec![arg, b]);
                 let p = self.promise_of(mi, r);
                 self.m.add_tok(p, TOP);
                 p

@@ -454,6 +454,24 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
             }
         }
+        // A node module object: a key its realm declaration names as a
+        // native function reads it (or what the program stored there); any
+        // other key is not described: ⊤, named.
+        TokKind::Builtin(BuiltinNs::Module(module)) => match name.as_deref() {
+            Some(n)
+                if !m.unit_mode
+                    && namespace_native(m, t, BuiltinNs::Module(module), n).is_some() =>
+            {
+                let Key::Named(a) = key else { unreachable!() };
+                ns_load(m, t, BuiltinNs::Module(module), a, dst);
+            }
+            _ => {
+                m.add_top(dst, |_| {
+                    format!("native module ref {module}.{}", name.as_deref().unwrap_or("[computed]"))
+                });
+                m.add_prim(dst, prim::ALL);
+            }
+        },
         // A method has no `prototype`.
         TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
             if name.as_deref() == Some("prototype") =>

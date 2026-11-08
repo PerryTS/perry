@@ -1532,6 +1532,12 @@ impl Model {
         if self.diagnostic.is_some() {
             self.diagnostic_reach(f, "accessor", u32::MAX);
         }
+        // An accessor run is a call made outside generation: what it throws
+        // reaches its region, the shared cell every catch reads (DESIGN
+        // SEEDE section 8).
+        let raise = self.raise_of(f);
+        let thrown = self.thrown;
+        self.edge(raise, thrown);
         if !self.sum.ready {
             self.sum
                 .deferred

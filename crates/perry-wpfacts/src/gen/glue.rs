@@ -397,10 +397,29 @@ impl<'a> Gen<'a> {
             // A literal CommonJS require (design CJS_LINK §3): the target's
             // init runs (every module body is in the program), and the value
             // is a read of its record binding; the caller reads `.exports`.
-            "cjsRequireEdge" => match arg(0) {
-                Some(record) => record,
-                None => self.m.top_val("cjsRequireEdge without its record binding"),
-            },
+            "cjsRequireEdge" => {
+                // The target's init guard runs its body here when it has not
+                // run yet: what that body throws, this call throws.
+                if let Some(Expr::ExternFuncRef { name, .. }) = source_args.first() {
+                    let t = self.imports_of(fx.module as usize).into_iter().find_map(|i| {
+                        let binds = i.specifiers.iter().any(|sp| match sp {
+                            perry_hir::ImportSpecifier::Named { local, .. }
+                            | perry_hir::ImportSpecifier::Default { local }
+                            | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                        });
+                        binds.then_some(i.resolved_path.as_ref()).flatten()
+                    });
+                    if let Some(t) = t.and_then(|p| self.path_index.get(p).copied()) {
+                        let rt = self.module_raise(t);
+                        let r = self.region();
+                        self.m.edge(rt, r);
+                    }
+                }
+                match arg(0) {
+                    Some(record) => record,
+                    None => self.m.top_val("cjsRequireEdge without its record binding"),
+                }
+            }
             "registerPathModule" | "registerPathModulePartial" => {
                 if let Some(value) = arg(1) {
                     let registry = match source_args.first() {
@@ -421,7 +440,11 @@ impl<'a> Gen<'a> {
                 // again after its cache entry was deleted.
                 if method == "registerPathModulePartial" {
                     if let Some(factory) = arg(2) {
+                        // It runs inside a later require: a lazy module body.
+                        let lazy = Some(self.m.lazy_raise);
+                        let region = std::mem::replace(&mut self.m.gen_region, lazy);
                         let _ = self.call_value(factory, ThisArg::Undef, vec![], vec![]);
+                        self.m.gen_region = region;
                     }
                 }
                 self.prim_node(prim::UNDEF)
@@ -493,6 +516,9 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF)
             }
             "requirePathModule" => {
+                // The registry may run a lazy module body here.
+                let r = self.region();
+                self.m.edge(self.m.lazy_raise, r);
                 // A path an instance knows is as good as a literal.
                 let known = match source_args.first().map(|x| self.const_eval(fx.module, x)) {
                     Some(Some(crate::gen_const::Const::Str(s))) => Some(Expr::String(s)),

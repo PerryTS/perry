@@ -1465,23 +1465,60 @@ impl Writer<'_> {
         if crate::event_target_hook_slots::is_dom_exception_error(err) {
             return self.unsupported("DOMException");
         }
-        // The stack text is formatted on first read, which allocates.
-        if (*err).stack.is_null() && self.mode == CloneMode::Message {
-            let root = self.scope.root_nanbox_u64(bits);
-            crate::error::js_error_get_stack(err as *mut crate::error::ErrorHeader);
-            self.refresh_identities();
-            return self.error(
-                root.get_nanbox_u64(),
-                (root.get_nanbox_u64() & POINTER_MASK) as usize,
-            );
-        }
-        if (*err).stack.is_null() {
+        if (*err).stack.is_null() && self.mode == CloneMode::Thread {
             self.to_build.push(Pending::ErrorStack(bits));
             return SerializedValue::Inline(TAG_UNDEFINED);
         }
         if let Err(seen) = self.begin(Some(addr)) {
             return seen;
         }
+        let index = self.next_index as usize - 1;
+        // Select the own data value before a reentrant stack getter can
+        // replace it, and retain it across any collection that getter causes.
+        let message_cause = if self.mode == CloneMode::Message {
+            let key = self.scope.root_nanbox_u64(
+                JSValue::string_ptr(crate::string::js_string_from_bytes(b"cause".as_ptr(), 5))
+                    .bits(),
+            );
+            self.refresh_identities();
+            let receiver = JSValue::pointer(self.source(index, err).cast()).bits();
+            match crate::object::descriptors::own_property(
+                f64::from_bits(receiver),
+                key.get_nanbox_f64(),
+            ) {
+                Some(OwnProperty::Data(value, _)) => Some(self.scope.root_nanbox_f64(value)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let stack = if self.mode == CloneMode::Message {
+            // Message cloning observes non-enumerable stack overrides and
+            // propagates their exceptions through the writer's rooted failure.
+            let result = crate::exception::catch_thrown(|| {
+                crate::value::js_dynamic_object_get_property(
+                    f64::from_bits(JSValue::pointer(self.source(index, err).cast()).bits()),
+                    b"stack".as_ptr().cast(),
+                    5,
+                )
+            });
+            self.refresh_identities();
+            match result {
+                Ok(value) => {
+                    let value = self.scope.root_nanbox_f64(value);
+                    let text = crate::value::js_get_string_pointer_unified(value.get_nanbox_f64())
+                        as *const crate::string::StringHeader;
+                    (!text.is_null()).then(|| string_bytes(text))
+                }
+                Err(error) => {
+                    self.failure = Some(Failure::Thrown(error.root(self.scope)));
+                    return SerializedValue::Inline(TAG_UNDEFINED);
+                }
+            }
+        } else {
+            Some(string_bytes((*err).stack))
+        };
+        let err = self.source(index, err);
         let flags = (*err).flags;
         let name = if (*err).name.is_null() {
             b"Error".to_vec()
@@ -1491,9 +1528,12 @@ impl Writer<'_> {
         let message = (flags & crate::error::ERROR_FLAG_HAS_MESSAGE != 0
             && !(*err).message.is_null())
         .then(|| string_bytes((*err).message));
-        let stack = Some(string_bytes((*err).stack));
-        let cause = (flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0)
-            .then(|| Box::new(self.value((*err).cause.to_bits())));
+        let cause = if self.mode == CloneMode::Message {
+            message_cause.map(|value| Box::new(self.value(value.get_nanbox_u64())))
+        } else {
+            (flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0)
+                .then(|| Box::new(self.value((*err).cause.to_bits())))
+        };
         SerializedValue::Error {
             name,
             message,
