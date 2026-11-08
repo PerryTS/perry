@@ -96,6 +96,26 @@ fn lifecycle_approval_uses_installed_identity_not_manifest_name() {
 }
 
 #[test]
+fn lifecycle_preserves_declared_name_in_script_environment() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    write_package(root.path(), "approved-fixture", "esbuild");
+    let manifest_path = root
+        .path()
+        .join("node_modules/approved-fixture/package.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["scripts"]["postinstall"] = json!("printf '%s' \"$npm_package_name\" > ran.txt");
+    fs::write(manifest_path, manifest.to_string()).unwrap();
+
+    run(root.path(), &args(&["--run-scripts", "approved-fixture"]));
+    assert_eq!(
+        fs::read_to_string(root.path().join("node_modules/approved-fixture/ran.txt")).unwrap(),
+        "esbuild"
+    );
+}
+
+#[test]
 fn lifecycle_preserves_project_and_blanket_approvals() {
     let _env = crate::test_env_lock::env_lock();
     let root = TempDir::new().unwrap();

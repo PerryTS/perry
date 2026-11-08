@@ -133,7 +133,13 @@ fn run_package(pkg: &ScannedPackage, project_root: &Path) -> Result<()> {
             .env("PATH", &augmented_path)
             .env("npm_lifecycle_event", key)
             .env("npm_lifecycle_script", body)
-            .env("npm_package_name", &pkg.name)
+            .env(
+                "npm_package_name",
+                pkg.manifest
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&pkg.name),
+            )
             .env("npm_package_version", &pkg.version)
             // INIT_CWD is what npm sets to the project root — many
             // scripts read it to locate sibling packages.
