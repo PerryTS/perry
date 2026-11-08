@@ -133,6 +133,7 @@ mod protocol_keys;
 mod reach_accessor;
 mod receiver_slots;
 mod receiver_this;
+mod recv_call_cycle;
 mod runtime_errors;
 mod reflect_construct;
 mod regexp_exec;
