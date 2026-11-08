@@ -6,6 +6,15 @@
 
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct FinallyScope {
+    pub(super) body: Vec<Stmt>,
+    pub(super) break_depth: Vec<u32>,
+    pub(super) loop_depth: Vec<u32>,
+    pub(super) label_stack: Vec<(String, u32, u32)>,
+    pub(super) pending_label: Option<String>,
+}
+
 /// Context for emitting a single function body
 pub(super) struct FuncEmitCtx<'a> {
     pub(super) emitter: &'a WasmModuleEmitter,
@@ -40,7 +49,7 @@ pub(super) struct FuncEmitCtx<'a> {
     /// Stack of saved frame sizes for nested frame support
     pub(super) frame_stack: Vec<u32>,
     /// Catch targets: absolute block depth and outstanding bridge-frame bytes.
-    pub(super) exception_handlers: Vec<(u32, u32, Option<Vec<Stmt>>)>,
+    pub(super) exception_handlers: Vec<(u32, u32, Option<FinallyScope>)>,
     pub(super) returns_value: bool,
 }
 

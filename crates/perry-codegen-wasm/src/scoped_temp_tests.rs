@@ -691,3 +691,87 @@ console.log(calls);
         "7\n1"
     );
 }
+
+#[test]
+fn host_interop_proxy_has_exceptions_reach_catch() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const create = globalThis.Function;
+const proxy = create('return new Proxy({}, {has() { throw 7; }})')();
+try { console.log('x' in proxy); }
+catch (error) { console.log(error); }
+console.log('after');
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "7\nafter"
+    );
+}
+
+#[test]
+fn host_interop_for_each_stops_on_callback_throw() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs = [1, 2, 3];
+let calls = 0;
+try { xs.forEach((value) => { calls++; throw 7; }); }
+catch (error) { console.log(error); }
+console.log(calls);
+"#
+        ),
+        "7\n1"
+    );
+}
+
+#[test]
+fn host_interop_host_caught_callback_clears_pending_state() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const create = globalThis.Function;
+const invoke = create('return function(cb) { try { cb(); } catch (error) { return "handled"; } return "missed"; }')();
+try { console.log(invoke(() => { throw null; })); console.log('continued'); }
+catch (error) { console.log('wrong catch'); }
+"#,
+            "require('node:assert/strict').equal(__memDispatch.has_exception(), 0);"
+        ),
+        "handled\ncontinued"
+    );
+}
+
+#[test]
+fn host_interop_inline_finally_uses_its_lexical_loop() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+function choose() {
+  while (true) {
+    try { while (true) { return 'wrong'; } }
+    finally { console.log('cleanup'); break; }
+  }
+  return 'correct';
+}
+console.log(choose());
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "cleanup\ncorrect"
+    );
+}
+
+#[test]
+fn host_interop_lexical_continue_and_for_each_success() {
+    assert_eq!(run_ts_after(r#"
+function choose() {
+ for(let i=0;i<2;i++) {
+  try { while(true) { return 'wrong'; } }
+  finally { console.log(i); continue; }
+ }
+ return 'correct';
+}
+console.log(choose());
+let sum=0;const xs=[1,2,3];xs.forEach((v)=>{sum+=v;});console.log(sum);
+"#, "require('node:assert/strict').equal(tryDepth,0);require('node:assert/strict').equal(__memDispatch.has_exception(),0);"),"0\n1\ncorrect\n6");
+}
