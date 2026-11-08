@@ -478,6 +478,8 @@ fn emit_versioned_checked_reader_loop() -> String {
     const FILTER: u32 = 24;
     const COUNTER: u32 = 25;
     const ENTITY: u32 = 26;
+    // `bound | 0`: an int32 bound keeps the `i++` counter provably inside i32.
+    const LIMIT: u32 = 27;
 
     let checked_call = Expr::Call {
         byte_end: 0,
@@ -514,65 +516,78 @@ fn emit_versioned_checked_reader_loop() -> String {
             param(FILTER, "filter", Type::Any),
         ],
         Type::Void,
-        vec![Stmt::For {
-            init: Some(Box::new(Stmt::Let {
-                id: COUNTER,
-                name: "i".to_string(),
+        vec![
+            Stmt::Let {
+                id: LIMIT,
+                name: "limit".to_string(),
                 ty: Type::Number,
-                mutable: true,
-                init: Some(Expr::Integer(0)),
-            })),
-            condition: Some(Expr::Compare {
-                op: perry_hir::CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(COUNTER)),
-                right: Box::new(Expr::LocalGet(BOUND)),
-            }),
-            update: Some(Expr::Update {
-                id: COUNTER,
-                op: perry_hir::UpdateOp::Increment,
-                prefix: false,
-            }),
-            body: vec![
-                Stmt::Let {
-                    id: ENTITY,
-                    name: "entity".to_string(),
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(Expr::IndexGet {
-                        element_offset: 0,
-                        byte_offset: 0,
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(ENTITIES)),
-                        index: Box::new(Expr::LocalGet(COUNTER)),
-                    }),
-                },
-                Stmt::If {
-                    condition: Expr::Logical {
-                        op: perry_hir::LogicalOp::And,
-                        left: Box::new(Expr::LocalGet(FILTER)),
-                        right: Box::new(Expr::Unary {
-                            op: perry_hir::UnaryOp::Not,
-                            operand: Box::new(Expr::Call {
-                                byte_end: 0,
-                                callee: Box::new(Expr::LocalGet(FILTER)),
-                                args: vec![Expr::LocalGet(ENTITY)],
-                                type_args: Vec::new(),
-                                byte_offset: 0,
-                            }),
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: perry_hir::BinaryOp::BitOr,
+                    left: Box::new(Expr::LocalGet(BOUND)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: COUNTER,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(COUNTER)),
+                    right: Box::new(Expr::LocalGet(LIMIT)),
+                }),
+                update: Some(Expr::Update {
+                    id: COUNTER,
+                    op: perry_hir::UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Let {
+                        id: ENTITY,
+                        name: "entity".to_string(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(Expr::IndexGet {
+                            element_offset: 0,
+                            byte_offset: 0,
+                            byte_end: 0,
+                            object: Box::new(Expr::LocalGet(ENTITIES)),
+                            index: Box::new(Expr::LocalGet(COUNTER)),
                         }),
                     },
-                    then_branch: vec![Stmt::Continue],
-                    else_branch: None,
-                },
-                Stmt::Expr(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::LocalGet(CALLBACK)),
-                    args: vec![Expr::LocalGet(ENTITY), checked_call],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }),
-            ],
-        }],
+                    Stmt::If {
+                        condition: Expr::Logical {
+                            op: perry_hir::LogicalOp::And,
+                            left: Box::new(Expr::LocalGet(FILTER)),
+                            right: Box::new(Expr::Unary {
+                                op: perry_hir::UnaryOp::Not,
+                                operand: Box::new(Expr::Call {
+                                    byte_end: 0,
+                                    callee: Box::new(Expr::LocalGet(FILTER)),
+                                    args: vec![Expr::LocalGet(ENTITY)],
+                                    type_args: Vec::new(),
+                                    byte_offset: 0,
+                                }),
+                            }),
+                        },
+                        then_branch: vec![Stmt::Continue],
+                        else_branch: None,
+                    },
+                    Stmt::Expr(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::LocalGet(CALLBACK)),
+                        args: vec![Expr::LocalGet(ENTITY), checked_call],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                ],
+            },
+        ],
     );
     let mut class = reader_class();
     class.methods = vec![checked_read_method(), iterate];
@@ -896,10 +911,13 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::synthetic_index_get(
-                Box::new(Expr::LocalGet(ARRAY_ID)),
-                Box::new(Expr::LocalGet(DERIVED_ID)),
-            ))),
+            Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(ARRAY_ID)),
+                index: Box::new(Expr::LocalGet(DERIVED_ID)),
+            })),
         ],
     );
     assert!(

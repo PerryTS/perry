@@ -149,7 +149,7 @@ fn a_key_written_onto_a_builtin_prototype_is_a_member_again() {
         // A computed key on a builtin prototype may be `inner`.
         (
             body(
-                "declare const name: string; (Array.prototype as any)[name] = function () { return 1; };",
+                "const name: string = process.argv[2]; (Array.prototype as any)[name] = function () { return 1; };",
                 "",
             ),
             false,

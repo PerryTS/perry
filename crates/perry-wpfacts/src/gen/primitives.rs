@@ -3,6 +3,62 @@ impl<'a> Gen<'a> {
     /// A node holding exactly the primitive kinds `p`. A union of kinds is
     /// its own node: the shared all-primitives node would add `STR` and
     /// `SYMBOL`, and a string index reads every named member.
+    /// A string literal: one source node per constant, holding it alone
+    /// (`Node::strs`) and, with guard intervals on, of at most one code unit
+    /// its code (`Node::crange`). A spelling of the solver's own keys is any
+    /// string (its code node, or the String primitive node).
+    pub fn str_literal(&mut self, s: &str) -> NodeId {
+        let iv = if self.guard_ranges {
+            crate::model::range::char_literal(s)
+        } else {
+            crate::model::Iv::TOP
+        };
+        let Some(a) = self.m.str_const_atom(s) else {
+            return self.char_literal(iv);
+        };
+        if let Some(&n) = self.m.str_literals.get(&a) {
+            return n;
+        }
+        // A program-wide source, as the primitive constants are: no
+        // summary packet owns it.
+        #[cfg(test)]
+        let scope = self.m.packet_scope.take();
+        let n = self.m.node_named("STRLIT", || format!("STRLIT {s:?}"));
+        if !iv.is_top() {
+            let nd = &mut self.m.nodes[n as usize];
+            nd.cruled = true;
+            nd.crange = iv;
+        }
+        let set = self.m.str_set(&[a]);
+        self.m.add_s(n, &[], prim::STR, set);
+        #[cfg(test)]
+        {
+            self.m.packet_scope = scope;
+        }
+        self.m.str_literals.insert(a, n);
+        n
+    }
+
+    /// A String of code interval `iv` that is any string: a shared node per
+    /// code of one unit, else the String primitive node.
+    fn char_literal(&mut self, iv: crate::model::Iv) -> NodeId {
+        if iv.is_top() {
+            return self.prim_node(prim::STR);
+        }
+        if let Some(&n) = self.str_lits.get(&iv.lo) {
+            return n;
+        }
+        let n = self.m.node_named("STRLIT", || format!("STRLIT{}", iv.lo));
+        {
+            let nd = &mut self.m.nodes[n as usize];
+            nd.cruled = true;
+            nd.crange = iv;
+        }
+        self.m.add_prim(n, prim::STR);
+        self.str_lits.insert(iv.lo, n);
+        n
+    }
+
     pub fn prim_node(&mut self, p: u16) -> NodeId {
         match p {
             prim::NUM => self.prim_const[0],
@@ -64,27 +120,6 @@ impl<'a> Gen<'a> {
         }
         self.m.add_prim(n, prim::NUM);
         self.num_lits.insert(iv.lo, n);
-        n
-    }
-
-    /// A String literal: of at most one code unit, a shared node with that
-    /// code (`Node::crange`); any other, the String primitive node.
-    pub fn str_literal(&mut self, s: &str) -> NodeId {
-        let iv = crate::model::range::char_literal(s);
-        if iv.is_top() {
-            return self.prim_node(prim::STR);
-        }
-        if let Some(&n) = self.str_lits.get(&iv.lo) {
-            return n;
-        }
-        let n = self.m.node_named("STRLIT", || format!("STRLIT{}", iv.lo));
-        {
-            let nd = &mut self.m.nodes[n as usize];
-            nd.cruled = true;
-            nd.crange = iv;
-        }
-        self.m.add_prim(n, prim::STR);
-        self.str_lits.insert(iv.lo, n);
         n
     }
 

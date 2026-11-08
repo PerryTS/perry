@@ -281,7 +281,13 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                 members::bobj_family(what) != Family::Opaque
                     || matches!(
                         *what,
-                        "Date" | "TypedArray" | "URL" | "URLSearchParams" | "TextCodec" | "Timer"
+                        "Date"
+                            | "TypedArray"
+                            | "Buffer"
+                            | "URL"
+                            | "URLSearchParams"
+                            | "TextCodec"
+                            | "Timer"
                     )
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {

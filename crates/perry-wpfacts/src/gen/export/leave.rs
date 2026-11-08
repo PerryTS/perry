@@ -237,13 +237,7 @@ impl<'a> Gen<'a> {
                                 match self.m.toks[x as usize] {
                                     TokKind::Obj(xtm, _)
                                         if !reported
-                                            && matches!(
-                                                self.m.tmpls[xtm as usize].kind,
-                                                TmplKind::BObj {
-                                                    what: "TypedArray",
-                                                    ..
-                                                }
-                                            )
+                                            && self.m.tmpls[xtm as usize].kind.typed_storage()
                                             && !self.stand_in_tas.iter().any(|&(_, s)| s == x)
                                             && !self.m.is_escaped(x)
                                             && !self.m.hard.contains_key(&x) =>
