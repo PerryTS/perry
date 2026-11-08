@@ -51,9 +51,6 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
     } else {
         Key::any()
     };
-    if key.is_any() {
-        m.add_top(c.ret, |_| "accessor descriptor under an unknown key".into());
-    }
     let act = ChainAct::Lookup { dst: c.ret, setter };
     m.accessor_walk(origin, origin, key, act);
     m.builtin_field_use(origin, key, act);
@@ -69,7 +66,10 @@ pub(crate) fn lookup_native_descriptor(
     key: Key,
     dst: NodeId,
 ) {
-    let Key::Named(a) = key else { return };
+    let Key::Named(a) = key else {
+        native_accessor_any(m, holder, dst);
+        return;
+    };
     let name = m.atoms[a as usize].clone();
     let family = match m.toks[holder as usize] {
         TokKind::ObjectProto => Some(seed_family(m, origin).unwrap_or(Family::Object)),
@@ -99,4 +99,35 @@ pub(crate) fn lookup_native_descriptor(
             m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
         }
     }
+}
+
+/// B.2.2.4/5 under a key that may name any property, on an intrinsic holder
+/// of the chain: an own accessor answers its [[Get]]/[[Set]], a data
+/// property or the end of the chain `undefined`. The realm's own accessors
+/// (`Object.prototype.__proto__`, `Map.prototype.size`, ...) are builtin
+/// functions, never values of the program; program accessors installed on a
+/// modeled holder come from the walk itself (`accessor_hit`). Only a write
+/// the model does not place on the holder (through ⊤, or onto it under any
+/// key) may have installed a program function: that write answers ⊤, now or
+/// when it arrives (`NativeMiss::Lookup`).
+fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
+    match m.toks[holder as usize] {
+        TokKind::BuiltinFn(Native::Any) => {
+            m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
+            return;
+        }
+        TokKind::ObjectProto
+        | TokKind::BuiltinFn(_)
+        | TokKind::Builtin(_)
+        | TokKind::NativeProto(_) => {}
+        _ => return,
+    }
+    let star = m.atom(crate::STAR_KEY);
+    if native_written(m, holder, star) {
+        m.add_top(dst, |_| "accessor descriptor of a written intrinsic key".into());
+        return;
+    }
+    m.native_missing.push((holder, star, NativeMiss::Lookup(dst)));
+    let f = builtin_fn(m, "native accessor of an Annex B lookup");
+    m.add_tok(dst, f);
 }
