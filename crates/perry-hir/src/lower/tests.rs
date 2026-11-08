@@ -1277,6 +1277,7 @@ mod anonymous_class_outer_binding;
 mod class_expr_self_new_instanceof;
 mod forward_class_captures;
 mod function_constructor_shadow;
+mod function_decl_store_binding;
 mod issue_11157_class_decl_self_statics;
 mod issue_11298_class_expr_evaluation_identity;
 
