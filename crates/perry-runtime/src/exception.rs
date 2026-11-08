@@ -346,6 +346,12 @@ crate::perry_thread_local! {
 /// listener), and an unhandled rejection. `Err(value)` is that exception. The
 /// caller ends the worker; the process keeps running, as in Node.
 pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    run_worker_body_caught(f).map_err(|caught| caught.value())
+}
+
+/// The typed worker base retains exception provenance when an execution
+/// phase observes the value before handing it to an outer worker base.
+pub fn run_worker_body_caught<R>(f: impl FnOnce() -> R) -> Result<R, Caught> {
     let outer = IN_WORKER_BASE.with(|d| d.replace(true));
     let outcome = trap_with::<true, R, _>(f);
     IN_WORKER_BASE.with(|d| d.set(outer));
@@ -354,7 +360,11 @@ pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
     with_exception_state(|s| unsafe { (*s).to_worker_base = false });
     match outcome {
         Some(r) => Ok(r),
-        None => Err(take_exception()),
+        None => {
+            let caught = pending_exception();
+            js_clear_exception();
+            Err(caught)
+        }
     }
 }
 
@@ -1111,4 +1121,18 @@ pub(crate) fn test_caught(value: f64) -> Caught {
         (*s).has_exception = had_exception;
     });
     caught
+}
+
+#[cfg(test)]
+mod typed_worker_base_tests {
+    use super::*;
+
+    #[test]
+    fn typed_worker_base_rethrows_to_the_outer_base() {
+        let result = run_worker_body::<()>(|| {
+            let caught = run_worker_body_caught(|| -> () { test_throw(42.0) }).unwrap_err();
+            rethrow_caught(caught);
+        });
+        assert_eq!(result, Err(42.0));
+    }
 }

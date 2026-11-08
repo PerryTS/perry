@@ -448,9 +448,9 @@ pub use this_binding::{
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
     js_static_this_resolve_class, js_this_coerce_sloppy,
 };
-pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
+pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every
