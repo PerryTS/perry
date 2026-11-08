@@ -22,7 +22,11 @@ console.log(b.f);
 "#;
 
 fn compile() -> String {
-    let ast = perry_parser::parse_typescript(SOURCE, "sbar.ts").unwrap();
+    compile_source(SOURCE)
+}
+
+fn compile_source(source: &str) -> String {
+    let ast = perry_parser::parse_typescript(source, "sbar.ts").unwrap();
     let m = perry_hir::lower_module(&ast, "sbar", "sbar.ts").unwrap();
     String::from_utf8(
         crate::compile_module(
@@ -83,4 +87,54 @@ fn any_other_value_keeps_its_barrier() {
         barriers(&ir, "storing") > 0,
         "a storing selection keeps its barrier"
     );
+}
+
+/// Controls for the call shape: a callee the program can rebind is no direct
+/// call of one body, so whatever it returns (here a heap String built at run
+/// time) keeps the barrier. `pick` returns only literals until it is rebound.
+const REBOUND: &[(&str, &str)] = &[
+    (
+        "a function declaration reassigned at module level",
+        r#"
+function pick(c: boolean): string { return c ? "a" : "b"; }
+const k = Date.now() > 0 ? "y" : "z";
+// @ts-ignore
+pick = function (c: boolean) { return k + String(c); };
+class Box { f: any = null; viaCall(c: boolean): void { this.f = pick(c); } }
+const b = new Box(); b.viaCall(true);
+console.log(b.f);
+"#,
+    ),
+    (
+        "a `let` function reassigned in another function",
+        r#"
+let pick = function (c: boolean): string { return c ? "a" : "b"; };
+const k = Date.now() > 0 ? "y" : "z";
+function rebind(): void { pick = function (c: boolean) { return k + String(c); }; }
+class Box { f: any = null; viaCall(c: boolean): void { this.f = pick(c); } }
+rebind();
+const b = new Box(); b.viaCall(true);
+console.log(b.f);
+"#,
+    ),
+    (
+        "an exported `let` function",
+        r#"
+export let pick = function (c: boolean): string { return c ? "a" : "b"; };
+class Box { f: any = null; viaCall(c: boolean): void { this.f = pick(c); } }
+const b = new Box(); b.viaCall(true);
+console.log(b.f);
+"#,
+    ),
+];
+
+#[test]
+fn a_call_of_a_rebindable_function_keeps_its_barrier() {
+    for (what, source) in REBOUND {
+        let ir = compile_source(source);
+        assert!(
+            barriers(&ir, "viaCall") > 0,
+            "{what}: the store keeps its barrier"
+        );
+    }
 }
