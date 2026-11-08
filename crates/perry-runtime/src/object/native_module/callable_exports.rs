@@ -5,7 +5,7 @@ mod buffer_species;
 pub(crate) use buffer_constructor::{
     buffer_constructor_value, buffer_intrinsic_prototype_parent, buffer_intrinsic_prototype_value,
     buffer_original_prototype_value, cached_buffer_intrinsic_prototype_value,
-    is_buffer_constructor_value,
+    install_buffer_prototype_members, is_buffer_constructor_value,
 };
 mod builtin_closure_metadata;
 mod module_cjs;
