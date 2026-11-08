@@ -446,6 +446,10 @@ impl<'a> Gen<'a> {
         // through the cell's contract, what the others throw is seeded into
         // what its `catch` reads (beside the runtime's errors, ⊤).
         let thrown = self.thrown;
+        // Another unit is unknown compiled code: it may throw anything.
+        self.m
+            .add_top(thrown, |_| "thrown value (runtime errors)".into());
+        self.m.add_prim(thrown, prim::ALL);
         if cells {
             self.seed_cell("thrown", thrown);
             self.cells.push(("thrown".to_string(), thrown));

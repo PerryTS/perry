@@ -27,6 +27,16 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// The value of the global object's declared constructor that class `tm`'s
+/// built-in parent names (`extends Error`: the realm's `Error`); `None`
+/// when the class has no built-in parent or the global declares none
+/// under that name (`EventEmitter` is a module export).
+pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
+    let (_, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let identity = m.namespace_property(BuiltinNs::GlobalThis, &name)?.native?;
+    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity })))
+}
+
 /// `super(...)` into a native parent.
 pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
     let name = m.tmpls[tm as usize]
@@ -623,6 +633,17 @@ pub(super) fn native_method(
             ret_tok(m, call, origin);
         }
         ("EventEmitter", "emit") => {
+            // `emit("error", er)` with no `error` listener throws `er` itself
+            // when it is an Error (`event_emitter_error.rs`); otherwise a
+            // runtime error (always in `thrown`).
+            let thrown = m.calls[call as usize].region;
+            if let Some(&er) = c.args.get(1) {
+                m.edge(er, thrown);
+            }
+            for &s in &c.spread {
+                let key = m.elem_key();
+                m.cons(s, Cons::Load { key, dst: thrown });
+            }
             let a = m.atom("#listeners");
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
@@ -635,6 +656,7 @@ pub(super) fn native_method(
                     spread: c.spread.clone(),
                     ret,
                     site: call2,
+                    region: m.thrown,
                 },
             );
             m.cons(fl, Cons::Call { call: call2 });

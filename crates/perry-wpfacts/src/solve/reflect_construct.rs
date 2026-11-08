@@ -70,6 +70,7 @@ impl Model {
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
+                    region: self.thrown,
                 },
             );
             self.bound_synth.insert(call2);

@@ -777,11 +777,12 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        // Callable namespaces still expose their declared static keys to
-        // the runtime. Their program-owned fields use the function graph.
+        // A callable namespace's own property is the realm's only under a
+        // static the realm itself reads (`realm_reads_store`). Every other
+        // key is a field of the function graph (above), which program
+        // reads and the protocols run on it read.
         let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
             if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
-        let program_field = matches!(key, Key::Named(a) if builtins::undeclared(self, t, a));
         // A number key names no declared static (the realm declares no
         // index) and the runtime reads no index of a built-in function or
         // namespace: an element store there writes that object's own
@@ -794,7 +795,9 @@ impl Model {
                 TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
                 _ => false,
             };
-        if (!builtins::builtin_function(self, t) || (namespace && !program_field)) && !own_index {
+        if (!builtins::builtin_function(self, t) || (namespace && builtins::realm_reads_store(self, t, key)))
+            && !own_index
+        {
             self.with_b(|m| builtins::tok_store(m, t, key, src));
         }
     }

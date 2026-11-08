@@ -608,7 +608,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -625,7 +625,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// keeps as a container's) have no chain the model describes.
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
-        "json" | "descriptor" | "descriptors" | "fromEntries" => BoxChain::Object,
+        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
         "keys" | "arraybox" => BoxChain::Array,
         "groups" => BoxChain::Null,
         _ => BoxChain::Unknown,
@@ -931,7 +931,7 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
-        BuiltinNs::GlobalThis | BuiltinNs::Process => (NsProto::Object, None),
+        BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Module(_) => (NsProto::Object, None),
         BuiltinNs::Require | BuiltinNs::Other => (NsProto::Unknown(Family::Function), None),
     };
     NsStatics { members, prototype }
@@ -1006,6 +1006,25 @@ pub(super) fn is_host(ns: BuiltinNs) -> bool {
         ns,
         BuiltinNs::Console | BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin
     )
+}
+
+/// The statics of a built-in constructor the realm reads by name itself,
+/// in operations the model does not run as loads or calls on the
+/// constructor: V8's stack hooks (`Error.prepareStackTrace`,
+/// `Error.stackTraceLimit`) and the Promise combinators' `C.resolve`
+/// (GetPromiseResolve). `@@species` is no such static: SpeciesConstructor
+/// and ArraySpeciesCreate read `O.constructor` and then its `@@species` as
+/// loads (`collections::species_link`, `typed_array_methods::species`, the
+/// regexp's), and a constructor that owns `@@species` owns a getter without
+/// a setter, which an ordinary store does not change. Operand protocols, a
+/// pattern's symbol methods and the formatter's hook are loads and calls on
+/// the value, which read what the program stored there.
+pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
+    match ns {
+        BuiltinNs::Error | BuiltinNs::AggregateError => &["prepareStackTrace", "stackTraceLimit"],
+        BuiltinNs::Promise => &["resolve"],
+        _ => &[],
+    }
 }
 
 /// The member `name` of a builtin namespace object: its own statics, then
