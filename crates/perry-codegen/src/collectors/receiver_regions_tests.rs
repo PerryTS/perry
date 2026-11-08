@@ -1261,3 +1261,145 @@ fn a_flow_refined_number_local_joins_and_leaves_its_copy_scope() {
     table.dematerialize_scope(9);
     assert!(!table.local_is_number_in_scope(NUM));
 }
+
+// ---------------------------------------------------------------------------
+// b2: cold-arm descriptors (DESIGN-b2-cold-arm-refresh rev 2, C4).
+// ---------------------------------------------------------------------------
+
+fn cold_arm(table: &mut ReceiverDescriptorTable, receiver: u32) -> Result<bool, BoundaryViolation> {
+    table.materialize_cold_arm_array(
+        receiver,
+        format!("%box{receiver}"),
+        format!("%handle{receiver}"),
+        format!("%source{receiver}"),
+        ReceiverArrayValidationKind::Plain,
+        format!("%valid{receiver}"),
+        &[RegionEnder::ColdArmCall, RegionEnder::BackEdgePoll],
+        vec![1, 2],
+    )
+}
+
+#[test]
+fn a_cold_arm_descriptor_survives_its_poll_and_its_cold_arm() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(cold_arm(&mut table, OBJ).expect("both enders are refreshed"));
+    // Its address is refreshed at the poll too (`poll_refreshes` no longer
+    // panics on a `ColdArmRefresh` entry).
+    assert_eq!(table.poll_refreshes().unwrap().len(), 1);
+    let recipes = table.cold_arm_refreshes().unwrap();
+    assert_eq!(recipes.len(), 1);
+    assert_eq!(recipes[0].valid_slot, format!("%valid{OBJ}"));
+    assert!(table.cold_arm_access(OBJ).is_some());
+    // Phase 3's consumer never reads a cold-arm entry's slot as an SSA i1.
+    assert_eq!(table.array_access(OBJ, false), None);
+    assert!(table.is_trusted_cold_arm_read(1) && !table.is_trusted_cold_arm_read(3));
+}
+
+#[test]
+fn a_cold_arm_is_refused_beside_any_receiver_s_cached_length() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table.materialize_cached_length(NUM2, "%len".into()));
+    let v = cold_arm(&mut table, OBJ).expect_err("another array's length is not refreshed");
+    assert_eq!(v.ender, RegionEnder::ColdArmCall);
+}
+
+#[test]
+fn a_cold_arm_is_refused_beside_a_phase_three_address() {
+    let mut table = ReceiverDescriptorTable::default();
+    table
+        .materialize_region_validated_array(
+            NUM2,
+            "%b".into(),
+            "%h".into(),
+            "%s".into(),
+            ReceiverArrayValidationKind::Numeric,
+            "%v".into(),
+            &[RegionEnder::BackEdgePoll],
+        )
+        .unwrap();
+    assert!(cold_arm(&mut table, OBJ).is_err());
+}
+
+#[test]
+fn a_cold_arm_is_refused_inside_a_number_local_scope() {
+    let mut table = ReceiverDescriptorTable::default();
+    table.materialize_number_locals(7, &[NUM]);
+    assert!(cold_arm(&mut table, OBJ).is_err());
+}
+
+#[test]
+fn a_cold_arm_descriptor_is_refused_across_other_user_code() {
+    let mut table = ReceiverDescriptorTable::default();
+    for ender in [
+        RegionEnder::CollectingCall,
+        RegionEnder::UnwindEdge,
+        RegionEnder::Coercion,
+        RegionEnder::Unmodelled,
+    ] {
+        let v = table
+            .materialize_cold_arm_array(
+                OBJ,
+                "%b".into(),
+                "%h".into(),
+                "%s".into(),
+                ReceiverArrayValidationKind::Plain,
+                "%v".into(),
+                &[RegionEnder::ColdArmCall, ender],
+                vec![],
+            )
+            .expect_err("only the poll and the read's own cold arm are refreshed");
+        assert_eq!(v.ender, ender);
+    }
+}
+
+#[test]
+fn scalar_and_non_moving_claims_deny_a_cold_arm() {
+    for claim in [ReceiverClaim::ScalarRelation, ReceiverClaim::NonMovingAddress] {
+        let d = ReceiverDescriptor {
+            table: "t",
+            receiver: OBJ,
+            claim,
+            boundary: FactBoundary::Never,
+            excludes_try: true,
+        };
+        assert!(boundary_admits(&d, RegionEnder::ColdArmCall).is_err());
+        assert!(boundary_admits(&d, RegionEnder::BackEdgePoll).is_ok());
+    }
+    assert!(RegionEnder::ColdArmCall.may_unwind() && RegionEnder::ColdArmCall.is_fallthrough());
+}
+
+/// REVIEW-b2 F8: the classified walk reports a descriptor read as its cold
+/// arm where `loop_purity` counts the read as allocating, and keeps the
+/// index's own enders (a call in the index stays a `CollectingCall`).
+#[test]
+fn a_cold_arm_read_is_allocating_in_loop_purity_terms() {
+    let read = Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
+        object: Box::new(num(OBJ)),
+        index: Box::new(num(NUM)),
+    };
+    let body = vec![Stmt::Expr(read)];
+    let classified = region_enders_in_stmts_classified(&body, &[], &stub_inert, &|e| {
+        matches!(e, Expr::IndexGet { .. }).then_some(Some(RegionEnder::ColdArmCall))
+    });
+    assert_eq!(classified, vec![RegionEnder::ColdArmCall]);
+    assert!(crate::loop_purity::loop_may_allocate(&body, &[], &stub_inert));
+
+    let effectful = vec![Stmt::Expr(Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
+        object: Box::new(num(OBJ)),
+        index: Box::new(call(vec![])),
+    })];
+    let classified = region_enders_in_stmts_classified(&effectful, &[], &stub_inert, &|e| {
+        matches!(e, Expr::IndexGet { .. }).then_some(Some(RegionEnder::ColdArmCall))
+    });
+    assert_eq!(
+        classified,
+        vec![RegionEnder::CollectingCall, RegionEnder::ColdArmCall]
+    );
+    assert!(!region_enders_in_expr(&call(vec![]), &stub_inert).is_empty());
+}
