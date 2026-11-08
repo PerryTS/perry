@@ -41,7 +41,7 @@
     "mongodb": "7.5.0",
     "mysql2": "^3.24.4",
     "nanoid": "^6.0.1",
-    "nodemailer": "9.0.3",
+    "nodemailer": "10.1.4",
     "rate-limiter-flexible": "^11.2.0",
     "redis": "6.1.0",
     "reflect-metadata": "0.2.2",
