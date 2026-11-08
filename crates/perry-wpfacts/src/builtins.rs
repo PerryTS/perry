@@ -30,7 +30,7 @@ pub use undeclared::{builtin_function, native_may_be, realm_reads_store, undecla
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
-pub(crate) use effects::{declared_member, run_native};
+pub(crate) use effects::{declared_construct, declared_member, run_construct, run_native};
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
@@ -937,11 +937,10 @@ pub(crate) fn native_prims(fam: Family) -> u16 {
 }
 
 /// The opaque member: what a key a store into ⊤ (or unmodeled code) may
-/// have written onto a builtin prototype holds: any value (⊤), a builtin
-/// function value, any primitive.
+/// have written onto a builtin prototype holds: any value (⊤) and any
+/// primitive. No builtin function value beside ⊤: ⊤ already stands for any
+/// builtin function.
 fn opaque_member(m: &mut Model, dst: NodeId) {
-    let bf = builtin_fn(m, "opaque member (written key)");
-    m.add_tok(dst, bf);
     m.add_top(dst, |_| {
         "member of a builtin prototype written through ⊤".into()
     });

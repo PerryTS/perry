@@ -23,6 +23,8 @@ the realm defines (every other global name is the program's).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
 strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
+`object <owner> <key> <namespace>` rows name a node module object's data property whose value
+is another declared node module object (`node:inspector` `default`: `node:inspector.default`).
 `native <owner> <key> <identity>` rows resolve callable property references on global, namespace, node module (`node:fs`) and prototype holders
 (an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
 """
@@ -53,9 +55,11 @@ def member_properties(declarations, holder, inherited):
 
 
 def node_module(name, kind):
-    """A node module object (`node:fs`): wpfacts names it `BuiltinNs::Module`;
-    its callable members resolve here (`native` rows), its keys are not R1's."""
-    return kind == "namespace" and name.startswith("node:") and "." not in name
+    """A node module object (`node:fs`), or an object one holds under a data
+    property (`node:inspector.default`, `node:fs.promises`): wpfacts names it
+    `BuiltinNs::Module`; its callable members resolve here (`native` rows), its
+    keys are not R1's."""
+    return kind == "namespace" and name.startswith("node:")
 
 
 def intrinsic_prototype(name, kind):
@@ -86,6 +90,9 @@ def rows(realm):
                 value = prop.get("value", {}).get("value")
                 if prop.get("value", {}).get("kind") == "reference" and value in callable_names:
                     out.add(("native", name, prop["key"], value))
+                if (node_module(name, kind) and prop.get("value", {}).get("kind") == "reference"
+                        and node_module(value, declarations.get(value, {}).get("kind"))):
+                    out.add(("object", name, prop["key"], value))
                 if (prop.get("value", {}).get("kind") == "dynamic"
                         and declarations.get(value, {}).get("elements") == "string"):
                     out.add(("strings", name, prop["key"], value))
