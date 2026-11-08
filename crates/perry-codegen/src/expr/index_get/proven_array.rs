@@ -42,6 +42,13 @@ pub(super) fn lower(
     numeric: bool,
 ) -> String {
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
+    crate::verify_facts::consumed(crate::verify_facts::Fact::ElementRead, || {
+        serde_json::json!({ "length": fact.len, "key_in_bounds": fact.key_in_bounds })
+    });
+    crate::facts_consumed::used();
+    if crate::verify_facts::enabled() {
+        witness(ctx, arr_box, idx_i32, fact);
+    }
     let load_idx = ctx.new_block("parr.load");
     let cold_idx = ctx.new_block("parr.cold");
     let merge_idx = ctx.new_block("parr.merge");
@@ -87,4 +94,62 @@ pub(super) fn lower(
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(&value, &load_end), (&cold, &cold_end)])
+}
+
+/// `PERRY_VERIFY_FACTS=1`: the claim, tested before the proven load. The
+/// value is an ordinary heap Array, not forwarded, without element
+/// descriptors, of exactly `len` elements, and the key is below `len` when
+/// the facts say so. A miss reports the false proof and exits 86.
+fn witness(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, fact: FactsElementRead) {
+    use super::guarded_array::{
+        emit_array_guard_word, emit_array_guard_word_ok, HEAP_POINTER_BAND_BASE_I64,
+        HEAP_POINTER_BAND_SPAN_I64,
+    };
+    let deref = ctx.new_block("parr.verify_deref");
+    let miss = ctx.new_block("parr.verify_miss");
+    let next = ctx.new_block("parr.verify_admitted");
+    let (deref_l, miss_l, next_l) = (
+        ctx.block_label(deref),
+        ctx.block_label(miss),
+        ctx.block_label(next),
+    );
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(arr_box);
+    let offset = blk.sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+    let heap = blk.icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
+    blk.cond_br(&heap, &deref_l, &miss_l);
+    ctx.current_block = deref;
+    let blk = ctx.block();
+    let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+    let word = emit_array_guard_word(blk, &handle);
+    let ordinary = emit_array_guard_word_ok(blk, &word, &handle);
+    let ptr = blk.inttoptr(I64, &handle);
+    let length = blk.load(I32, &ptr);
+    let exact = blk.icmp_eq(I32, &length, &fact.len.to_string());
+    let mut ok = blk.and(crate::types::I1, &ordinary, &exact);
+    if fact.key_in_bounds {
+        let inside = blk.icmp_ult(I32, idx_i32, &fact.len.to_string());
+        ok = blk.and(crate::types::I1, &ok, &inside);
+    }
+    crate::verify_facts::tick(ctx);
+    ctx.block().cond_br(&ok, &next_l, &miss_l);
+    ctx.current_block = miss;
+    crate::verify_facts::covered(crate::verify_facts::Fact::ElementRead, || {
+        serde_json::json!({ "length": fact.len, "key_in_bounds": fact.key_in_bounds })
+    });
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("proven element read of length {}", fact.len),
+        crate::verify_facts::Fact::ElementRead,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, arr_box)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
 }
