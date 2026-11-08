@@ -1124,9 +1124,17 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
     // The four collection kinds share one model of their contents; a
     // member no arm models is looked up on the kind's own chain.
     let (kind, fam) = (what, members::bobj_family(what));
+    // A Buffer's method `Buffer.prototype` does not own is its typed
+    // array chain's.
+    let buffer_owns = |m: &Model, n: &str| {
+        m.declarations
+            .named("Buffer.prototype", m)
+            .is_some_and(|h| m.declarations.property(h, n, m).is_some())
+    };
     let what = match fam {
         Family::Collection => "Collection",
         Family::Iterator => "Iterator",
+        _ if what == "Buffer" && !name.is_some_and(|n| buffer_owns(m, n)) => "TypedArray",
         _ => what,
     };
     match (what, name) {
@@ -1134,7 +1142,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
         (
-            "Collection" | "TypedArray" | "Promise" | "Error" | "IterResult",
+            "Collection" | "TypedArray" | "Buffer" | "Promise" | "Error" | "IterResult",
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
@@ -1408,6 +1416,17 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             if matches!(n, "unref" | "ref" | "refresh") {
                 ret_tok(m, call, t);
             }
+        }
+        // A `Buffer.prototype` method the runtime declares the effects of.
+        ("Buffer", Some(n)) if effects::declared_at("Buffer.prototype", n).is_some() => {
+            let e = effects::declared_at("Buffer.prototype", n).expect("declared");
+            effects::run_native(m, e, t, call);
+        }
+        ("Buffer", _) => {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
         }
         ("TypedArray", Some(n)) if typed_array_methods::method(m, t, n, call) => {}
         ("TypedArray", Some("transfer" | "transferToFixedLength" | "resize" | "grow")) => {

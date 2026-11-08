@@ -413,6 +413,13 @@ pub enum TmplKind {
 }
 
 impl TmplKind {
+    /// A typed array's storage (NUM elements, the B1 buffer rules): a
+    /// `%TypedArray%` instance or a host `Buffer` (`fs.readFileSync(path)`),
+    /// a `Uint8Array` whose prototype is `Buffer.prototype`.
+    pub fn typed_storage(&self) -> bool {
+        matches!(self, TmplKind::BObj { what: "TypedArray" | "Buffer", .. })
+    }
+
     /// Birth templates the facts are about (design section 2).
     pub fn is_fact_unit(&self) -> bool {
         matches!(

@@ -613,14 +613,14 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                             opaque_member(m, dst);
                         }
                     }
-                    (_, Some("buffer")) if what == "TypedArray" => {
+                    (_, Some("buffer")) if matches!(what, "TypedArray" | "Buffer") => {
                         // B1: the backing buffer is observed (it can be
                         // transferred, detached or wrapped by another view).
                         let r = m.reason("B1 .buffer read");
                         m.mark_hard(t, Hard::B1Exposed, r);
                         m.add_tok(dst, t);
                     }
-                    (_, Some("byteOffset")) if what == "TypedArray" => {
+                    (_, Some("byteOffset")) if matches!(what, "TypedArray" | "Buffer") => {
                         let r = m.reason("B1 .byteOffset read");
                         m.mark_hard(t, Hard::B1Exposed, r);
                         m.add_prim(dst, prim::NUM)

@@ -1006,7 +1006,7 @@ fn ta_only_sealed(m: &Model, ts: &[Tok], a: Atom) -> bool {
 
 fn ta_sealed_tok(m: &Model, x: Tok) -> bool {
     matches!(m.toks[x as usize], TokKind::Obj(tm, _)
-        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }))
+        if m.tmpls[tm as usize].kind.typed_storage())
         && !m.hard.contains_key(&x)
         && !m.escaped.contains_key(&x)
 }
