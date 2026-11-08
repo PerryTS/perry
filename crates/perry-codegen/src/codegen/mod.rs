@@ -259,8 +259,6 @@ pub mod entry_outline;
 mod export_value_wrappers;
 pub(crate) mod facts_const_length;
 pub(crate) mod facts_int32_locals;
-#[cfg(test)]
-mod facts_int32_locals_tests;
 pub(crate) mod facts_number_locals;
 #[cfg(test)]
 mod facts_number_locals_tests;

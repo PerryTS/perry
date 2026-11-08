@@ -141,3 +141,7 @@ pub(crate) fn store_from_double(
     let plain = blk.fptosi(DOUBLE, &safe, I32);
     Some(blk.select(crate::types::I1, &is_int, I32, &low, &plain))
 }
+
+#[cfg(test)]
+#[path = "facts_int32_locals_tests.rs"]
+mod tests;
