@@ -539,7 +539,21 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
+        // `new Array(k)` of an integer literal: the length its birth has.
+        let birth_len = match args.as_slice() {
+            [a] if self.arr_lengths && name == "Array" && spread.is_empty() => self
+                .num_lits
+                .iter()
+                .find(|(_, &n)| n == *a)
+                .map(|(&k, _)| k)
+                .filter(|k| (0..=i64::from(u32::MAX)).contains(k)),
+            _ => None,
+        };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+        if let Some(k) = birth_len {
+            let site = self.m.calls[call as usize].site;
+            self.m.arr_len_at_site.insert(site, k);
+        }
         let h = self.m.node_l("new-named");
         let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
         self.m.add_tok(h, mark);

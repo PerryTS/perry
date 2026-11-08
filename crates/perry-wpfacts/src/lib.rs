@@ -42,7 +42,7 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, BodyRef, ModuleBindings, Rep};
+pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,

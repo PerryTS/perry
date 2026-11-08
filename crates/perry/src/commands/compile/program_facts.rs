@@ -527,6 +527,17 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         for (offset, iv) in &mb.call_arg_ranges {
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
+        if element_reads_enabled() {
+            for (offset, r) in &mb.element_reads {
+                out.element_reads.insert(
+                    *offset,
+                    perry_codegen::FactsElementRead {
+                        len: r.len,
+                        key_in_bounds: r.key_in_bounds,
+                    },
+                );
+            }
+        }
     }
     for (id, b) in &mb.locals {
         if !interp {
@@ -916,4 +927,14 @@ fn verification_sites(
             })
         })
         .collect()
+}
+
+/// `PERRY_WP_ELEMENT_READS=0` withholds wpfacts' proven element reads
+/// (`ModuleBindings::element_reads`): every element read keeps its guarded
+/// tier (representation RFC §10.7, P4).
+fn element_reads_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_WP_ELEMENT_READS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
 }

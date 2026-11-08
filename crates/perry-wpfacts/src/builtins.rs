@@ -431,6 +431,11 @@ fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bo
         per_evaluation: false,
         static_methods: Vec::new(),
     });
+    if what == "Array" {
+        if let Some(&k) = m.arr_len_at_site.get(&site) {
+            m.arr_birth_len.insert(tm, k);
+        }
+    }
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
     let ctx = m.birth_ctx(call);

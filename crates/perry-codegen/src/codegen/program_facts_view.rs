@@ -230,6 +230,10 @@ pub struct ElisionFacts {
     /// Method call byte offset → each argument's integer interval at the
     /// call (wpfacts `ModuleBindings::call_arg_ranges`).
     pub call_arg_ranges: std::collections::BTreeMap<u32, Vec<Option<(i64, i64)>>>,
+    /// `IndexGet::element_offset` → the read's receivers are program Arrays
+    /// whose storage never moves (wpfacts `ModuleBindings::element_reads`,
+    /// `expr::index_get::proven_array`).
+    pub element_reads: std::collections::BTreeMap<u32, FactsElementRead>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -283,6 +287,7 @@ impl ElisionFacts {
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
             && self.call_arg_ranges.is_empty()
+            && self.element_reads.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()
@@ -350,4 +355,14 @@ pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, b
         "@llvm.used = appending global [2 x ptr] [ptr @{name}, ptr @{name}_ref], \
          section \"llvm.metadata\""
     ));
+}
+
+/// wpfacts `ElementRead`: every receiver of the read is a program Array of
+/// at least `len` elements whose length, storage and element descriptors no
+/// operation of the program ever changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FactsElementRead {
+    pub len: u32,
+    /// The key is an integer in `[0, len)`: the read needs no bound.
+    pub key_in_bounds: bool,
 }

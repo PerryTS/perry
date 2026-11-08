@@ -1,7 +1,20 @@
-//! Element reads of ordinary Arrays (representation RFC §10.7, phase P4).
+//! Element reads of ordinary Arrays whose storage the program never moves
+//! (`bindings::ElementRead`, representation RFC §10.7, phase P4).
 
-use super::*;
-use crate::ElementOp;
+use crate::ElementRead;
+
+fn reads(src: &str, at: &str) -> Option<ElementRead> {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &Default::default());
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    // SWC offsets are 1-based; the read's offset is its object's start.
+    let offset = src.find(at).expect("read in source") as u32 + 1;
+    mb.element_reads
+        .iter()
+        .find(|(o, _)| *o == offset)
+        .map(|(_, r)| *r)
+}
 
 const BOARD: &str = r#"
 class Board {
@@ -21,16 +34,73 @@ console.log(b.count());
 "#;
 
 #[test]
-fn zz_probe_board_read() {
-    let pf = facts(BOARD);
-    let offset = BOARD.find("this.board[square] ??").unwrap() as u32 + 1;
-    eprintln!("READ {:#?}", pf.element(0, offset, ElementOp::Read));
-    let woff = BOARD.find("this.board[square & 127]").unwrap() as u32 + 1;
-    eprintln!("WRITE {:#?}", pf.element(0, woff, ElementOp::Write));
-    let module = perry_parser::parse_typescript(BOARD, "t.ts").unwrap();
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").unwrap();
-    let text = format!("{hir:?}");
-    if let Some(i) = text.find("fill") {
-        eprintln!("HIR ...{}", &text[i.saturating_sub(600)..(i + 200).min(text.len())]);
-    }
+fn a_fixed_length_field_array_read_is_proven() {
+    let r = reads(BOARD, "this.board[square] ??").expect("proven read");
+    assert_eq!(r.len, 128);
+}
+
+#[test]
+fn a_literal_array_read_in_bounds_needs_no_bound() {
+    let src = "const a = [1, 2, 3, 4];\n\
+               let s = 0;\n\
+               for (let i = 0; i < 4; i++) s += a[i];\n\
+               console.log(s);";
+    let r = reads(src, "a[i]").expect("proven read");
+    assert_eq!(
+        r,
+        ElementRead {
+            len: 4,
+            key_in_bounds: true
+        }
+    );
+}
+
+#[test]
+fn an_array_that_may_grow_is_not_proven() {
+    let src = "const a = new Array<number>(4).fill(0);\n\
+               let s = 0;\n\
+               for (let i = 0; i < 4; i++) s += a[i];\n\
+               a.push(5);\n\
+               console.log(s, a[4]);";
+    assert_eq!(reads(src, "a[i]"), None);
+}
+
+#[test]
+fn an_index_store_past_the_length_is_growth() {
+    let src = "const a = new Array<number>(4).fill(0);\n\
+               function put(k: number) { a[k] = 1; }\n\
+               put(Math.floor(Math.random() * 10));\n\
+               console.log(a[1]);";
+    assert_eq!(reads(src, "a[1]"), None);
+}
+
+#[test]
+fn an_escaped_array_is_not_proven() {
+    let src = "const a = [1, 2, 3];\n\
+               (globalThis as any).leak = a;\n\
+               console.log(a[1]);";
+    assert_eq!(reads(src, "a[1]"), None);
+}
+
+#[test]
+fn a_receiver_that_may_be_another_object_is_not_proven() {
+    let src = "const a: any = Math.random() < 0.5 ? [1, 2, 3] : { 1: 'x' };\n\
+               console.log(a[1]);";
+    assert_eq!(reads(src, "a[1]"), None);
+}
+
+#[test]
+fn a_key_outside_the_length_keeps_its_bound() {
+    let src = "const a = [1, 2, 3, 4];\n\
+               let s = 0;\n\
+               for (let i = 0; i < 8; i++) s += a[i] ?? 0;\n\
+               console.log(s);";
+    let r = reads(src, "a[i]").expect("proven read");
+    assert_eq!(
+        r,
+        ElementRead {
+            len: 4,
+            key_in_bounds: false
+        }
+    );
 }
