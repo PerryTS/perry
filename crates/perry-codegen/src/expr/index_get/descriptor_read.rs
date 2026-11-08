@@ -363,8 +363,18 @@ impl Installed {
 /// each array binding the loop reads through the shared predicate, when the
 /// region's every ender is the back-edge poll or such a read's cold arm and
 /// every other active fact survives a cold arm.
+fn dbg(why: &str) {
+    if std::env::var_os("PERRY_DEBUG_COLD_ARM").is_some() {
+        eprintln!("COLD_ARM {why}");
+    }
+}
+
 pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) -> Installed {
-    if !enabled() || !side_tables_clear(ctx) {
+    if !enabled() {
+        return Installed(Vec::new());
+    }
+    if !side_tables_clear(ctx) {
+        dbg("side tables");
         return Installed(Vec::new());
     }
     let mut written = std::collections::HashSet::new();
@@ -377,6 +387,20 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
     }
     receivers.retain(|&id| !ctx.receiver_descriptors.contains(id));
     if receivers.is_empty() {
+        let c = candidate_reads(body, controls);
+        if !c.is_empty() {
+            let id = c[0].0;
+            dbg(&format!(
+                "no receiver ({} reads; first {id}: written={} boxed={} cap={} local={} global={} array={})",
+                c.len(),
+                written.contains(&id),
+                ctx.boxed_vars.contains(&id),
+                ctx.closure_captures.contains_key(&id),
+                ctx.locals.contains_key(&id),
+                ctx.module_globals.contains_key(&id),
+                crate::type_analysis::is_array_expr(ctx, &Expr::LocalGet(id))
+            ));
+        }
         return Installed(Vec::new());
     }
     let is_inert = |x: &Expr| crate::rooting::expr_is_inert_primitive(ctx, x);
@@ -389,6 +413,7 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
         .any(|x| !matches!(x, RegionEnder::BackEdgePoll | RegionEnder::ColdArmCall))
         || !enders.contains(&RegionEnder::ColdArmCall)
     {
+        dbg(&format!("enders {enders:?}"));
         return Installed(Vec::new());
     }
     let mut enders = enders;
@@ -427,9 +452,12 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
             &enders,
             trusted,
         ) {
-            Ok(true) => installed.push(id),
+            Ok(true) => {
+                dbg(&format!("installed {id}"));
+                installed.push(id)
+            }
             Ok(false) => {}
-            Err(_) => {}
+            Err(v) => dbg(&format!("refused {v:?}")),
         }
     }
     Installed(installed)
