@@ -195,9 +195,9 @@ manifest fetch  →  semver compare  →  download to <exe>.staged
                                           ↓
                                       arm sentinel (state: "armed")
                                           ↓
-                                      install:  rename <exe> → <exe>.prev
-                                                rename <exe>.staged → <exe>
-                                                chmod +x   (Unix only)
+                                      prepare complete <exe>.prev backup
+                                      prepare executable permissions (files)
+                                      publish staged → live in one operation
                                           ↓
                                       detached relaunch  →  process.exit(0)
 
@@ -207,12 +207,46 @@ next boot  →  initUpdater() reads sentinel
                   └── restartCount ≥ N      → performRollback + exit
 ```
 
-`installUpdate` is atomic where the OS lets us be: POSIX `rename(2)` on the
-same filesystem, NTFS rename-while-open (the PE loader opens with
-`FILE_SHARE_DELETE` so Windows tolerates this since Vista), and Linux's
-mmap'd-inode-stays-alive semantics. If the staging directory ends up on a
-different filesystem (a separate mount for `/tmp`, for instance) the rename
-falls back to copy + remove, which has a small non-atomic window.
+### Publication guarantees
+
+| Target | Install and rollback |
+|--------|----------------------|
+| Regular file on macOS / Linux | Complete backup first, then one same-filesystem POSIX rename over the live path. Rollback renames the backup directly over the live file. |
+| macOS bundle / directory | Complete metadata-aware backup first, then `renamex_np(RENAME_SWAP)` on a filesystem supporting atomic exchange. Rollback exchanges the backup and live directory. |
+| Windows, other platforms, Linux directories | Return `0` without changing the live, backup, or staged paths. Auto-update and automatic rollback are unavailable until a replacement protocol is certified. |
+
+A missing target supports initial installation on supported platforms via one
+rename; any existing backup is retained. Missing staging data, incompatible
+file types, final-component symlinks, path/inode aliases, nested source/target
+paths, and cross-filesystem paths are rejected before mutation. A backup may
+share the current file's inode after a failed publication; staging may not
+alias either of them. Unsupported native operations fail closed: there is no
+remove-then-rename or cross-device copy fallback.
+
+Backup preparation never removes the live target. A regular-file backup is a
+hard link; a bundle backup copies data, permissions, ACLs, extended attributes,
+and symlinks with macOS `copyfile`, using per-file clones where available.
+The source tree must remain unchanged during copying. Existing nonempty bundle
+backups are exchanged with the completed copy, not deleted before copying.
+This may require space and time proportional to the old bundle when cloning
+is unavailable.
+
+If interrupted before publication, the live path still names the old version.
+After publication it names the new version and `.prev` already holds a complete
+old version. Directory exchange can also leave the old tree at `.staged`;
+cleanup failure does not turn a committed install into failure. Interrupted
+backup preparation can leave an exclusively created `.prev.prepare-<pid>-<id>`
+sibling directory, which may be removed manually when no update is running.
+A failed publication can leave `.prev` refreshed to the current version, but
+never removes the live target. Successful directory rollback can leave the
+broken tree at `.prev` if cleanup fails.
+
+These guarantees cover namespace publication on supported local filesystems,
+not power-loss durability, concurrently modified source trees, network
+filesystems, or concurrent updater invocations. Bundle backup publication and
+target publication are separate atomic steps; they are not a multi-path
+transaction. The numeric native ABI remains `1` for committed publication,
+`0` for failure. The wrapper disarms its matching sentinel on install failure.
 
 The sentinel is a JSON file at a per-OS user-writable path:
 
