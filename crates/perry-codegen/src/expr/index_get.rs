@@ -42,6 +42,9 @@ use super::{
 
 mod foreign_counter;
 pub(super) mod guarded_array;
+mod proven_array;
+#[cfg(test)]
+mod proven_array_tests;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
     packed_f64_loop_index_parts, packed_f64_loop_offset_read,
@@ -398,7 +401,13 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let Expr::IndexGet {
+        object,
+        index,
+        element_offset,
+        ..
+    } = expr
+    else {
         return Ok(None);
     };
     // A planned-bare region read lowers through the value path's hook.
@@ -562,6 +571,9 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         &[index],
         |ctx| lower_expr_as_i32(ctx, index),
         |ctx, vals, idx_i32| {
+            if let Some(fact) = proven_array::fact(ctx, *element_offset) {
+                return Ok(proven_array::lower(ctx, &vals[0], &idx_i32, fact, true));
+            }
             lower_guarded_array_index_get(
                 ctx,
                 &vals[0],
@@ -826,7 +838,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // Step 4b / array S3: a planned-bare element read inside a loop region.
 
     match expr {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet {
+            object,
+            index,
+            element_offset,
+            ..
+        } => {
             // The private record cursor starts at zero, advances only after a
             // successful read, and is bounded by the array's u32 length here.
             // Consume that proof in the ordinary guarded indexed backend.
@@ -1530,6 +1547,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[index],
                     |ctx| lower_expr_as_i32(ctx, index),
                     |ctx, vals, idx_i32| {
+                        if let Some(fact) = proven_array::fact(ctx, *element_offset) {
+                            return Ok(proven_array::lower(ctx, &vals[0], &idx_i32, fact, false));
+                        }
                         with_confined_read(ctx, confined, |ctx| {
                             lower_guarded_array_index_get(
                                 ctx,

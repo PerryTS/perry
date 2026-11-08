@@ -325,6 +325,46 @@ pub struct ModuleBindings {
     /// of the call the program holds (inlining duplicates a site); `None`
     /// for an argument that may be anything but such a Number.
     pub call_arg_ranges: Vec<(u32, Vec<Option<(i64, i64)>>)>,
+    /// Element reads by `IndexGet::element_offset` whose receiver is proven
+    /// (`ElementRead`), joined over every copy of the read the program holds.
+    pub element_reads: Vec<(u32, ElementRead)>,
+}
+
+/// An element read `a[i]` whose every receiver is a program Array that
+/// keeps its birth length for the whole program (`const_length`): no store
+/// moves it, so its storage never grows, is never forwarded and holds `len`
+/// slots, and no `defineProperty` ever gave it an element descriptor
+/// (`solve::arr_len`). A slot holds its own data or a hole; a hole reads
+/// through the prototype chain, which the read leaves to the generic path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ElementRead {
+    /// The length every receiver has (the least, over the copies).
+    pub len: u32,
+    /// The key is an integer Number in `[0, len)` at every copy.
+    pub key_in_bounds: bool,
+}
+
+/// The `ElementRead` of one copy of an element read.
+fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead> {
+    if !matches!(site.key, crate::model::Key::Any(_)) {
+        return None;
+    }
+    let len = const_length(m, site.recv)?;
+    // A named property moves an Array to the named layout.
+    for t in m.nodes[site.recv as usize].pts.to_sorted() {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if owner_metadata_written(m, tm) {
+            return None;
+        }
+    }
+    let len = u32::try_from(len)
+        .ok()
+        .filter(|&l| l >= 1 && l <= i32::MAX as u32)?;
+    let key = number_range(m, site.idx);
+    let key_in_bounds = key.is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(len));
+    Some(ElementRead { len, key_in_bounds })
 }
 
 /// Node `n` holds only Numbers, each an integer in this interval. An empty
@@ -473,6 +513,34 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
     for &(mi, offset, ref args) in &g.call_args_at {
         let iv: Vec<Option<(i64, i64)>> = args.iter().map(|&n| number_range(&g.m, n)).collect();
         out[mi as usize].call_arg_ranges.push((offset, iv));
+    }
+    let mut reads: Vec<Vec<(u32, Option<ElementRead>)>> = vec![Vec::new(); out.len()];
+    for site in &g.element_sites {
+        if site.op == crate::derive::ElementOp::Read && site.byte_offset != 0 {
+            reads[site.module as usize].push((site.byte_offset, element_read(&g.m, site)));
+        }
+    }
+    for (mb, mut rs) in out.iter_mut().zip(reads) {
+        rs.sort_by_key(|(o, _)| *o);
+        let mut joined: Vec<(u32, Option<ElementRead>)> = Vec::new();
+        for (o, r) in rs {
+            match joined.last_mut() {
+                Some((lo, prev)) if *lo == o => {
+                    *prev = match (*prev, r) {
+                        (Some(a), Some(b)) => Some(ElementRead {
+                            len: a.len.min(b.len),
+                            key_in_bounds: a.key_in_bounds && b.key_in_bounds,
+                        }),
+                        _ => None,
+                    }
+                }
+                _ => joined.push((o, r)),
+            }
+        }
+        mb.element_reads = joined
+            .into_iter()
+            .filter_map(|(o, r)| Some((o, r?)))
+            .collect();
     }
     for mb in &mut out {
         mb.call_arg_ranges.sort_by_key(|(o, _)| *o);

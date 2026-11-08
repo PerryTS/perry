@@ -1234,6 +1234,10 @@ pub struct Model {
     pub arr_len: FxHashMap<Tok, NodeId>,
     /// The birth length of an array literal template (`solve::arr_len`).
     pub arr_birth_len: FxHashMap<TmplId, i64>,
+    /// `new Array(k)` of an integer literal `k`, by its call's source site:
+    /// the Array its builtin births there (`builtins::site_tmpl_born`) has
+    /// birth length `k`. Recorded only with array lengths on.
+    pub arr_len_at_site: FxHashMap<SiteId, i64>,
     /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
     /// judges against the birth length (`Model::arr_len_store`).
     pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
