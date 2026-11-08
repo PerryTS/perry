@@ -1223,8 +1223,9 @@ fn cjs_cache_slot_holds_its_own_record() {
 /// is then a store on a record, not on a builtin (E20), and a call of it is
 /// no `Function(...)` call (E14). With `Object.prototype` as the prototype
 /// (`__perry_declared_keys_object`) the same read reaches the builtins: a
-/// store under a key they declare (`name`) sinks the value (E20); one under
-/// a key they do not declare (`parent`) is their field (rule R1).
+/// store of `__proto__` relinks one and the value's members escape (E6); a
+/// store under a key the realm does not read back (`name`, `parent`) is
+/// their own field (rule R1, `realm_reads_store`).
 fn null_proto_read(births: &str, key: &str) -> Option<String> {
     let pf = facts(&format!(
         r#"
@@ -1246,9 +1247,11 @@ fn null_proto_read(births: &str, key: &str) -> Option<String> {
 fn a_computed_read_of_a_null_prototype_record_stops_at_the_record() {
     assert_eq!(null_proto_read("__perry_declared_keys", "parent"), None);
     assert_eq!(null_proto_read("__perry_declared_keys", "name"), None);
-    let escape = null_proto_read("__perry_declared_keys_object", "name");
+    assert_eq!(null_proto_read("__perry_declared_keys", "__proto__"), None);
+    assert_eq!(null_proto_read("__perry_declared_keys_object", "name"), None);
+    let escape = null_proto_read("__perry_declared_keys_object", "__proto__");
     assert!(
-        escape.as_deref().is_some_and(|e| e.contains("E20")),
+        escape.as_deref().is_some_and(|e| e.contains("E6")),
         "{escape:?}"
     );
     assert_eq!(
@@ -1873,6 +1876,7 @@ mod constructor_values;
 mod cycle_e20_own_field;
 mod cycle_locked_member;
 mod date_methods;
+mod realm_read_static;
 mod declared_constructor;
 mod declared_global_write;
 mod delegate_step;

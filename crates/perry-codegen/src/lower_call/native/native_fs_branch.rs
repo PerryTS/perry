@@ -326,11 +326,11 @@
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                ctx.block().call_void(
+                let result = ctx.block().call(
+                    DOUBLE,
                     "js_fs_mkdir_sync_options",
                     &[(DOUBLE, &p), (DOUBLE, &options)],
                 );
-                let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 arg_group.release(ctx);
                 return Ok(result);
             }
