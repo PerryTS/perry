@@ -346,7 +346,17 @@ pub struct ElementRead {
 
 /// The `ElementRead` of one copy of an element read.
 fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead> {
-    if !matches!(site.key, crate::model::Key::Any(_)) {
+    // A computed key, or a literal one that is a canonical array index (a
+    // loop the HIR unrolled reads `a[0]`, `a[1]`, ... at the loop's site).
+    let index_key = match site.key {
+        crate::model::Key::Any(_) => true,
+        crate::model::Key::Named(a) => {
+            let k = &m.atoms[a as usize];
+            k.parse::<u32>()
+                .is_ok_and(|v| v != u32::MAX && v.to_string() == *k)
+        }
+    };
+    if !index_key {
         return None;
     }
     let len = const_length(m, site.recv)?;
