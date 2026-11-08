@@ -1089,17 +1089,18 @@ pub(crate) fn lower_let(
             // double path (`facts_int32_locals::checked`).
             if !crate::codegen::facts_int32_locals::checked(ctx, id)
                 && crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let slot = ctx
                     .i32_counter_slots
@@ -1248,17 +1249,18 @@ pub(crate) fn lower_let(
             // double path (`facts_int32_locals::checked`).
             if !crate::codegen::facts_int32_locals::checked(ctx, id)
                 && crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 // i32-native init: compute directly in i32, single store.
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 ctx.block().store(I32, &v_i32, &i32_slot);
@@ -1442,17 +1444,18 @@ pub(crate) fn lower_let(
             // double path (`facts_int32_locals::checked`).
             if !crate::codegen::facts_int32_locals::checked(ctx, id)
                 && crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let unsigned_i32 = ctx.unsigned_i32_locals.contains(&id);
                 let blk = ctx.block();

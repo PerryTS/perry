@@ -108,7 +108,9 @@ fn unproven_console_log_reads_the_member_and_calls_it() {
         "an unproven site reads console.log:\n{body}"
     );
     assert!(
-        !body.lines().any(|l| l.contains("call ") && l.contains("@js_console_log")),
+        !body
+            .lines()
+            .any(|l| l.contains("call ") && l.contains("@js_console_log")),
         "an unproven site never binds the console intrinsic:\n{body}"
     );
 }
@@ -118,7 +120,8 @@ fn proven_console_log_binds_the_intrinsic() {
     let ir = compile(console_call("log"), &[SITE]);
     let body = build_body(&ir);
     assert!(
-        body.lines().any(|l| l.contains("call ") && l.contains("@js_console_log")),
+        body.lines()
+            .any(|l| l.contains("call ") && l.contains("@js_console_log")),
         "a proven site binds the console intrinsic:\n{body}"
     );
     assert!(
@@ -132,7 +135,9 @@ fn a_proof_for_another_site_does_not_bind_the_intrinsic() {
     let ir = compile(console_call("log"), &[SITE + 1]);
     let body = build_body(&ir);
     assert!(
-        !body.lines().any(|l| l.contains("call ") && l.contains("@js_console_log")),
+        !body
+            .lines()
+            .any(|l| l.contains("call ") && l.contains("@js_console_log")),
         "only the proven offset binds the intrinsic:\n{body}"
     );
 }

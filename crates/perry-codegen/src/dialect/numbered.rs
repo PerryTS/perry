@@ -71,12 +71,19 @@ impl<'ctx> NumberedMetadata<'ctx> {
     /// The node `!id`, built on first use.
     pub(crate) fn node(&self, ctx: &'ctx Context, id: u32) -> Result<MetadataValue<'ctx>> {
         let md = self.resolve(ctx, id, &mut Vec::new())?;
-        Ok(unsafe {
-            MetadataValue::new(llvm_sys::core::LLVMMetadataAsValue(ctx.as_ctx_ref(), md))
-        })
+        Ok(
+            unsafe {
+                MetadataValue::new(llvm_sys::core::LLVMMetadataAsValue(ctx.as_ctx_ref(), md))
+            },
+        )
     }
 
-    fn resolve(&self, ctx: &'ctx Context, id: u32, stack: &mut Vec<u32>) -> Result<LLVMMetadataRef> {
+    fn resolve(
+        &self,
+        ctx: &'ctx Context,
+        id: u32,
+        stack: &mut Vec<u32>,
+    ) -> Result<LLVMMetadataRef> {
         if let Some(v) = self.built.borrow().get(&id) {
             return Ok(unsafe { llvm_sys::core::LLVMValueAsMetadata(v.as_value_ref()) });
         }
@@ -102,8 +109,9 @@ impl<'ctx> NumberedMetadata<'ctx> {
             (false, true) => bail!("uniqued metadata !{id} refers to itself: {body}"),
         }
         let c = ctx.as_ctx_ref();
-        let temp = self_ref
-            .then(|| unsafe { llvm_sys::debuginfo::LLVMTemporaryMDNode(c, std::ptr::null_mut(), 0) });
+        let temp = self_ref.then(|| unsafe {
+            llvm_sys::debuginfo::LLVMTemporaryMDNode(c, std::ptr::null_mut(), 0)
+        });
         stack.push(id);
         let built = self.build(ctx, &tree, id, temp, stack);
         stack.pop();

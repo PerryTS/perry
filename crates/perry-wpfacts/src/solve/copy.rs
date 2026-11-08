@@ -89,7 +89,7 @@ impl Model {
         self.bufs.push(toks);
         // Registration is a value-copy delivery: `a`'s Numbers arrive with
         // `a`'s interval.
-        let saved_range = self.cur_range.replace(self.nodes[a as usize].range);
+        let saved_range = self.cur_range.replace(self.rg(a));
         if covered {
             self.add_s(b, &[], prim, strs);
             self.cur_range = saved_range;

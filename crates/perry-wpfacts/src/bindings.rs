@@ -141,6 +141,10 @@ pub struct BindingFacts {
     /// Number (a String's code-unit count, an Array's non-configurable
     /// `length`), whatever its declared type says.
     pub length_number: bool,
+    /// It holds one program Array literal's tokens and nothing else, each
+    /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
+    /// that constant.
+    pub const_length: Option<i64>,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -208,6 +212,37 @@ pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
     Some((tm, *m.ta_elem.get(&tm)?))
 }
 
+/// The length every value of node `n` has: it holds only program Array
+/// tokens whose birth length never moved (`solve::arr_len`), all the same.
+fn const_length(m: &Model, n: u32) -> Option<i64> {
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 || node.pts.contains_tok(TOP) {
+        return None;
+    }
+    let mut len = None;
+    for t in node.pts.to_sorted() {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if !m.is_arr(t) || m.foreign.contains_key(&tm) || m.is_escaped(t) {
+            return None;
+        }
+        let birth = *m.arr_birth_len.get(&tm)?;
+        if let Some(&ln) = m.arr_len.get(&t) {
+            let r = m.nodes[ln as usize].range;
+            if r.is_top() || r.lo != birth || r.hi != birth {
+                return None;
+            }
+        }
+        match len {
+            None => len = Some(birth),
+            Some(l) if l == birth => {}
+            Some(_) => return None,
+        }
+    }
+    len
+}
+
 fn indexed_owner(g: &Gen, n: u32) -> Option<IndexedOwner> {
     let m = &g.m;
     let node = &m.nodes[n as usize];
@@ -258,6 +293,22 @@ pub struct ModuleBindings {
     /// Numeric leaf functions: evaluating the expression on numeric arguments
     /// has no calls, allocation, mutation or user coercion.
     pub numeric_functions: Vec<(u32, Vec<u32>, perry_hir::Expr)>,
+    /// Method call sites by byte offset: each argument's integer interval
+    /// at the call (after narrowing: `gen::narrow`), joined over every copy
+    /// of the call the program holds (inlining duplicates a site); `None`
+    /// for an argument that may be anything but such a Number.
+    pub call_arg_ranges: Vec<(u32, Vec<Option<(i64, i64)>>)>,
+}
+
+/// Node `n` holds only Numbers, each an integer in this interval. An empty
+/// node proves nothing (it may be one the solve left unpopulated).
+fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
+    let node = &m.nodes[n as usize];
+    if node.prim != crate::model::prim::NUM || !node.pts.is_empty() {
+        return None;
+    }
+    let r = node.range;
+    (!r.is_top() && !r.is_empty()).then_some((r.lo, r.hi))
 }
 
 fn facts_of(g: &Gen, n: u32) -> BindingFacts {
@@ -320,6 +371,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     if !node.range.is_top() && !node.range.is_empty() {
         out.int_range = Some((node.range.lo, node.range.hi));
     }
+    out.const_length = const_length(m, n);
     out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
     out
@@ -372,6 +424,32 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         }
         let b = facts_of(g, f.this);
         out[f.module as usize].this_of.push((f.func_id, b));
+    }
+    for &(mi, offset, ref args) in &g.call_args_at {
+        let iv: Vec<Option<(i64, i64)>> = args.iter().map(|&n| number_range(&g.m, n)).collect();
+        out[mi as usize].call_arg_ranges.push((offset, iv));
+    }
+    for mb in &mut out {
+        mb.call_arg_ranges.sort_by_key(|(o, _)| *o);
+        let mut joined: Vec<(u32, Vec<Option<(i64, i64)>>)> = Vec::new();
+        for (o, iv) in std::mem::take(&mut mb.call_arg_ranges) {
+            match joined.last_mut() {
+                Some((lo, prev)) if *lo == o => {
+                    if prev.len() != iv.len() {
+                        prev.iter_mut().for_each(|p| *p = None);
+                        continue;
+                    }
+                    for (p, q) in prev.iter_mut().zip(iv) {
+                        *p = match (*p, q) {
+                            (Some((a, b)), Some((c, d))) => Some((a.min(c), b.max(d))),
+                            _ => None,
+                        };
+                    }
+                }
+                _ => joined.push((o, iv)),
+            }
+        }
+        mb.call_arg_ranges = joined;
     }
     for (mi, (_, m)) in g.modules.iter().enumerate() {
         fn pure(e: &perry_hir::Expr, params: &[u32]) -> bool {

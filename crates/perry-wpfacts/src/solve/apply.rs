@@ -38,6 +38,11 @@ impl Model {
                     }
                 }
             }
+            Cons::LenIndex { lo, hi } => {
+                for &t in toks {
+                    self.arr_len_index(t, Iv { lo, hi });
+                }
+            }
             Cons::IndexHole => {
                 for &t in toks {
                     self.mark_hole(t);
@@ -412,7 +417,7 @@ impl Model {
                     // A filter of the host's values: its Numbers keep the
                     // host's interval, its strings the host's constants.
                     let strs = self.nodes[n as usize].strs;
-                    let saved = self.cur_range.replace(self.nodes[n as usize].range);
+                    let saved = self.cur_range.replace(self.rg(n));
                     self.add_s(dst, &[], prim & !strip, strs);
                     self.cur_range = saved;
                 }
@@ -434,10 +439,8 @@ impl Model {
                     // The host's falsy Numbers: within its interval unless ⊤
                     // or a marker adds falsy values of its own.
                     let own = !toks.iter().any(|&t| t == TOP || self.is_marker(t));
-                    let saved = std::mem::replace(
-                        &mut self.cur_range,
-                        own.then(|| self.nodes[n as usize].range),
-                    );
+                    let host = own.then(|| self.rg(n));
+                    let saved = std::mem::replace(&mut self.cur_range, host);
                     self.add_prim(dst, p);
                     self.cur_range = saved;
                 }
@@ -500,6 +503,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
+                        self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
                         self.note_inst(t, true);
@@ -659,7 +663,7 @@ impl Model {
                         continue;
                     }
                     if self.is_array_length(q, key) {
-                        self.add_prim(dst, prim::NUM);
+                        self.arr_len_into(q, dst);
                         continue;
                     }
                     // The same final-read decision as chain_load: the
@@ -1304,11 +1308,13 @@ impl Model {
                 let strs = self.nodes[n as usize].strs;
                 let mut index = prim & prim::NUM != 0;
                 let mut names: Vec<Atom> = Vec::new();
+                let mut index_strs: Vec<i64> = Vec::new();
                 if prim & prim::STR != 0 {
                     for i in 0..self.str_atoms(strs).len() {
                         let a = self.str_atoms(strs)[i];
                         if super::strs::index_string(&self.atoms[a as usize]) {
                             index = true;
+                            index_strs.push(self.atoms[a as usize].parse::<i64>().unwrap_or(-1));
                         } else {
                             names.push(a);
                         }
@@ -1321,6 +1327,27 @@ impl Model {
                 ] {
                     if prim & bit != 0 {
                         names.extend(keys.iter().map(|k| self.atom(k)));
+                    }
+                }
+                // Every index store names its index interval before the
+                // element store below reaches the holders (`Cons::LenIndex`,
+                // `arr_len`): a Number key its interval, an index string
+                // its value.
+                let mut len_ivs: Vec<Iv> = Vec::new();
+                if prim & prim::NUM != 0 {
+                    len_ivs.push(self.range_input(n));
+                }
+                len_ivs.extend(index_strs.iter().map(|&v| Iv::int(v, v)));
+                for iv in len_ivs {
+                    self.indexed_store_sites.insert(site);
+                    if self.len_index_done.insert((site, o, iv.lo, iv.hi)) {
+                        self.cons(
+                            o,
+                            Cons::LenIndex {
+                                lo: iv.lo,
+                                hi: iv.hi,
+                            },
+                        );
                     }
                 }
                 if index && self.index_store_done.insert((n, site, true)) {
@@ -1379,17 +1406,41 @@ impl Model {
                 dst,
                 right,
             } => {
-                let me = self.range_input(n);
-                let ot = if other == NO_NODE {
-                    Iv::EMPTY
+                // A code rule clips the operand's Strings by the literal's
+                // code; its result is a code interval (`Node::crange`).
+                if let RangeOp::SClip(k) = op {
+                    let me = self.crange_input(n);
+                    let ot = if other == NO_NODE {
+                        Iv::TOP
+                    } else {
+                        self.crange_input(other)
+                    };
+                    let (l, r) = if right { (ot, me) } else { (me, ot) };
+                    let iv = crate::model::range::eval(RangeOp::Clip(k), l, r);
+                    if crate::solve::grow_crange(&mut self.nodes[dst as usize], iv) {
+                        let d = &mut self.nodes[dst as usize];
+                        if !d.in_wl {
+                            d.in_wl = true;
+                            self.wl.push_back(dst);
+                        }
+                    }
+                    return;
+                }
+                let iv = if op == RangeOp::ToNumber {
+                    self.to_number_range(n)
                 } else {
-                    self.range_input(other)
-                };
-                let (l, r) = if right { (ot, me) } else { (me, ot) };
-                let iv = if self.range_sabotage && op == RangeOp::Add {
-                    l
-                } else {
-                    crate::model::range::eval(op, l, r)
+                    let me = self.range_input(n);
+                    let ot = if other == NO_NODE {
+                        Iv::EMPTY
+                    } else {
+                        self.range_input(other)
+                    };
+                    let (l, r) = if right { (ot, me) } else { (me, ot) };
+                    if self.range_sabotage && op == RangeOp::Add {
+                        l
+                    } else {
+                        crate::model::range::eval(op, l, r)
+                    }
                 };
                 if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
                     let d = &mut self.nodes[dst as usize];
@@ -1491,7 +1542,13 @@ impl Model {
                     self.call_args(call, t);
                 }
             }
-            Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
+            Cons::RetInto { call, run } => {
+                // The run's result is the call's: its Numbers keep their
+                // interval.
+                let saved = self.cur_range.replace(self.rg(n));
+                self.ret_into(call, run, toks, prim);
+                self.cur_range = saved;
+            }
             Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
                 // A primitive source copies no key surely (`null`,
@@ -1507,6 +1564,9 @@ impl Model {
             }
             Cons::SpreadFrom { src, site } => {
                 for &d in toks {
+                    // A copy into an Array (`Object.assign`) may write any
+                    // index, past its end too.
+                    self.arr_len_top(d);
                     self.spread_into(src, d, site);
                 }
             }
