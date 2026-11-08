@@ -30,6 +30,15 @@ pub struct ScannedPackage {
     pub manifest: Value,
 }
 
+impl ScannedPackage {
+    pub fn declared_name(&self) -> &str {
+        self.manifest
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.name)
+    }
+}
+
 /// Walk a `node_modules/` directory and return every package found,
 /// recursing into nested `node_modules/` (npm's hoist-fallback layout).
 pub fn discover_packages(node_modules: &Path) -> Vec<ScannedPackage> {

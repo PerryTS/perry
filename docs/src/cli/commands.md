@@ -64,6 +64,8 @@ that name, including nested dependencies. For an alias such as
 `"build-tool": "npm:esbuild@..."`, approve `build-tool`, not `esbuild`.
 Keep approvals narrow and review their sources and versions: approved scripts
 run with your full privileges and inherited environment, without a sandbox.
+Typosquatting checks inspect the declared package name, but `--allow-risky`
+overrides select the installed name, just like script approvals.
 
 `--run-scripts-all` explicitly approves every installed package. Neither form
 of script approval bypasses the malware-scan gate. `--skip-scan` skips scanning

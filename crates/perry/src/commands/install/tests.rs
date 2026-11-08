@@ -116,6 +116,39 @@ fn lifecycle_preserves_declared_name_in_script_environment() {
 }
 
 #[test]
+fn scanner_checks_declared_names_but_overrides_use_installed_names() {
+    for (installed, declared, blocked) in [
+        ("legitimate-alias", "expres", true),
+        ("expres", "express", false),
+    ] {
+        let root = TempDir::new().unwrap();
+        write_package(root.path(), installed, declared);
+        let packages = scanner::discover_packages(&root.path().join("node_modules"));
+        let report = scanner::scan_packages(&packages, &[], false);
+        assert_eq!(
+            matches!(report.verdict, scanner::report::Verdict::Blocked),
+            blocked
+        );
+        if blocked {
+            assert_eq!(report.findings.len(), 1);
+            assert_eq!(report.findings[0].package, "legitimate-alias@1.0.0");
+            assert!(report.findings[0]
+                .message
+                .contains("--allow-risky legitimate-alias"));
+            assert!(report.findings[0]
+                .message
+                .contains("npmjs.com/package/expres"));
+            let overridden = scanner::scan_packages(&packages, &[installed.into()], false);
+            assert!(matches!(
+                overridden.verdict,
+                scanner::report::Verdict::Overridden
+            ));
+            assert!(overridden.findings[0].overridden);
+        }
+    }
+}
+
+#[test]
 fn lifecycle_preserves_project_and_blanket_approvals() {
     let _env = crate::test_env_lock::env_lock();
     let root = TempDir::new().unwrap();
