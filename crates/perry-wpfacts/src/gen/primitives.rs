@@ -78,100 +78,28 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// The primitive type of an enum member's value, resolved as codegen
-    /// resolves `Expr::EnumMember` (the enum table in codegen/mod.rs, fed by
-    /// run_pipeline's `exported_enums`): the module's own enum of that name
-    /// first, else the enum the module's import binding of that local name
-    /// names, followed through `export { X } from` / `export *` to its
-    /// declaring module (`imported_enum`). A number member is a number, a
-    /// string member a string; a computed, missing or unresolved member is
-    /// either.
+    /// The primitive type of an enum member's value. One lookup order, the
+    /// one codegen's enum table has: the module's own enum member by its
+    /// declaration (a string is a string, a number a number, a computed one
+    /// either). An `Expr::EnumMember` with no such own member is an imported
+    /// one that `perry_hir::fix_imported_enums` already resolved before this
+    /// walk: it writes `EnumMember` only for a numeric member (a string member
+    /// is inlined as `Expr::String`, a computed one is left a property read),
+    /// and any other member would fail codegen. So it is a number.
     pub(crate) fn enum_member_prim(&self, mi: u32, enum_name: &str, member_name: &str) -> u16 {
         use perry_hir::EnumValue;
-        let own = self.modules[mi as usize]
+        match self.modules[mi as usize]
             .1
             .enums
             .iter()
-            .find(|e| e.name == enum_name);
-        let e = match own {
-            Some(e) => Some(e),
-            None => self.imported_enum(mi, enum_name),
-        };
-        match e
-            .and_then(|e| e.members.iter().find(|m| m.name == member_name))
+            .filter(|e| e.name == enum_name)
+            .find_map(|e| e.members.iter().find(|m| m.name == member_name))
             .map(|m| &m.value)
         {
-            Some(EnumValue::Number(_)) => prim::NUM,
             Some(EnumValue::String(_)) => prim::STR,
-            Some(EnumValue::Computed) | None => prim::NUM | prim::STR,
+            Some(EnumValue::Computed) => prim::NUM | prim::STR,
+            Some(EnumValue::Number(_)) | None => prim::NUM,
         }
-    }
-
-    /// The exported enum module `mi` binds to the local name `local` by an
-    /// import: the specifier's exported name (a default import uses the local
-    /// name, as run_pipeline does) looked up in the resolved module's exported
-    /// enums.
-    fn imported_enum(&self, mi: u32, local: &str) -> Option<&'a perry_hir::Enum> {
-        use perry_hir::ImportSpecifier;
-        let module = self.modules[mi as usize].1;
-        for imp in &module.imports {
-            let Some(t) = imp
-                .resolved_path
-                .as_ref()
-                .and_then(|p| self.path_index.get(p).copied())
-            else {
-                continue;
-            };
-            for spec in &imp.specifiers {
-                let exported = match spec {
-                    ImportSpecifier::Named { imported, local: l } if l == local => imported,
-                    ImportSpecifier::Default { local: l } if l == local => l,
-                    _ => continue,
-                };
-                return self.exported_enum(t, exported, &mut Vec::new());
-            }
-        }
-        None
-    }
-
-    /// Module `t`'s exported enum `name`: declared there, or re-exported
-    /// (`export { name as .. } from`, `export * from`) from another module.
-    fn exported_enum(
-        &self,
-        t: u32,
-        name: &str,
-        seen: &mut Vec<u32>,
-    ) -> Option<&'a perry_hir::Enum> {
-        use perry_hir::Export;
-        if seen.contains(&t) {
-            return None;
-        }
-        seen.push(t);
-        let module = self.modules[t as usize].1;
-        if let Some(e) = module
-            .enums
-            .iter()
-            .find(|e| e.is_exported && e.name == name)
-        {
-            return Some(e);
-        }
-        for ex in &module.exports {
-            let (source, imported) = match ex {
-                Export::ReExport {
-                    source,
-                    imported,
-                    exported,
-                } if exported == name => (source, imported.as_str()),
-                Export::ExportAll { source } => (source, name),
-                _ => continue,
-            };
-            if let Some(s) = self.resolve_source(t, module, source) {
-                if let Some(e) = self.exported_enum(s, imported, seen) {
-                    return Some(e);
-                }
-            }
-        }
-        None
     }
 
     /// The node of a numeric literal: a shared node per integer value,

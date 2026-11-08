@@ -1418,7 +1418,7 @@ impl<'a> Gen<'a> {
     /// Unresolved, the export is ⊤ (a native or unknown module); a program
     /// module must never land there, or its namespace members are called
     /// through a ⊤ that never escaped them.
-    pub(crate) fn resolve_source(&self, mi: u32, module: &Module, source: &str) -> Option<u32> {
+    fn resolve_source(&self, mi: u32, module: &Module, source: &str) -> Option<u32> {
         let path = self.modules[mi as usize].0;
         if let Some(p) = self.export_sources.get(path).and_then(|m| m.get(source)) {
             return self.path_index.get(p).copied();
