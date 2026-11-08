@@ -36,6 +36,7 @@ pub enum DataViewKind {
     Float64 = 7,
     BigInt64 = 8,
     BigUint64 = 9,
+    Float16 = 10,
 }
 
 impl DataViewKind {
@@ -60,6 +61,7 @@ impl DataViewKind {
             7 => DataViewKind::Float64,
             8 => DataViewKind::BigInt64,
             9 => DataViewKind::BigUint64,
+            10 => DataViewKind::Float16,
             _ => return None,
         })
     }
@@ -78,6 +80,7 @@ impl DataViewKind {
             DataViewKind::Float64 => "Float64",
             DataViewKind::BigInt64 => "BigInt64",
             DataViewKind::BigUint64 => "BigUint64",
+            DataViewKind::Float16 => "Float16",
         }
     }
 
@@ -95,8 +98,52 @@ impl DataViewKind {
             "Float64" => DataViewKind::Float64,
             "BigInt64" => DataViewKind::BigInt64,
             "BigUint64" => DataViewKind::BigUint64,
+            "Float16" => DataViewKind::Float16,
             _ => return None,
         })
+    }
+}
+
+/// IEEE-754 binary16 bits of `n`, rounded to nearest, ties to even
+/// (`Math.f16round` gives the value; this packs it). NaN packs as the quiet
+/// NaN 0x7E00, like V8.
+pub(crate) fn f64_to_binary16(n: f64) -> u16 {
+    if n.is_nan() {
+        return 0x7e00;
+    }
+    let sign: u16 = if n.is_sign_negative() { 0x8000 } else { 0 };
+    let r = crate::math::js_math_f16round(n).abs();
+    if r == 0.0 {
+        return sign;
+    }
+    if r.is_infinite() {
+        return sign | 0x7c00;
+    }
+    const MIN_HALF_NORMAL: f64 = 0.00006103515625; // 2^-14
+    if r < MIN_HALF_NORMAL {
+        // subnormal: r = m * 2^-24, m in 1..=1023
+        return sign | (r * 16777216.0) as u16;
+    }
+    let exponent = (((r.to_bits() >> 52) & 0x7ff) as i32) - 1023; // -14..=15
+    let significand = (r / 2.0f64.powi(exponent - 10)) as u16; // 1024..=2047
+    sign | (((exponent + 15) as u16) << 10) | (significand - 1024)
+}
+
+/// The number an IEEE-754 binary16 bit pattern denotes.
+pub(crate) fn binary16_to_f64(bits: u16) -> f64 {
+    let negative = bits & 0x8000 != 0;
+    let exponent = ((bits >> 10) & 0x1f) as i32;
+    let mantissa = (bits & 0x3ff) as f64;
+    let magnitude = match exponent {
+        0 => mantissa * 2.0f64.powi(-24),
+        31 if mantissa == 0.0 => f64::INFINITY,
+        31 => return f64::NAN,
+        e => (1024.0 + mantissa) * 2.0f64.powi(e - 25),
+    };
+    if negative {
+        -magnitude
+    } else {
+        magnitude
     }
 }
 
@@ -257,6 +304,15 @@ unsafe fn write_number(
             };
             write_bytes(buf, offset, &bytes);
         }
+        DataViewKind::Float16 => {
+            let v = f64_to_binary16(n);
+            let bytes = if little {
+                v.to_le_bytes()
+            } else {
+                v.to_be_bytes()
+            };
+            write_bytes(buf, offset, &bytes);
+        }
         DataViewKind::Float32 => {
             let v = n as f32;
             let bytes = if little {
@@ -321,6 +377,14 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
             // #10779: same reasoning as `typedarray::load_at` — these two are
             // the only `get*` kinds that can return a NaN, and the bytes are
             // whatever the program wrote.
+            DataViewKind::Float16 => {
+                let b = read_bytes::<2>(buf, offset);
+                binary16_to_f64(if little {
+                    u16::from_le_bytes(b)
+                } else {
+                    u16::from_be_bytes(b)
+                })
+            }
             DataViewKind::Float32 => {
                 let b = read_bytes::<4>(buf, offset);
                 crate::array::canonical_raw_f64(if little {

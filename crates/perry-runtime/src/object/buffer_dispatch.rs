@@ -494,6 +494,24 @@ pub(crate) unsafe fn buffer_to_string_call(
     f64::from_bits(JSValue::string_ptr(str_ptr).bits())
 }
 
+/// The methods an ArrayBuffer / SharedArrayBuffer / DataView implements
+/// natively here: exactly the methods of its kind's prototype in node
+/// (`DataView.prototype` get*/set*, `ArrayBuffer.prototype` slice resize
+/// transfer transferToFixedLength, `SharedArrayBuffer.prototype` slice grow).
+fn view_native_method(addr: usize, name: &str) -> bool {
+    if crate::buffer::is_data_view(addr) {
+        return name
+            .strip_prefix("get")
+            .or_else(|| name.strip_prefix("set"))
+            .and_then(crate::buffer::DataViewKind::from_method_suffix)
+            .is_some();
+    }
+    if crate::buffer::is_shared_array_buffer(addr) {
+        return matches!(name, "slice" | "grow");
+    }
+    matches!(name, "slice" | "resize" | "transfer" | "transferToFixedLength")
+}
+
 pub unsafe fn dispatch_buffer_method(
     addr: usize,
     method_name: &str,
@@ -526,6 +544,43 @@ pub unsafe fn dispatch_buffer_method(
         return match crate::collection_iter::call_with_this_capturing_throw(
             own_value,
             own_receiver.get_nanbox_f64(),
+            args,
+        ) {
+            Ok(value) => value,
+            Err(error) => crate::exception::rethrow_caught(error),
+        };
+    }
+    // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView is an ordinary
+    // object. Only its own kind's native methods dispatch below; any other
+    // name is the receiver's [[Get]] (own, then its [[Prototype]] chain:
+    // `Object.prototype` members, a method the program stored on
+    // `DataView.prototype`), called with the view as `this`. A Buffer method
+    // (`dv.subarray`) is not a member: "is not a function", as in node.
+    if crate::buffer::is_non_indexed_buffer_view(addr) && !view_native_method(addr, method_name) {
+        if method_name.starts_with("__perry_") {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(buf_f64);
+        let key =
+            crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+        let raw = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+        let value = crate::object::view_get(raw as *const ObjectHeader, key);
+        let value = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+        if value.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED
+            || value.get_nanbox_f64().to_bits() == crate::value::TAG_NULL
+        {
+            let kind = crate::object::view_kind_name(raw);
+            crate::error::js_throw_type_error_not_a_function(
+                kind.as_ptr(),
+                kind.len(),
+                method_name.as_ptr(),
+                method_name.len(),
+            )
+        }
+        return match crate::collection_iter::call_with_this_capturing_throw(
+            value.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
             args,
         ) {
             Ok(value) => value,
@@ -599,14 +654,6 @@ pub unsafe fn dispatch_buffer_method(
             let s = crate::string::js_string_from_bytes(b"[object KeyObject]".as_ptr(), 18);
             f64::from_bits(JSValue::string_ptr(s).bits())
         }
-        // ArrayBuffer, SharedArrayBuffer, and DataView inherit
-        // Object.prototype.toString. They share BufferHeader storage and
-        // reach this dispatcher, but their `toString` ignores every argument;
-        // interpreting the first argument as a Buffer encoding leaks their
-        // backing bytes instead of returning the object brand.
-        "toString" if crate::buffer::is_non_indexed_buffer_view(addr) => {
-            crate::object::js_object_to_string(buf_f64)
-        }
         // A plain `Uint8Array` inherits `%TypedArray%.prototype.toString`
         // (the element join, arguments ignored); only `Buffer.prototype`
         // overrides it with the encoding-aware decode below.
@@ -654,6 +701,10 @@ pub unsafe fn dispatch_buffer_method(
         // ES2024 `ArrayBuffer.prototype.resize` (#10873). Same receiver scope
         // as `transfer`; a fixed-length ArrayBuffer reaches the helper too and
         // gets the spec's TypeError rather than "resize is not a function".
+        // ES2024 `SharedArrayBuffer.prototype.grow`.
+        "grow" if crate::buffer::is_shared_array_buffer(addr) => {
+            crate::buffer::shared_array_buffer_grow(addr, args)
+        }
         "resize"
             if crate::buffer::is_array_buffer(addr)
                 && !crate::buffer::is_shared_array_buffer(addr)

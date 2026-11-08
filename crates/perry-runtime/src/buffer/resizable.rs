@@ -110,6 +110,68 @@ pub extern "C" fn js_array_buffer_new_with_options(
 }
 
 /// `ArrayBuffer.prototype.resize(newLength)`.
+/// `new SharedArrayBuffer(length, { maxByteLength })` (ES2024 growable SAB).
+/// Without the option (or with `maxByteLength: undefined`) a fixed-length
+/// SAB, exactly `js_shared_array_buffer_new_value`. A growable one reserves
+/// `max` zeroed bytes in its process-global store; `grow` only moves the
+/// length within it, so the store never moves.
+#[no_mangle]
+pub extern "C" fn js_shared_array_buffer_new_with_options(
+    size_value: f64,
+    options: f64,
+) -> *mut BufferHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    let len = super::from::array_buffer_to_index(size_value);
+    match max_byte_length_option(options.get_nanbox_f64()) {
+        None => super::from::js_shared_array_buffer_new(len),
+        Some(max) => {
+            if len > max {
+                throw_invalid_length("Invalid array buffer max length");
+            }
+            let buf = super::from::js_shared_array_buffer_new(max);
+            unsafe {
+                super::store::set_length(buf as usize, len.max(0) as u32);
+            }
+            set_resizable(
+                buf as usize,
+                ResizableInfo {
+                    max_byte_length: max.max(0) as u32,
+                },
+            );
+            buf
+        }
+    }
+}
+
+/// `SharedArrayBuffer.prototype.grow(newLength)`: a growable SAB only, and
+/// only to a length in `[byteLength, maxByteLength]`. The new bytes are
+/// already zero (the store is zero-filled at its reserved size and never
+/// shrinks).
+pub(crate) fn shared_array_buffer_grow(addr: usize, args: &[f64]) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let receiver = handles.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
+    let Some(info) = resizable_info(addr) else {
+        throw_type_error(
+            "Method SharedArrayBuffer.prototype.grow called on incompatible receiver #<SharedArrayBuffer>",
+        );
+    };
+    let new_len = super::from::array_buffer_to_index(args.first().copied().unwrap_or(undefined));
+    let buf = unsafe {
+        super::store::owner(crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize)
+    } as *mut BufferHeader;
+    let old_len = unsafe { super::store::length(buf as usize) as u32 };
+    let new_len = new_len.max(0) as u32;
+    if new_len > info.max_byte_length || new_len < old_len {
+        throw_invalid_length("SharedArrayBuffer.prototype.grow: Invalid length parameter");
+    }
+    unsafe {
+        super::store::set_length(buf as usize, new_len);
+    }
+    undefined
+}
+
 pub(crate) fn array_buffer_resize(addr: usize, args: &[f64]) -> f64 {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let handles = crate::gc::RuntimeHandleScope::new();

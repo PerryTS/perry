@@ -184,6 +184,56 @@ pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
     )
 }
 
+/// `SharedArrayBuffer.prototype.grow(newLength)` (length 1).
+pub(crate) extern "C" fn shared_array_buffer_grow_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    new_length: f64,
+) -> f64 {
+    match shared_array_buffer_receiver_addr(this) {
+        Some(addr) => crate::buffer::shared_array_buffer_grow(addr, &[new_length]),
+        None => super::super::object_ops::throw_object_type_error(
+            b"Method SharedArrayBuffer.prototype.grow called on incompatible receiver",
+        ),
+    }
+}
+
+/// `get SharedArrayBuffer.prototype.growable` / `maxByteLength`.
+fn shared_array_buffer_flag_getter(this: crate::closure::JsThis, key: &[u8]) -> f64 {
+    let Some(addr) = shared_array_buffer_receiver_addr(this) else {
+        super::super::object_ops::throw_object_type_error(if key == b"growable" {
+            b"Method get SharedArrayBuffer.prototype.growable called on incompatible receiver"
+        } else {
+            b"Method get SharedArrayBuffer.prototype.maxByteLength called on incompatible receiver"
+        })
+    };
+    let value = if key == b"growable" {
+        JSValue::bool(crate::buffer::is_resizable_buffer(addr))
+    } else {
+        let buf = addr as *const crate::buffer::BufferHeader;
+        JSValue::number(
+            crate::buffer::resizable_max_byte_length(addr)
+                .map(|max| max as f64)
+                .unwrap_or_else(|| crate::buffer::js_buffer_length(buf) as f64),
+        )
+    };
+    f64::from_bits(value.bits())
+}
+
+pub(crate) extern "C" fn shared_array_buffer_growable_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    shared_array_buffer_flag_getter(this, b"growable")
+}
+
+pub(crate) extern "C" fn shared_array_buffer_max_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    shared_array_buffer_flag_getter(this, b"maxByteLength")
+}
+
 /// Shared body of the reflectable `resizable` / `maxByteLength` / `detached`
 /// accessors on `ArrayBuffer.prototype`. Instance reads are answered by
 /// `get_field_by_name_tail`; this is the `Object.getOwnPropertyDescriptor(
