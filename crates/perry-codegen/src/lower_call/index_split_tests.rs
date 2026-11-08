@@ -37,8 +37,9 @@ fn at_offsets(m: &Module) -> Vec<u32> {
     let text = format!("{m:?}");
     let mut out = Vec::new();
     let mut rest = text.as_str();
-    while let Some(i) = rest.find("property: \"at\", byte_offset: ") {
-        rest = &rest[i + 30..];
+    let key = "property: \"at\", byte_offset: ";
+    while let Some(i) = rest.find(key) {
+        rest = &rest[i + key.len()..];
         let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         out.push(num.parse().expect("offset"));
     }
