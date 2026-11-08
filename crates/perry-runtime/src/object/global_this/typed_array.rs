@@ -605,7 +605,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
 }
 
 /// Install the four `%TypedArray%.prototype` accessor descriptors
-/// (`length`, `byteLength`, `byteOffset`, `buffer`) on a typed-array
+/// (`buffer`, `byteLength`, `byteOffset`, `length`: node's own-key order) on a typed-array
 /// constructor's prototype object so `Object.getOwnPropertyDescriptor`
 /// reflects them as `{ get, set: undefined, enumerable: false,
 /// configurable: true }`. #2060.
@@ -622,10 +622,9 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         };
         install_builtin_getter(
             proto_obj,
-            "length",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_declared(0))),
-        );
-        install_builtin_getter(
+            "buffer",
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_declared(0))),
+        );        install_builtin_getter(
             proto_obj,
             "byteLength",
             mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_length_getter_thunk, 0; with_declared(0))),
@@ -637,9 +636,10 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         );
         install_builtin_getter(
             proto_obj,
-            "buffer",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_declared(0))),
+            "length",
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_declared(0))),
         );
+
     }
 }
 
@@ -740,7 +740,7 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
         crate::fn_info!(#[realm(realm_decl! { BigInt64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); BigUint64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { fromBase64; fromHex; prototype; BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8ClampedArray, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); "%TypedArray%", kind = constructor, capture = [ref(Uint8Array.prototype)], members = { from; of; [Symbol.species] = accessor(get = "%TypedArray%[\"@@species\"].<get>"); }, spec = {name = "TypedArray"}, emit = metadata(realm_typed_array_public), births = [ArrayBuffer]; })] export crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk, 1; with_declared(0)),
         1,
     );
-    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; length = accessor(get = "%TypedArray%.prototype.length.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); at; copyWithin; entries; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; keys; lastIndexOf; map; reduce; reduceRight; reverse; set; slice; some; sort; subarray; toLocaleString; toReversed; toSorted; values; with; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); length = accessor(get = "%TypedArray%.prototype.length.<get>"); entries; keys; values; at; copyWithin; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; lastIndexOf; map; reverse; reduce; reduceRight; set; slice; some; sort; subarray; toReversed; toSorted; with; toLocaleString; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
     if ctor.is_null() || proto.is_null() {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }

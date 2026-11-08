@@ -517,15 +517,16 @@ pub(super) unsafe fn construct(
         // "not a function". Mirror the static lowering exactly.
         BuiltinConstructorIdentity::ArrayBuffer | BuiltinConstructorIdentity::SharedArrayBuffer => {
             let size = args.first().copied().unwrap_or(0.0);
+            // #10873: the `{ maxByteLength }` options bag, exactly as the
+            // static lowering passes it (a growable SharedArrayBuffer like a
+            // resizable ArrayBuffer).
+            let options = args
+                .get(1)
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             let buf = if name == BuiltinConstructorIdentity::SharedArrayBuffer {
-                crate::buffer::js_shared_array_buffer_new_value(size)
+                crate::buffer::js_shared_array_buffer_new_with_options(size, options)
             } else {
-                // #10873: the `{ maxByteLength }` options bag, exactly as
-                // the static lowering passes it.
-                let options = args
-                    .get(1)
-                    .copied()
-                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                 crate::buffer::js_array_buffer_new_with_options(size, options)
             };
             return Some(crate::value::js_nanbox_pointer(buf as i64));
