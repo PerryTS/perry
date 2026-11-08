@@ -143,6 +143,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_guard_presence: matches!(
+            std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -825,6 +829,10 @@ pub(crate) fn activation(
         ),
         no_guard_ranges: matches!(
             std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_presence: matches!(
+            std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
