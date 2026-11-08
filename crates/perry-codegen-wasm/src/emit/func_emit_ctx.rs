@@ -40,7 +40,8 @@ pub(super) struct FuncEmitCtx<'a> {
     /// Stack of saved frame sizes for nested frame support
     pub(super) frame_stack: Vec<u32>,
     /// Catch targets: absolute block depth and outstanding bridge-frame bytes.
-    pub(super) exception_handlers: Vec<(u32, u32)>,
+    pub(super) exception_handlers: Vec<(u32, u32, Option<Vec<Stmt>>)>,
+    pub(super) returns_value: bool,
 }
 
 impl<'a> FuncEmitCtx<'a> {
@@ -67,6 +68,7 @@ impl<'a> FuncEmitCtx<'a> {
             current_frame_size: 0,
             frame_stack: Vec::new(),
             exception_handlers: Vec::new(),
+            returns_value: true,
         }
     }
 }

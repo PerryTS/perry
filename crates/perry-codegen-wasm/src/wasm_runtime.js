@@ -1411,15 +1411,20 @@ function buildImports() {
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
         const coreFn = __memDispatch[name];
-        if (coreFn) {
-          result = coreFn(...args);
-        } else {
-          const uiFn = __perryUiDispatch[name];
-          if (uiFn) {
-            result = uiFn(...args);
-          } else if (argc > 0) {
-            result = __classDispatch(args[0], name, args.slice(1));
+        try {
+          if (coreFn) {
+            result = coreFn(...args);
+          } else {
+            const uiFn = __perryUiDispatch[name];
+            if (uiFn) {
+              result = uiFn(...args);
+            } else if (argc > 0) {
+              result = __classDispatch(args[0], name, args.slice(1));
+            }
           }
+        } catch (error) {
+          if (tryDepth === 0) throw error;
+          currentException = error;
         }
         // Write result back to same base address
         const outU64 = new BigUint64Array(wasmMemory.buffer, base, 1);
@@ -2133,6 +2138,13 @@ const __memDispatch = {
   try_start: () => { tryDepth++; },
   try_end: () => { if (tryDepth > 0) tryDepth--; },
   throw_value: (val) => { currentException = val; },
+  propagate_exception: () => {
+    if (tryDepth === 0 && currentException !== NO_EXCEPTION) {
+      const error = currentException;
+      currentException = NO_EXCEPTION;
+      throw error;
+    }
+  },
   has_exception: () => currentException !== NO_EXCEPTION ? 1 : 0,
   get_exception: () => { const e = currentException; currentException = NO_EXCEPTION; return e !== NO_EXCEPTION ? e : undefined; },
 
@@ -4933,7 +4945,11 @@ const hostCallbacks = new WeakMap();
 function __hostCallback(value) {
   if (!value || typeof value !== 'object' || typeof value.funcIdx === 'undefined') return value;
   if (!hostCallbacks.has(value)) {
-    hostCallbacks.set(value, (...args) => callWasmClosure(value, ...args));
+    hostCallbacks.set(value, (...args) => {
+      const result = callWasmClosure(value, ...args);
+      if (currentException !== NO_EXCEPTION) throw currentException;
+      return result;
+    });
   }
   return hostCallbacks.get(value);
 }
