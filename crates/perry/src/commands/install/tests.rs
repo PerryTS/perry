@@ -63,6 +63,103 @@ fn lifecycle_requires_explicit_approval_even_for_bundled_names() {
     }
 }
 
+fn isolated_alias(root: &Path, store: &str, alias: &str) -> std::path::PathBuf {
+    let installed = format!("{store}/esbuild@1.0.0/node_modules/esbuild");
+    write_package(root, &installed, "esbuild");
+    let physical = root.join("node_modules").join(installed);
+    let manifest_path = physical.join("package.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["scripts"]["postinstall"] = json!("printf approved >> ran.txt");
+    fs::write(manifest_path, manifest.to_string()).unwrap();
+    std::os::unix::fs::symlink(&physical, root.join("node_modules").join(alias)).unwrap();
+    physical
+}
+
+#[test]
+fn lifecycle_store_names_cannot_approve_visible_aliases() {
+    let _env = crate::test_env_lock::env_lock();
+    for store in [".bun", ".pnpm"] {
+        let root = TempDir::new().unwrap();
+        let physical = isolated_alias(root.path(), store, "untrusted-fixture");
+
+        let summary = run(root.path(), &args(&["--run-scripts", "esbuild"]));
+        assert!(summary.ran.is_empty());
+        assert_eq!(summary.skipped, ["untrusted-fixture"]);
+        assert!(!physical.join("ran.txt").exists());
+
+        let summary = run(root.path(), &args(&["--run-scripts", "untrusted-fixture"]));
+        assert_eq!(summary.ran, ["untrusted-fixture"]);
+        assert!(summary.skipped.is_empty());
+        assert_eq!(
+            fs::read_to_string(physical.join("ran.txt")).unwrap(),
+            "approved"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_runs_a_shared_physical_package_once() {
+    let _env = crate::test_env_lock::env_lock();
+    for store in [".bun", ".pnpm"] {
+        for flags in [
+            vec![
+                "--run-scripts",
+                "first-alias",
+                "--run-scripts",
+                "second-alias",
+            ],
+            vec!["--run-scripts-all"],
+        ] {
+            let root = TempDir::new().unwrap();
+            let physical = isolated_alias(root.path(), store, "first-alias");
+            std::os::unix::fs::symlink(&physical, root.path().join("node_modules/second-alias"))
+                .unwrap();
+            let summary = run(root.path(), &args(&flags));
+            assert_eq!(summary.ran.len(), 1);
+            assert!(["first-alias", "second-alias"].contains(&summary.ran[0].as_str()));
+            assert!(summary.skipped.is_empty());
+            assert_eq!(
+                fs::read_to_string(physical.join("ran.txt")).unwrap(),
+                "approved"
+            );
+        }
+    }
+}
+
+#[test]
+fn lifecycle_follows_scoped_dependencies_without_looping_over_link_cycles() {
+    let _env = crate::test_env_lock::env_lock();
+    for store in [".bun", ".pnpm"] {
+        let root = TempDir::new().unwrap();
+        let outer = isolated_alias(root.path(), store, "outer-alias");
+        let nested_path = format!("{store}/nested-fixture@1.0.0/node_modules/nested-fixture");
+        write_package(root.path(), &nested_path, "nested-fixture");
+        let nested = root.path().join("node_modules").join(nested_path);
+        fs::create_dir_all(outer.join("node_modules/@approved")).unwrap();
+        std::os::unix::fs::symlink(&nested, outer.join("node_modules/@approved/native")).unwrap();
+        fs::create_dir_all(nested.join("node_modules")).unwrap();
+        std::os::unix::fs::symlink(&outer, nested.join("node_modules/back-link")).unwrap();
+
+        let summary = run(root.path(), &args(&["--run-scripts", "@approved/native"]));
+        assert_eq!(summary.ran, ["@approved/native"]);
+        assert_eq!(summary.skipped.len(), 2);
+        assert!(!outer.join("ran.txt").exists());
+        assert_eq!(
+            fs::read_to_string(nested.join("ran.txt")).unwrap(),
+            "approved"
+        );
+
+        let summary = run(root.path(), &args(&["--run-scripts-all"]));
+        assert_eq!(summary.ran.len(), 2);
+        assert!(summary.skipped.is_empty());
+        assert_eq!(
+            fs::read_to_string(outer.join("ran.txt")).unwrap(),
+            "approved"
+        );
+    }
+}
+
 #[test]
 fn lifecycle_approval_uses_installed_identity_not_manifest_name() {
     let _env = crate::test_env_lock::env_lock();
@@ -126,8 +223,12 @@ fn scanner_checks_declared_names_but_overrides_use_installed_names() {
         let packages = scanner::discover_packages(&root.path().join("node_modules"));
         let report = scanner::scan_packages(&packages, &[], false);
         assert_eq!(
-            matches!(report.verdict, scanner::report::Verdict::Blocked),
-            blocked
+            report.verdict,
+            if blocked {
+                scanner::report::Verdict::Blocked
+            } else {
+                scanner::report::Verdict::Clean
+            }
         );
         if blocked {
             assert_eq!(report.findings.len(), 1);

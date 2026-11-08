@@ -12,7 +12,7 @@
 
 use anyhow::{bail, Result};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -31,6 +31,7 @@ pub fn run_all(
 ) -> Result<RunSummary> {
     let user_opt_in = read_user_allowscripts(project_root);
     let mut summary = RunSummary::default();
+    let mut executed = HashSet::new();
 
     for pkg in packages {
         if !has_lifecycle_scripts(pkg) {
@@ -43,6 +44,9 @@ pub fn run_all(
             continue;
         }
 
+        if !executed.insert(pkg.dir.canonicalize()?) {
+            continue;
+        }
         run_package(pkg, project_root)?;
         summary.ran.push(pkg.name.clone());
     }

@@ -1,12 +1,10 @@
 //! Scanner: walks `node_modules/`, runs rule modules, produces a
 //! verdict + report. Wired into the install pipeline between the
 //! installer subprocess and any script execution.
-//!
-//! Phase 3 introduces the walk and the empty report. P0 rules
-//! (Phases 4-7) plug into [`scan_package`].
 
 use anyhow::Result;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -39,15 +37,20 @@ impl ScannedPackage {
     }
 }
 
-/// Walk a `node_modules/` directory and return every package found,
-/// recursing into nested `node_modules/` (npm's hoist-fallback layout).
+/// Follow installed dependency names, including links into isolated stores.
 pub fn discover_packages(node_modules: &Path) -> Vec<ScannedPackage> {
     let mut out = Vec::new();
-    walk(node_modules, &mut out);
+    walk(node_modules, &mut out, &mut HashSet::new());
     out
 }
 
-fn walk(node_modules: &Path, out: &mut Vec<ScannedPackage>) {
+fn walk(node_modules: &Path, out: &mut Vec<ScannedPackage>, visited: &mut HashSet<PathBuf>) {
+    let Ok(identity) = fs::canonicalize(node_modules) else {
+        return;
+    };
+    if !visited.insert(identity) {
+        return;
+    }
     let entries = match fs::read_dir(node_modules) {
         Ok(e) => e,
         Err(_) => return,
@@ -55,15 +58,7 @@ fn walk(node_modules: &Path, out: &mut Vec<ScannedPackage>) {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') {
-            // Most dot-prefixed entries are npm bookkeeping (.bin,
-            // .package-lock.json, .cache) and contain no packages. The
-            // exceptions are bun's `.bun/` and pnpm's `.pnpm/` —
-            // isolated-mode content-addressable stores where each
-            // subdir is `<name>@<version>/` and the actual package
-            // lives in its own nested `node_modules/<name>/`.
-            if name == ".bun" || name == ".pnpm" {
-                walk_isolated_store(&entry.path(), out);
-            }
+            // Store directory names are storage identities, not script approvals.
             continue;
         }
         let path = entry.path();
@@ -75,37 +70,21 @@ fn walk(node_modules: &Path, out: &mut Vec<ScannedPackage>) {
             if let Ok(scope_entries) = fs::read_dir(&path) {
                 for scoped in scope_entries.flatten() {
                     let scoped_name = format!("{}/{}", name, scoped.file_name().to_string_lossy());
-                    record_and_recurse(&scoped.path(), &scoped_name, out);
+                    record_and_recurse(&scoped.path(), &scoped_name, out, visited);
                 }
             }
         } else {
-            record_and_recurse(&path, &name, out);
+            record_and_recurse(&path, &name, out, visited);
         }
     }
 }
 
-/// Walk a bun / pnpm isolated-mode store: each immediate subdir is
-/// `<pkg>@<ver>/`, and the real extracted package sits at
-/// `<pkg>@<ver>/node_modules/<pkg>/`. We recurse into each inner
-/// node_modules so the scanner sees the real packages.
-fn walk_isolated_store(store_root: &Path, out: &mut Vec<ScannedPackage>) {
-    let entries = match fs::read_dir(store_root) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let inner = path.join("node_modules");
-        if inner.is_dir() {
-            walk(&inner, out);
-        }
-    }
-}
-
-fn record_and_recurse(pkg_dir: &Path, dir_name: &str, out: &mut Vec<ScannedPackage>) {
+fn record_and_recurse(
+    pkg_dir: &Path,
+    dir_name: &str,
+    out: &mut Vec<ScannedPackage>,
+    visited: &mut HashSet<PathBuf>,
+) {
     if !pkg_dir.is_dir() {
         return;
     }
@@ -127,7 +106,7 @@ fn record_and_recurse(pkg_dir: &Path, dir_name: &str, out: &mut Vec<ScannedPacka
     }
     let nested = pkg_dir.join("node_modules");
     if nested.is_dir() {
-        walk(&nested, out);
+        walk(&nested, out, visited);
     }
 }
 
@@ -290,10 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_bun_isolated_store() {
-        // Bun's workspace / isolated mode layout:
-        //   node_modules/.bun/lodash@4.17.21/node_modules/lodash/package.json
-        // Our walker should descend into .bun/ and pick up the real package.
+    fn ignore_unlinked_bun_store_entries() {
         let td = TempDir::new().unwrap();
         let inner = td
             .path()
@@ -305,13 +281,11 @@ mod tests {
         )
         .unwrap();
         let pkgs = discover_packages(&td.path().join("node_modules"));
-        assert_eq!(pkgs.len(), 1);
-        assert_eq!(pkgs[0].name, "lodash");
+        assert!(pkgs.is_empty());
     }
 
     #[test]
-    fn discover_pnpm_isolated_store() {
-        // pnpm's layout is structurally the same as bun's.
+    fn ignore_unlinked_pnpm_store_entries() {
         let td = TempDir::new().unwrap();
         let inner = td
             .path()
@@ -323,8 +297,7 @@ mod tests {
         )
         .unwrap();
         let pkgs = discover_packages(&td.path().join("node_modules"));
-        assert_eq!(pkgs.len(), 1);
-        assert_eq!(pkgs[0].name, "chalk");
+        assert!(pkgs.is_empty());
     }
 
     #[test]
