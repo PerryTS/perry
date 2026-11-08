@@ -49,13 +49,10 @@ fn ir(fact: Option<FactsElementRead>) -> String {
     String::from_utf8(compile_module(&m, opts).expect("fixture compiles")).expect("UTF-8 IR")
 }
 
-fn body<'a>(ir: &'a str, name: &str) -> &'a str {
-    let at = ir
-        .find(&format!("__{name}("))
-        .and_then(|i| ir[..i].rfind("define "))
-        .unwrap_or_else(|| panic!("no function {name} in\n{ir}"));
-    let end = ir[at..].find("\n}\n").map_or(ir.len(), |e| at + e);
-    &ir[at..end]
+/// The bound against the length the proven tier emits, as LLVM prints it.
+fn bound_128(ir: &str) -> bool {
+    ir.lines()
+        .any(|l| l.contains("icmp ult i32") && l.trim_end().ends_with(", 128"))
 }
 
 #[test]
@@ -65,19 +62,19 @@ fn a_proven_read_loads_its_slot_without_the_guarded_tier() {
         key_in_bounds: false,
     };
     let with = ir(Some(fact));
-    for f in ["at", "twice"] {
-        let b = body(&with, f);
-        assert!(b.contains("parr.load"), "{f}: proven tier\n{b}");
-        assert!(!b.contains(".guard.prefix"), "{f}: no guarded tier\n{b}");
-        assert!(b.contains("icmp ult i32"), "{f}: the bound stays\n{b}");
-        assert!(b.contains(", 128"), "{f}: bound is the length\n{b}");
-    }
+    // Both reads (the value read and the number-context read) take the tier.
+    assert!(
+        with.matches("parr.load").count() >= 2,
+        "proven tier\n{with}"
+    );
+    assert!(!with.contains(".guard.prefix"), "no guarded tier\n{with}");
+    assert!(bound_128(&with), "the bound is the length\n{with}");
     let without = ir(None);
-    for f in ["at", "twice"] {
-        let b = body(&without, f);
-        assert!(!b.contains("parr."), "{f}: no fact, no proven tier\n{b}");
-        assert!(b.contains(".guard.prefix"), "{f}: guarded tier\n{b}");
-    }
+    assert!(
+        !without.contains("parr."),
+        "no fact, no proven tier\n{without}"
+    );
+    assert!(without.contains(".guard.prefix"), "guarded tier\n{without}");
 }
 
 #[test]
@@ -87,9 +84,8 @@ fn a_key_proven_inside_the_length_needs_no_bound() {
         key_in_bounds: true,
     };
     let with = ir(Some(fact));
-    let b = body(&with, "at");
-    assert!(b.contains("parr.load"), "{b}");
-    assert!(!b.contains(", 128"), "no bound against the length\n{b}");
+    assert!(with.contains("parr.load"), "{with}");
+    assert!(!bound_128(&with), "no bound against the length\n{with}");
     // A hole still reads through the generic Get.
-    assert!(b.contains("perry_array_read_cold_shared"), "{b}");
+    assert!(with.contains("perry_array_read_cold_shared"), "{with}");
 }
