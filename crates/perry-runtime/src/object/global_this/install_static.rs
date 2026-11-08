@@ -411,18 +411,6 @@ const NUMBER_STATIC_DATA: [(&str, f64); 8] = [
 // Only intrinsic construction calls this; the installed functions keep the
 // runtime's speed optimization and ordinary inlining policy (#13662).
 #[optimize(size)]
-/// The element size of the typed-array kind `name`, or `None` for any other
-/// constructor.
-pub(super) fn typed_array_bytes_per_element(name: &str) -> Option<f64> {
-    match name {
-        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => Some(1.0),
-        "Int16Array" | "Uint16Array" | "Float16Array" => Some(2.0),
-        "Int32Array" | "Uint32Array" | "Float32Array" => Some(4.0),
-        "Float64Array" | "BigInt64Array" | "BigUint64Array" => Some(8.0),
-        _ => None,
-    }
-}
-
 pub(crate) fn install_builtin_constructor_statics(
     name: &str,
     ctor: *mut crate::closure::ClosureHeader,
@@ -448,15 +436,6 @@ pub(crate) fn install_builtin_constructor_statics(
         super::super::PropertyAttrs::new(false, false, true),
     );
     let s = &mut statics;
-    // A typed-array constructor's `BYTES_PER_ELEMENT` precedes its other
-    // statics (`Uint8Array.fromBase64` / `fromHex`), as in node.
-    if let Some(bytes) = typed_array_bytes_per_element(name) {
-        s.data(
-            "BYTES_PER_ELEMENT",
-            bytes,
-            super::super::PropertyAttrs::new(false, false, false),
-        );
-    }
     match name {
         "Error" => {
             if let Some(prototype) = prototype.take() {
