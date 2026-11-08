@@ -146,9 +146,7 @@ extern "C" fn replace_cause_and_collect(
         key,
         99.0,
     );
-    unsafe {
-        crate::gc::gc_collect_minor();
-    }
+    crate::gc::gc_collect_minor();
     text("stack")
 }
 

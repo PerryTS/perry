@@ -1,6 +1,7 @@
 //! Edge-triggered epoll with eventfd wake and nanosecond wait budgets.
 //! epoll_pwait2 support is probed at construction, never with a second wait in a
-//! turn. Older kernels use a one-shot timerfd plus one epoll_wait(-1).
+//! turn. Older kernels, and Android (whose seccomp filter kills the probe), use a
+//! one-shot timerfd plus one epoll_wait(-1).
 use crate::{
     Result,
     backend::{
@@ -99,29 +100,34 @@ impl Poller for Epoll {
             WAKE,
             libc::EPOLLIN | libc::EPOLLET,
         )?;
-        let mut event = libc::epoll_event { events: 0, u64: 0 };
-        let zero = timespec(Duration::ZERO);
-        // SAFETY: valid epoll descriptor, one event output slot, zero timeout, and
-        // null signal mask. The Linux kernel sigset ABI is eight bytes.
-        let probe = unsafe {
-            libc::syscall(
-                libc::SYS_epoll_pwait2,
-                fd.as_raw_fd(),
-                &mut event,
-                1,
-                &zero,
-                std::ptr::null::<libc::sigset_t>(),
-                8usize,
-            )
-        };
-        let unsupported = if probe < 0 {
-            let e = std::io::Error::last_os_error();
-            if e.raw_os_error() != Some(libc::ENOSYS) {
-                return Err(e.into());
+        // Android's app seccomp filter doesn't list epoll_pwait2: the call
+        // kills the process with SIGSYS instead of failing with ENOSYS, so
+        // there it isn't probed and the timerfd path is the only one.
+        let unsupported = cfg!(target_os = "android") || {
+            let mut event = libc::epoll_event { events: 0, u64: 0 };
+            let zero = timespec(Duration::ZERO);
+            // SAFETY: valid epoll descriptor, one event output slot, zero timeout,
+            // and null signal mask. The Linux kernel sigset ABI is eight bytes.
+            let probe = unsafe {
+                libc::syscall(
+                    libc::SYS_epoll_pwait2,
+                    fd.as_raw_fd(),
+                    &mut event,
+                    1,
+                    &zero,
+                    std::ptr::null::<libc::sigset_t>(),
+                    8usize,
+                )
+            };
+            if probe < 0 {
+                let e = std::io::Error::last_os_error();
+                if e.raw_os_error() != Some(libc::ENOSYS) {
+                    return Err(e.into());
+                }
+                true
+            } else {
+                false
             }
-            true
-        } else {
-            false
         };
         let timer = if unsupported || cfg!(feature = "epoll-timerfd") {
             // SAFETY: CLOCK_MONOTONIC and timerfd flags are valid.
