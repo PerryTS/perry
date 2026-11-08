@@ -1739,11 +1739,11 @@ const __memDispatch = {
     const e = end === undefined ? undefined : (typeof end === 'number' ? end : end);
     return arr.slice(s, e);
   },
-  array_splice: (arr, start, deleteCount) => {
+  array_splice: (arr, start, deleteCount, ...items) => {
     if (!Array.isArray(arr)) return [];
     const s = typeof start === 'number' ? start : 0;
     const dc = deleteCount === undefined ? arr.length - s : deleteCount;
-    return arr.splice(s, dc);
+    return arr.splice(s, dc, ...items);
   },
   array_shift: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.shift(); },
   array_unshift: (arr, value) => { if (Array.isArray(arr)) arr.unshift(value); },
