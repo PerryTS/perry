@@ -159,7 +159,9 @@ def main():
     assert all(row.get("emitted_checks") for row in inventory if row.get("check")), inventory
     uncovered = sum(bool(row.get("reason")) for row in inventory)
     assert uncovered == 3, (uncovered, inventory)
-    assert sum(row.get("consumed", False) for row in inventory) == 2, inventory
+    # `value.call(undefined)` is a Number call (P2): consumed and checked.
+    assert sum(row.get("consumed", False) for row in inventory) == 3, inventory
+    assert any(row.get("check") == "numeric result" and row.get("emitted_checks") for row in inventory), inventory
     save("manifest", consumed=len(inventory), uncovered=uncovered)
 
     samples = []
