@@ -22,6 +22,7 @@ use super::opts::CrossModuleCtx;
 mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
+mod module_frame;
 mod module_init;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
@@ -461,6 +462,19 @@ pub(super) fn compile_module_entry(
             }
             None => Vec::new(),
         };
+        let entry_name = if is_dylib {
+            "perry_module_init".to_string()
+        } else {
+            std::env::var("PERRY_ENTRY_SYMBOL").unwrap_or_else(|_| "main".to_string())
+        };
+        if !entry_in_init {
+            module_frame::record(
+                llmod,
+                hir,
+                &entry_name,
+                cross_module.app_metadata.module_source_path.as_deref(),
+            );
+        }
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {

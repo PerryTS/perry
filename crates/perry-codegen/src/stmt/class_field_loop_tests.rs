@@ -255,6 +255,10 @@ fn emit(m: &Module) -> String {
 /// Runtime route/shape/store attribution is checked separately by the isolated
 /// executable. These IR assertions never certify retained-tier cost parity.
 fn assert_versioned_loop_lowered(ir: &str, what: &str) {
+    let blocks: Vec<_> = ir
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(':'))
+        .collect();
     for label in [
         "rloop.guard.",
         "rloop.fast",
@@ -262,7 +266,7 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "rloop.version.plain",
     ] {
         assert!(
-            ir.contains(label),
+            blocks.iter().any(|block| block.starts_with(label)),
             "{what}: missing generic replacement `{label}`"
         );
     }
@@ -273,7 +277,10 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "for.class_field_fast",
         "for.class_field_slow",
     ] {
-        assert!(!ir.contains(label), "{what}: legacy tier remains `{label}`");
+        assert!(
+            !blocks.iter().any(|block| block.starts_with(label)),
+            "{what}: legacy tier remains `{label}`"
+        );
     }
     let fast = ir
         .lines()

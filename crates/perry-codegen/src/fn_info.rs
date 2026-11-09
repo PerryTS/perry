@@ -1,4 +1,5 @@
-//! One static `JsFunctionInfo` (perry-abi) per JS body a function object runs.
+//! One static `JsFunctionInfo` (perry-abi) per published JS body.
+//! Module bodies use the same records for stack identity without a callable birth.
 //!
 //! A function object's header points at its body's info
 //! (`perry_abi::CLOSURE_INFO_OFFSET`); every fact a caller needs about the
@@ -110,6 +111,8 @@ pub(crate) struct FnInfoFacts {
     pub call_entry: Option<String>,
     pub call_entry_offset_words: u8,
     pub metadata: Option<(String, u32)>,
+    /// A source module body has stack identity but no callable birth or startup publication.
+    pub module_frame: bool,
 }
 
 /// `FN_RETURNS_CAPTURE` (perry-abi): what a body that is exactly `return
@@ -353,7 +356,7 @@ fn render_definition(
         "hidden ".to_string()
     } else {
         match def.linkage.as_str() {
-            "" => String::new(),
+            "" | "external" => String::new(),
             other => format!("{other} "),
         }
     };
@@ -1039,6 +1042,7 @@ impl FnInfoState {
             field!(call_entry);
             field!(call_entry_offset_words);
             field!(metadata);
+            field!(module_frame);
         }
     }
 }

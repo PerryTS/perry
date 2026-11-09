@@ -158,6 +158,12 @@ pub(super) fn compile_module_init(
     // (strings init, globals/GC registration, top-level statements,
     // namespace populator at the tail). Calls normally go through the
     // wrapper above, both within this module and across modules.
+    module_frame::record(
+        llmod,
+        hir,
+        &init_body_name,
+        cross_module.app_metadata.module_source_path.as_deref(),
+    );
     let init_name = init_body_name;
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();

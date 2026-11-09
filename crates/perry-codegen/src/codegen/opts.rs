@@ -32,6 +32,8 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// Canonical source path of this module, used by its static stack frame.
+    pub module_source_path: Option<String>,
     /// The module format Node declares for the entry before looking at its
     /// syntax: `Some(true)` for `.mjs`/`.mts` or a nearest package.json with
     /// `"type": "module"`, `Some(false)` for `.cjs`/`.cts` or
@@ -57,6 +59,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            module_source_path: None,
             entry_declared_esm: None,
             native_provider_installs: Vec::new(),
         }

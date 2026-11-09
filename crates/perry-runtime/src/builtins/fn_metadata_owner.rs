@@ -422,10 +422,38 @@ impl<'a> Record<'a> {
 /// snapshot or address-to-id cache. The rare stack path orders actual code
 /// locations at query time; ordinary closure reads never search this list.
 pub(crate) struct BundleFunctionNames<'a>(&'a [ImageRecords]);
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+core::arch::global_asm!(".weak perry_fnrec_bounds\n.hidden perry_fnrec_bounds");
+
+fn static_record_bounds() -> Option<&'static FunctionRecordBounds> {
+    unsafe extern "C" {
+        #[linkage = "extern_weak"]
+        static perry_fnrec_bounds: *const FunctionRecordBounds;
+    }
+    // SAFETY: an undefined weak reference is null; a definition is the
+    // local image's immutable, linker-bounded record section.
+    unsafe { perry_fnrec_bounds.as_ref() }
+}
 impl BundleFunctionNames<'_> {
     /// Every named body, `(code, name)`, until `visit` returns true. One
     /// non-generic walk shared by every query.
     fn visit(&self, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) {
+        if let Some(bounds) = static_record_bounds().filter(|bounds| {
+            !self
+                .0
+                .iter()
+                .any(|image| matches!(image, ImageRecords::Image(b) if std::ptr::eq(*b, *bounds)))
+        }) {
+            for info in unsafe { image_infos(bounds) } {
+                let Some(bytes) = super::fn_metadata::info_name_bytes(info) else {
+                    continue;
+                };
+                if !bytes.is_empty() && visit(info.code as usize, bytes) {
+                    return;
+                }
+            }
+        }
         for image in self.0 {
             match *image {
                 // SAFETY: a permanent image's records stay mapped.
@@ -473,7 +501,8 @@ impl BundleFunctionNames<'_> {
     }
     /// The images' identities and entry counts: images are only appended and
     /// an unloadable image's copies are set once, so this names the view's
-    /// exact contents.
+    /// variable contents. The local static image is immutable for this
+    /// runtime's lifetime and is part of every view.
     fn owner_key(&self) -> Vec<(usize, usize)> {
         let mut key = vec![(self.0.as_ptr() as usize, self.0.len())];
         key.extend(self.0.iter().map(|image| {
