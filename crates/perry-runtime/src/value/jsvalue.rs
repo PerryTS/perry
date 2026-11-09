@@ -123,7 +123,7 @@ impl JSValue {
     /// Check if this is an int32
     #[inline]
     pub fn is_int32(&self) -> bool {
-        (self.bits & !INT32_MASK) == INT32_TAG
+        super::tags::is_int32_bits(self.bits)
     }
 
     /// A `POINTER_TAG` word: a GC-headed heap allocation whose header may be

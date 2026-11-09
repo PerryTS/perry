@@ -78,7 +78,9 @@ fn forty_dynamic_comparisons_classify_once_and_share_the_slow_call() {
     let ir = ir(chain(40), vec![]);
     assert_eq!(ir.matches("call double @js_rel_ge(").count(), 1, "{ir}");
     assert_eq!(ir.matches("sitofp i32").count(), 1, "{ir}");
-    assert_eq!(ir.matches("lshr i64").count(), 1, "{ir}");
+    // The one exact int32 test (`emit_int32_bits_test`), shared by the graph.
+    assert_eq!(ir.matches(crate::nanbox::INT32_TAG_I64).count(), 1, "{ir}");
+    assert!(!ir.contains("lshr i64"), "{ir}");
     assert!(ir.contains("phi i1"), "{ir}");
     assert!(
         !ir.contains("phi double") || ir.matches("phi double").count() <= 2,
@@ -170,7 +172,11 @@ fn mixed_graph_does_not_decode_a_constructively_numeric_local() {
     };
     let good = ir(expr.clone(), vec![local.clone()]);
     assert_eq!(good.matches("sitofp i32").count(), 1, "{good}");
-    assert_eq!(good.matches("lshr i64").count(), 1, "{good}");
+    assert_eq!(
+        good.matches(crate::nanbox::INT32_TAG_I64).count(),
+        1,
+        "{good}"
+    );
     let dynamic = ir(
         expr,
         vec![

@@ -64,6 +64,16 @@ pub const fn is_reference_bits(bits: u64) -> bool {
 pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
+/// THE "is this an int32 Number?" test: tag `0x7FFE` with bits 32..47 clear.
+/// Other words in the `0x7FFE` band are not Numbers: the `C.prototype` ref
+/// (`CLASS_PROTOTYPE_REF_FLAG`, bit 32), key-attribute and overflow route
+/// words, the bound-closure inline-args marker. A test of the top 16 bits
+/// alone reads those as int32 Numbers; every Number consumer asks this.
+#[inline]
+pub(crate) const fn is_int32_bits(bits: u64) -> bool {
+    bits & !INT32_MASK == INT32_TAG
+}
+
 /// String pointer tag: 0x7FFF_XXXX_XXXX_XXXX (48 bits for string pointer)
 pub(crate) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 
