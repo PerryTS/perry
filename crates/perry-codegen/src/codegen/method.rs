@@ -160,6 +160,7 @@ pub(super) fn compile_method(
     guarded_undefined_clone: bool,
     pshape_arg_clone: bool,
     generator_owner: bool,
+    sig: Option<&super::signature_entry::TypedMethod>,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -294,12 +295,20 @@ pub(super) fn compile_method(
         && !(guarded_undefined_clone && guarded_falsy_field_default.is_some())
         && !generator_owner
         && super::index_entry::raw_i32_enabled();
-    let raw_index_param_ids: HashSet<u32> = nonnegative_index_params
-        .filter(|_| raw_index_entry)
-        .unwrap_or_default()
-        .iter()
-        .copied()
-        .collect();
+    let raw_index_param_ids: HashSet<u32> = match sig {
+        // P2: `M$sig`'s I32 registers are raw i32 (DESIGN-p2 §3.1).
+        Some(tm) => super::signature_entry::raw_i32_params(method, &tm.plan),
+        None => nonnegative_index_params
+            .filter(|_| raw_index_entry)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .collect(),
+    };
+    let llvm_name = match sig {
+        Some(_) => format!("{public_llvm_name}$sig"),
+        None => llvm_name,
+    };
 
     // Build the param list: (this, arg0, arg1, ...). All are doubles except
     // an indexed clone's raw i32 index parameters.
@@ -329,7 +338,15 @@ pub(super) fn compile_method(
     } else {
         llvm_name
     };
-    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    let sig_return = sig.and_then(|tm| tm.plan.signature.as_ref()).map(|s| s.ret);
+    let lf = llmod.define_function(
+        &llvm_name,
+        super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
+        params,
+    );
+    if sig.is_some() {
+        lf.linkage = "internal".to_string();
+    }
     // Plain `$pshape` clones are producer-published capabilities and need
     // external linkage for guarded calls from importing modules. The stricter
     // array-cache clone remains module-local: only containment-proven locals
@@ -347,7 +364,10 @@ pub(super) fn compile_method(
         lf.linkage = "internal".to_string();
     }
     super::helpers::apply_pshape_inline_policy(lf, method, is_pshape_clone || pshape_arg_clone);
-    if is_index_clone {
+    // P2 (CWN 11-09): `M$sig` subsuming main's index clone inherits its
+    // admission, and so takes no other admission below.
+    let index_admitted = is_index_clone || sig.is_some_and(|tm| tm.index_admission);
+    if index_admitted {
         lf.pre_statepoint_inline = true;
     }
     // #8872: methods participate in the same allocation-hot analysis as
@@ -427,11 +447,21 @@ pub(super) fn compile_method(
 
     // Allocate slots for `this` and each parameter; pre-populate with
     // the incoming values.
-    let index_param_ids: HashSet<u32> = nonnegative_index_params
-        .unwrap_or_default()
-        .iter()
-        .copied()
-        .collect();
+    // P2: `M$sig`'s unwritten I32 parameters take the index clone's i32 slot
+    // (the `$idx` raw body, generalised); only those whose interval has
+    // `lo >= 0` are non-negative (T1).
+    let index_param_ids: HashSet<u32> = match sig {
+        Some(tm) => super::signature_entry::slot_i32_params(method, &tm.plan),
+        None => nonnegative_index_params
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .collect(),
+    };
+    let nonnegative_param_ids: HashSet<u32> = match sig {
+        Some(tm) => super::signature_entry::nonnegative_params(method, &tm.plan),
+        None => index_param_ids.clone(),
+    };
     let mut index_i32_param_slots: HashMap<u32, String> = HashMap::new();
     // Parameters the whole-program facts prove Number on every entry hold
     // their plain double for the whole body and own no root slot.
@@ -865,6 +895,8 @@ pub(super) fn compile_method(
         ),
         spec_i32_params: index_param_ids.clone(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -970,7 +1002,7 @@ pub(super) fn compile_method(
         int_range_aliases: HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
-        nonnegative_integer_locals: index_param_ids,
+        nonnegative_integer_locals: nonnegative_param_ids,
         elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
@@ -1750,6 +1782,12 @@ pub(super) fn compile_method(
         ctx.current_block = *after_idx;
     }
 
+    if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
+        // P2: the facts prove an I32 entry never completes normally.
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        super::signature_entry::witness_return(&mut ctx, super::FactsRep::I32, &undef);
+        ctx.block().unreachable();
+    }
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         let return_value =
@@ -1794,7 +1832,7 @@ pub(super) fn compile_method(
     // inliner so direct method chains can flatten without guessing from HIR
     // statement count.  Indexed clones are already admitted above and
     // pshape-argument clones do not carry an exact receiver proof.
-    if is_pshape_clone && !is_index_clone && !method.is_async && !method.is_generator {
+    if is_pshape_clone && !index_admitted && !method.is_async && !method.is_generator {
         let callable_worker = llmod.callable_worker;
         let lowered = llmod
             .function_mut(lowered_function_index)
@@ -1814,7 +1852,7 @@ pub(super) fn compile_method(
     // budget. Clones and wrappers are excluded; async and generator bodies
     // are state machines.
     if !is_pshape_clone
-        && !is_index_clone
+        && !index_admitted
         && !arguments_length_clone
         && !ptr_array_cache_clone
         && !guarded_undefined_clone
