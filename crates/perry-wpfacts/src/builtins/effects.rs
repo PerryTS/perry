@@ -163,6 +163,7 @@ fn names_this(effects: &[RealmEffect]) -> bool {
             RealmOperand::Union(us) => us.iter().any(operand),
             // BoundFunctionCreate binds the receiver.
             RealmOperand::Bound => true,
+            RealmOperand::Json | RealmOperand::Unknown => false,
         }
     }
     effects.iter().any(|e| match e {
@@ -352,6 +353,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmOperand::Native(path) => declared_member(path).is_some(),
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(operand),
+            RealmOperand::Json | RealmOperand::Unknown => true,
         }
     }
     !effects.is_empty()
@@ -414,6 +416,8 @@ struct Vals {
 /// One run of a declaration: native `entry` called with receiver token `t`
 /// (`None`: a construct, which has no receiver).
 struct Run {
+    /// The entry whose declaration runs.
+    name: &'static str,
     t: Option<Tok>,
     call: CallId,
     c: CallSite,
@@ -592,6 +596,24 @@ impl Run {
                 unreachable!("interpretable() takes species as a result only")
             }
             RealmOperand::Bound => unreachable!("interpretable() takes bound as a result only"),
+            // What JSON.parse makes (`builtins::json_value`).
+            RealmOperand::Json => {
+                let n = m.node_l("native-json");
+                let (j, ja) = crate::builtins::json_value(m, self.call);
+                m.add_tok(n, j);
+                m.add_tok(n, ja);
+                m.add_prim(n, prim::ALL);
+                n
+            }
+            // What unknown code hands back: the declaration escaped the
+            // value that makes it.
+            RealmOperand::Unknown => {
+                let n = m.node_l("native-unknown");
+                let name = self.name;
+                m.add_top(n, |_| format!("{name}: a value of unknown code"));
+                m.add_prim(n, prim::ALL);
+                n
+            }
         }
     }
 
@@ -699,7 +721,7 @@ impl Run {
                 let p = self.promise(m, value, reject);
                 ret_tok(m, self.call, p);
             }
-            RealmOperand::Native(_) => {
+            RealmOperand::Native(_) | RealmOperand::Json | RealmOperand::Unknown => {
                 let n = self.operand(m, o);
                 m.edge(n, self.c.ret);
             }
@@ -807,6 +829,7 @@ fn run(m: &mut Model, entry: &'static RealmEntry, t: Option<Tok>, call: CallId) 
         sites.insert(site);
     }
     let mut run = Run {
+        name: entry.name,
         t,
         call,
         c: m.calls[call as usize].clone(),

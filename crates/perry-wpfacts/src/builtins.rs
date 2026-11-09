@@ -1291,6 +1291,21 @@ pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
 pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
 /// Whether the generated global object declares a callable under this key.
+/// The objects `JSON.parse` makes at `call`: ordinary objects and arrays
+/// (`members::box_chain`), as `Gen::json_value` models them, whose fields
+/// and elements are such objects or primitives.
+pub(crate) fn json_value(m: &mut Model, call: CallId) -> (Tok, Tok) {
+    let j = site_tmpl(m, call, "json");
+    let ja = site_tmpl(m, call, "Array");
+    let fa = m.field_any(j);
+    for f in [fa, m.field_any(ja)] {
+        m.add_prim(f, prim::ALL);
+        m.add_tok(f, j);
+        m.add_tok(f, ja);
+    }
+    (j, ja)
+}
+
 pub(crate) fn global_function(m: &Model, name: &str) -> bool {
     m.namespace_property(BuiltinNs::GlobalThis, name)
         .is_some_and(|p| p.native.is_some())
@@ -1872,16 +1887,8 @@ fn ns_method_inner(
         }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
-            // Its objects are ordinary objects, its arrays arrays
-            // (`members::box_chain`), as `Gen::json_value` models them.
-            let j = site_tmpl(m, call, "json");
-            let ja = site_tmpl(m, call, "Array");
+            let (j, ja) = json_value(m, call);
             let fa = m.field_any(j);
-            for f in [fa, m.field_any(ja)] {
-                m.add_prim(f, prim::ALL);
-                m.add_tok(f, j);
-                m.add_tok(f, ja);
-            }
             ret_tok(m, call, j);
             ret_tok(m, call, ja);
             ret_prim(m, call, prim::ALL);
