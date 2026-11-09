@@ -50,11 +50,8 @@ await bootPerryWasm("{b64}");
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(
-        result.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    // Node exits 0 while writing warnings to stderr (inherited NODE_OPTIONS,
+    // experimental flags), so only the exit status gates the run here.
     String::from_utf8(result.stdout).unwrap().trim().to_string()
 }
 
@@ -99,5 +96,19 @@ console.log(a.join(','));
 "#
         ),
         "2,3\n1,4\n0\n1,4\n4\n1"
+    );
+}
+
+#[test]
+fn splice_coerces_non_numeric_start_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const a = [1, 2, 3];
+a.splice("1" as any, 0, 9);
+console.log(a.join(','));
+"#
+        ),
+        "1,9,2,3"
     );
 }

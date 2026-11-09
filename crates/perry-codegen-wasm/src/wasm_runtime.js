@@ -1743,7 +1743,9 @@ const __memDispatch = {
     if (!Array.isArray(arr)) return [];
     const s = typeof start === 'number' ? start : 0;
     const dc = deleteCount === undefined ? arr.length - s : deleteCount;
-    return arr.splice(s, dc, ...items);
+    // Non-numeric start must reach splice uncoerced: JS ToIntegerOrInfinity
+    // coerces "1" to 1, while the pre-coerced 0 silently shifts insertions.
+    return arr.splice(typeof start === 'number' ? s : start, dc, ...items);
   },
   array_shift: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.shift(); },
   array_unshift: (arr, value) => { if (Array.isArray(arr)) arr.unshift(value); },
