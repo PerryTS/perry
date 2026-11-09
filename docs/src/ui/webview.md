@@ -130,6 +130,10 @@ WebKit owns camera and microphone permission decisions for the requesting
 origin, frame and capture type. Perry does not grant capture on behalf of web
 content or preemptively request both devices when constructing a WebView.
 macOS consent and the host app's required usage descriptions still apply.
+A host built with App Sandbox also needs `com.apple.security.device.camera` and
+`com.apple.security.device.audio-input` in its signature, because capture is
+denied before the consent prompt without them; list both under `entitlements`
+in `perry.toml`.
 
 WebKit and macOS may reuse remembered decisions, so a request does not always
 show a new prompt. Perry does not expose a custom media-permission callback.
