@@ -136,6 +136,11 @@ pub(crate) unsafe fn bag_born_with_room(ptr: usize, entries: &[(&str, f64)], att
 #[inline(always)]
 unsafe fn bag_born<const ROOM: u32>(ptr: usize, entries: &[(&str, f64)], attrs: &[u8]) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
+    // An unborn lazy builtin family's constructor gets its bag (`length`,
+    // `name`, `prototype` and its statics) from its family's birth.
+    if bag_of(ptr).is_null() {
+        crate::object::birth_unborn_family_of(ptr);
+    }
     if !bag_of(ptr).is_null()
         || entries.iter().any(|(key, _)| {
             crate::object::class_value::holds_declared_static_method(ptr, key).is_some()

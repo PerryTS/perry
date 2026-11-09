@@ -73,7 +73,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                     _ => None,
                 }
                 .and_then(|identity| {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
                     match m.toks[value as usize] {
                         TokKind::Builtin(_)
                             if !m

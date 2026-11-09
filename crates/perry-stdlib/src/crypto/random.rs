@@ -1256,7 +1256,7 @@ mod tests {
     }
 
     fn int32(value: i32) -> f64 {
-        f64::from_bits(perry_runtime::JSValue::int32(value).bits())
+        f64::from(value)
     }
 
     /// The bytes behind a `Buffer` the dispatcher returned, or empty when it

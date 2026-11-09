@@ -142,6 +142,9 @@ pub struct Gen<'a> {
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
     pub thrown: NodeId,
+    /// The realm error a failed runtime operation throws (`Model::runtime_error`,
+    /// held by `thrown`), for a site that throws it into its own region.
+    pub runtime_error: Tok,
     /// Registry summary: only dynamic lookups read every publication.
     pub cjs_registry: NodeId,
     /// Canonical module path -> the publications for that path.
@@ -597,6 +600,7 @@ impl<'a> Gen<'a> {
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
             thrown,
+            runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),
             cjs_unknown_path,

@@ -272,7 +272,7 @@ impl Model {
                 self.atoms[key as usize].clone(),
                 setter
             ),
-            Cons::AccessorInstall { key, f, setter } => format!(
+            Cons::AccessorInstall { key, f, setter, .. } => format!(
                 "AccessorInstall key={:?} f={:?} setter={:?}",
                 self.atoms[key as usize].clone(),
                 self.packet_token(f, packet),

@@ -15,7 +15,9 @@ fn throw_from_entries_non_object_entry() -> ! {
 }
 
 unsafe fn object_from_entries_gc_type(raw_ptr: i64) -> Option<u8> {
-    if raw_ptr < crate::gc::GC_HEADER_SIZE as i64 + 0x1000 {
+    if raw_ptr < crate::gc::GC_HEADER_SIZE as i64 + 0x1000
+        || crate::value::addr_class::is_handle_band(raw_ptr as usize)
+    {
         return None;
     }
     let addr = raw_ptr as usize;
@@ -89,6 +91,19 @@ unsafe fn object_from_entries_materialize_entries(entries_value: f64) -> *mut Ar
     }
     if jv.is_bigint() {
         throw_from_entries_not_iterable();
+    }
+
+    if jv.is_handle() {
+        let symbol = crate::symbol::well_known_symbol("iterator");
+        let symbol = crate::value::js_nanbox_pointer(symbol as i64);
+        if let Some(method) = crate::symbol::own_symbol_property(entries_value, symbol) {
+            let iterator = crate::symbol::iterator_from_method(entries_value, method)
+                .unwrap_or_else(|| throw_from_entries_not_iterable());
+            return crate::array::js_iterator_to_array(iterator);
+        }
+    }
+    if let Some(entries) = crate::array::entries_array_for_small_handle_value(entries_value) {
+        return entries;
     }
 
     let raw = crate::value::js_nanbox_get_pointer(entries_value);

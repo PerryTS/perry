@@ -39,10 +39,19 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// names.
     pub named_serial: Option<u64>,
     pub instance_identity: Option<BuiltinInstanceIdentity>,
+    /// The family is born on first observation, not at realm setup: setup
+    /// allocates only the constructor (the realm's [[Intrinsics]] entry holds
+    /// it, and `globalThis.<name>` binds it); `realm_intrinsic_addr`, the one
+    /// materialize point, births the rest (`global_this::populate::birth_family`)
+    /// the first time the intrinsic prototype is asked for. The constructor
+    /// has no own property bag until then: its `length`, `name` and
+    /// `prototype` are the ordinary not-yet-materialized intrinsic slots, and
+    /// whatever needs the bag or the prototype births the family first.
+    pub lazy: bool,
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
@@ -83,6 +92,7 @@ macro_rules! builtin_constructors {
                 sealed_serial: builtin_constructors!(@optional $($sealed)?),
                 named_serial: builtin_constructors!(@optional $($named)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
+                lazy: builtin_constructors!(@callable $($lazy)?),
             },)*
         ];
     };
@@ -158,7 +168,7 @@ builtin_constructors! {
     ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060),
     WritableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0061),
     TransformStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0062),
-    Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID),
+    Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID); lazy true,
     URL => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL; instance BuiltinInstanceIdentity::Class(0xFFFF0063),
     URLSearchParams => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
     URLPattern => crate::fn_info!(#[realm(URLPattern, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::ctor_thunks::global_this_url_pattern_call_thunk, 2; with_declared(2)),
@@ -378,6 +388,15 @@ pub(crate) fn constructor_identity(value: f64) -> Option<BuiltinConstructorIdent
     }
 }
 
+/// The call capture of a builtin constructor: its identity in the
+/// runtime-internal 0x7FFE word space (DESIGN-p3 §1.2, R4), the same word the
+/// realm image writes for `RealmValue::Int32` (`realm_image/atoms.rs`). It is
+/// never a JS value, and never a Number (P3 B4a: nothing builds an INT32
+/// Number).
+pub(crate) const fn builtin_constructor_identity_word(identity: u32) -> u64 {
+    crate::value::INT32_TAG | identity as u64
+}
+
 /// Birth consumes one declaration, so code, header identity and call capture
 /// cannot disagree. The fact precedes publication and survives moving GC.
 pub(crate) fn alloc_builtin_constructor(
@@ -390,7 +409,7 @@ pub(crate) fn alloc_builtin_constructor(
         crate::closure::js_closure_set_capture_bits(
             closure,
             0,
-            crate::JSValue::int32(identity as i32).bits(),
+            builtin_constructor_identity_word(identity as u32),
         );
         // Scalar declaration fact, installed before publication. The ordinary
         // birth has already checked the capture bound and initialized all slots.

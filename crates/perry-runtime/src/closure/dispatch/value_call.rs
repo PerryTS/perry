@@ -559,10 +559,7 @@ mod slice_body_tests {
     fn array_bridge_keeps_legacy_int32_conversion() {
         let info = crate::fn_info!(probe, 2; plain());
         let closure = js_closure_alloc(info, 0);
-        let args = [
-            f64::from_bits(crate::value::JSValue::int32(3).bits()),
-            f64::from_bits(crate::value::JSValue::int32(5).bits()),
-        ];
+        let args = [f64::from(3), f64::from(5)];
         assert_eq!(
             unsafe {
                 js_closure_call_array(closure as i64, JsThis::from_f64(42.0), args.as_ptr(), 2)

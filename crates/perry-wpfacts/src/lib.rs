@@ -451,6 +451,7 @@ fn generate<'a>(
     g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
     g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
     g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
+    g.m.dense_birth_sabotage = cfg.sabotage.as_deref() == Some("densebirth");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;

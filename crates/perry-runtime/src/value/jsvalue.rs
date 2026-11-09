@@ -44,14 +44,6 @@ impl JSValue {
         }
     }
 
-    /// Create an i32 value (stored in payload, faster than f64 for integers)
-    #[inline]
-    pub const fn int32(value: i32) -> Self {
-        Self {
-            bits: INT32_TAG | ((value as u32) as u64),
-        }
-    }
-
     /// Create a pointer value (for heap-allocated objects)
     #[inline]
     pub fn pointer(ptr: *const u8) -> Self {

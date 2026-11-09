@@ -29,17 +29,6 @@ pub(super) fn emit_stored_error(id: usize) {
     }
 }
 
-pub(super) fn record_stream_error(id: usize, message: String) {
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.errored = true;
-            state.error_msg = Some(message);
-        }
-    });
-    refresh_props(id);
-    emit_stored_error(id);
-}
-
 /// #10451: a read stream's failure as Node reports it. `error_msg` alone
 /// became a bare `Error` with the Rust text ("No such file or directory (os
 /// error 2)") and no `code`/`errno`/`syscall`/`path`, while the write side
@@ -81,33 +70,4 @@ pub(super) fn stored_node_error_value(id: usize) -> Option<f64> {
         (!JSValue::from_bits(state.error_value.to_bits()).is_undefined())
             .then_some(state.error_value)
     })
-}
-
-/// A failed read while pumping (`EISDIR ... read` for a directory).
-pub(super) fn record_read_failure(id: usize, failure: FsReadFailure) {
-    store_read_failure(id, &failure);
-    record_stream_error(id, failure.err.to_string());
-}
-
-/// Starting a ReadStream must deliver a constructor-time open failure. Without
-/// this transition, event-backed consumers wait forever for data/end/error
-/// after `createReadStream()` recorded an invalid path (#9616).
-pub(super) fn emit_pending_read_error(id: usize) -> bool {
-    let pending = STREAM_REGISTRY.with(|registry| {
-        registry.borrow().get(&id).and_then(|state| {
-            (state.kind == StreamKind::Read && !state.errored)
-                .then(|| state.error_msg.clone())
-                .flatten()
-        })
-    });
-    let Some(message) = pending else {
-        return false;
-    };
-    record_stream_error(id, message);
-    // Node delivers `close` after `error`. Keeping those on separate turns
-    // also lets work queued in the construction turn (for example
-    // `fs.promises.writeFile(out, stream)`) still identify the stream and
-    // consume its stored open failure.
-    schedule_read_stream_turn(id);
-    true
 }
