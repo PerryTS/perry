@@ -1980,6 +1980,7 @@ mod shaped_key_proto_methods;
 mod uri_coercion;
 
 mod accessor_lookup_values;
+mod buffer_iterator_absent;
 mod native_fs_effects;
 mod native_util_types_effects;
 mod native_module_ref;
@@ -1997,3 +1998,5 @@ mod error_namespaces;
 mod given_proto_census;
 mod spread_from_census;
 mod accessor_from_census;
+mod navigator_decl;
+mod navigator_store;

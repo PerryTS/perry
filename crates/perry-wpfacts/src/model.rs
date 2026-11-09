@@ -736,6 +736,10 @@ pub enum NativeMiss {
     New(CallId),
     /// Descriptor metadata, without reading or calling the property.
     Lookup(NodeId),
+    /// A store of this node at this site that met a declared getter-only
+    /// accessor (`builtins::getter_only`) and wrote nothing: once the key
+    /// may be written natively (the accessor replaced), it is stored again.
+    Store(NodeId, SiteId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1753,6 +1757,10 @@ pub struct Model {
     /// the runtime's own objects, opaque, when no CommonJS support module
     /// installs the program's (`cjs_cache`, `cjs_ext` hold them as well).
     pub require_parts: Option<(Tok, Tok)>,
+    /// The realm's `navigator` object (namespace `navigator`, its
+    /// [[Prototype]] `Navigator.prototype`), born once per model: what
+    /// Node's `get navigator` on the global object returns.
+    pub navigator: Option<Tok>,
     /// What `require.cache` / `require.extensions` / `require.main` are at
     /// run time: the support module's cache and the extensions the runtime
     /// returned to it (`__perry_runtime.cjsInstall`), the runtime's own
