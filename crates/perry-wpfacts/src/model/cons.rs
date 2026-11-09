@@ -507,8 +507,13 @@ pub enum Cons {
     /// by key, into each target (`Model::spread_into`), never through one
     /// any-key bucket.
     Spread { into: NodeId, site: SiteId },
-    /// The node holds the targets of a spread from source token `src`.
-    SpreadFrom { src: Tok, site: SiteId },
+    /// The node holds the targets of a spread from source token `src`; `from` is the node of the
+    /// spread's source value (the census attributes a spread of ⊤ to it).
+    SpreadFrom {
+        src: Tok,
+        site: SiteId,
+        from: NodeId,
+    },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).

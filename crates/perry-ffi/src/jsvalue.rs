@@ -263,7 +263,9 @@ impl JsValue {
     /// True if the value is a 32-bit integer.
     #[inline]
     pub const fn is_int32(self) -> bool {
-        (self.0 & TAG_MASK) == INT32_TAG
+        // Bits 32..47 clear as well: other `0x7FFE` words (a `C.prototype`
+        // ref, internal markers) are not Numbers.
+        (self.0 & !0x0000_0000_FFFF_FFFF) == INT32_TAG
     }
 
     /// True if the value is a number (real f64 OR int32). Returns
@@ -662,7 +664,12 @@ mod tests {
             let v = JsValue::from_int32(n);
             // One Number encoding: the raw f64 bits, never an INT32 word.
             assert_eq!(v.bits(), (n as f64).to_bits(), "{n}");
-            assert!(!v.is_int32(), "{} must not be an INT32 word, got {:?}", n, v);
+            assert!(
+                !v.is_int32(),
+                "{} must not be an INT32 word, got {:?}",
+                n,
+                v
+            );
             assert_eq!(v.to_int32(), n);
             assert!(v.is_number());
             assert_eq!(v.to_number(), n as f64);

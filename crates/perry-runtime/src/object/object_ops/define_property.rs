@@ -323,8 +323,9 @@ pub(crate) unsafe fn apply_property_descriptor(
         // through array hole/OOB reads — flip the global flag.
         {
             let kb = key_value.to_bits();
-            let is_numeric_key =
-                (kb >> 48) == 0x7FFE || crate::value::JSValue::from_bits(kb).is_number() || {
+            let is_numeric_key = crate::value::is_int32_bits(kb)
+                || crate::value::JSValue::from_bits(kb).is_number()
+                || {
                     let sp = crate::value::js_get_string_pointer_unified(key_value)
                         as *const crate::StringHeader;
                     !sp.is_null()

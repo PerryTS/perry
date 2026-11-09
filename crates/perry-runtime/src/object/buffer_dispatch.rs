@@ -1148,7 +1148,7 @@ pub unsafe fn dispatch_buffer_method(
                         .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
-                } else if (key_bits >> 48) == 0x7FFE {
+                } else if crate::value::is_int32_bits(key_bits) {
                     // int32 key
                     let idx = (key_bits & 0xFFFF_FFFF) as i32;
                     let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
@@ -1186,7 +1186,7 @@ pub unsafe fn dispatch_buffer_method(
                         .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
-                } else if (key_bits >> 48) == 0x7FFE {
+                } else if crate::value::is_int32_bits(key_bits) {
                     let idx = (key_bits & 0xFFFF_FFFF) as i32;
                     let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
                     idx >= 0 && idx < buf_len

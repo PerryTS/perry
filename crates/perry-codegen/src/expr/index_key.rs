@@ -115,8 +115,7 @@ fn publish(ctx: &mut FnCtx<'_>) {
     f.no_inline = true;
     let b = f.create_block("entry");
     let bits = b.bitcast_double_to_i64("%key");
-    let tag = b.lshr(I64, &bits, "48");
-    let boxed = b.icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
+    let boxed = crate::codegen::emit_int32_bits_test(b, &bits);
     b.cond_br(&boxed, "boxed.1", "raw.2");
 
     let b = f.create_block("boxed");

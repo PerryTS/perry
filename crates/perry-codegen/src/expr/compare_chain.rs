@@ -221,10 +221,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             continue;
         }
         let bits = ctx.block().bitcast_double_to_i64(&boxed);
-        let top = ctx.block().lshr(I64, &bits, "48");
-        let int = ctx
-            .block()
-            .icmp_eq(I64, &top, crate::nanbox::INT32_TAG_TOP16_I64);
+        let int = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
         if !strict_numeric_equality {
             // The sign-closed plain-number test: negative IEEE values and
             // canonical NaNs pass, every tag (HANDLE_TAG included) fails.
