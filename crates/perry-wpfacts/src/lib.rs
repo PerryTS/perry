@@ -25,6 +25,7 @@ mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
+pub mod field_read_calls;
 mod gen;
 mod gen_call;
 mod gen_cjs;
@@ -43,6 +44,7 @@ mod tests;
 mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
+pub use field_read_calls::FieldReadCall;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -863,6 +865,15 @@ fn compute_act<'a>(
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);
+    if !g.m.aborted && field_read_calls::enabled() {
+        field_read_calls::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref() == Some("fieldreadcall"),
+        );
+    }
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.
         templates.clear();

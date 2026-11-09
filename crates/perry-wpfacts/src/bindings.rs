@@ -333,6 +333,9 @@ pub struct ModuleBindings {
     /// only Numbers (representation RFC §10.4, the call's return
     /// representation). Sorted.
     pub number_calls: Vec<u32>,
+    /// Method call byte offsets proven field element reads
+    /// (`field_read_calls`, b1), sorted.
+    pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
