@@ -755,10 +755,17 @@ fn an_active_observer_keeps_a_young_large_containers_edges_as_old_pages() {
             "fixture: the container must be a young large owner"
         );
         let child = crate::array::js_array_alloc(2);
-        crate::array::js_array_set_f64_extend(container, 3, f64::from_bits(ptr_bits(child as usize)));
+        crate::array::js_array_set_f64_extend(
+            container,
+            3,
+            f64::from_bits(ptr_bits(child as usize)),
+        );
         let header = header_from_user_ptr(container.cast());
         assert!(crate::gc::full_trace::object_words_may_name_handles(header));
-        crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(observer_phase, passive_observer);
+        crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(
+            observer_phase,
+            passive_observer,
+        );
         let _scope = ObserverScope;
         crate::gc::full_trace::begin_full_trace();
         assert!(crate::gc::full_trace::handle_trace_active());
