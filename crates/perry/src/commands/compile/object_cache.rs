@@ -562,6 +562,8 @@ fn compute_object_cache_key_with_env(
         );
     }
     h.field("init_deps", &opts.module_init_deps.join("|"));
+    h.field("async_modules", if opts.program_has_tla { "1" } else { "0" });
+    h.field("async_graph", if opts.module_graph_has_tla { "1" } else { "0" });
     // Issue #842: side-effect-only dynamic-import targets emit a
     // `@__perry_ns_<prefix>` global + populator regardless of
     // `namespace_entries`. Toggling this flag changes the emitted IR

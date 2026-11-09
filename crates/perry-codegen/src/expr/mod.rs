@@ -417,6 +417,7 @@ pub(crate) struct FnCtx<'a> {
     /// that arm is the site's complete operation without the facts.
     pub wpfacts_off: bool,
     pub program_has_worker: bool,
+    pub program_has_tla: bool,
     pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,

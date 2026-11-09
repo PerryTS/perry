@@ -2951,6 +2951,18 @@ fn lower_module(
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+    if opts.program_has_tla {
+        llmod.declare_function("js_async_module_configure", crate::types::VOID, &[I64, I64, I64, I64, I64]);
+        llmod.declare_function("js_async_module_visit", crate::types::VOID, &[I64, I64, I64]);
+        llmod.declare_function("js_async_module_import", DOUBLE, &[I64]);
+        llmod.declare_function("js_async_module_require", crate::types::VOID, &[I64]);
+        llmod.declare_function("js_async_module_entry", crate::types::VOID, &[I64]);
+        for prefix in opts.dynamic_import_path_to_prefix.values() {
+            if !prefix.starts_with("__node_submod__") && !prefix.starts_with("__native_mod__") {
+                llmod.declare_function(&format!("{prefix}__async_record"), I64, &[]);
+            }
+        }
+    }
     let mut cross_module = CrossModuleCtx {
         numeric_order_functions: &hir.functions,
         numeric_order_closures: &closures,
@@ -3288,6 +3300,8 @@ fn lower_module(
         lazy_path_init_modules: opts.lazy_path_init_modules.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
+        program_has_tla: opts.program_has_tla,
+        module_graph_has_tla: opts.module_graph_has_tla,
         is_dynamic_import_target: opts.is_dynamic_import_target,
         namespace_adopts_cjs_exports: opts.namespace_adopts_cjs_exports,
     };

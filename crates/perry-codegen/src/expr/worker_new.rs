@@ -37,7 +37,9 @@ pub(super) fn lower(
             if target.starts_with("__node_submod__") || target.starts_with("__native_mod__") {
                 bail!("worker_threads Worker target must be a compiled source file");
             }
-            let init = if ctx.program_has_worker {
+            let init = if ctx.program_has_tla {
+                format!("{target}__async_entry")
+            } else if ctx.program_has_worker {
                 format!("{target}__init")
             } else {
                 format!("{target}__init_body")
