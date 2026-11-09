@@ -60,27 +60,32 @@ pub(crate) struct Declarations {
     named: usize,
 }
 
+/// The namespace model a canonical call of `owner.key` runs under. A global
+/// host object (`Intl`, `performance`, `Atomics`) has no namespace model
+/// (`ns_method_inner`): a function it holds is called as its declaration
+/// says (`declared_static`, `declared_proto_method`), else as an unknown
+/// function, as before it was a token.
+fn call_namespace(owner: &'static str, key: &'static str) -> Option<(BuiltinNs, &'static str)> {
+    (!owner.ends_with(".prototype"))
+        .then(|| ns_by_name(owner))
+        .flatten()
+        .filter(|ns| !matches!(ns, BuiltinNs::Module(n) if !n.starts_with("node:")))
+        .map(|ns| {
+            (
+                if ns == BuiltinNs::GlobalThis {
+                    BuiltinNs::Other
+                } else {
+                    ns
+                },
+                key,
+            )
+        })
+}
+
 fn coordinates(owner: &'static str, key: &'static str) -> Coordinates {
     Coordinates {
         prototype: super::prototype_model(owner, key),
-        // A global host object (`Intl`, `performance`) has no namespace
-        // model (`ns_method_inner`): a function it holds is called as its
-        // declaration says (`declared_static`, `declared_proto_method`),
-        // else as an unknown function, as before it was a token.
-        namespace: (!owner.ends_with(".prototype"))
-            .then(|| ns_by_name(owner))
-            .flatten()
-            .filter(|ns| !matches!(ns, BuiltinNs::Module(n) if !n.starts_with("node:")))
-            .map(|ns| {
-                (
-                    if ns == BuiltinNs::GlobalThis {
-                        BuiltinNs::Other
-                    } else {
-                        ns
-                    },
-                    key,
-                )
-            }),
+        namespace: call_namespace(owner, key),
         constructible: false,
     }
 }
@@ -374,20 +379,12 @@ mod tests {
                         "{}",
                         shape.name
                     );
-                    let ns = (!owner.ends_with(".prototype"))
-                        .then(|| ns_by_name(owner))
-                        .flatten()
-                        .map(|ns| {
-                            (
-                                if ns == BuiltinNs::GlobalThis {
-                                    BuiltinNs::Other
-                                } else {
-                                    ns
-                                },
-                                key,
-                            )
-                        });
-                    assert_eq!(native.namespace, ns, "{}", shape.name);
+                    assert_eq!(
+                        native.namespace,
+                        call_namespace(owner, key),
+                        "{}",
+                        shape.name
+                    );
                 }
             } else {
                 assert!(
