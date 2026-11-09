@@ -1668,48 +1668,19 @@ pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> 
 
 /// A Map/Set method name the by-name natives do not implement (#11915): the
 /// spec call, `Call(Get(recv, name), recv, args)` — `m.isPrototypeOf(x)`,
-/// `m.foo()` on a relinked `Map.prototype`, or the TypeError for a missing
-/// method — instead of the old silent `undefined`. A builtin closure found
-/// here is called as a value; one level only, so a builtin body that
-/// dispatches the same name by name again answers `undefined` as before
-/// rather than recursing.
+/// `m.toLocaleString()` (whose body invokes `toString`, an ordinary nested
+/// call here), `m.foo()` on a relinked `Map.prototype`, or the TypeError for
+/// a missing method.
+///
+/// A method reached here that dispatches by name back into this lookup can
+/// form a cycle of runtime frames only, which no compiled prologue's stack
+/// check sees; the same check at this entry bounds it, so a runaway
+/// recursion through this path throws node's `RangeError` instead of running
+/// into the guard page. No state of its own: the agent's stack limit is the
+/// one every prologue reads.
 #[optimize(size)]
 pub(crate) unsafe fn call_unknown_collection_method(recv: f64, name: &[u8], args: &[f64]) -> f64 {
-    // The guard is per (receiver, name): a builtin body that dispatches the
-    // SAME name on the same receiver by name again answers `undefined`, while
-    // a different name it invokes (`Object.prototype.toLocaleString` ->
-    // `Invoke(this, "toString")`) is a fresh, ordinary lookup. The active
-    // calls form a chain of stack frames and the thread-local holds only the
-    // innermost one, so the guard costs one pointer in every thread's TLS
-    // block, which every thread start zeroes.
-    struct Frame {
-        recv: u64,
-        name: *const [u8],
-        outer: *const Frame,
-    }
-    thread_local! {
-        static ACTIVE: std::cell::Cell<*const Frame> = const { std::cell::Cell::new(std::ptr::null()) };
-    }
-    let outer = ACTIVE.with(|a| a.get());
-    let mut frame = outer;
-    while !frame.is_null() {
-        // SAFETY: every frame in the chain lives on the stack of an enclosing
-        // call of this function, which unlinks it before it returns.
-        let f = unsafe { &*frame };
-        if f.recv == recv.to_bits() && unsafe { &*f.name } == name {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        frame = f.outer;
-    }
-    let this = Frame { recv: recv.to_bits(), name: name as *const [u8], outer };
-    struct Reset(*const Frame);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            ACTIVE.with(|a| a.set(self.0));
-        }
-    }
-    ACTIVE.with(|a| a.set(&this as *const Frame));
-    let _reset = Reset(outer);
+    crate::stack_guard::check_native_stack();
     select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }
