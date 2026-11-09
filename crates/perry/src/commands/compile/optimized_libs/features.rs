@@ -368,6 +368,9 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/event-target".to_string());
     }
+    if ctx.uses_navigator || ctx.uses_get_builtin_module || needs_dyn_eval || addon_world {
+        cross_features.push("perry-runtime/navigator".to_string());
+    }
     if ctx.uses_typedarray
         || ctx.uses_proc_ipc
         || ctx.uses_get_builtin_module

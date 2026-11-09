@@ -693,6 +693,10 @@ fn detect_optional_feature_usage_with_capabilities(
                     "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
                 )
         });
+    ctx.uses_navigator |= global_object::may_escape(hir_module)
+        || ["navigator", "Navigator"]
+            .iter()
+            .any(|name| hir_debug.contains(&format!("\"{name}\"")));
     ctx.uses_messaging |= global_object::may_escape(hir_module)
         || hir_debug.contains(r#""worker_threads""#)
         || hir_module.imports.iter().any(|import| {
