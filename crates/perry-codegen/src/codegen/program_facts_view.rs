@@ -240,6 +240,10 @@ pub struct ElisionFacts {
     /// Method call byte offset → the call is a field element read of its
     /// receiver (wpfacts `ModuleBindings::field_read_calls`, b1).
     pub field_read_calls: std::collections::BTreeMap<u32, FactsFieldReadCall>,
+    /// Element reads (by `element_offset`) whose value the facts prove a
+    /// plain Number; `true` when it may also be `undefined` (wpfacts
+    /// `canonical_numbers`, P3 B1).
+    pub number_element_reads: std::collections::BTreeMap<u32, bool>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -296,6 +300,7 @@ impl ElisionFacts {
             && self.number_calls.is_empty()
             && self.element_reads.is_empty()
             && self.field_read_calls.is_empty()
+            && self.number_element_reads.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()

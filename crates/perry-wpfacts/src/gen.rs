@@ -150,6 +150,9 @@ pub struct Gen<'a> {
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
     pub(crate) element_sites: Vec<ElementSite>,
+    /// `(module, element_offset, value node)` of every `IndexGet` copy
+    /// (`canonical_numbers`, P3 B1).
+    pub(crate) element_values: Vec<(u32, u32, NodeId)>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -595,6 +598,7 @@ impl<'a> Gen<'a> {
             cjs_unknown_path,
             read_sites: Vec::new(),
             element_sites: Vec::new(),
+            element_values: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),

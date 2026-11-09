@@ -336,6 +336,10 @@ pub struct ModuleBindings {
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
+    /// Element reads whose value is a plain Number at every copy, by
+    /// `element_offset`, sorted; `true` when the value may also be
+    /// `undefined` (`canonical_numbers`, P3 B1).
+    pub number_element_reads: Vec<(u32, bool)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that

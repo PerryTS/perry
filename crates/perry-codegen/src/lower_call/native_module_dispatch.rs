@@ -579,6 +579,33 @@ mod ffi_return_type_tests {
     }
 
     #[test]
+    fn worker_listener_admission_keeps_original_nanbox_payloads() {
+        for (method, runtime) in [
+            ("on", "js_worker_threads_worker_on"),
+            ("once", "js_worker_threads_worker_once"),
+            ("off", "js_worker_threads_worker_off"),
+            (
+                "addEventListener",
+                "js_worker_threads_worker_add_event_listener",
+            ),
+            (
+                "removeEventListener",
+                "js_worker_threads_worker_remove_event_listener",
+            ),
+        ] {
+            let signature =
+                super::native_module_lookup("worker_threads", true, method, Some("Worker"))
+                    .unwrap();
+            assert_eq!(signature.runtime, runtime);
+            assert_eq!(
+                signature.args,
+                &[super::NativeArgKind::F64, super::NativeArgKind::JsvalI64],
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
     fn net_socket_methods_keep_their_external_float_abi_without_id_lowering() {
         let abi = include_str!("../wasm32/runtime_abi.tsv");
         for (method, symbol) in [
