@@ -29,6 +29,7 @@ impl<'a> Gen<'a> {
         args: &[Expr],
         _extra: &[NodeId],
         byte_offset: u32,
+        byte_end: u32,
     ) -> NodeId {
         // The object-literal IIFE: `(o => { js_object_literal_define(o, …);
         // …; return o })(seed)`. Its defines are the literal's birth.
@@ -121,7 +122,7 @@ impl<'a> Gen<'a> {
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        let result = self.call_with(fx, callee, a, vec![], byte_offset);
+        let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
         if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
             self.call_results_at.push((fx.module, byte_offset, result));
         }
@@ -144,7 +145,7 @@ impl<'a> Gen<'a> {
         callee: &Expr,
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
-        byte_offset: u32,
+        (byte_offset, byte_end): (u32, u32),
     ) -> NodeId {
         let lit = self.call_lit_arg.take();
         match callee {
@@ -152,6 +153,7 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 byte_offset: pb,
+                byte_end: pe,
                 ..
             } => {
                 let o = match self.ns_member(fx.module, object, property, true) {
@@ -161,12 +163,17 @@ impl<'a> Gen<'a> {
                 self.own_test_recv = Some(o);
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
-                let off = if *pb != 0 { *pb } else { byte_offset };
+                let (off, end) = if *pb != 0 {
+                    (*pb, *pe)
+                } else {
+                    (byte_offset, byte_end)
+                };
                 if off != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
                         offset: off,
-                        hir: callee as *const Expr as usize,
+                        end,
+                        args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: None,
                     });
@@ -268,7 +275,8 @@ impl<'a> Gen<'a> {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
                         offset: byte_offset,
-                        hir: callee as *const Expr as usize,
+                        end: byte_end,
+                        args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: Some(c),
                     });

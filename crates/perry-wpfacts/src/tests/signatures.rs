@@ -296,3 +296,111 @@ console.log(s, new Q().sum(1));
     let s = sig(src, "sum");
     assert!(s.as_ref().is_none_or(|s| s.this_class.is_none()), "{s:?}");
 }
+
+/// The `(offset, end)` of every direct call of `name` in `m`'s top level.
+fn calls_of(m: &mut perry_hir::Module, name: &str, f: &mut dyn FnMut(&mut u32, &mut u32)) {
+    use perry_hir::{Expr, Stmt};
+    let id = m
+        .functions
+        .iter()
+        .find(|x| x.name == name)
+        .expect("a function")
+        .id;
+    fn walk(e: &mut Expr, id: u32, f: &mut dyn FnMut(&mut u32, &mut u32)) {
+        if let Expr::Call {
+            callee,
+            byte_offset,
+            byte_end,
+            ..
+        } = e
+        {
+            if matches!(callee.as_ref(), Expr::FuncRef(x) if *x == id) {
+                f(byte_offset, byte_end);
+            }
+        }
+        perry_hir::walker::walk_expr_children_mut(e, &mut |c| walk(c, id, f));
+    }
+    for s in &mut m.init {
+        match s {
+            Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) => walk(e, id, f),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn s20_distinct_calls_under_one_key_refuse() {
+    // E3 (CWN 11-09): the cross-module inliner keeps a call's offset, so two
+    // distinct calls may share a key. Here the second `g` call takes the
+    // first's offset (its own span end kept): the key names two source
+    // calls, and the site refuses, although both resolve to `g` and pass
+    // int32 arguments.
+    let src = r#"
+function g(x: number): number { return (x * 3) | 0; }
+const a = g(1);
+const b = g(20);
+console.log(a + b);
+"#;
+    let mut m = hir(src);
+    let mut spans: Vec<(u32, u32)> = Vec::new();
+    calls_of(&mut m, "g", &mut |o, e| spans.push((*o, *e)));
+    assert_eq!(spans.len(), 2, "{spans:?}");
+    assert_ne!(spans[0].1, spans[1].1);
+    let first = spans[0].0;
+    let mut k = 0;
+    calls_of(&mut m, "g", &mut |o, _| {
+        if k == 1 {
+            *o = first;
+        }
+        k += 1;
+    });
+    let pf = compute(&[("t.ts".to_string(), &m)], &FactsConfig::default());
+    let typed: Vec<u32> = pf
+        .bindings
+        .iter()
+        .flat_map(|b| b.typed_calls.iter().map(|(o, _)| *o))
+        .collect();
+    assert!(!typed.contains(&first), "{typed:?}");
+    // Unchanged, both sites are typed.
+    let id = id_of(src, "g");
+    assert_eq!(typed_targets(src), vec![id, id]);
+}
+
+#[test]
+fn e3_copies_of_one_call_join() {
+    // A for…of body is walked in its counted and its IteratorRecord arm, so
+    // gen sees two HIR calls of `mf` under one key, with one span: they are
+    // joined. (The inliner's copies, `twice` into its callers, arise in the
+    // compile pipeline only; the P2 controls check those.)
+    let src = r#"
+function mf(m: number): number { return (m >> 7) & 127; }
+function twice(m: number): number { return mf(m) + 1; }
+let s = 0;
+for (let i = 0; i < 100; i++) s += twice(i * 129);
+function other(k: number): number { return twice(k) * 2; }
+for (let i = 0; i < 10; i++) s += other(i);
+const xs = [1, 2, 3];
+for (const x of xs) s += mf(x);
+console.log(s);
+"#;
+    let id = id_of(src, "mf");
+    let t = typed_targets(src);
+    assert!(t.iter().filter(|&&f| f == id).count() >= 2, "{t:?}");
+}
+
+#[test]
+fn e3_a_patched_iterator_arm_with_strings_is_not_typed() {
+    // Control (a): the IteratorRecord arm of the for…of passes what a user
+    // `Symbol.iterator` yields (a fraction and a String).
+    let src = r#"
+function inc(x: number): number { return x + 1; }
+const xs: number[] = [1, 2, 3];
+(xs as any)[Symbol.iterator] = function* () { yield 0.5; yield "x"; };
+let s = "";
+for (const x of xs) s += inc(x);
+for (let i = 0; i < 4; i++) s += inc(i);
+console.log(s);
+"#;
+    let id = id_of(src, "inc");
+    assert!(!typed_targets(src).contains(&id), "{:?}", sig(src, "inc"));
+}
