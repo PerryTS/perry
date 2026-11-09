@@ -105,8 +105,18 @@ fn hir_fn<'a>(g: &'a Gen<'_>, mi: u32, id: u32) -> Option<&'a perry_hir::Functio
 /// `eval` needs no rule here: it writes the caller's locals as ⊤, so their
 /// parameters are Boxed (REVIEW-p2, checked).
 fn excluded(f: &perry_hir::Function) -> bool {
+    // A generator the transform lowered no longer says `is_generator`; its
+    // body returns the generator object it links to the function's
+    // `prototype`.
+    let lowered_generator = f.body.iter().any(|s| {
+        matches!(
+            s,
+            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype { .. }))
+        )
+    });
     f.is_async
         || f.is_generator
+        || lowered_generator
         || f.params
             .iter()
             .any(|p| p.is_rest || p.arguments_object.is_some())

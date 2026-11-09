@@ -812,7 +812,17 @@ pub(super) fn compile_function(
     let split_region = super::split_regions::is_region_function(f) && spec_entry.is_none();
     lf.no_inline = entry_outline_chunk || split_region;
     let specialized_entry = spec_entry.is_some();
-    if !specialized_entry {
+    // P2 (CWN 11-09): `F$sig` where main had no spec clone replaces the body
+    // main's direct sites entered, the public body: it takes its attributes
+    // (and not a spec clone's early-inline admission, below).
+    let sig_as_public = spec_entry.is_some_and(|plan| {
+        plan.signature.is_some()
+            && matches!(
+                plan.sig_public,
+                super::spec_abi::MainPublic::Body | super::spec_abi::MainPublic::TypedTrampoline
+            )
+    });
+    if !specialized_entry || sig_as_public {
         apply_public_inline_attrs(lf, f, cross_module);
     }
     if typed_public_trampoline.is_some()
@@ -1963,6 +1973,7 @@ pub(super) fn compile_function(
     // budget is the clone's real IR size. `PERRY_SPEC_INLINE=0` keeps the
     // clone out of line.
     if spec_entry.is_some()
+        && !sig_as_public
         && !f.is_async
         && !f.is_generator
         && !f.was_plain_async
@@ -2069,7 +2080,9 @@ fn apply_boxed_entry_inline_attrs(
             }
         }
         MainPublic::TypedTrampoline => {}
-        MainPublic::Body => apply_public_inline_attrs(entry, f, cross_module),
+        MainPublic::Body | MainPublic::SpecBody => {
+            apply_public_inline_attrs(entry, f, cross_module)
+        }
     }
 }
 

@@ -196,12 +196,11 @@ fn typed_plan(
     let sig_public =
         if cm.typed_f64_functions.contains(&f.id) || cm.typed_i32_functions.contains(&f.id) {
             MainPublic::TypedTrampoline
-        } else if cm
-            .spec_abi_functions
-            .get(&f.id)
-            .is_some_and(|plan| matches!(plan.dispatch, SpecDispatch::Guarded))
-        {
-            MainPublic::GuardedSpec
+        } else if let Some(plan) = cm.spec_abi_functions.get(&f.id) {
+            match plan.dispatch {
+                SpecDispatch::Guarded => MainPublic::GuardedSpec,
+                SpecDispatch::Static => MainPublic::SpecBody,
+            }
         } else {
             MainPublic::Body
         };
