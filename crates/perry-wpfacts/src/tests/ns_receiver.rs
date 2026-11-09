@@ -5,6 +5,8 @@
 //! given to no one, so `Promise` and every other global read off it stay
 //! what they are (three.js FileLoader's `fetch( req )`). A program object
 //! the native is called on, and every argument, still reach unknown code.
+//! A global function whose effects the runtime declares (`fetch`) runs its
+//! declaration, which names no receiver: node's `fetch` never reads `this`.
 use super::*;
 
 fn at<'a>(pf: &'a ProgramFacts, src: &str, marker: &str, key: &str) -> Vec<&'a SiteFacts> {
@@ -58,11 +60,12 @@ fn a_bare_global_call_gives_the_global_namespace_to_no_one() {
     );
 }
 
-/// Control: called as a method of a program object, the native is given
-/// that object as `this` (`o.f(u)`): it reaches unknown code, `p` with it.
+/// Control: called as a method of a program object, a native whose effects
+/// are not modeled (`structuredClone` read as a value) is given that object
+/// as `this` (`o.f(u)`): it reaches unknown code, `p` with it.
 #[test]
 fn a_program_receiver_of_the_native_still_escapes() {
-    let src = program("const o: any = { f: fetch, p }; return o.f(u);");
+    let src = program("const o: any = { f: globalThis.structuredClone, p }; return o.f(u);");
     let pf = facts(&src);
     assert!(
         !proven(&pf, &src, "// SITE", "x"),
@@ -75,6 +78,28 @@ fn a_program_receiver_of_the_native_still_escapes() {
 #[test]
 fn an_argument_of_the_bare_global_call_still_escapes() {
     let src = program("return fetch(u, { body: p } as any);");
+    let pf = facts(&src);
+    assert!(
+        !proven(&pf, &src, "// SITE", "x"),
+        "{}",
+        verdicts(&pf, &src, "// SITE", "x")
+    );
+}
+
+/// Control: a declared global function runs its declaration, which names
+/// no receiver (node's `fetch(input, init)` never reads `this`): a program
+/// object it is called on stays the program's, what `init.body` holds
+/// reaches unknown code (`escapes`).
+#[test]
+fn a_declared_global_function_gives_its_receiver_to_no_one() {
+    let src = program("const o: any = { f: fetch, p }; return o.f(u);");
+    let pf = facts(&src);
+    assert!(
+        proven(&pf, &src, "// SITE", "x"),
+        "{}",
+        verdicts(&pf, &src, "// SITE", "x")
+    );
+    let src = program("const o: any = { f: fetch }; return o.f(u, { body: p });");
     let pf = facts(&src);
     assert!(
         !proven(&pf, &src, "// SITE", "x"),

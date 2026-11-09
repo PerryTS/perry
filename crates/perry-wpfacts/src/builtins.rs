@@ -30,7 +30,10 @@ pub use undeclared::{builtin_function, native_may_be, realm_reads_store, undecla
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
-pub(crate) use effects::{declared_construct, declared_member, run_construct, run_native};
+pub(crate) use effects::{
+    declared_construct, declared_member, declared_static, run_construct, run_function, run_native,
+};
+
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
@@ -855,6 +858,18 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             return p.native.map(|identity| Native::Member { identity });
         }
     }
+    // The prototype of an object a declaration made
+    // (`AbortController.prototype`): a method whose effects it declares
+    // (`effects::declared_at`); any other member stays opaque.
+    if let Some(w) = what.filter(|w| w.ends_with(".prototype")) {
+        effects::declared_at(w, name)?;
+        let identity = m
+            .declarations
+            .named(w, m)
+            .and_then(|h| m.declarations.property(h, name, m))?
+            .native?;
+        return Some(Native::Member { identity });
+    }
     let holder = match what {
         Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
         // Every iterator kind resolves its members as `Iterator.prototype`'s.
@@ -938,7 +953,13 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
     match &m.toks[r as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => fam == Family::Array && what.is_none(),
-            TmplKind::BObj { what: w, .. } => what == Some(*w) && members::bobj_family(w) == fam,
+            // An object a declaration made has the kind `X.prototype`
+            // (`effects::Run::fresh`), its natives the owner `X`.
+            TmplKind::BObj { what: w, .. } => {
+                (what == Some(*w) || what.is_some() && w.strip_suffix(".prototype") == what)
+                    && members::bobj_family(w) == fam
+            }
+
             _ => false,
         },
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::ClassObj(_) => {
@@ -1488,7 +1509,9 @@ fn host_call(
 /// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
 fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     let c = m.calls[call as usize].clone();
-    let r = m.reason(&format!("argument of host {h:?}.write (kept by the stream)"));
+    let r = m.reason(&format!(
+        "argument of host {h:?}.write (kept by the stream)"
+    ));
     for &a in c.args.iter().chain(c.spread.iter()) {
         m.sink_node(a, r);
     }
@@ -1562,7 +1585,9 @@ fn ns_method_inner(
         // A stream method: the runtime's own, which hands its receiver to no
         // one; a listener it registers is called by the runtime (escaped).
         (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, "write") => {
-            host_call(m, ns, "write", crate::STAR_KEY, call, |m| stream_write(m, ns, call))
+            host_call(m, ns, "write", crate::STAR_KEY, call, |m| {
+                stream_write(m, ns, call)
+            })
         }
         (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, n) => {
             host_call(m, ns, n, n, call, |m| {
@@ -1652,6 +1677,22 @@ fn ns_method_inner(
             } else {
                 m.native_missing.push((g, a, NativeMiss::Call(g, call)));
                 ns_method(m, BuiltinNs::Other, Some(n), call);
+            }
+        }
+        // A global function the realm declares (`fetch`), while the global
+        // holds it: what its declaration says. A write under the name (now,
+        // or later in the solve: the replay) is the unknown call again.
+        (BuiltinNs::Other, n) if !m.unit_mode && effects::declared_function(n).is_some() => {
+            let e = effects::declared_function(n).expect("the guard found it");
+            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let a = m.atom(n);
+            if native_written(m, g, a) {
+                let prev = m.cur_this.replace(g);
+                unknown_method(m, call, &format!("argument of builtin Other.{n}"));
+                m.cur_this = prev;
+            } else {
+                m.native_missing.push((g, a, NativeMiss::Call(g, call)));
+                effects::run_function(m, e, call);
             }
         }
         (
