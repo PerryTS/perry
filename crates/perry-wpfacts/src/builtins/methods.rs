@@ -242,6 +242,63 @@ pub(super) fn undescribed_method(
     }
 }
 
+/// `name` called on `t`, an object a realm declaration made, of kind `born`
+/// (`members::realm_born`): `born` is its [[Prototype]] (W2a). The member
+/// is the first declaration's own property on the declared chain
+/// (`members::realm_chain_find`): a function whose effects the runtime
+/// declares runs them; a primitive data member is no function (a
+/// TypeError); any other member runs as an unknown method (`why`). A key no
+/// declaration on the chain has is absent, a TypeError: no instance of a
+/// declared prototype owns a callable property the realm leaves out (an
+/// error's own `stack`/`message`/`cause` are data). Found or absent, a key
+/// a store into ⊤ may have written onto the chain runs what was stored
+/// (`intrinsic_unwritten`, replayed when the write comes later).
+pub(super) fn realm_born_method(
+    m: &mut Model,
+    t: Tok,
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+    call: CallId,
+    why: &str,
+) {
+    use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
+    let a = m.atom(name);
+    let written = !intrinsic_unwritten(m, Family::Opaque, Some(born.name), a, NativeMiss::Call(t, call));
+    match members::realm_chain_find(born, name) {
+        members::RealmFind::Absent => {
+            if written {
+                unknown_method(m, call, why);
+            }
+        }
+        members::RealmFind::Own(p) => {
+            match p.value {
+                RealmOwnValue::Undefined
+                | RealmOwnValue::Null
+                | RealmOwnValue::Boolean
+                | RealmOwnValue::Number
+                | RealmOwnValue::String
+                | RealmOwnValue::Symbol => {}
+                RealmOwnValue::Reference(r) => match members::realm_entry(r) {
+                    Some(e)
+                        if matches!(e.kind, RealmKind::Function | RealmKind::Method)
+                            && !e.effects.is_empty()
+                            && effects::interpretable(e.effects) =>
+                    {
+                        effects::run_native(m, e, t, call)
+                    }
+                    _ => unknown_method(m, call, why),
+                },
+                RealmOwnValue::Accessor { .. } | RealmOwnValue::Other => {
+                    unknown_method(m, call, why)
+                }
+            }
+            if written {
+                unknown_method(m, call, &format!("argument of a written method {name}"));
+            }
+        }
+    }
+}
+
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
     if native_waits(m, NativeRecv::Own(t), key, call) {

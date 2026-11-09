@@ -249,6 +249,9 @@ pub struct RealmEntry {
     /// Its own properties (`RealmDeclaration::properties`), key and value
     /// kind, so a reader of the table needs no JSON.
     pub own: &'static [RealmOwn],
+    /// Its [[Prototype]] (`RealmDeclaration::prototype`): the declaration a
+    /// lookup past `own` continues on; `None` ends the chain (`null`).
+    pub proto: Option<&'static str>,
 }
 
 /// An own property of a declaration in the generated compiler table.
