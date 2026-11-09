@@ -36,6 +36,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_math_atan", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_atan2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_cos", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_exp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_expm1", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_log", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_log10", DOUBLE, &[DOUBLE]);

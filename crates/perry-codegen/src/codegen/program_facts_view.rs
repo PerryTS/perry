@@ -237,6 +237,19 @@ pub struct ElisionFacts {
     /// whose storage never moves (wpfacts `ModuleBindings::element_reads`,
     /// `expr::index_get::proven_array`).
     pub element_reads: std::collections::BTreeMap<u32, FactsElementRead>,
+    /// Method call byte offset → the call is a field element read of its
+    /// receiver (wpfacts `ModuleBindings::field_read_calls`, b1).
+    pub field_read_calls: std::collections::BTreeMap<u32, FactsFieldReadCall>,
+    /// P2: typed signatures by HIR function id (wpfacts
+    /// `ModuleBindings::signatures`, DESIGN-p2 §1).
+    pub signatures: std::collections::BTreeMap<u32, FactsSignature>,
+    /// P2: call byte offset -> the one same-module body (HIR function id) a
+    /// typed entry serves (wpfacts `typed_calls`, DESIGN-p2 §2).
+    pub typed_calls: std::collections::BTreeMap<u32, u32>,
+    /// Element reads (by `element_offset`) whose value the facts prove a
+    /// plain Number; `true` when it may also be `undefined` (wpfacts
+    /// `canonical_numbers`, P3 B1).
+    pub number_element_reads: std::collections::BTreeMap<u32, bool>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -292,6 +305,10 @@ impl ElisionFacts {
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
             && self.element_reads.is_empty()
+            && self.field_read_calls.is_empty()
+            && self.signatures.is_empty()
+            && self.typed_calls.is_empty()
+            && self.number_element_reads.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()
@@ -364,6 +381,32 @@ pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, b
 /// wpfacts `ElementRead`: every receiver of the read is a program Array of
 /// exactly `len` elements whose length, storage and element descriptors no
 /// operation of the program ever changes.
+/// b1: a method call proven to be `this.field[arg] ?? default` on its
+/// receiver, which can neither throw nor run user code (wpfacts
+/// P2: a function's typed signature (wpfacts `Signature`, DESIGN-p2 §1).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsSignature {
+    pub params: Vec<FactsRep>,
+    /// Each parameter's int interval (T1).
+    pub ranges: Vec<Option<(i64, i64)>>,
+    pub ret: FactsRep,
+    /// The class id of the one class every `this` holds (E2).
+    pub this_class: Option<u32>,
+}
+
+/// `field_read_calls`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsFieldReadCall {
+    pub field: String,
+    /// The argument that is the index.
+    pub index_arg: u32,
+    /// The Number default of `?? L`, as f64 bits.
+    pub default: Option<u64>,
+    /// The method body's `IndexGet::element_offset` and `this.f` offset.
+    pub element_offset: u32,
+    pub field_offset: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FactsElementRead {
     pub len: u32,

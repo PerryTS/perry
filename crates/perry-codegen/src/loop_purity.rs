@@ -232,6 +232,8 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
         Expr::Compare { .. } | Expr::Binary { .. } | Expr::Unary { .. } | Expr::Update { .. } => {
             is_inert(e)
         }
+        // c1: a Math intrinsic over proven Numbers.
+        e if crate::expr::math_intrinsic_operands(e).is_some() => is_inert(e),
         Expr::Conditional {
             condition,
             then_expr,
@@ -273,6 +275,19 @@ mod allocation_tests {
             Expr::Compare { left, right, .. } | Expr::Binary { left, right, .. } => {
                 stub_inert(left) && stub_inert(right)
             }
+            // c1: mirrors `expr_is_inert_primitive`'s Math-intrinsic and
+            // conditional arms (a stub-inert operand stands for a proven Number).
+            e if crate::expr::math_intrinsic_operands(e).is_some() => {
+                crate::expr::math_intrinsic_operands(e)
+                    .unwrap()
+                    .iter()
+                    .all(stub_inert)
+            }
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => stub_inert(condition) && stub_inert(then_expr) && stub_inert(else_expr),
             _ => false,
         }
     }

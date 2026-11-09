@@ -168,6 +168,10 @@ pub(crate) unsafe fn intl_subclass_super(
         let dst = (this_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if dst >= 0x10000 {
             crate::object::js_object_copy_own_fields(dst, instance);
+            super::slot_record::share_slot_record_of(
+                dst as *mut crate::object::ObjectHeader,
+                instance,
+            );
         }
     }
     true
@@ -217,7 +221,7 @@ pub(crate) fn intl_instanceof(value: f64, type_ref: f64) -> Option<bool> {
     }
     // Brand arm: subclass instances re-homed by `intl_subclass_super`.
     if let Some(obj) = object_ptr_from_value(value) {
-        if get_string_field(obj, KEY_KIND).as_deref() == Some(expected_kind) {
+        if get_string_field(super::slot_holder(obj), KEY_KIND).as_deref() == Some(expected_kind) {
             return Some(true);
         }
     }

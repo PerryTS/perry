@@ -66,6 +66,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
     let (root, steps) = match (name, inner) {
         ("this", None) => (Value::String("this".into()), Vec::new()),
         ("result", None) => (Value::String("result".into()), Vec::new()),
+        ("callee", None) => (Value::String("callee".into()), Vec::new()),
         ("arg" | "rest" | "returned", Some(_)) => {
             (tagged(name, index(name, inner)?), Vec::new())
         }
@@ -75,10 +76,10 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
             steps.push(Value::String("elems".into()));
             (base.remove("root").unwrap(), steps)
         }
-        ("field", Some(inner)) => {
+        (step @ ("field" | "islot"), Some(inner)) => {
             let parts = info::split(inner, ",");
             let [of, key] = parts.as_slice() else {
-                return Err("field(slot, key) takes a slot and a key".into());
+                return Err(format!("{step}(slot, key) takes a slot and a key"));
             };
             let key = match key {
                 [t] => t.string.clone().unwrap_or_else(|| t.text.to_owned()),
@@ -89,12 +90,13 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
             }
             let Value::Object(mut base) = slot(of)? else { unreachable!() };
             let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
-            steps.push(tagged("field", Value::String(key)));
+            let tag = if step == "field" { "field" } else { "internal" };
+            steps.push(tagged(tag, Value::String(key)));
             (base.remove("root").unwrap(), steps)
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, arg(N), rest(N), returned(N), elems(slot), field(slot, key))",
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), field(slot, key), islot(slot, name))",
                 info::text(ts)
             ))
         }
@@ -156,13 +158,14 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
             Ok(tagged("prim", Value::Array(kinds)))
         }
         ("fresh", Some(inner)) => {
-            let usage = "fresh(Proto, elems = [operand, ...], fields = {key: operand, ...})";
+            let usage = "fresh(Proto, elems = [operand, ...], fields = {key: operand, ...}, slots = {name: operand, ...})";
             let parts = info::split(inner, ",");
             let [proto, rest @ ..] = parts.as_slice() else {
                 return Err(format!("{usage} takes a prototype"));
             };
             let mut elems: Option<Vec<Value>> = None;
             let mut fields: Option<Vec<Value>> = None;
+            let mut slots: Option<Vec<Value>> = None;
             for part in rest {
                 match part.first().map(|t| t.text) {
                     Some("elems") if elems.is_none() => {
@@ -176,15 +179,18 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
                                 .collect::<Result<Vec<_>, _>>()?
                         });
                     }
-                    Some("fields") if fields.is_none() => {
-                        let block = match keyword("fields", part)? {
+                    Some(which @ ("fields" | "slots"))
+                        if (which == "fields" && fields.is_none())
+                            || (which == "slots" && slots.is_none()) =>
+                    {
+                        let block = match keyword(which, part)? {
                             [open, inner @ .., close] if open.text == "{" && close.text == "}" => {
                                 inner
                             }
                             _ => {
-                                return Err(
-                                    "fresh fields must be a {key: operand, ...} block".into()
-                                )
+                                return Err(format!(
+                                    "fresh {which} must be a {{key: operand, ...}} block"
+                                ))
                             }
                         };
                         let mut keys: Vec<String> = Vec::new();
@@ -200,7 +206,7 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
                             }
                             let key = key.text.trim_matches('"').to_string();
                             if keys.contains(&key) {
-                                return Err(format!("fresh field `{key}` declared twice"));
+                                return Err(format!("fresh {which} `{key}` declared twice"));
                             }
                             list.push(object(vec![
                                 ("key", Value::String(key.clone())),
@@ -208,24 +214,55 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
                             ]));
                             keys.push(key);
                         }
-                        fields = Some(list);
+                        if which == "fields" {
+                            fields = Some(list);
+                        } else {
+                            slots = Some(list);
+                        }
                     }
                     _ => return Err(format!("{usage}: unexpected `{}`", info::text(part))),
                 }
             }
+            // No internal slots: the form a declaration without them always had.
+            let mut parts = vec![
+                ("proto", Value::String(super::facts::path(proto)?)),
+                ("elems", Value::Array(elems.unwrap_or_default())),
+                ("fields", Value::Array(fields.unwrap_or_default())),
+            ];
+            if let Some(slots) = slots.filter(|s| !s.is_empty()) {
+                parts.push(("slots", Value::Array(slots)));
+            }
+            Ok(tagged("fresh", object(parts)))
+        }
+        ("promise", Some(inner)) => {
+            let usage = "promise(operand | .., reject = operand | ..)";
+            let members = |v: Value| match v {
+                Value::Object(mut o) if o.contains_key("union") => match o.remove("union") {
+                    Some(Value::Array(us)) => us,
+                    _ => unreachable!(),
+                },
+                v => vec![v],
+            };
+            let parts = info::split(inner, ",");
+            let (value, reject) = match parts.as_slice() {
+                [v] => (operand(v)?, None),
+                [v, r] if r.first().map(|t| t.text) == Some("reject") => {
+                    (operand(v)?, Some(operand(keyword("reject", r)?)?))
+                }
+                _ => return Err(format!("{usage}: malformed `{}`", info::text(inner))),
+            };
             Ok(tagged(
-                "fresh",
+                "promise",
                 object(vec![
-                    ("proto", Value::String(super::facts::path(proto)?)),
-                    ("elems", Value::Array(elems.unwrap_or_default())),
-                    ("fields", Value::Array(fields.unwrap_or_default())),
+                    ("value", Value::Array(members(value))),
+                    (
+                        "reject",
+                        Value::Array(reject.map(members).unwrap_or_default()),
+                    ),
                 ]),
             ))
         }
-        ("native", Some(inner)) => Ok(tagged(
-            "native",
-            Value::String(super::facts::path(inner)?),
-        )),
+        ("native", Some(inner)) => Ok(tagged("native", Value::String(super::facts::path(inner)?))),
         ("bound", None) => Ok(Value::String("bound".into())),
         ("species", Some(inner)) => {
             let parts = info::split(inner, ",");
@@ -267,8 +304,11 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
             }
             tagged("reads", Value::Array(read))
         }
+        "escapes" => tagged("escapes", slot(inner()?)?),
+        "async_resource" => tagged("async_resource", slot(inner()?)?),
         "coerce" => {
             let parts = info::split(inner()?, ",");
+
             let [of, protocol] = parts.as_slice() else {
                 return Err("coerce(slot, Protocol) takes a slot and a protocol".into());
             };
@@ -561,7 +601,6 @@ mod tests {
         }
     }
 
-
     /// `fresh(.., fields = {..})` and `native(..)`: own data fields with
     /// their values, the host function a body makes.
     #[test]
@@ -575,13 +614,84 @@ mod tests {
             r#"[{"returns":{"fresh":{"elems":[{"prim":["str"]}],"fields":[],"proto":"Array.prototype"}}}]"#
         );
         for (bad, why) in [
-            ("{ returns(fresh(Object.prototype, fields = {a: prim(num), a: prim(str)})) }", "declared twice"),
-            ("{ returns(fresh(Object.prototype, fields = {a prim(num)})) }", "malformed fresh field"),
-            ("{ returns(fresh(Object.prototype, fields = [a])) }", "fields must be"),
-            ("{ returns(fresh(Object.prototype, slots = [a])) }", "unexpected"),
+            (
+                "{ returns(fresh(Object.prototype, fields = {a: prim(num), a: prim(str)})) }",
+                "declared twice",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, fields = {a prim(num)})) }",
+                "malformed fresh field",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, fields = [a])) }",
+                "fields must be",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, slots = [a])) }",
+                "slots must be",
+            ),
         ] {
             let err = parse_text(bad).unwrap_err();
             assert!(err.contains(why), "{bad}: {err}");
+        }
+    }
+
+    /// The W1 forms (fetch, AbortController/AbortSignal): `escapes(slot)`,
+    /// an internal slot step `islot(slot, name)`, a fresh object's internal
+    /// `slots`, a `promise(value, reject = ..)` operand, and a call of a
+    /// function the result holds (`calls(islot(result, k), this = result)`).
+    #[test]
+    fn escapes_islot_slots_and_promise_parse() {
+        for (text, json) in [
+            (
+                "{ escapes(field(arg(1), body)) }",
+                r#"[{"escapes":{"root":{"arg":1},"steps":[{"field":"body"}]}}]"#,
+            ),
+            (
+                "{ stores(arg(0) -> islot(islot(this, signal), reason)) }",
+                r#"[{"stores":{"dst":{"root":"this","steps":[{"internal":"signal"},{"internal":"reason"}]},"src":{"root":{"arg":0},"steps":[]}}}]"#,
+            ),
+            (
+                "{ returns(islot(this, reason) | prim(undefined)) }",
+                r#"[{"returns":{"union":[{"slot":{"root":"this","steps":[{"internal":"reason"}]}},{"prim":["undefined"]}]}}]"#,
+            ),
+            (
+                "{ returns(fresh(AbortSignal.prototype, slots = {reason: arg(0)})) }",
+                r#"[{"returns":{"fresh":{"elems":[],"fields":[],"proto":"AbortSignal.prototype","slots":[{"key":"reason","value":{"slot":{"root":{"arg":0},"steps":[]}}}]}}}]"#,
+            ),
+            (
+                "{ returns(promise(fresh(Response.prototype), reject = fresh(TypeError.prototype) | islot(field(arg(1), signal), reason))) }",
+                r#"[{"returns":{"promise":{"reject":[{"fresh":{"elems":[],"fields":[],"proto":"TypeError.prototype"}},{"slot":{"root":{"arg":1},"steps":[{"field":"signal"},{"internal":"reason"}]}}],"value":[{"fresh":{"elems":[],"fields":[],"proto":"Response.prototype"}}]}}}]"#,
+            ),
+            (
+                "{ returns(promise(prim(undefined))) }",
+                r#"[{"returns":{"promise":{"reject":[],"value":[{"prim":["undefined"]}]}}}]"#,
+            ),
+            (
+                "{ calls(islot(result, onabort), this = result, args = [fresh(Event.prototype)]) }",
+                r#"[{"calls":{"args":[{"fresh":{"elems":[],"fields":[],"proto":"Event.prototype"}}],"callee":{"root":"result","steps":[{"internal":"onabort"}]},"this":{"slot":{"root":"result","steps":[]}}}}]"#,
+            ),
+        ] {
+            assert_eq!(parse_text(text).unwrap(), json, "{text}");
+        }
+        for (bad, why) in [
+            ("{ escapes() }", "empty effect term"),
+            ("{ escapes(arg(0), arg(1)) }", "arg(N)"),
+            (
+                "{ returns(islot(this)) }",
+                "islot(slot, key) takes a slot and a key",
+            ),
+            (
+                "{ returns(promise(reject = prim(undefined))) }",
+                "malformed effect term",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, slots = {a: prim(num), a: prim(str)})) }",
+                "declared twice",
+            ),
+        ] {
+            let e = parse_text(bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
         }
     }
 }

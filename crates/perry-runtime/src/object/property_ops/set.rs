@@ -531,10 +531,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
     let target = f64::from_bits(target_handle.get_nanbox_u64());
     // Class constructors have an immutable own prototype even though their
     // ClassRef representation has no heap address or descriptor side table.
-    if key_name == "prototype"
-        && crate::object::class_ref_id(target).is_some()
-        && crate::object::class_prototype_ref_id(target).is_none()
-    {
+    if key_name == "prototype" && crate::object::class_ref_id(target).is_some() {
         return Some(OwnSetDescriptor::Data { writable: false });
     }
     let obj_ptr = extract_pointer(target.to_bits()) as usize;
@@ -614,6 +611,15 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
             // property. Preserve its attributes when the first operation is
             // an assignment, before any read materializes the default object.
             if key_name == "prototype" && crate::object::function_would_have_own_prototype(target) {
+                // An unborn lazy builtin family's constructor: its birth gives
+                // `prototype` the builtin's attributes.
+                if unsafe { crate::object::birth_unborn_family_of(obj_ptr) } {
+                    if let Some(attrs) = crate::object::get_property_attrs(obj_ptr, &key_name) {
+                        return Some(OwnSetDescriptor::Data {
+                            writable: attrs.writable(),
+                        });
+                    }
+                }
                 crate::object::set_builtin_property_attrs(
                     obj_ptr,
                     key_name.clone(),

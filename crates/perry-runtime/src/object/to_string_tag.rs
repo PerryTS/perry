@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod fetch_handle_tests;
+
 pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     let id = stream_handle_id(value)?;
     let kind_probe = stream_handle_kind_probe()?;
@@ -12,6 +15,49 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
         5 => Some("TransformStream"),
         _ => None,
     }
+}
+
+/// The Web Fetch interface a registry handle id is an instance of, if any.
+pub(crate) fn fetch_handle_interface_name(addr: usize) -> Option<&'static str> {
+    let probe = crate::object::fetch_handle_kind_probe()?;
+    match unsafe { probe(addr) } {
+        1 => Some("Response"),
+        2 => Some("Request"),
+        3 => Some("Headers"),
+        4 => Some("Blob"),
+        5 => Some("File"),
+        6 => Some("FormData"),
+        _ => None,
+    }
+}
+
+/// Own properties shadow the actual prototype, even when their value is undefined.
+pub(crate) fn fetch_handle_constructor_value(addr: usize) -> Option<crate::value::JSValue> {
+    let name = fetch_handle_interface_name(addr)?;
+    let key = b"constructor";
+    if let Some(value) = unsafe {
+        super::handle_expando::handle_own_property_get(addr as i64, key.as_ptr(), key.len())
+    } {
+        return Some(crate::value::JSValue::from_bits(value.to_bits()));
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prototype = super::prototype_chain::object_static_prototype(addr)
+        .map(f64::from_bits)
+        .unwrap_or_else(|| super::builtin_prototype_value(name));
+    let prototype = scope.root_nanbox_f64(prototype);
+    let prototype_value = crate::value::JSValue::from_bits(prototype.get_nanbox_u64());
+    if prototype_value.is_null() || prototype_value.is_undefined() {
+        return Some(crate::value::JSValue::undefined());
+    }
+    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let key = crate::value::js_nanbox_string(key as i64);
+    let receiver = f64::from_bits(crate::value::HANDLE_TAG | addr as u64);
+    let value = crate::proxy::js_reflect_get_with_explicit_receiver(
+        prototype.get_nanbox_f64(),
+        key,
+        receiver,
+    );
+    Some(crate::value::JSValue::from_bits(value.to_bits()))
 }
 
 /// Remaining Web built-ins without a recorded prototype chain. Migrated
@@ -26,16 +72,8 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     if top16 == (crate::value::HANDLE_TAG >> 48) {
         // Web Fetch handle family — one shared id counter, disjoint registries
         // (see `js_fetch_handle_kind`'s own doc comment).
-        if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-            match unsafe { probe(addr) } {
-                1 => return Some("Response"),
-                2 => return Some("Request"),
-                3 => return Some("Headers"),
-                4 => return Some("Blob"),
-                5 => return Some("File"),
-                6 => return Some("FormData"),
-                _ => {}
-            }
+        if let Some(name) = fetch_handle_interface_name(addr) {
+            return Some(name);
         }
         // #340/#341: TextEncoder/TextDecoder used to be sentinel ids handled
         // here. They are ordinary objects linked to their prototypes now, so

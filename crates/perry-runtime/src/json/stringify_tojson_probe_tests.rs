@@ -89,7 +89,7 @@ fn json_tojson_key_probe_rejects_inline_and_nonstring_values_without_allocation(
         for value in [
             JSValue::null(),
             JSValue::undefined(),
-            JSValue::int32(42),
+            JSValue::number(f64::from(42)),
             JSValue::bool(true),
             JSValue::from_bits(crate::value::TAG_HOLE),
             JSValue::string_ptr(std::ptr::null_mut()),

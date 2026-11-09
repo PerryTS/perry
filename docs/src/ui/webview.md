@@ -116,13 +116,26 @@ at logout, or between accounts:
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `url` | `string` | — | Initial URL. Required. |
-| `allowedDomains` | `string[]` | `[]` | Hard host allowlist (exact OR subdomain). Empty / omitted = no host restriction. |
+| `allowedDomains` | `string[]` | `[]` | Navigation host filter (exact OR subdomain). Empty / omitted = no host restriction. |
 | `userAgent` | `string` | platform WebKit UA | Custom UA header. |
 | `ephemeral` | `boolean` | `true` | Cookie / storage isolation. See the table above. |
 | `onShouldNavigate` | `(url) => boolean \| void` | — | **Sync** intercept. Return `false` to cancel. |
 | `onLoaded` | `(url) => void` | — | Fires when a page finishes loading. |
 | `onError` | `(code, message) => void` | — | DNS / TLS / HTTP / cancellation. |
 | `width`, `height` | `number` | layout-engine controlled | Initial pixel bounds; layout engine still has final say. |
+
+Native navigation-decision callbacks share one destination-host policy. It
+parses the URL rather than interpreting credentials or path text as the host.
+Domain names are normalized for case and IDNA; IPv4 and bracketed IPv6 entries
+match addresses exactly. Entries are hosts, without schemes or ports. A URL
+containing credentials is checked against its actual destination host.
+For `blob:` URLs, the filter checks the embedded HTTP(S) origin; opaque,
+nested-blob and disallowed origins are rejected when the list is non-empty.
+
+This filter is not a network sandbox. It applies when the native engine
+delivers a navigation-decision callback; constructor ordering and
+platform-specific callback coverage are separate concerns. Use trusted content
+and do not rely on this option to confine arbitrary untrusted web code.
 
 ## Media capture on macOS
 
@@ -133,8 +146,11 @@ macOS consent and the host app's required usage descriptions still apply.
 A host built with App Sandbox also needs `com.apple.security.device.camera` and
 `com.apple.security.device.audio-input` in its signature, because capture is
 denied before the consent prompt without them. `perry publish` signs with the
-`[macos].entitlements` list from `perry.toml`; a bundle from `perry compile` or
-`perry run` is signed outside that path, so pass both to `codesign` yourself.
+`[macos].entitlements` list from `perry.toml`; `perry compile` writes
+`app.entitlements` next to the bundle and leaves signing to you; `perry run`
+launches and ad-hoc signs the app itself, before any signing you would add.
+Testing a sandboxed capture therefore means `perry compile`, your own `codesign`
+with both entitlements, and then launching that bundle directly.
 
 WebKit and macOS may reuse remembered decisions, so a request does not always
 show a new prompt. Perry does not expose a custom media-permission callback.

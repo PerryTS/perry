@@ -183,6 +183,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     crate::wasi_hook_slots::install();
     js_runtime_install_messaging();
     js_runtime_install_event_target();
+    js_runtime_install_navigator();
     js_runtime_install_typedarray();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
@@ -585,6 +586,13 @@ pub extern "C" fn js_runtime_install_messaging() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_event_target() {
     crate::event_target_hook_slots::install();
+}
+
+/// `Navigator.prototype`'s getters (`navigator.rs`), for a program that
+/// reaches navigator.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_navigator() {
+    crate::navigator::PROTOTYPE_INSTALL.set(crate::navigator::install_prototype);
 }
 
 #[no_mangle]

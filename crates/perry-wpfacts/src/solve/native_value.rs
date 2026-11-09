@@ -24,7 +24,7 @@ impl Model {
     /// call's own `this`). `false`: not a named native, or a receiver its
     /// model does not cover: the caller runs the unknown callee's arm.
     pub(super) fn native_call(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
-        let TokKind::BuiltinFn(Native::Member { identity }) = self.toks[t as usize] else {
+        let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
             return false;
         };
         // A module member whose effects the runtime declares at the body
@@ -32,13 +32,24 @@ impl Model {
         if let Some(e) = builtins::declared_member(identity) {
             if self.bind_done.insert((call, t, u32::MAX - 7)) {
                 self.diagnostic_callee(call, t);
-                self.with_b(|m| builtins::run_native(m, e, t, call));
+                self.with_b(|m| builtins::run_member(m, e, t, call));
             }
             return true;
         }
         if builtins::native_namespace_call(self, t, call, this_tok) {
             return true;
         }
+        // A static of a realm constructor whose effects the runtime
+        // declares without naming `this` (`AbortSignal.any`): the
+        // declaration runs, whatever `this`.
+        if let Some(e) = builtins::declared_static(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_function(m, e, call));
+            }
+            return true;
+        }
+
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
             return false;
         };

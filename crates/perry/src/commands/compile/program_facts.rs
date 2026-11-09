@@ -532,6 +532,49 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
         out.number_calls.extend(mb.number_calls.iter().copied());
+        out.number_element_reads
+            .extend(mb.number_element_reads.iter().copied());
+        let rep = |r: &perry_wpfacts::Rep| match r {
+            perry_wpfacts::Rep::Boxed => perry_codegen::FactsRep::Boxed,
+            perry_wpfacts::Rep::F64 => perry_codegen::FactsRep::F64,
+            perry_wpfacts::Rep::I32 => perry_codegen::FactsRep::I32,
+        };
+        for (id, sig) in &mb.signatures {
+            out.signatures.insert(
+                *id,
+                perry_codegen::FactsSignature {
+                    params: sig.params.iter().map(rep).collect(),
+                    ranges: sig.ranges.clone(),
+                    ret: rep(&sig.ret),
+                    this_class: sig.this_class,
+                },
+            );
+        }
+        // Same-module typed calls only (DESIGN-p2 rev 2.2 §2).
+        let module_index = pf.module_paths.iter().position(|p| p == path);
+        for (offset, (callee_module, func_id)) in &mb.typed_calls {
+            if Some(*callee_module as usize) == module_index {
+                out.typed_calls.insert(*offset, *func_id);
+            }
+        }
+        for (offset, c) in &mb.field_read_calls {
+            let default = match &c.default {
+                None => None,
+                Some(perry_wpfacts::FieldReadDefault::Number(bits)) => Some(*bits),
+                // Codegen applies a Number default only.
+                Some(_) => continue,
+            };
+            out.field_read_calls.insert(
+                *offset,
+                perry_codegen::FactsFieldReadCall {
+                    field: c.field.clone(),
+                    index_arg: c.index_arg,
+                    default,
+                    element_offset: c.element_offset,
+                    field_offset: c.field_offset,
+                },
+            );
+        }
         if element_reads_enabled() {
             for (offset, r) in &mb.element_reads {
                 out.element_reads.insert(

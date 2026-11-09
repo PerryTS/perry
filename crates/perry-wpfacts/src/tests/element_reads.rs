@@ -136,3 +136,23 @@ fn a_key_outside_the_length_keeps_its_bound() {
         }
     );
 }
+
+#[test]
+fn a_birth_the_runtime_backs_sparsely_is_not_proven() {
+    // `new Array(k)` past `MAX_FRESH_DENSE_ARRAY_LENGTH` has length `k` over
+    // an empty store: no slot is addressable, so the read keeps its tests.
+    // The densely backed bound itself is still proven.
+    let read = |k: u32| {
+        let src = format!(
+            "const a = new Array({k});\n\
+             let s = 0;\n\
+             for (let i = 0; i < a.length; i++) if (a[i] !== undefined) s++;\n\
+             console.log(s);"
+        );
+        reads(&src, "a[i]")
+    };
+    let max = perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH;
+    assert_eq!(read(max).map(|r| r.len), Some(max));
+    assert_eq!(read(max + 1), None);
+    assert_eq!(read(2_000_000), None);
+}

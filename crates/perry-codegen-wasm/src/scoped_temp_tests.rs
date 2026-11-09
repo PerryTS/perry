@@ -7,7 +7,11 @@ fn run_module(module: Module) -> String {
 }
 
 fn run_module_after(module: Module, after: &str) -> String {
-    let output = emit::compile_to_wasm_with_async(&[("scoped".into(), module)]);
+    run_modules_after(&[("scoped".into(), module)], after)
+}
+
+fn run_modules_after(modules: &[(String, Module)], after: &str) -> String {
+    let output = emit::compile_to_wasm_with_async(modules);
     let b64 = BASE64.encode(output.wasm_bytes);
     let script = format!(
         r#"
@@ -223,4 +227,702 @@ console.log((await Promise.all(pending)).join(','));
 "#,
     );
     assert_eq!(output, "2\n7,9");
+}
+
+#[test]
+fn host_interop_extracted_functions_and_perry_closures() {
+    assert_eq!(
+        run_ts(
+            r#"
+const parse = globalThis.parseInt;
+console.log(parse('42'));
+const identity = (v: number) => v + 1;
+console.log(identity(4));
+"#
+        ),
+        "42\n5"
+    );
+}
+
+#[test]
+fn host_interop_callback_arity_and_array_fallback() {
+    assert_eq!(
+        run_ts(
+            r#"
+async function make(): Promise<number> { return 41; }
+make().then((v, omitted) => { console.log(v + 1); console.log(omitted); });
+const xs: any = [1, 2, 3];
+console.log(xs.findLast((v: number) => v < 3));
+"#
+        ),
+        "2\n42\nundefined"
+    );
+}
+
+#[test]
+fn host_interop_receiver_identity_getters_and_ui_dispatch() {
+    assert_eq!(
+        run_ts_after(
+            "",
+            r#"
+const assert = require('node:assert/strict');
+const originalGlobal = globalThis;
+const globalBits = __jsValueToBits(originalGlobal);
+for (let i = 0; i < 100; i++) assert.equal(__jsValueToBits(originalGlobal), globalBits);
+assert.equal(__classDispatch(new Headers({'x-test': 'value'}), 'get', ['x-test']), 'value');
+let reads = 0;
+const obj = {value: 7, get read() { reads++; return reads === 1 ? function() { return this.value; } : undefined; }};
+assert.equal(__classDispatch(obj, 'read', []), 7);
+assert.equal(reads, 1);
+const state = uiStateCreate(9);
+assert.equal(__classDispatch(state, 'get', []), 9);
+const native = v => v + 1;
+assert.equal(__classDispatch([1, 2], 'findLast', [native]), 2);
+console.log('ok');
+"#
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn host_interop_callback_identity_for_listener_removal() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const callback = () => { console.log('unexpected callback'); };
+globalThis.savedCallback = callback;
+"#,
+            r#"
+const assert = require('node:assert/strict');
+const target = new EventTarget();
+__classDispatch(target, 'addEventListener', ['test', globalThis.savedCallback]);
+__classDispatch(target, 'removeEventListener', ['test', globalThis.savedCallback]);
+assert.equal(target.dispatchEvent(new Event('test')), true);
+console.log('removed');
+"#
+        ),
+        "removed"
+    );
+}
+
+#[test]
+fn host_interop_bare_call_ignores_replaced_global_this_property() {
+    assert_eq!(
+        run_ts(
+            r#"
+globalThis.globalThis = {fetch: () => { console.log('wrong receiver'); }};
+fetch('data:text/plain,hello').then((r) => r.text()).then((text) => { console.log(text); });
+"#
+        ),
+        "hello"
+    );
+}
+
+#[test]
+fn host_interop_native_exceptions_reach_perry_catch() {
+    assert_eq!(
+        run_ts(
+            r#"
+const decode = globalThis.decodeURIComponent;
+try { decode('%'); }
+catch (error) { console.log('caught'); }
+console.log(decode('ok'));
+"#
+        ),
+        "caught\nok"
+    );
+    assert_eq!(
+        run_ts_after(
+            "",
+            r#"
+const assert = require('node:assert/strict');
+for (const name of ['closure_call_0', 'closure_call_1', 'closure_call_2', 'closure_call_3', 'closure_call_spread']) {
+  const error = new Error(name);
+  const fail = () => { throw error; };
+  const args = name.endsWith('spread') ? [[1, 2, 3, 4]] : [1, 2, 3];
+  __memDispatch.try_start();
+  assert.equal(__memDispatch[name](fail, ...args), undefined);
+  assert.equal(__memDispatch.has_exception(), 1);
+  assert.equal(__memDispatch.get_exception(), error);
+  __memDispatch.try_end();
+  assert.throws(() => __memDispatch[name](fail, ...args), thrown => thrown === error);
+}
+console.log('ok');
+"#
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn host_interop_worker_reuses_reference_handles() {
+    let bootstrap = WASM_RUNTIME_JS
+        .split("const WORKER_BOOTSTRAP = `")
+        .nth(1)
+        .unwrap()
+        .split("`;")
+        .next()
+        .unwrap();
+    let source = BASE64.encode(bootstrap);
+    assert_eq!(
+        run_ts_after(
+            "",
+            &format!(
+                r#"
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = Buffer.from('{source}', 'base64').toString();
+vm.runInNewContext(source + `
+const object = {{value: 7}};
+const array = [object];
+const fn = () => {{}};
+for (const value of [object, array, fn]) {{
+  const id = allocHandle(value);
+  for (let i = 0; i < 100; i++) assert.equal(allocHandle(value), id);
+  assert.equal(handleStore.get(id), value);
+}}
+assert.notEqual(allocHandle({{}}), allocHandle({{}}));
+assert.equal(__bitsToJsValue(__jsValueToBits(object)), object);
+`, {{self: {{}}, assert}});
+console.log('ok');
+"#
+            )
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn host_interop_host_methods_enter_perry_catch() {
+    assert_eq!(
+        run_ts(
+            r#"
+const json: any = globalThis.JSON;
+try { json.parse('{'); }
+catch (error) { console.log('method caught'); }
+console.log(json.parse('7'));
+"#
+        ),
+        "method caught\n7"
+    );
+}
+
+#[test]
+fn host_interop_returned_calls_enter_catch_and_release_try_state() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+function read() {
+  const decode = globalThis.decodeURIComponent;
+  try { return decode('%'); }
+  catch (error) { return 'caught'; }
+}
+console.log(read());
+function success() {
+  const decode = globalThis.decodeURIComponent;
+  try { return decode('ok'); }
+  catch (error) { return 'unexpected'; }
+}
+console.log(success());
+"#,
+            r#"
+const assert = require('node:assert/strict');
+assert.equal(tryDepth, 0);
+assert.equal(__memDispatch.has_exception(), 0);
+"#
+        ),
+        "caught\nok"
+    );
+}
+
+#[test]
+fn host_interop_null_exception_is_not_lost() {
+    assert_eq!(
+        run_ts(
+            r#"
+const create = globalThis.Function;
+const fail = create('throw null');
+try { fail(); }
+catch (error) { console.log(error === null); }
+"#
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn host_interop_catch_precedes_expression_effects_and_preserves_nesting() {
+    assert_eq!(run_ts_after(r#"
+const decode = globalThis.decodeURIComponent;
+let calls = 0;
+function later() { calls++; return 'later'; }
+function join(a: any, b: any) { return a + b; }
+try { join('prefix' + decode('%'), later()); }
+catch (error) { console.log('arguments caught'); }
+console.log(calls);
+try { const value = true ? decode('%') : later(); console.log(value); }
+catch (error) { console.log('conditional caught'); }
+try { const value = true && decode('%'); console.log(value); }
+catch (error) { console.log('logical caught'); }
+try {
+  try { decode('%'); }
+  catch (error) { console.log('inner caught'); }
+  console.log('outer continued');
+} catch (error) { console.log('unexpected outer catch'); }
+finally { console.log('finally'); }
+console.log(decode('ok'));
+"#, r#"
+const assert = require('node:assert/strict');
+assert.equal(tryDepth, 0);
+assert.equal(__memDispatch.has_exception(), 0);
+"#), "arguments caught\n0\nconditional caught\nlogical caught\ninner caught\nouter continued\nfinally\nok");
+}
+
+#[test]
+fn host_interop_caught_nullish_values_and_method_receivers_are_preserved() {
+    assert_eq!(
+        run_ts(
+            r#"
+const create = globalThis.Function;
+const fail = create('throw undefined');
+try { fail(); }
+catch (error) { console.log(error === undefined); }
+const make = create('return { value: 7, read() { if (this.value !== 7) throw null; throw this.value; } }');
+const object = make();
+try { object.read(); }
+catch (error) { console.log(error); }
+const getter = create('return { get read() { throw null; } }')();
+try { getter.read(); }
+catch (error) { console.log(error === null); }
+"#
+        ),
+        "true\n7\ntrue"
+    );
+}
+
+#[test]
+fn host_interop_nested_calls_and_loops_preserve_exception_frames() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const decode = globalThis.decodeURIComponent;
+let effects = 0;
+function later() { effects++; return 10; }
+const maker = globalThis.Function;
+const host = maker('return {sum(a,b,c){return a+b+c}}')();
+for (let i = 0; i < 3; i++) {
+  try { host.sum(1, decode('%'), later()); }
+  catch (error) { console.log(i); }
+}
+console.log(effects);
+console.log(host.sum(1,2,3));
+try { while (true) { if (true) { decode('%'); } console.log('wrong'); } }
+catch (error) { console.log('loop caught'); }
+function nestedReturn() {
+ try { try { return decode('good'); } catch (error) { return 'bad'; } }
+ catch (error) { return 'outer bad'; }
+}
+console.log(nestedReturn());
+try { try { decode('%'); } catch (error) { decode('%'); } }
+catch (error) { console.log('outer caught'); }
+console.log(host.sum(4,5,6));
+"#,
+            r#"
+const assert = require('node:assert/strict');
+assert.equal(tryDepth,0);
+assert.equal(__memDispatch.has_exception(),0);
+"#
+        ),
+        "0\n1\n2\n0\n6\nloop caught\ngood\nouter caught\n15"
+    );
+}
+
+#[test]
+fn host_interop_global_getters_and_unhandled_callees_stop_at_catch() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const create = globalThis.Function;
+const install = create('Object.defineProperty(globalThis, "failingGlobal", {get() { throw 9; }, configurable: true})');
+install();
+const configure = create('const d = Object.getOwnPropertyDescriptor(globalThis, "Promise"); Object.defineProperty(globalThis, "Promise", {get() { throw 10; }, configurable: true}); return () => Object.defineProperty(globalThis, "Promise", d)');
+const restore = configure();
+try { const P = Promise; console.log(P); }
+catch (error) { console.log(error); }
+restore();
+try { console.log(globalThis.failingGlobal); console.log('wrong getter'); }
+catch (error) { console.log(error); }
+const decode = globalThis.decodeURIComponent;
+function helper() { decode('%'); console.log('wrong helper'); }
+try { helper(); console.log('wrong caller'); }
+catch (error) { console.log('helper caught'); }
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "10\n9\nhelper caught"
+    );
+}
+
+#[test]
+fn host_interop_explicit_throw_and_loop_exits_release_try_scopes() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+function throws() {
+  try { throw 7; }
+  catch (error) { return error; }
+}
+console.log(throws());
+for (let i = 0; i < 3; i++) {
+  try { if (i === 0) continue; break; }
+  finally { console.log('cleanup'); }
+}
+try { for (let j = 0; j < 2; j++) { if (j === 0) continue; break; } throw 8; }
+catch (error) { console.log(error); }
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "7\ncleanup\ncleanup\n8"
+    );
+}
+
+#[test]
+fn host_interop_finally_preserves_and_replaces_pending_completion() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const decode = globalThis.decodeURIComponent;
+try {
+  try { decode('%'); }
+  finally { console.log('cleanup one'); console.log('cleanup two'); }
+} catch (error) { console.log('outer caught'); }
+try {
+  try { throw 3; }
+  finally { throw 4; }
+} catch (error) { console.log(error); }
+function returned() {
+  try { return 'value'; }
+  finally { console.log('return cleanup'); }
+}
+console.log(returned());
+function override() { try { return 'old'; } finally { return 'new'; } }
+console.log(override());
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "cleanup one\ncleanup two\nouter caught\n4\nreturn cleanup\nvalue\nnew"
+    );
+}
+
+#[test]
+fn host_interop_imported_callees_stop_before_following_effects() {
+    for import in [
+        "import { fail } from './helper';",
+        "import * as H from './helper';",
+    ] {
+        let call = if import.contains("* as") {
+            "H.fail()"
+        } else {
+            "fail()"
+        };
+        let sources = [
+            ("helper", "export function fail() { throw 7; console.log('wrong callee'); }".to_string()),
+            ("entry", format!("{import} try {{ {call}; console.log('wrong caller'); }} catch (error) {{ console.log(error); }}")),
+        ];
+        let modules: Vec<_> = sources
+            .iter()
+            .map(|(name, source)| {
+                let filename = format!("{name}.ts");
+                let ast = perry_parser::parse_typescript(source, &filename).unwrap();
+                let module = perry_hir::lower::lower_module(&ast, name, &filename).unwrap();
+                (name.to_string(), module)
+            })
+            .collect();
+        assert_eq!(
+            run_modules_after(
+                &modules,
+                "require('node:assert/strict').equal(tryDepth, 0);"
+            ),
+            "7"
+        );
+    }
+}
+
+#[test]
+fn host_interop_abrupt_scopes_and_function_signatures() {
+    assert_eq!(run_ts_after(r#"
+const decode = globalThis.decodeURIComponent;
+function noValue() { decode('%'); console.log('wrong void'); }
+function value() { decode('%'); return 'wrong value'; }
+try { noValue(); } catch (e) { console.log('void caught'); }
+try { console.log(value()); } catch (e) { console.log('value caught'); }
+class Fail { constructor() { decode('%'); console.log('wrong constructor'); } static run() { decode('%'); console.log('wrong static'); } }
+try { const f = new Fail(); } catch (e) { console.log('constructor caught'); }
+try { Fail.run(); } catch (e) { console.log('static caught'); }
+function nested() { try { try { return 1; } finally { console.log('inner final'); } } finally { console.log('outer final'); } }
+console.log(nested());
+try { try { throw 2; } catch (e) { throw 3; } finally { console.log('catch final'); } } catch (e) { console.log(e); }
+function overridden() { try { throw 4; } finally { return 5; } }
+console.log(overridden());
+outer: for (let i = 0; i < 2; i++) {
+ try { for (let j = 0; j < 2; j++) { if (j === 0) continue; break; } if (i === 0) continue outer; break outer; }
+ finally { console.log('label cleanup'); }
+}
+for(let i=0;i<2;i++) { try { throw 8; } finally { break; } }
+console.log('break suppressed');
+try { for(let i=0;i<2;i++) { if(i===0) continue; break; } throw 9; } catch(e) { console.log(e); }
+console.log(decode('done'));
+"#, r#"const a=require('node:assert/strict');a.equal(tryDepth,0);a.equal(__memDispatch.has_exception(),0);"#),"void caught\nvalue caught\nconstructor caught\nstatic caught\ninner final\nouter final\n1\ncatch final\n3\n5\nlabel cleanup\nlabel cleanup\nbreak suppressed\n9\ndone");
+}
+
+#[test]
+fn host_interop_throwing_callback_stops_the_host_iteration() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs: any = [1, 2, 3];
+let calls = 0;
+try { xs.findLast((value) => { calls++; throw 7; }); }
+catch (error) { console.log(error); }
+console.log(calls);
+"#
+        ),
+        "7\n1"
+    );
+}
+
+#[test]
+fn host_interop_proxy_has_exceptions_reach_catch() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const create = globalThis.Function;
+const proxy = create('return new Proxy({}, {has() { throw 7; }})')();
+try { console.log('x' in proxy); }
+catch (error) { console.log(error); }
+console.log('after');
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "7\nafter"
+    );
+}
+
+#[test]
+fn host_interop_for_each_stops_on_callback_throw() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs = [1, 2, 3];
+let calls = 0;
+try { xs.forEach((value) => { calls++; throw 7; }); }
+catch (error) { console.log(error); }
+console.log(calls);
+"#
+        ),
+        "7\n1"
+    );
+}
+
+#[test]
+fn host_interop_host_caught_callback_clears_pending_state() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+const create = globalThis.Function;
+const invoke = create('return function(cb) { try { cb(); } catch (error) { return "handled"; } return "missed"; }')();
+try { console.log(invoke(() => { throw null; })); console.log('continued'); }
+catch (error) { console.log('wrong catch'); }
+"#,
+            "require('node:assert/strict').equal(__memDispatch.has_exception(), 0);"
+        ),
+        "handled\ncontinued"
+    );
+}
+
+#[test]
+fn host_interop_inline_finally_uses_its_lexical_loop() {
+    assert_eq!(
+        run_ts_after(
+            r#"
+function choose() {
+  while (true) {
+    try { while (true) { return 'wrong'; } }
+    finally { console.log('cleanup'); break; }
+  }
+  return 'correct';
+}
+console.log(choose());
+"#,
+            "require('node:assert/strict').equal(tryDepth, 0);"
+        ),
+        "cleanup\ncorrect"
+    );
+}
+
+#[test]
+fn host_interop_lexical_continue_and_for_each_success() {
+    assert_eq!(run_ts_after(r#"
+function choose() {
+ for(let i=0;i<2;i++) {
+  try { while(true) { return 'wrong'; } }
+  finally { console.log(i); continue; }
+ }
+ return 'correct';
+}
+console.log(choose());
+let sum=0;const xs=[1,2,3];xs.forEach((v)=>{sum+=v;});console.log(sum);
+"#, "require('node:assert/strict').equal(tryDepth,0);require('node:assert/strict').equal(__memDispatch.has_exception(),0);"),"0\n1\ncorrect\n6");
+}
+
+#[test]
+fn host_interop_array_callbacks_receive_array_and_missing_arguments() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs = [2, 4];
+const result = xs.map((value, index, array, missing) => {
+  console.log(array === xs);
+  console.log(missing);
+  return value + index;
+});
+console.log(result.join(','));
+"#
+        ),
+        "true\nundefined\ntrue\nundefined\n2,5"
+    );
+}
+
+#[test]
+fn host_interop_nested_finalizers_have_linear_code_growth() {
+    fn source(depth: usize) -> String {
+        let mut body = "return 0;".to_string();
+        for i in 1..=depth {
+            body = format!("try {{ {body} }} finally {{ if (flag) return {i}; }}");
+        }
+        format!("function nested(flag: boolean) {{ {body} }} console.log(nested(false)); console.log(nested(true));")
+    }
+    fn size(depth: usize) -> usize {
+        let ast = perry_parser::parse_typescript(&source(depth), "nested.ts").unwrap();
+        let module = perry_hir::lower::lower_module(&ast, "nested", "nested.ts").unwrap();
+        emit::compile_to_wasm_with_async(&[("nested".into(), module)])
+            .wasm_bytes
+            .len()
+    }
+    let small_growth = size(4) - size(3);
+    let large_growth = size(9) - size(8);
+    assert!(
+        large_growth <= small_growth * 2,
+        "{large_growth} exceeds linear bound {small_growth}"
+    );
+    assert_eq!(run_ts(&source(9)), "0\n9");
+}
+
+#[test]
+fn host_interop_native_for_each_statement_has_balanced_stack() {
+    use perry_hir::{Expr, Stmt};
+    let ast = perry_parser::parse_typescript(
+        "const xs = [1, 2]; xs.forEach((value) => console.log(value));",
+        "scoped.ts",
+    )
+    .unwrap();
+    let mut module = perry_hir::lower::lower_module(&ast, "scoped", "scoped.ts").unwrap();
+    let mut replaced = false;
+    for stmt in &mut module.init {
+        if let Stmt::Expr(expr) = stmt {
+            if let Expr::ArrayForEach { array, callback } = expr {
+                *expr = Expr::NativeMethodCall {
+                    module: "array".into(),
+                    class_name: None,
+                    object: Some(array.clone()),
+                    method: "forEach".into(),
+                    args: vec![*callback.clone()],
+                };
+                replaced = true;
+            }
+        }
+    }
+    assert!(replaced, "fixture must exercise NativeMethodCall forEach");
+    assert_eq!(run_module(module), "1\n2");
+}
+
+#[test]
+fn host_interop_shared_finalizers_preserve_payloads_and_jumps() {
+    assert_eq!(run_ts_after(r#"
+const object={value:7};
+function payload(){try{return object;}finally{try{console.log('nested');}finally{console.log('nested final');}}}
+console.log(payload()===object);
+function override(){try{return object;}finally{try{return {value:8};}finally{console.log('override final');}}}
+console.log(override().value);
+function cleanupThrow(){try{return object;}finally{throw 9;}}
+try{cleanupThrow();}catch(e){console.log(e);}
+try{try{throw null;}finally{try{console.log('pending final');}finally{console.log('pending nested');}}}catch(e){console.log(e===null);}
+function jump(){outer:for(let i=0;i<3;i++){try{try{return 'wrong';}finally{console.log(i);continue outer;}}finally{console.log('outer');}}return 'done';}
+console.log(jump());
+function breaking(){outer:while(true){try{try{return 'wrong';}finally{break outer;}}finally{console.log('break final');}}return 'broken';}
+console.log(breaking());
+"#, "require('node:assert/strict').equal(tryDepth,0);require('node:assert/strict').equal(__memDispatch.has_exception(),0);"),"nested\nnested final\ntrue\noverride final\n8\n9\npending final\npending nested\ntrue\n0\nouter\n1\nouter\n2\nouter\ndone\nbreak final\nbroken");
+}
+
+#[test]
+fn host_interop_closure_calls_pad_after_captures_only() {
+    assert_eq!(run_ts(r#"
+function factory(offset: number) {
+  return (a: number, b?: number, c?: number, d?: number) => {
+    console.log(offset);
+    console.log(a);
+    console.log(b);
+    console.log(c);
+    console.log(d);
+  };
+}
+const callback = factory(9);
+callback(1);
+callback(1, 2);
+callback(1, 2, 3);
+"#), "9\n1\nundefined\nundefined\nundefined\n9\n1\n2\nundefined\nundefined\n9\n1\n2\n3\nundefined");
+}
+
+#[test]
+fn host_interop_reduce_callback_argument_contract() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs = [2, 4];
+const total = xs.reduce((accumulator, value, index, array, missing) => {
+  console.log(accumulator);
+  console.log(value);
+  console.log(index);
+  console.log(array === xs);
+  console.log(missing);
+  return accumulator + value;
+}, 10);
+console.log(total);
+"#
+        ),
+        "10\n2\n0\ntrue\nundefined\n12\n4\n1\ntrue\nundefined\n16"
+    );
+}
+
+#[test]
+fn host_interop_legacy_closure_calls_pad_after_captures_only() {
+    assert_eq!(run_ts_after(r#"
+function factory(offset: number) {
+  return (a: number, b?: number, c?: number, d?: number) => {
+    console.log(offset);
+    console.log(a);
+    console.log(b);
+    console.log(c);
+    console.log(d);
+  };
+}
+globalThis.savedCallback = factory(9);
+"#, r#"
+const rt = buildImports().rt;
+const callback = fromJsValue(globalThis.savedCallback);
+rt.closure_call_1(callback, 1);
+rt.closure_call_2(callback, 1, 2);
+rt.closure_call_3(callback, 1, 2, 3);
+"#), "9\n1\nundefined\nundefined\nundefined\n9\n1\n2\nundefined\nundefined\n9\n1\n2\n3\nundefined");
 }

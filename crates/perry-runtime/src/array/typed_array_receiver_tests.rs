@@ -1362,7 +1362,7 @@ fn js_put_value_set_number_key_on_a_typed_array_is_its_numeric_index() {
     let _serialized = crate::array::test_serialize();
     let ta = typed(UINT16, &[0.0; 4]);
     let t = boxed(ta);
-    let int32 = |n: i32| f64::from_bits(crate::value::JSValue::int32(n).bits());
+    let int32 = |n: i32| f64::from(n);
     crate::proxy::js_put_value_set(t, 3.0, 70000.0, t, 0);
     crate::proxy::js_put_value_set(t, int32(2), 7.0, t, 0);
     crate::proxy::js_put_value_set(t, 1.5, 9.0, t, 0); // canonical numeric, not an integer: nothing

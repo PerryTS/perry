@@ -226,7 +226,13 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 /// may be `throw`.
 /// `thrown` is the region of the `throw` call, or the shared cell for an
 /// async generator's (it rejects).
-fn gen_throw_passes(m: &mut Model, name: Option<&str>, thrown: NodeId, args: &[NodeId], spread: &[NodeId]) {
+fn gen_throw_passes(
+    m: &mut Model,
+    name: Option<&str>,
+    thrown: NodeId,
+    args: &[NodeId],
+    spread: &[NodeId],
+) {
     if !matches!(name, Some("throw") | None) {
         return;
     }
@@ -1266,11 +1272,19 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 }
 
 pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: CallId) {
+    let born = members::realm_born(what);
     if let Some(name) = name {
-        if matches!(
-            members::member(members::bobj_family(what), name),
-            Some(Mem::Fn)
-        ) {
+        let callable = match born {
+            Some(b) => matches!(
+                members::realm_chain_find(b, name),
+                members::RealmFind::Own(p) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
+            ),
+            None => matches!(
+                members::member(members::bobj_family(what), name),
+                Some(Mem::Fn)
+            ),
+        };
+        if callable {
             m.diagnostic_builtin(call, |_| format!("{what}.prototype.{name}"));
         }
     }
@@ -1294,7 +1308,22 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         _ => what,
     };
     match (what, name) {
+        // An object a realm declaration made (`fresh(P)`) has `P` as its
+        // [[Prototype]]: the method is the member of `P`'s declared chain,
+        // or absent (`realm_born_method`).
+        (_, Some(n)) if born.is_some() => {
+            let why = format!("argument of {kind}.{n}");
+            realm_born_method(m, t, born.expect("born"), n, call, &why)
+        }
+        // A method the realm declares on the prototype of an object a
+        // declaration made (`AbortController.prototype.abort`): its
+        // declaration runs.
+        (w, Some(n)) if w.ends_with(".prototype") && effects::declared_at(w, n).is_some() => {
+            let e = effects::declared_at(w, n).expect("declared");
+            effects::run_native(m, e, t, call);
+        }
         ("Iterator", _) => iterator_method(m, t, name, call),
+
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
         (

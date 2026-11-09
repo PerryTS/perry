@@ -18,6 +18,7 @@
 
 pub mod bindings;
 mod builtins;
+pub mod canonical_numbers;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
@@ -25,6 +26,7 @@ mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
+pub mod field_read_calls;
 mod gen;
 mod gen_call;
 mod gen_cjs;
@@ -35,6 +37,7 @@ mod ledger;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+pub mod signatures;
 mod rooted;
 mod solve;
 mod summary;
@@ -43,6 +46,8 @@ mod tests;
 mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
+pub use signatures::Signature;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -446,6 +451,7 @@ fn generate<'a>(
     g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
     g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
     g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
+    g.m.dense_birth_sabotage = cfg.sabotage.as_deref() == Some("densebirth");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
@@ -863,6 +869,27 @@ fn compute_act<'a>(
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);
+    if !g.m.aborted && field_read_calls::enabled() {
+        field_read_calls::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref() == Some("fieldreadcall"),
+        );
+    }
+    if canonical_numbers::enabled() {
+        canonical_numbers::collect(&g, &mut bindings);
+    }
+    if !g.m.aborted && signatures::enabled() {
+        signatures::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref(),
+        );
+    }
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.
         templates.clear();

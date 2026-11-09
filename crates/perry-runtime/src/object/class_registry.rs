@@ -49,10 +49,8 @@ pub(in crate::object) use construct::{
 mod decl_accessors;
 pub(crate) mod declarations;
 pub(crate) use decl_accessors::{
-    class_chain_getter_value, class_chain_getter_value_bytes, class_chain_setter_apply,
-    decl_prototype_own_accessor, decl_prototype_own_accessor_bytes,
-    install_decl_prototype_accessor_at, instance_chain_getter_value, instance_chain_setter_apply,
-    instance_chain_setter_apply_bytes, invoke_instance_getter,
+    class_chain_setter_apply, install_decl_prototype_accessor_at, instance_chain_getter_value,
+    instance_chain_setter_apply, instance_chain_setter_apply_bytes, invoke_instance_getter,
 };
 pub use declarations::{
     js_register_class_declaration, ClassDeclaration, ClassMemberDecl, CLASS_MEMBER_GETTER,
@@ -111,9 +109,9 @@ pub(crate) use state::{
     class_register_declared_static_global_slot, class_static_alias_sync,
     class_static_clear_defined_attrs, class_static_defined_attrs, class_static_defined_attrs_bytes,
     class_static_key_deleted, class_static_key_deleted_bytes, class_static_prototype,
-    class_static_prototype_is_nulled, class_static_prototype_root_clear,
-    class_static_prototype_root_store, class_static_set_defined_attrs,
-    class_static_set_defined_attrs_bytes, decl_prototype_identity_id, global_object_prototype_bits,
+    class_static_prototype_root_clear, class_static_prototype_root_store,
+    class_static_set_defined_attrs, class_static_set_defined_attrs_bytes,
+    decl_prototype_identity_id, global_object_prototype_bits,
     is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
     parent_closure_in_chain, proto_member_has_no_string_key_bytes, template_has_class_objects,
     throw_non_constructable_builtin_function, ClassDeclarationValueKind, CLASS_OBJECT_EVER,
@@ -157,7 +155,6 @@ pub(crate) use class_meta::{
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 #[cfg(test)]
 pub(crate) use prototype_methods::class_prototype_set;
-pub(crate) use prototype_methods::class_prototype_set_bytes;
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,
     js_register_function_prototype_method, js_register_prototype_method,
@@ -323,4 +320,5 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
 
 pub(crate) use state::{
     reserved_native_parent_constructor_value, reserved_native_parent_prototype_bits,
+    static_parent_prototype_bits,
 };

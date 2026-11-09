@@ -290,6 +290,7 @@ impl<'a> FuncEmitCtx<'a> {
                         }
                     }
                     func.instruction(&Instruction::Call(ctor_idx));
+                    self.emit_exception_guard(func);
                 }
                 // If no compiled constructor, just leave the instance handle on stack
             }
@@ -345,6 +346,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(ctor_idx));
+                            self.emit_exception_guard(func);
                             func.instruction(&Instruction::Drop); // parent ctor returns this, discard
                             called = true;
                         }
@@ -479,6 +481,7 @@ impl<'a> FuncEmitCtx<'a> {
                             }
                         }
                         func.instruction(&Instruction::Call(static_idx));
+                        self.emit_exception_guard(func);
                         return true;
                     }
                 }

@@ -391,14 +391,15 @@ impl Model {
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
-        // A program-owned global: an ordinary field of the global object.
-        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
-            (&self.toks[t as usize], key)
-        {
-            if builtins::global_user_key(self, &self.atoms[a as usize])
+        // A program-owned global: an ordinary field of the global object
+        // (one field per key, whichever token stored it).
+        if let Key::Named(a) = key {
+            if builtins::global_object(self, t)
+                && builtins::global_user_key(self, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
-                let f = builtins::global_field(self, t, a);
+                let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let f = builtins::global_field(self, g, a);
                 self.edge(src, f);
                 return;
             }
@@ -773,6 +774,8 @@ impl Model {
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native.
         self.builtin_field_use(t, key, ChainAct::Store(src));
+        // A setter a declaration made the receiver with (`onabort`).
+        self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
@@ -794,11 +797,12 @@ impl Model {
         // not a prototype's (the lock's, `note_native_write`).
         let own_index = elem
             && match self.toks[t as usize] {
-                TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other) => false,
+                _ if builtins::global_object(self, t) => false,
                 TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
                 _ => false,
             };
-        if (!builtins::builtin_function(self, t) || (namespace && builtins::realm_reads_store(self, t, key)))
+        if (!builtins::builtin_function(self, t)
+            || (namespace && builtins::realm_reads_store(self, t, key)))
             && !own_index
         {
             self.with_b(|m| builtins::tok_store(m, t, key, src));

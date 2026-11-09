@@ -65,6 +65,11 @@ pub(super) fn family_load(
     dst: NodeId,
 ) {
     let name = m.atoms[a as usize].clone();
+    // An internal slot (`effects::internal_atom`) is no property: no chain
+    // has it and no program store, even one under an unknown key, writes it.
+    if super::effects::is_internal_key(&name) {
+        return;
+    }
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
         if buffer_member_absent(m, what, &name) {
             m.add_prim(dst, prim::UNDEF);
@@ -536,7 +541,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             _ => {
                 m.add_top(dst, |_| {
-                    format!("native module ref {module}.{}", name.as_deref().unwrap_or("[computed]"))
+                    format!(
+                        "native module ref {module}.{}",
+                        name.as_deref().unwrap_or("[computed]")
+                    )
                 });
                 m.add_prim(dst, prim::ALL);
             }
@@ -745,8 +753,24 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                             m.add_prim(dst, prim::ALL);
                         }
                     }
+                    // A getter the realm declares on the prototype of an
+                    // object a declaration made (`AbortController.prototype
+                    // .signal`) that returns primitives and the receiver's
+                    // slots: its value; a write of the key onto the chain
+                    // (now, or later: the replay) reads what was stored.
+                    (Key::Named(a), Some(n))
+                        if what.ends_with(".prototype")
+                            && super::effects::declared_getter(what, n).is_some() =>
+                    {
+                        let e = super::effects::declared_getter(what, n).expect("declared");
+                        super::effects::getter_value(m, e, t, dst);
+                        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                            opaque_member(m, dst);
+                        }
+                    }
                     (Key::Named(a), Some(_)) => {
                         // A container of primitives (split/match results,
+
                         // keys …) holds them under every key.
                         if what == "primbox" || what == "arraybox" {
                             m.add_prim(dst, prim::ALL);
@@ -919,5 +943,27 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
         Key::Named(a) => family_load(m, fam, what, a, dst),
         Key::Any(_) if is_site_builtin(m, of) => tok_load(m, q, key, dst),
         Key::Any(_) => family_any(m, of, fam, dst),
+    }
+}
+
+/// A store of `src` under named key `key` on an object a declaration made
+/// (`AbortSignal.prototype`'s token) whose prototype declares a setter for
+/// the key that keeps its argument in a receiver slot (`onabort`: the
+/// event handler): the slot holds `src`, as the setter's run does. The
+/// ordinary store (`store_into`) stays beside it: a superset where the
+/// chain's setter may have been replaced.
+pub fn declared_setter_store(m: &mut Model, t: Tok, key: Key, src: NodeId) {
+    let (TokKind::Obj(tm, _), Key::Named(a)) = (&m.toks[t as usize], key) else {
+        return;
+    };
+    let TmplKind::BObj { what, .. } = m.tmpls[*tm as usize].kind else {
+        return;
+    };
+    if !what.ends_with(".prototype") {
+        return;
+    }
+    let name = m.atoms[a as usize].clone();
+    if let Some(e) = super::effects::declared_setter(what, &name) {
+        super::effects::setter_store(m, e, t, src);
     }
 }

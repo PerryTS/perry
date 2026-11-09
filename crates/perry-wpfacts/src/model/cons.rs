@@ -151,7 +151,7 @@ pub enum Cons {
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
     /// when an argument reaches it.
-    /// (`reason` `None`: only `from`, no ⊤.)
+    /// (`reason` `None`: only `from`, no ⊤; `from` = `dst`: only ⊤.)
     TopIfAny {
         dst: NodeId,
         from: NodeId,
@@ -305,7 +305,14 @@ pub enum Cons {
     },
     /// Internal: install accessor `f` on every token of the node.
     /// `f`: the accessor's callable token (a known body or opaque callback).
-    AccessorInstall { key: Atom, f: Tok, setter: bool },
+    /// `from`: the node that held `f` (`NO_NODE`: none), the source the
+    /// census attributes an opaque accessor's ⊤ to.
+    AccessorInstall {
+        key: Atom,
+        f: Tok,
+        setter: bool,
+        from: NodeId,
+    },
     /// A direct Annex B runtime entry, dispatched per receiver token.
     AnnexBDefine { call: CallId, setter: bool },
     /// Reflect an accessor descriptor after ToPropertyKey.
@@ -507,8 +514,13 @@ pub enum Cons {
     /// by key, into each target (`Model::spread_into`), never through one
     /// any-key bucket.
     Spread { into: NodeId, site: SiteId },
-    /// The node holds the targets of a spread from source token `src`.
-    SpreadFrom { src: Tok, site: SiteId },
+    /// The node holds the targets of a spread from source token `src`; `from` is the node of the
+    /// spread's source value (the census attributes a spread of ⊤ to it).
+    SpreadFrom {
+        src: Tok,
+        site: SiteId,
+        from: NodeId,
+    },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).

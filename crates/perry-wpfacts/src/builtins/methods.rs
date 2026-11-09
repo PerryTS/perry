@@ -65,9 +65,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            let retained = if !m.unit_mode
-                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
-            {
+            let retained = if !m.unit_mode && super::global_object(m, t) {
                 match _key {
                     Key::Named(a) => m
                         .native_property(t, &m.atoms[a as usize])
@@ -75,7 +73,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                     _ => None,
                 }
                 .and_then(|identity| {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
                     match m.toks[value as usize] {
                         TokKind::Builtin(_)
                             if !m
@@ -237,6 +235,63 @@ pub(super) fn undescribed_method(
             let a = m.atom(name);
             if !intrinsic_unwritten(m, fam, None, a, NativeMiss::Call(t, call)) {
                 unknown_method(m, call, why);
+            }
+        }
+    }
+}
+
+/// `name` called on `t`, an object a realm declaration made, of kind `born`
+/// (`members::realm_born`): `born` is its [[Prototype]] (W2a). The member
+/// is the first declaration's own property on the declared chain
+/// (`members::realm_chain_find`): a function whose effects the runtime
+/// declares runs them; a primitive data member is no function (a
+/// TypeError); any other member runs as an unknown method (`why`). A key no
+/// declaration on the chain has is absent, a TypeError: no instance of a
+/// declared prototype owns a callable property the realm leaves out (an
+/// error's own `stack`/`message`/`cause` are data). Found or absent, a key
+/// a store into ⊤ may have written onto the chain runs what was stored
+/// (`intrinsic_unwritten`, replayed when the write comes later).
+pub(super) fn realm_born_method(
+    m: &mut Model,
+    t: Tok,
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+    call: CallId,
+    why: &str,
+) {
+    use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
+    let a = m.atom(name);
+    let written = !intrinsic_unwritten(m, Family::Opaque, Some(born.name), a, NativeMiss::Call(t, call));
+    match members::realm_chain_find(born, name) {
+        members::RealmFind::Absent => {
+            if written {
+                unknown_method(m, call, why);
+            }
+        }
+        members::RealmFind::Own(p) => {
+            match p.value {
+                RealmOwnValue::Undefined
+                | RealmOwnValue::Null
+                | RealmOwnValue::Boolean
+                | RealmOwnValue::Number
+                | RealmOwnValue::String
+                | RealmOwnValue::Symbol => {}
+                RealmOwnValue::Reference(r) => match members::realm_entry(r) {
+                    Some(e)
+                        if matches!(e.kind, RealmKind::Function | RealmKind::Method)
+                            && !e.effects.is_empty()
+                            && effects::interpretable(e.effects) =>
+                    {
+                        effects::run_native(m, e, t, call)
+                    }
+                    _ => unknown_method(m, call, why),
+                },
+                RealmOwnValue::Accessor { .. } | RealmOwnValue::Other => {
+                    unknown_method(m, call, why)
+                }
+            }
+            if written {
+                unknown_method(m, call, &format!("argument of a written method {name}"));
             }
         }
     }
@@ -617,8 +672,11 @@ pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
         ) || super::undeclared(m, t, key))
 }
 
-/// Callable values whose bodies the accessor groups cannot bind precisely.
-pub(crate) fn unknown_accessor_callable(m: &Model, t: Tok) -> bool {
+/// Callable values other than a program function that an accessor may
+/// hold: ⊤, a builtin function, a bound function, a class. Only ⊤ is an
+/// opaque accessor (`Cons::AccessorInstall`); the others run as an ordinary
+/// call of that value (`Model::group_call`).
+pub(crate) fn accessor_callable(m: &Model, t: Tok) -> bool {
     match m.toks[t as usize] {
         TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
         TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,

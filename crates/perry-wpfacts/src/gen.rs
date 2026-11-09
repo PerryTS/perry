@@ -142,6 +142,9 @@ pub struct Gen<'a> {
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
     pub thrown: NodeId,
+    /// The realm error a failed runtime operation throws (`Model::runtime_error`,
+    /// held by `thrown`), for a site that throws it into its own region.
+    pub runtime_error: Tok,
     /// Registry summary: only dynamic lookups read every publication.
     pub cjs_registry: NodeId,
     /// Canonical module path -> the publications for that path.
@@ -150,6 +153,9 @@ pub struct Gen<'a> {
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
     pub(crate) element_sites: Vec<ElementSite>,
+    /// `(module, element_offset, value node)` of every `IndexGet` copy
+    /// (`canonical_numbers`, P3 B1).
+    pub(crate) element_values: Vec<(u32, u32, NodeId)>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -280,6 +286,10 @@ pub struct Gen<'a> {
     /// `(module, byte offset, result node)` of each method call site
     /// (`bindings::ModuleBindings::number_calls`).
     pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
+    /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
+    /// identity (the callee expression's address), whether it spreads, and
+    /// for a direct call its callee node (`signatures::typed_calls`).
+    pub(crate) call_sites_at: Vec<crate::signatures::CallSiteRec>,
     /// One-unit String literal nodes by code (`Gen::str_literal`).
     pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
@@ -590,11 +600,13 @@ impl<'a> Gen<'a> {
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
             thrown,
+            runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
             element_sites: Vec::new(),
+            element_values: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -644,6 +656,7 @@ impl<'a> Gen<'a> {
             narrow_consts: Default::default(),
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
+            call_sites_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),

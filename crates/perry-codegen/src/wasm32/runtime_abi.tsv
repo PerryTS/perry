@@ -2044,6 +2044,7 @@ js_math_cbrt	f64	f64
 js_math_clz32	f64	f64
 js_math_cos	f64	f64
 js_math_cosh	f64	f64
+js_math_exp	f64	f64
 js_math_expm1	f64	f64
 js_math_f16round	f64	f64
 js_math_fmod	f64	f64,f64
@@ -4815,6 +4816,7 @@ js_zlib_brotli_decompress	void	f64,f64,f64
 js_zlib_brotli_decompress_init	f64	f64,f64
 js_zlib_brotli_decompress_sync	f64	i64,f64
 js_zlib_brotli_dictionary	f64	f64
+js_zlib_brotli_large_window	i32s	f64
 js_zlib_brotli_max_output_length	usize	f64
 js_zlib_brotli_quality	i32s	f64
 js_zlib_crc32	f64	f64,f64

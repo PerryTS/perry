@@ -39,6 +39,9 @@ def main():
     parser.add_argument("--perry", type=Path, required=True)
     parser.add_argument("--node", default="node")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--canonnum-runtime", type=Path,
+                        help="target/release of a runtime built with PERRY_FACTS_SABOTAGE=canonnum "
+                             "(scripts/p3-canonnum-runtime.sh); without it only the correct arm runs")
     args = parser.parse_args()
     args.perry = args.perry.resolve()
     args.out = args.out.resolve()
@@ -105,7 +108,12 @@ def main():
         ("int32-negative", "range", "int32 input"),
         ("arrlen-negative", "arrlen", "array constant length"),
         ("element-read-negative", "arrlen", "proven element read"),
+        ("element-read-sparse-birth", "densebirth", "proven element read"),
         ("number-call-negative", "numbercall", "numeric result"),
+        ("field-read-call-negative", "fieldreadcall", "field read call"),
+        ("signature-negative", "signature", "signature"),
+        ("signature-escape-negative", "signature-escape", "signature"),
+        ("signature-range-negative", "signature-range", "signature"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:
@@ -118,6 +126,22 @@ def main():
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)
+
+    # P3 B1 (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): this arm sabotages the
+    # RUNTIME, not the facts. `js_math_round` built with
+    # PERRY_FACTS_SABOTAGE=canonnum returns an INT32-boxed word, and the
+    # canonical-number witness must report it with rc 86 exactly.
+    source = fixtures / "canonical-number-negative.ts"
+    exe, e = compile_(source, "canonical-number-negative-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("canonical-number-negative-correct", status=0)
+    if args.canonnum_runtime:
+        runtime = str(args.canonnum_runtime.resolve())
+        exe, e = compile_(source, "canonical-number-negative-false", PERRY_RUNTIME_DIR=runtime)
+        value = report(observe(exe, e))
+        assert value["predicate"] == "canonical number", value
+        save("canonical-number-negative-false", status=86)
 
     source = fixtures / "parallel-bodies.ts"
     exe, e = compile_(source, "parallel-bodies")
