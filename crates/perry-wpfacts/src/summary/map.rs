@@ -35,6 +35,7 @@ pub fn map_cons(
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
         LenIndex { lo, hi } => LenIndex { lo, hi },
+        LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,
@@ -264,6 +265,11 @@ pub fn map_cons(
             obj,
             dst: n(dst),
             shape,
+        },
+        ElemUndef { obj, key, dst } => ElemUndef {
+            obj,
+            key: n(key),
+            dst: n(dst),
         },
         IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
             idx: n(idx),
@@ -519,6 +525,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
+        | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }

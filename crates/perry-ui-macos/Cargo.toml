@@ -77,7 +77,7 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-perry-runtime.workspace = true
+perry-runtime = { workspace = true, features = ["test-layout-descriptors"] }
 
 [[test]]
 name = "native_widget_order"

@@ -127,6 +127,13 @@ pub enum RealmOperand {
     /// bound `this` is the first argument and whose bound arguments are the
     /// rest. Calling it calls the target with those.
     Bound,
+    /// The value `JSON.parse` makes of the text the call reads: ordinary
+    /// objects and arrays of such values, and primitives.
+    Json,
+    /// A value code the program cannot see supplies: the native hands a
+    /// value to unknown code (`escapes`) and gives back what that code
+    /// produces (a user body stream that errors).
+    Unknown,
     /// Any one of these values (at least two; no union inside a union).
     Union(Cow<'static, [RealmOperand]>),
 }
@@ -199,7 +206,7 @@ impl RealmOperand {
             }
             Self::Prim(_) => Ok(()),
             Self::Slot(slot) => slot.validate(at),
-            Self::Bound => Ok(()),
+            Self::Bound | Self::Json | Self::Unknown => Ok(()),
             Self::Fresh {
                 proto,
                 elems,
@@ -290,7 +297,11 @@ pub fn validate_effects(
     };
     fn slots_in<'a>(o: &'a RealmOperand, out: &mut Vec<&'a RealmSlot>) {
         match o {
-            RealmOperand::Prim(_) | RealmOperand::Bound | RealmOperand::Native(_) => {}
+            RealmOperand::Prim(_)
+            | RealmOperand::Bound
+            | RealmOperand::Json
+            | RealmOperand::Unknown
+            | RealmOperand::Native(_) => {}
             RealmOperand::Slot(slot) => out.push(slot),
             RealmOperand::Fresh {
                 elems,
@@ -420,6 +431,8 @@ pub mod emit {
             ),
             RealmOperand::Slot(s) => format!("{p}RealmOperand::Slot({})", slot(p, s)),
             RealmOperand::Bound => format!("{p}RealmOperand::Bound"),
+            RealmOperand::Json => format!("{p}RealmOperand::Json"),
+            RealmOperand::Unknown => format!("{p}RealmOperand::Unknown"),
             RealmOperand::Fresh {
                 proto,
                 elems,
@@ -502,4 +515,24 @@ pub mod emit {
 
 fn no_slots(slots: &Cow<'static, [RealmField]>) -> bool {
     slots.is_empty()
+}
+
+#[cfg(test)]
+mod operand_tests {
+    use super::*;
+
+    #[test]
+    fn json_and_unknown_operands_parse_and_round_trip() {
+        for (text, want) in [("\"json\"", RealmOperand::Json), ("\"unknown\"", RealmOperand::Unknown)] {
+            let got: RealmOperand = serde_json::from_str(text).unwrap();
+            assert_eq!(got, want);
+            assert_eq!(serde_json::to_string(&got).unwrap(), text);
+        }
+        let union: RealmOperand = serde_json::from_str(r#"{"union":["json","unknown"]}"#).unwrap();
+        assert_eq!(
+            union,
+            RealmOperand::Union(vec![RealmOperand::Json, RealmOperand::Unknown].into())
+        );
+        assert!(serde_json::from_str::<RealmOperand>("\"jsonn\"").is_err());
+    }
 }

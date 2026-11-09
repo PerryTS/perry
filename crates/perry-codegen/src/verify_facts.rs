@@ -382,6 +382,31 @@ fn raw_site_inner(
     }
 }
 
+/// The witness site of code lowered outside any body context (P2's boxed
+/// entry, DESIGN-p2 §5): the metadata `raw_site_inner` writes, with the
+/// emitting symbol as the copy and no source offset.
+pub(crate) fn raw_entry_site(prefix: &str, copy: &str, fact: Fact, what: &str) -> SiteArg {
+    let (name, ordinal) = MODULE.with(|m| {
+        let m = m.borrow();
+        let m = m.as_ref().expect("verification module initialized");
+        (m.name.clone(), m.ordinal)
+    });
+    let metadata = serde_json::json!({
+        "marker": "PERRY_FALSE_PROOF", "module": name, "byte_offset": null,
+        "key": what, "verdict": fact.name(), "proven_receivers": [],
+        "copy": {"body": copy, "site": null, "emission": ordinal},
+        "compile_sha": option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown"),
+        "expectation": what, "predicate": fact.name(),
+    });
+    let mut bytes = serde_json::to_vec(&metadata).expect("static verification metadata");
+    assert_eq!(bytes.pop(), Some(b'}'));
+    let (pointer, len) = raw_bytes(prefix, &bytes);
+    SiteArg {
+        pointer,
+        len: Some(len),
+    }
+}
+
 pub(crate) fn check(
     ctx: &mut FnCtx<'_>,
     result: LlvmType,
