@@ -66,7 +66,13 @@ pub(crate) struct BirthCensus {
     pub top_edges: BTreeSet<(NodeId, NodeId)>,
     pub escapes: BTreeSet<(Tok, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
     pub sinks: BTreeSet<(NodeId, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
-    pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok)>,
+    /// (token, key, source node, call, parent, proto): `proto` is the prototype value node
+    /// a `settle_native_given` write is made for (`NO_NODE` for every other write).
+    pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok, NodeId)>,
+    /// The operation that gave `t` the prototype `src` (`Model::given_prototype`): its cause node and call.
+    pub given: BTreeMap<(Tok, NodeId), (NodeId, u32)>,
+    /// The prototype whose delayed give `settle_native_given` is writing (census only).
+    pub settling_proto: Option<NodeId>,
     pub reads: BTreeSet<(Tok, Atom, bool, u32)>,
     /// The receiver a missed intrinsic method call was looked up on, by call.
     pub read_origins: BTreeMap<u32, Tok>,
@@ -206,7 +212,32 @@ impl Model {
             d.cause_node.unwrap_or(NO_NODE),
             d.cur_call.unwrap_or(u32::MAX),
             d.escaping.last().copied().unwrap_or(u32::MAX),
+            c.settling_proto.unwrap_or(NO_NODE),
         ));
+    }
+    /// The operation giving `t` the prototype `src`, the first time (census only).
+    pub(crate) fn census_given(&mut self, t: Tok, src: NodeId) {
+        let Some(d) = self.diagnostic.as_mut() else {
+            return;
+        };
+        let Some(c) = d.census.as_mut() else {
+            return;
+        };
+        c.given.entry((t, src)).or_insert((
+            d.cause_node.unwrap_or(NO_NODE),
+            d.cur_call.unwrap_or(u32::MAX),
+        ));
+    }
+    /// What gave `t` the prototype `src`: (cause node, call), `None` when unrecorded.
+    pub(crate) fn census_given_by(&self, t: Tok, src: NodeId) -> Option<(NodeId, u32)> {
+        let c = self.diagnostic.as_ref()?.census.as_ref()?;
+        c.given.get(&(t, src)).copied()
+    }
+    /// Mark the writes made next as the delayed give of `proto` (census only).
+    pub(crate) fn census_settling(&mut self, proto: Option<NodeId>) {
+        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
+            c.settling_proto = proto;
+        }
     }
 }
 
@@ -1254,13 +1285,13 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         for (n, source, call, parent, reason, gate) in &c.sinks {
             out.push(format!("{{\"record\":\"birth-sink\",\"node\":{n},\"source\":{source},\"call\":{call},\"parent\":{parent},\"why\":{},\"gate\":{}}}",quote(&m.reasons[*reason as usize]),birth_gate(m,*gate)));
         }
-        for (t, k, n, call, parent) in &c.writes {
+        for (t, k, n, call, parent, proto) in &c.writes {
             let key = if *k == u32::MAX {
                 "null".into()
             } else {
                 quote(&m.atoms[*k as usize])
             };
-            out.push(format!("{{\"record\":\"birth-write\",\"token\":{t},\"key\":{key},\"source\":{n},\"call\":{call},\"parent\":{parent},\"numeric\":{}}}", *k != u32::MAX && crate::solve::numeric_key(&m.atoms[*k as usize])));
+            out.push(format!("{{\"record\":\"birth-write\",\"token\":{t},\"key\":{key},\"source\":{n},\"call\":{call},\"parent\":{parent},\"proto\":{},\"numeric\":{}}}", if *proto == NO_NODE { "null".into() } else { proto.to_string() }, *k != u32::MAX && crate::solve::numeric_key(&m.atoms[*k as usize])));
         }
         let mut opened: Vec<_> = c.openers.iter().collect();
         opened.sort_by_key(|(_, o)| o.seq);

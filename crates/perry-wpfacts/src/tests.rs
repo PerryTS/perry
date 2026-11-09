@@ -1985,4 +1985,5 @@ mod number_bigint_ns;
 mod buffer_namespaces;
 mod error_namespaces;
 
+mod given_proto_census;
 mod spread_from_census;

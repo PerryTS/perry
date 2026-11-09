@@ -303,13 +303,26 @@ pub fn settle_native_given(m: &mut Model) -> bool {
                 continue;
             }
             more = true;
-            // The census names the given prototype `src` as the write's
-            // source (no call runs it): a ⊤ there makes it derived.
+            // The census attributes the write to the operation that gave the
+            // prototype (its receiver node, or its call), and keeps the given
+            // value as `proto`: a ⊤ on either side makes the write derived.
+            let (by_node, by_call) = match m.census_given_by(t, src) {
+                Some((n, c)) => (
+                    if n == NO_NODE { src } else { n },
+                    (c != u32::MAX).then_some(c),
+                ),
+                None => (src, None),
+            };
             let saved = m
                 .diagnostic
                 .as_mut()
-                .map(|d| (d.cur_call.take(), d.cause_node.replace(src)));
+                .map(|d| (d.cur_call.take(), d.cause_node.replace(by_node)));
+            if let Some(d) = m.diagnostic.as_mut() {
+                d.cur_call = by_call;
+            }
+            m.census_settling(Some(src));
             note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            m.census_settling(None);
             if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
                 (d.cur_call, d.cause_node) = saved;
             }
