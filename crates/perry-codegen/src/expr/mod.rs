@@ -327,7 +327,9 @@ pub(crate) use slot_rep::{
     PTR_SHAPE_REGION_AUTHORITY, PTR_SHAPE_SCALAR_REPLACED,
 };
 
-pub(crate) use dispatch::{lower_expr, lower_math_operand};
+pub(crate) use dispatch::{
+    lower_expr, lower_math_operand, math_intrinsic_operands, math_operand_is_proven_number,
+};
 pub(crate) use scalar_slot_root::{
     entry_init_load_rooted_global, root_entry_alloca, root_scalar_replaced_slot,
     root_scalar_replaced_slot_unconditional,

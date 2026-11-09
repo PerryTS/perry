@@ -1,0 +1,1 @@
+- codegen: in loop regions, `Math.abs`/`floor`/`ceil`/`sqrt`/`min`/`max` over proven Numbers (which lower to LLVM intrinsics only) and `c ? a : b` over inert operands are inert, so they no longer end a receiver region or block a loop's call-free tier (c1).

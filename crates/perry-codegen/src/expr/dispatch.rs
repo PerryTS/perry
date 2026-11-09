@@ -783,6 +783,26 @@ pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Str
     }
 }
 
+/// c1: the operands of a Math call that lowers to an LLVM intrinsic and
+/// nothing else, once every operand is a proven Number
+/// (`expr::math_simple` / `logical_collections`: `llvm.fabs`, `llvm.floor`,
+/// `llvm.ceil`, `llvm.sqrt`, and `llvm.minimum` / `llvm.maximum` folds, which
+/// give JS's NaN and signed-zero results; `Math.max()` folds to its
+/// identity). `MathRound`, `MathTrunc`, `MathSign` call `js_math_*`, and the
+/// spread forms allocate: not listed. Whatever the lowering of the node is,
+/// this describes it; a `Math` member the program writes never becomes the
+/// node (`perry_hir::patched_builtins`, #10848; under dynamic code the node
+/// sits inside the `NamespacePatched` guard, #12643).
+pub(crate) fn math_intrinsic_operands(e: &Expr) -> Option<&[Expr]> {
+    match e {
+        Expr::MathAbs(x) | Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathSqrt(x) => {
+            Some(std::slice::from_ref(x.as_ref()))
+        }
+        Expr::MathMin(v) | Expr::MathMax(v) => Some(v.as_slice()),
+        _ => None,
+    }
+}
+
 /// The operand lowers to a plain double by construction.
 pub(crate) fn math_operand_is_proven_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     is_numeric_expr(ctx, expr)

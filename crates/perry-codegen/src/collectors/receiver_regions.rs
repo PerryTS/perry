@@ -1378,6 +1378,11 @@ fn expr_region_ender_with_trusted_operation(
             }
         }
 
+        // c1: a Math intrinsic over proven Numbers emits no call
+        // (`expr::math_intrinsic_operands`); any other Math form keeps the
+        // `Unmodelled` catch-all.
+        e if crate::expr::math_intrinsic_operands(e).is_some() && is_inert(e) => None,
+
         // ---- Suspension ----------------------------------------------------
         // Control reaches the microtask pump, whose outermost boundary runs
         // the moving minor collection.
