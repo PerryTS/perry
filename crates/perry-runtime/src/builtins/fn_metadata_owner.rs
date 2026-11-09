@@ -439,7 +439,7 @@ fn static_record_bounds() -> Option<&'static FunctionRecordBounds> {
     // local image's immutable, linker-bounded record section.
     unsafe { perry_fnrec_bounds.as_ref() }
 }
-fn visit_image(image: ImageRecords, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) {
+fn visit_image(image: ImageRecords, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) -> bool {
     match image {
         // SAFETY: a permanent image's records stay mapped.
         ImageRecords::Image(bounds) => {
@@ -448,7 +448,7 @@ fn visit_image(image: ImageRecords, visit: &mut dyn FnMut(usize, &'static [u8]) 
                     continue;
                 };
                 if !bytes.is_empty() && visit(info.code as usize, bytes) {
-                    return;
+                    return true;
                 }
             }
         }
@@ -460,12 +460,13 @@ fn visit_image(image: ImageRecords, visit: &mut dyn FnMut(usize, &'static [u8]) 
                         continue;
                     };
                     if !bytes.is_empty() && visit(entry.code, bytes) {
-                        return;
+                        return true;
                     }
                 }
             }
         }
     }
+    false
 }
 impl BundleFunctionNames<'_> {
     /// Every named body, `(code, name)`, until `visit` returns true. One
@@ -487,7 +488,9 @@ impl BundleFunctionNames<'_> {
             }
         }
         for image in self.0 {
-            visit_image(*image, visit);
+            if visit_image(*image, visit) {
+                return;
+            }
         }
     }
     /// The entry the key order picks: the greatest under `better`.
