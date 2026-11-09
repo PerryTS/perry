@@ -312,7 +312,7 @@ extern "C" fn get_dom_code(closure: *const ClosureHeader, this: crate::closure::
     dom_exception_code(&String::from_utf8_lossy(bytes))
 }
 
-pub(super) fn accessor(
+pub(crate) fn accessor(
     proto: *mut ObjectHeader,
     name: &str,
     getter: *const crate::closure::JsFunctionInfo,
