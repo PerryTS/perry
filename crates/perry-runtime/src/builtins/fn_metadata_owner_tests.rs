@@ -339,10 +339,9 @@ fn constfn_identity_word_is_owner_index_and_ordinal() {
     assert_eq!(word(&copy.info), a0);
 }
 
-/// The ordered index answers exactly what the descriptor scans answered, and a
-/// different view (another owner set) never reuses another view's index.
+/// Direct lookup matches the descriptor scan for each independent owner set.
 #[test]
-fn ordered_name_index_matches_the_scan_and_follows_the_owner_set() {
+fn name_lookup_matches_the_scan_for_each_owner_set() {
     let entries: Vec<(usize, &[u8])> = (0..500usize)
         .map(|i| {
             (

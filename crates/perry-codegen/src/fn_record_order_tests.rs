@@ -17,6 +17,11 @@ fn linked_records(dir: &Path, associated: bool) -> Vec<u64> {
         ir.push_str(&format!("define void @{body}() section \".text.{body}\" {{ ret void }}\n@{body}$info = constant ptr @{body}\n"));
     }
     for (_, line) in image_lines(RecordFormat::Elf) {
+        let line = if associated {
+            line
+        } else {
+            line.split(", !associated").next().unwrap().to_string()
+        };
         ir.push_str(&line);
         ir.push('\n');
     }

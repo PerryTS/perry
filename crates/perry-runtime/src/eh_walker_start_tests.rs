@@ -29,7 +29,7 @@ fn function_start_uses_direct_tables_and_real_gimli_for_unusual_encoding() {
         .unwrap();
     // Valid DWARF, deliberately outside the direct decoder's sdata4 table:
     // absolute 64-bit pointers and an unsigned 64-bit entry count.
-    let mut header = vec![1, 0, 4, 0];
+    let mut header = vec![1, 0, 4, 4];
     header.extend_from_slice(&image.image.eh_frame_addr.to_le_bytes());
     header.extend_from_slice(&1_u64.to_le_bytes());
     header.extend_from_slice(&start.to_le_bytes());
