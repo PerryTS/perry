@@ -380,3 +380,36 @@ fn ordered_name_index_matches_the_scan_and_follows_the_owner_set() {
     assert_eq!(other.predecessor(0x20), Some((0x10, &b"other"[..])));
     assert_eq!(names.len(), entries.len());
 }
+
+#[test]
+fn local_permanent_image_skips_only_publication_and_keeps_owner_order() {
+    // None forces discovery off without a production knob. Both arms call
+    // the same registration implementation as the exported entry point.
+    let forced_off = Box::leak(image(0x4e00_b000));
+    let local = Box::leak(image(0x4e00_c000));
+    let nonlocal = Box::leak(image(0x4e00_d000));
+    let unloadable = Box::leak(image(0x4e00_e000));
+    let first = NEXT_REGISTRATION.load(Ordering::Relaxed);
+    let mut publications = Vec::new();
+    for (index, (image, permanent, bounds)) in [
+        (&*forced_off, 1, None),
+        (&*local, 1, Some(&local.bounds)),
+        (&*nonlocal, 1, Some(&local.bounds)),
+        (&*unloadable, 0, Some(&unloadable.bounds)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let before = images().lock().unwrap().len();
+        unsafe {
+            register_function_metadata_with_local_bounds(&image.owner, permanent, bounds);
+        }
+        publications.push(images().lock().unwrap().len() - before);
+        assert_eq!(registration(&image.owner), first + index as u32);
+        assert_eq!(image.records[0].identity.ordinal, 0);
+        assert_eq!(image.records[1].identity.ordinal, 1);
+    }
+    assert_eq!(publications, [1, 0, 1, 1]);
+    assert_eq!(NEXT_REGISTRATION.load(Ordering::Relaxed), first + 4);
+    eprintln!("startup publications forced-off/local/nonlocal/unloadable: {publications:?}; owner order preserved");
+}

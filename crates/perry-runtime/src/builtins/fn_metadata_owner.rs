@@ -175,6 +175,15 @@ pub unsafe extern "C" fn js_register_function_metadata(
     owner: *const FunctionMetadataOwner,
     permanent: i32,
 ) {
+    register_function_metadata_with_local_bounds(owner, permanent, static_record_bounds());
+}
+
+#[inline(always)]
+unsafe fn register_function_metadata_with_local_bounds(
+    owner: *const FunctionMetadataOwner,
+    permanent: i32,
+    local: Option<&FunctionRecordBounds>,
+) {
     let Some(owner) = owner.as_ref() else {
         return;
     };
@@ -189,6 +198,12 @@ pub unsafe extern "C" fn js_register_function_metadata(
     let Some(bounds) = owner.record_bounds() else {
         return;
     };
+    // The local permanent image is already in every lazy names view. Owner
+    // identity still follows the same registration order; only publication
+    // of these immutable records into the image list is redundant.
+    if permanent != 0 && local.is_some_and(|local| std::ptr::eq(local, bounds)) {
+        return;
+    }
     let Ok(mut list) = images().lock() else {
         return;
     };
