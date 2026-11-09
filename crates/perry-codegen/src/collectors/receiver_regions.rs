@@ -1266,6 +1266,13 @@ impl ReceiverDescriptorTable {
             boundary_admits(&entry.contract, RegionEnder::BackEdgePoll)?;
             if let Some(validation) = array_validation {
                 boundary_admits(&validation.contract, RegionEnder::BackEdgePoll)?;
+                // b2's `handle` negative control drops every re-derivation of
+                // a cold-arm handle, the poll's included.
+                if validation.cold_arm.is_some()
+                    && std::env::var("PERRY_RECEIVER_COLD_ARM_SABOTAGE").as_deref() == Ok("handle")
+                {
+                    continue;
+                }
             }
             refreshes.push(refresh.clone());
         }
