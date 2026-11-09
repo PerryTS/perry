@@ -23,12 +23,15 @@ pub enum RealmSlotRoot {
 }
 
 /// One step from a slot into what it holds: its elements (array elements,
-/// Map/Set entries, iterator values) or one named field.
+/// Map/Set entries, iterator values), one named field, or one internal
+/// slot of a host object (`islot(s, reason)`: the abort reason of a signal),
+/// which no program key names and no [[Get]] reads.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmSlotStep {
     Elems,
     Field(Cow<'static, str>),
+    Internal(Cow<'static, str>),
 }
 
 /// `this`, `arg(0)`, `elems(this)`, `field(arg(0), key)`, ...
@@ -88,6 +91,17 @@ pub enum RealmOperand {
         /// Own data fields the call defines on the object, with their values.
         #[serde(default)]
         fields: Cow<'static, [RealmField]>,
+        /// Internal slots the call gives the object (`islot` steps read
+        /// them), with their values.
+        #[serde(default, skip_serializing_if = "no_slots")]
+        slots: Cow<'static, [RealmField]>,
+    },
+    /// A promise born by the call: it fulfills with one of `value` (a
+    /// thenable among them is adopted) or rejects with one of `reject`.
+    Promise {
+        value: Cow<'static, [RealmOperand]>,
+        #[serde(default)]
+        reject: Cow<'static, [RealmOperand]>,
     },
     /// The host function value the realm declares at this path (a closure
     /// the body makes); its own declaration says what calling it does.
@@ -141,6 +155,10 @@ pub enum RealmEffect {
     },
     /// Keeps `src` in `dst` (ordinary [[Set]] into elements or a field).
     Stores { src: RealmSlot, dst: RealmSlot },
+    /// Hands the slot's values to code no declaration describes (fetch's
+    /// `init.body`: node iterates an async-iterable body, which calls the
+    /// program's methods): they escape, and what they reach.
+    Escapes(RealmSlot),
     /// `stores(fresh)`: the body stores only into objects it creates itself
     /// (a ToObject wrapper, a temporary, its fresh result); it keeps nothing
     /// in an object the program already holds.
@@ -154,7 +172,7 @@ pub enum RealmEffect {
 impl RealmSlot {
     fn validate(&self, at: &str) -> Result<(), String> {
         for step in self.steps.iter() {
-            if let RealmSlotStep::Field(key) = step {
+            if let RealmSlotStep::Field(key) | RealmSlotStep::Internal(key) = step {
                 if key.is_empty() {
                     return Err(format!("{at}: effect field key is empty"));
                 }
@@ -177,17 +195,30 @@ impl RealmOperand {
                 proto,
                 elems,
                 fields,
+                slots,
             } => {
                 if !names(proto) {
                     return Err(format!(
                         "{at}: fresh object prototype {proto} is not a realm node"
                     ));
                 }
-                if fields.iter().any(|f| f.key.is_empty()) {
+                if fields.iter().chain(slots.iter()).any(|f| f.key.is_empty()) {
                     return Err(format!("{at}: fresh field key is empty"));
                 }
                 elems.iter().try_for_each(|e| e.validate(at, names))?;
-                fields.iter().try_for_each(|f| f.value.validate(at, names))
+                fields
+                    .iter()
+                    .chain(slots.iter())
+                    .try_for_each(|f| f.value.validate(at, names))
+            }
+            Self::Promise { value, reject } => {
+                if value.is_empty() {
+                    return Err(format!("{at}: promise() names no fulfillment value"));
+                }
+                value
+                    .iter()
+                    .chain(reject.iter())
+                    .try_for_each(|v| v.validate(at, names))
             }
             Self::Native(path) => {
                 if !names(path) {
@@ -251,9 +282,23 @@ pub fn validate_effects(
         match o {
             RealmOperand::Prim(_) | RealmOperand::Bound | RealmOperand::Native(_) => {}
             RealmOperand::Slot(slot) => out.push(slot),
-            RealmOperand::Fresh { elems, fields, .. } => {
+            RealmOperand::Fresh {
+                elems,
+                fields,
+                slots,
+                ..
+            } => {
                 elems.iter().for_each(|e| slots_in(e, out));
-                fields.iter().for_each(|f| slots_in(&f.value, out));
+                fields
+                    .iter()
+                    .chain(slots.iter())
+                    .for_each(|f| slots_in(&f.value, out));
+            }
+            RealmOperand::Promise { value, reject } => {
+                value
+                    .iter()
+                    .chain(reject.iter())
+                    .for_each(|v| slots_in(v, out));
             }
             RealmOperand::Species { of, args, elems } => {
                 out.push(of);
@@ -280,8 +325,23 @@ pub fn validate_effects(
             // A call's result may be coerced (sort: ToNumber of the comparator's result).
             RealmEffect::Coerce { slot, .. } => value(slot)?,
             RealmEffect::Calls { callee, this, args } => {
-                not_result(callee)?;
-                operand(this)?;
+                // A function the result holds may be called later (a
+                // signal's `onabort` when its timer fires), with the
+                // result as `this`; the result itself is no function the
+                // call makes and calls.
+                let later = callee.root == RealmSlotRoot::Result && !callee.steps.is_empty();
+                if later {
+                    callee.validate(at)?;
+                } else {
+                    not_result(callee)?;
+                }
+                match this {
+                    RealmOperand::Slot(s) if later && s.root == RealmSlotRoot::Result => {
+                        s.validate(at)?
+                    }
+                    _ => operand(this)?,
+                }
+
                 args.iter().try_for_each(operand)?;
             }
             RealmEffect::Stores { src, dst } => {
@@ -294,6 +354,7 @@ pub fn validate_effects(
                 dst.validate(at)?;
             }
             RealmEffect::Returns(value) => operand(value)?,
+            RealmEffect::Escapes(slot) => not_result(slot)?,
             RealmEffect::StoresFresh | RealmEffect::Open => {}
         }
     }
@@ -324,6 +385,9 @@ pub mod emit {
             RealmSlotStep::Field(k) => {
                 format!("{p}RealmSlotStep::Field(::std::borrow::Cow::Borrowed({k:?}))")
             }
+            RealmSlotStep::Internal(k) => {
+                format!("{p}RealmSlotStep::Internal(::std::borrow::Cow::Borrowed({k:?}))")
+            }
         });
         format!("{p}RealmSlot {{ root: {root}, steps: {steps} }}")
     }
@@ -340,14 +404,26 @@ pub mod emit {
                 proto,
                 elems,
                 fields,
-            } => format!(
-                "{p}RealmOperand::Fresh {{ proto: ::std::borrow::Cow::Borrowed({proto:?}), elems: {}, fields: {} }}",
-                list(elems, |e| operand(p, e)),
-                list(fields, |f| format!(
-                    "{p}RealmField {{ key: ::std::borrow::Cow::Borrowed({:?}), value: {} }}",
-                    f.key,
-                    operand(p, &f.value)
-                ))
+                slots,
+            } => {
+                let field = |f: &RealmField| {
+                    format!(
+                        "{p}RealmField {{ key: ::std::borrow::Cow::Borrowed({:?}), value: {} }}",
+                        f.key,
+                        operand(p, &f.value)
+                    )
+                };
+                format!(
+                    "{p}RealmOperand::Fresh {{ proto: ::std::borrow::Cow::Borrowed({proto:?}), elems: {}, fields: {}, slots: {} }}",
+                    list(elems, |e| operand(p, e)),
+                    list(fields, field),
+                    list(slots, field)
+                )
+            }
+            RealmOperand::Promise { value, reject } => format!(
+                "{p}RealmOperand::Promise {{ value: {}, reject: {} }}",
+                list(value, |v| operand(p, v)),
+                list(reject, |v| operand(p, v))
             ),
             RealmOperand::Native(path) => {
                 format!("{p}RealmOperand::Native(::std::borrow::Cow::Borrowed({path:?}))")
@@ -390,11 +466,17 @@ pub mod emit {
                         slot(p, dst)
                     ),
                     RealmEffect::Returns(o) => format!("{p}RealmEffect::Returns({})", operand(p, o)),
+                    RealmEffect::Escapes(s) => format!("{p}RealmEffect::Escapes({})", slot(p, s)),
                     RealmEffect::StoresFresh => format!("{p}RealmEffect::StoresFresh"),
+
                     RealmEffect::Open => format!("{p}RealmEffect::Open"),
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
         )
     }
+}
+
+fn no_slots(slots: &Cow<'static, [RealmField]>) -> bool {
+    slots.is_empty()
 }
