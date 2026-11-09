@@ -1627,6 +1627,14 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
         }
+        // A key neither the buffer's own prototype nor `Object.prototype`
+        // declares (`buffer_member_absent`; `@@iterator` among them: a
+        // buffer is not iterable): the lookup is `undefined` and the call
+        // throws a fresh TypeError. Nothing runs and nothing escapes. A key
+        // a program store may have written onto a builtin prototype was
+        // already answered by `own_method_inner` (the receiver is described:
+        // the written method runs now, or on the replay of the miss).
+        ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(_)) => {}
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);
             if name == Some("toString") {
