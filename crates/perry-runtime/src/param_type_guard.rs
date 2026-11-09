@@ -1148,7 +1148,7 @@ mod tests {
     fn primitive_descriptors_reject_lying_values() {
         let number = one_node(&[OP_NUMBER]);
         assert_eq!(guard(JSValue::number(12.5), &number), 1);
-        assert_eq!(guard(JSValue::int32(12), &number), 1);
+        assert_eq!(guard(JSValue::number(f64::from(12)), &number), 1);
         assert_eq!(guard(JSValue::bool(true), &number), 0);
 
         let boolean = one_node(&[OP_BOOLEAN]);

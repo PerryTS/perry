@@ -957,7 +957,7 @@ fn concat_box_delegates_a_non_string_operand_to_the_dynamic_add() {
     // with the empty string.
     assert_eq!(js_string_concat_box(40.0, 2.0), 42.0);
     // An int32-tagged operand must decode to its value, not to its boxed bits.
-    let int42 = f64::from_bits(crate::value::JSValue::int32(42).bits());
+    let int42 = f64::from(42);
     assert_eq!(text(js_string_concat_box(heap("n="), int42)), "n=42");
     // undefined / null keep their ToString forms.
     let undef = f64::from_bits(crate::value::JSValue::undefined().bits());

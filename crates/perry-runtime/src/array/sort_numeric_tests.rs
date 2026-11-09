@@ -106,7 +106,7 @@ fn numeric_sort_admits_dense_numbers_without_a_raw_f64_brand() {
     let a = array(&[3.0, 1.0, i32::MAX as f64, 2.0]);
     unsafe {
         crate::array::header::clear_array_numeric_layout(a);
-        note_array_slot(a, 2, crate::value::JSValue::int32(i32::MAX).bits());
+        note_array_slot(a, 2, f64::from(i32::MAX).to_bits());
         assert!(array_numeric_layout(a).is_none());
         assert!(try_sort_numeric(a, false));
         // The operation need not change a producer's conservative layout.

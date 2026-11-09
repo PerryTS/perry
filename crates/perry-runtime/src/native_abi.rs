@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(js_typed_f64_arg_guard(12.5), 1);
         assert_eq!(js_typed_f64_arg_to_raw(12.5), 12.5);
 
-        let int32 = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        let int32 = f64::from(-7);
         assert_eq!(js_typed_f64_arg_guard(int32), 1);
         assert_eq!(js_typed_f64_arg_to_raw(int32), -7.0);
 
@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn typed_i32_arg_guard_is_non_throwing_and_int32_only() {
-        let tagged = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        let tagged = f64::from(-7);
         assert_eq!(js_typed_i32_arg_guard(tagged), 1);
         assert_eq!(js_typed_i32_arg_to_raw(tagged), -7);
 
@@ -574,10 +574,7 @@ mod tests {
         assert_eq!(js_typed_i1_arg_to_raw(f), 0);
 
         assert_eq!(js_typed_i1_arg_guard(1.0), 0);
-        assert_eq!(
-            js_typed_i1_arg_guard(f64::from_bits(JSValue::int32(1).bits())),
-            0
-        );
+        assert_eq!(js_typed_i1_arg_guard(f64::from(1)), 0);
         let s = crate::string::js_string_from_bytes(b"yes".as_ptr(), 3);
         let string = f64::from_bits(JSValue::string_ptr(s).bits());
         assert_eq!(js_typed_i1_arg_guard(string), 0);
@@ -595,10 +592,7 @@ mod tests {
         assert_ne!(js_typed_string_arg_to_raw(short), 0);
 
         assert_eq!(js_typed_string_arg_guard(42.0), 0);
-        assert_eq!(
-            js_typed_string_arg_guard(f64::from_bits(JSValue::int32(7).bits())),
-            0
-        );
+        assert_eq!(js_typed_string_arg_guard(f64::from(7)), 0);
         assert_eq!(js_typed_string_arg_guard(f64::from_bits(TAG_TRUE)), 0);
     }
 

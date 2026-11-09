@@ -554,7 +554,7 @@ fn an_int32_equal_to_a_registered_class_id_is_a_number() {
 fn an_int32_is_neither_a_dynamic_parent_nor_a_reflect_object() {
     let cid = 0x6A11;
     register(cid);
-    let int = f64::from_bits(crate::value::JSValue::int32(cid as i32).bits());
+    let int = f64::from(cid as i32);
     assert_eq!(
         crate::object::class_registry::parent_static::dynamic_value_class_id(int),
         0
@@ -573,7 +573,7 @@ fn metadata_on_an_int32_cannot_alias_a_class() {
     let _no_gc = crate::gc::GcSuppressScope::new();
     let cid = 0x6A12;
     register(cid);
-    let int = f64::from_bits(crate::value::JSValue::int32(cid as i32).bits());
+    let int = f64::from(cid as i32);
     let class = class_value(cid);
     let key = crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
         b"number-class-metadata".as_ptr(),

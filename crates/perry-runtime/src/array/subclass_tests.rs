@@ -434,7 +434,7 @@ fn dense_array_subclass_numeric_tail_store_preserves_tagged_fallbacks() {
     js_array_push_f64(obj as *mut ArrayHeader, 11.0);
     assert_eq!(array_subclass_fast_pop(receiver), Some(11.0));
 
-    let tagged_i32 = f64::from_bits(crate::value::JSValue::int32(123).bits());
+    let tagged_i32 = f64::from(123);
     assert_eq!(
         array_subclass_fast_push_one(receiver, tagged_i32),
         Some(1.0)

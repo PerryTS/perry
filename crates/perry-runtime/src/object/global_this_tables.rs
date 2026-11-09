@@ -388,6 +388,15 @@ pub(crate) fn constructor_identity(value: f64) -> Option<BuiltinConstructorIdent
     }
 }
 
+/// The call capture of a builtin constructor: its identity in the
+/// runtime-internal 0x7FFE word space (DESIGN-p3 §1.2, R4), the same word the
+/// realm image writes for `RealmValue::Int32` (`realm_image/atoms.rs`). It is
+/// never a JS value, and never a Number (P3 B4a: nothing builds an INT32
+/// Number).
+pub(crate) const fn builtin_constructor_identity_word(identity: u32) -> u64 {
+    crate::value::INT32_TAG | identity as u64
+}
+
 /// Birth consumes one declaration, so code, header identity and call capture
 /// cannot disagree. The fact precedes publication and survives moving GC.
 pub(crate) fn alloc_builtin_constructor(
@@ -400,7 +409,7 @@ pub(crate) fn alloc_builtin_constructor(
         crate::closure::js_closure_set_capture_bits(
             closure,
             0,
-            crate::JSValue::int32(identity as i32).bits(),
+            builtin_constructor_identity_word(identity as u32),
         );
         // Scalar declaration fact, installed before publication. The ordinary
         // birth has already checked the capture bound and initialized all slots.

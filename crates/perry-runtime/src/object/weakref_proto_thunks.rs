@@ -360,7 +360,7 @@ mod tests {
         _c: *const crate::closure::ClosureHeader,
         _this: crate::closure::JsThis,
     ) -> f64 {
-        f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
+        f64::from(FOREIGN_SENTINEL)
     }
 
     extern "C" fn foreign_method_thunk_1(
@@ -368,7 +368,7 @@ mod tests {
         _this: crate::closure::JsThis,
         _a: f64,
     ) -> f64 {
-        f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
+        f64::from(FOREIGN_SENTINEL)
     }
 
     /// A plain object carrying its own `method_name` function property — the
@@ -400,7 +400,7 @@ mod tests {
     /// Removing the brand check makes every one of these return `undefined`.
     #[test]
     fn folded_weak_helpers_delegate_a_foreign_receiver_to_its_own_method() {
-        let sentinel = JSValue::int32(FOREIGN_SENTINEL).bits();
+        let sentinel = f64::from(FOREIGN_SENTINEL).to_bits();
 
         let deref_recv = plain_object_with_method(
             "deref",
@@ -412,7 +412,7 @@ mod tests {
             "a foreign receiver's own `deref` must run, not the WeakRef intrinsic"
         );
 
-        let key = f64::from_bits(JSValue::int32(1).bits());
+        let key = f64::from(1);
         for name in ["get", "has", "delete"] {
             let recv = plain_object_with_method(
                 name,
@@ -466,7 +466,7 @@ mod tests {
             delegate_if_not_weak_collection(wm_val, "get", &[]).is_none(),
             "a real WeakMap must NOT be delegated away"
         );
-        let v = f64::from_bits(JSValue::int32(42).bits());
+        let v = f64::from(42);
         crate::weakref::js_weakmap_set(wm_val, target_val, v);
         assert_eq!(
             crate::weakref::js_weakmap_get(wm_val, target_val).to_bits(),

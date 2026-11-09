@@ -14,12 +14,7 @@ fn negative_key_proof_requires_an_ordinary_array_without_own_named_properties() 
     let mut arr = js_array_alloc(4);
     arr = js_array_push_f64(arr, 19.0);
     assert!(negative_integer_key_is_absent(arr));
-    for key in [
-        -1.0,
-        -4294967296.0,
-        -1e21,
-        f64::from_bits(crate::JSValue::int32(-1).bits()),
-    ] {
+    for key in [-1.0, -4294967296.0, -1e21, f64::from(-1)] {
         assert_eq!(read(arr, key).to_bits(), TAG_UNDEFINED);
     }
     assert_eq!(read(arr, -0.0), 19.0);
