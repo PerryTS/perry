@@ -325,7 +325,11 @@ fn a_parameters_prototype_is_its_class_prototype_in_every_unit() {
 fn a_hard_object_prototype_is_hard_in_every_unit() {
     // `Object.defineProperties` on Object.prototype in one unit makes every
     // chain through it HARD (E5), in the other units too, as the whole
-    // program derives it (`SharedWrite::Hard`; main: per unit stronger).
+    // program derives it (`SharedWrite::Hard`). Asserted on the whole
+    // program only: per-unit facts are retired (DEC 251, H3 deletes them),
+    // and per unit this case held only through the old global-sentinel
+    // escape cascade (the per-unit shared closure does not carry unit a's
+    // top writes into unit m).
     // The prototype may come as a value (DECISIONS 217). Under DEC 250 (Q2)
     // the accessor lands only under `constructor`: a computed read of `c`
     // (which may be that key) meets it, its own field `x` alone would not.
@@ -342,12 +346,12 @@ fn a_hard_object_prototype_is_hard_in_every_unit() {
             const c = new C();
             install(String(Math.random()));
             console.log(c.x, (c as any)[String(Math.random())]);";
-        let (u, _) = super::unit_alias::assert_not_stronger(&[("a", a.as_str()), ("m", m)]);
-        let c = u
+        let w = super::unit_alias::whole(&[("a", a.as_str()), ("m", m)]);
+        let c = w
             .templates
             .iter()
             .find(|t| t.display == "m.ts:C")
             .expect("C");
-        assert!(!c.prefix_stable, "{proto}\n{}", u.dump_text());
+        assert!(!c.prefix_stable, "{proto}\n{}", w.dump_text());
     }
 }

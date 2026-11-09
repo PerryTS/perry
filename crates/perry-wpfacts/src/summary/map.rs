@@ -222,7 +222,17 @@ pub fn map_cons(
             key,
             setter,
         },
-        AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
+        AccessorInstall {
+            key,
+            f,
+            setter,
+            from,
+        } => AccessorInstall {
+            key,
+            f,
+            setter,
+            from: if from == NO_NODE { NO_NODE } else { n(from) },
+        },
         AnnexBDefine { call, setter } => AnnexBDefine {
             call: k(call),
             setter,

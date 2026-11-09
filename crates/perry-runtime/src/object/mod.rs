@@ -156,6 +156,7 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
+pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -229,7 +230,7 @@ pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
 pub(crate) use native_module::{class_instance_has_method, class_method_value_target};
 pub(crate) use native_module::{
-    class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+    class_method_entry_source_func_ptr, class_method_home_id, SYMBOL_BOUND_METHOD_NAME,
 };
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
@@ -240,12 +241,12 @@ pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module.
+#[cfg(test)]
+pub(crate) use native_module_registry::js_nm_install_events;
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf,
+    js_install_global_value_surfaces, js_nm_install_fs, js_nm_install_module, js_nm_install_perf,
     js_nm_install_process, js_nm_install_tls, js_nm_install_util,
 };
-#[cfg(test)]
-pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -448,6 +449,7 @@ pub use this_binding::{
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
     js_static_this_resolve_class, js_this_coerce_sloppy,
 };
+pub(crate) use to_string_tag::fetch_handle_constructor_value;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
 pub use to_string_tag::{js_object_to_string, object_prototype_to_string};

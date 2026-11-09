@@ -115,8 +115,6 @@ pub(crate) fn capture_owner_for_template(start: f64, class_id: u32) -> Option<f6
                 continue;
             }
             cid
-        } else if super::class_prototype_ref_id(current).is_some() {
-            return None;
         } else {
             let cid = super::class_ref_id(current)?;
             if cid == class_id {

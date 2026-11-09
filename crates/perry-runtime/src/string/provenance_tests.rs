@@ -150,7 +150,7 @@ fn index_conversion_matches_saturation_and_numeric_coercion() {
         assert_eq!(slice_ops::js_string_position_to_index(n), expected);
     }
     for n in [i32::MIN, -1, 0, 1, i32::MAX] {
-        let boxed = f64::from_bits(crate::value::JSValue::int32(n).bits());
+        let boxed = f64::from(n);
         assert_eq!(js_string_index_to_i32(boxed), n);
         assert_eq!(char_ops::js_string_number_index_to_i32(boxed), n);
         assert_eq!(char_ops::js_string_end_index_to_i32(boxed, 17), n);

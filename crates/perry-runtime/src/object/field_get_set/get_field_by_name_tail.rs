@@ -74,6 +74,11 @@ pub(crate) fn get_field_by_name_object_tail(
                         let key_len = (*key).byte_len as usize;
                         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                         if key_bytes == b"constructor" {
+                            if let Some(ctor) =
+                                crate::object::fetch_handle_constructor_value(raw as usize)
+                            {
+                                return ctor;
+                            }
                             if let Some(dispatch) = handle_property_dispatch() {
                                 let bits = dispatch(raw as i64, key_ptr, key_len);
                                 let value = JSValue::from_bits(bits.to_bits());

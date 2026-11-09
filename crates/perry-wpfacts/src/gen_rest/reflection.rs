@@ -175,6 +175,7 @@ impl<'a> Gen<'a> {
                 paths,
                 arg,
                 options,
+                synchronous,
                 ..
             } => {
                 let a = self.expr(fx, arg);
@@ -220,6 +221,19 @@ impl<'a> Gen<'a> {
                 // of any specifier): runtime-made values, never a compiled
                 // module outside `paths`.
                 self.m.add_tok(out, TOP);
+                // A synchronous CommonJS `require(expr)` (codegen
+                // `lower_dynamic_require`) returns the target value itself: no
+                // promise, and no `then` adoption (node's CJS loader never calls
+                // `then` on `module.exports`). The ⊤ fallback stays ⊤; what goes
+                // is a `then(resolve, reject)` call on it, which handed the
+                // program-wide rejecter to unknown code and so made every
+                // `catch` ⊤. A require that fails (MODULE_NOT_FOUND, the ambient
+                // require's own errors) throws a realm error at the site.
+                if *synchronous {
+                    let r = self.region();
+                    self.m.add_tok(r, self.runtime_error);
+                    return out;
+                }
                 self.promise_of(mi, out)
             }
 

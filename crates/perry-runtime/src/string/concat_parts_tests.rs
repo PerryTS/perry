@@ -105,8 +105,8 @@ fn other_value_kinds_take_the_general_arm_with_chain_results() {
         f64::from_bits(0x7FFC_0000_0000_0002),
         f64::from_bits(0x7FFC_0000_0000_0004),
         f64::from_bits(0x7FFC_0000_0000_0003),
-        f64::from_bits(JSValue::int32(7).bits()),
-        f64::from_bits(JSValue::int32(-7).bits()),
+        f64::from(7),
+        f64::from(-7),
     ];
     for other in others {
         let a = parts_call(&[literal("<"), value(other), literal(">")]);

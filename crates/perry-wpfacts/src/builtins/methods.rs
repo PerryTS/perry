@@ -65,9 +65,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            let retained = if !m.unit_mode
-                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
-            {
+            let retained = if !m.unit_mode && super::global_object(m, t) {
                 match _key {
                     Key::Named(a) => m
                         .native_property(t, &m.atoms[a as usize])
@@ -75,7 +73,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                     _ => None,
                 }
                 .and_then(|identity| {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
                     match m.toks[value as usize] {
                         TokKind::Builtin(_)
                             if !m
@@ -674,8 +672,11 @@ pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
         ) || super::undeclared(m, t, key))
 }
 
-/// Callable values whose bodies the accessor groups cannot bind precisely.
-pub(crate) fn unknown_accessor_callable(m: &Model, t: Tok) -> bool {
+/// Callable values other than a program function that an accessor may
+/// hold: ⊤, a builtin function, a bound function, a class. Only ⊤ is an
+/// opaque accessor (`Cons::AccessorInstall`); the others run as an ordinary
+/// call of that value (`Model::group_call`).
+pub(crate) fn accessor_callable(m: &Model, t: Tok) -> bool {
     match m.toks[t as usize] {
         TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
         TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,

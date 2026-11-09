@@ -25,13 +25,16 @@ impl Model {
             .or_default()
             .insert((origin, key, act))
         {
+            // ⊤ (all kinds) is the rule's own result (`reason`): no flow
+            // from TOPVAL beside it (`from` = `dst`), so the census sees
+            // the any-key node that fired it as its source.
             let any = self.any_key_node(holder);
             let reason = self.reason("accessor descriptor of a changed holder");
             self.cons(
                 any,
                 Cons::TopIfAny {
                     dst,
-                    from: self.top_tok_node,
+                    from: dst,
                     reason: Some(reason),
                 },
             );

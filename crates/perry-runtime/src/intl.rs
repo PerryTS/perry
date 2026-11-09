@@ -43,8 +43,8 @@ mod install;
 use install::install_constructor;
 mod method_install;
 use method_install::{
-    install_bound_instance_function, install_bound_instance_function_from_handle, install_function,
-    install_function_from_handle,
+    bound_instance_function, install_bound_instance_function,
+    install_bound_instance_function_from_handle, install_function, install_function_from_handle,
 };
 mod rooted_fields;
 use rooted_fields::{
@@ -52,6 +52,8 @@ use rooted_fields::{
     get_option_value, get_string_field, get_string_field_from_raw_handle, set_builtin_attrs,
     set_field, set_internal_field, set_internal_field_from_raw_handle,
 };
+mod slot_record;
+use slot_record::{attach_slot_record, slot_holder};
 mod subclass;
 pub(crate) use subclass::{intl_instanceof, intl_subclass_super, is_intl_constructor_value};
 use subclass::{locale_instance_tag, push_locale_element};
@@ -67,11 +69,10 @@ pub mod segments_view;
 use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
-    collator_bound_compare_thunk, collator_bound_resolved_options_thunk,
-    date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
-    date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
-    date_time_format_bound_to_parts_thunk, resolve_collator_locale, temporal_locale_string,
-    TemporalLocaleCtx,
+    collator_bound_compare_thunk, date_time_format_bound_format_thunk,
+    date_time_format_bound_range_thunk, date_time_format_bound_range_to_parts_thunk,
+    date_time_format_bound_resolved_options_thunk, date_time_format_bound_to_parts_thunk,
+    resolve_collator_locale, temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, is_valid_offset_time_zone,
@@ -1016,8 +1017,14 @@ fn make_instance_this(
     let locale = locale_or_default(locales_handle.get_nanbox_f64());
     let obj = js_object_alloc(0, 8);
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    set_internal_field_from_raw_handle(&obj_handle, KEY_KIND, string_value(kind));
-    set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&locale));
+    // A Collator keeps every internal slot in its slot record (no own keys, as
+    // in node); the other services still keep them as hidden own fields.
+    let slots = scope.root_raw_mut_ptr(match kind {
+        KIND_COLLATOR => attach_slot_record(&obj_handle),
+        _ => obj_handle.with_mut_ptr(|obj| obj),
+    });
+    set_internal_field_from_raw_handle(&slots, KEY_KIND, string_value(kind));
+    set_internal_field_from_raw_handle(&slots, KEY_LOCALE, string_value(&locale));
     let opts = &options_handle;
 
     match kind {
@@ -1434,53 +1441,42 @@ fn make_instance_this(
                 .unwrap_or_else(|| locale == "th" || locale.starts_with("th-"));
             let (resolved_locale, collation, numeric, case_first) =
                 resolve_collator_locale(&locale, collation_opt, numeric_opt, case_first_opt);
+            set_internal_field_from_raw_handle(&slots, KEY_LOCALE, string_value(&resolved_locale));
+            set_internal_field_from_raw_handle(&slots, KEY_COL_USAGE, string_value(&usage));
             set_internal_field_from_raw_handle(
-                &obj_handle,
-                KEY_LOCALE,
-                string_value(&resolved_locale),
-            );
-            set_internal_field_from_raw_handle(&obj_handle, KEY_COL_USAGE, string_value(&usage));
-            set_internal_field_from_raw_handle(
-                &obj_handle,
+                &slots,
                 KEY_COL_SENSITIVITY,
                 string_value(&sensitivity),
             );
             set_internal_field_from_raw_handle(
-                &obj_handle,
+                &slots,
                 KEY_COL_IGNORE_PUNCT,
                 bool_value(ignore_punct),
             );
+            set_internal_field_from_raw_handle(&slots, KEY_COL_COLLATION, string_value(&collation));
+            set_internal_field_from_raw_handle(&slots, KEY_COL_NUMERIC, bool_value(numeric));
             set_internal_field_from_raw_handle(
-                &obj_handle,
-                KEY_COL_COLLATION,
-                string_value(&collation),
-            );
-            set_internal_field_from_raw_handle(&obj_handle, KEY_COL_NUMERIC, bool_value(numeric));
-            set_internal_field_from_raw_handle(
-                &obj_handle,
+                &slots,
                 KEY_COL_CASE_FIRST,
                 string_value(&case_first),
             );
-            let compare_fn = install_bound_instance_function_from_handle(
-                &obj_handle,
-                "compare",
-                crate::fn_info!(collator_bound_compare_thunk, 2; with_declared(2)),
-                2,
-            );
+            // [[BoundCompare]]: read through the `Intl.Collator.prototype.compare`
+            // getter; `resolvedOptions` is the prototype method (node).
+            let compare_fn = obj_handle.with_mut_ptr(|obj| {
+                bound_instance_function(
+                    obj,
+                    "",
+                    crate::fn_info!(collator_bound_compare_thunk, 2; with_declared(2)),
+                    2,
+                )
+            });
             if !compare_fn.is_null() {
-                object::set_bound_native_closure_name(compare_fn, "");
                 set_internal_field_from_raw_handle(
-                    &obj_handle,
+                    &slots,
                     KEY_COL_BOUND_COMPARE,
                     js_nanbox_pointer(compare_fn as i64),
                 );
             }
-            install_bound_instance_function_from_handle(
-                &obj_handle,
-                "resolvedOptions",
-                crate::fn_info!(collator_bound_resolved_options_thunk, 0; with_declared(0)),
-                0,
-            );
         }
         KIND_SEGMENTER => {
             // `? ToObject(options)` (null → TypeError), then GetOption in order:

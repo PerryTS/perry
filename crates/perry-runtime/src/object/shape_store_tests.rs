@@ -166,11 +166,7 @@ fn own_number_store_preserves_lanes_and_generalizes_a_function_slot() {
             super::super::js_object_get_field_by_name_f64(obj, atom),
             f64::INFINITY
         );
-        assert!(try_own_store(
-            obj,
-            atom,
-            f64::from_bits(crate::JSValue::int32(42).bits())
-        ));
+        assert!(try_own_store(obj, atom, f64::from(42)));
         assert_eq!(
             super::super::js_object_get_field_by_name_f64(obj, atom),
             42.0

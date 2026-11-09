@@ -92,16 +92,12 @@ pub(crate) fn reflect_value_is_object(value: f64) -> bool {
     // One shared Type(value) is Object answer: a POINTER_TAG word names a
     // GC-headed object (honest pointers), so its header byte decides, and
     // native ids are objects. Raw untagged words keep the allocator proof;
-    // class constructors are callable function objects. Only a flagged
-    // prototype reference needs the non-pointer compatibility path.
+    // class constructors are callable function objects.
     if crate::builtins::arithmetic::js_value_is_object(value) {
         return true;
     }
     let top16 = value.to_bits() >> 48;
-    if top16 == 0 {
-        return crate::object::js_value_is_heap_object(value);
-    }
-    crate::object::class_prototype_ref_id(value).is_some()
+    top16 == 0 && crate::object::js_value_is_heap_object(value)
 }
 
 /// `CreateListFromArrayLike(value)` — collect indexed `0..length` properties of

@@ -65,6 +65,7 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
     if key.is_any() {
         let f = m.tok(TokKind::BuiltinFn(Native::Member {
             identity: REALM_ACCESSOR,
+            holder: None,
         }));
         m.add_tok(c.ret, f);
     }
