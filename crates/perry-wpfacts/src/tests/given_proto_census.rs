@@ -79,11 +79,15 @@ external(v);
 
 /// F1: a store `type[key] = val` through a top receiver that holds `Object`, with an unknown key,
 /// gives `val` as a prototype. The write is attributed to the (top) receiver; `proto` is `val`.
+/// The one receiver joins `unknown()` (top) with an `Object` that has not escaped, so the set keeps
+/// the builtin beside top. A load of `Object` alone is exactly the builtin (the global object is
+/// kept): its give is C1's known receiver, and an escaped `Object` is absorbed into top.
 #[test]
 fn computed_store_give_names_its_top_receiver() {
+    let head = HEAD.replace("external(Object);\n", "");
     let src = format!(
-        "{HEAD}function setCached(type: any, key: string, val: any) {{ type[key] = val; }}\n\
-         setCached(unknown(), String(Math.random()), v);\nsetCached(Object, String(Math.random()), v);\n"
+        "{head}function setCached(type: any, key: string, val: any) {{ type[key] = val; }}\n\
+         setCached(Math.random() < 0.5 ? unknown() : Object, String(Math.random()), v);\n"
     );
     let pf = census(&src);
     let w = given_writes(&pf, "builtin:Object");
