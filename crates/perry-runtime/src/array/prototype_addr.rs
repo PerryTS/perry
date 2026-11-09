@@ -223,7 +223,7 @@ pub(crate) fn note_realm_intrinsic(
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).prototype)
+    realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity))
 }
 
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
@@ -246,17 +246,48 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor)
+    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None)
 }
 
-fn realm_intrinsic_addr(cell: &Cell<usize>) -> usize {
+/// This realm's original constructor of `identity` if the realm has bound
+/// it, else 0. Never builds the realm.
+#[inline]
+pub(crate) fn intrinsic_constructor_addr_if_bound(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let cell = &intrinsic_entry(identity).constructor;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// The one materialize point of the realm's intrinsics: builds the realm when
+/// this thread has none yet, then births a `lazy` family
+/// (`BuiltinConstructorDeclaration::lazy`) whose prototype `family` names
+/// the first time it is asked for. Every reader that may build goes through
+/// here; the `_if_bound` readers never build (an unborn family was never
+/// written either).
+fn realm_intrinsic_addr(
+    cell: &Cell<usize>,
+    family: Option<crate::object::BuiltinConstructorIdentity>,
+) -> usize {
     let mut addr = cell.get();
     if addr == 0 && !crate::object::global_this_is_materialized() {
         crate::object::js_get_global_this();
         addr = cell.get();
     }
     if addr == 0 {
-        return 0;
+        match family {
+            Some(identity) if identity.declaration().lazy => {
+                crate::object::birth_lazy_family(identity);
+                addr = cell.get();
+                if addr == 0 {
+                    return 0;
+                }
+            }
+            _ => return 0,
+        }
     }
     heal_prototype_addr(cell, addr)
 }
