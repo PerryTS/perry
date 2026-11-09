@@ -320,4 +320,5 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
 
 pub(crate) use state::{
     reserved_native_parent_constructor_value, reserved_native_parent_prototype_bits,
+    static_parent_prototype_bits,
 };
