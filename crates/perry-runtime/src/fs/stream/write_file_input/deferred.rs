@@ -35,7 +35,7 @@ struct Operation {
     phase: Phase,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static OPERATIONS: RefCell<HashMap<usize, Operation>> = RefCell::new(HashMap::new());
     static NEXT_OPERATION: Cell<usize> = const { Cell::new(1) };
 }

@@ -2046,6 +2046,7 @@ js_math_cbrt	f64	f64
 js_math_clz32	f64	f64
 js_math_cos	f64	f64
 js_math_cosh	f64	f64
+js_math_exp	f64	f64
 js_math_expm1	f64	f64
 js_math_f16round	f64	f64
 js_math_fmod	f64	f64,f64

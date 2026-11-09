@@ -148,6 +148,44 @@ pub(crate) struct SpecFnPlan {
     /// successful descriptor guard is what licenses the matching HIR proof in
     /// the clone; `None` keeps that parameter fully generic.
     pub guards: Vec<Option<SpecParamGuard>>,
+    /// P2 (DESIGN-p2 §3): the function is typed. Its entry is `{public}$sig`,
+    /// whose parameter registers and return take the signature's
+    /// representations; `reps` then only says how the body binds them. The
+    /// public symbol is the boxed entry (`emit_boxed_entry`).
+    pub signature: Option<super::FactsSignature>,
+    /// P2 (§4.1): per parameter, the literal default the caller (or the
+    /// boxed entry) applies outside `$sig`. Only non-Boxed parameters carry
+    /// one; `$sig` is compiled without their default prologue.
+    pub sig_defaults: Vec<Option<f64>>,
+    /// P2 (CWN 11-09): the public symbol main emitted for this function; a
+    /// typed function's boxed entry takes that symbol's inline attributes.
+    pub sig_public: MainPublic,
+}
+
+/// The public symbol main emits for a function (`compile_function`). `F$sig`
+/// takes the admission of the body main's direct sites entered: a spec
+/// clone's (`GuardedSpec`, `SpecBody`) or the public body's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum MainPublic {
+    /// The ordinary body (`function::apply_public_inline_attrs`).
+    #[default]
+    Body,
+    /// The ordinary body, beside a Tier A static spec clone (`$spec_…`).
+    SpecBody,
+    /// The Tier B guarded trampoline (`emit_public_spec_function_trampoline`).
+    GuardedSpec,
+    /// The typed_abi `typed_f64`/`typed_i32` trampoline.
+    TypedTrampoline,
+}
+
+/// The entry symbol `plan` names: `{public}$sig` for a typed function (P2),
+/// `{public}$spec_<labels>` otherwise.
+pub(crate) fn spec_entry_name(public_name: &str, plan: &SpecFnPlan) -> String {
+    if plan.signature.is_some() {
+        format!("{public_name}$sig")
+    } else {
+        spec_function_name(public_name, &plan.reps)
+    }
 }
 
 /// LLVM parameter type for a rep slot.

@@ -282,6 +282,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         } else {
             birth_family(declaration, closure_ptr, &singleton, &mut birth)
         };
+        if name == "Storage" {
+            // Node: `localStorage` / `sessionStorage` are accessors whose
+            // getters make the areas; bound here, ahead of `Storage`.
+            crate::web_storage::install_global_accessors(singleton());
+        }
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         super::super::define_builtin_data_property(
@@ -299,13 +304,13 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     }
     // Interface inheritance carries prototype methods. DOMException has
     // Error.prototype as its instance parent, but no Error constructor parent.
-    for (child, parent, constructor_inherits) in [
-        ("AbortSignal", "EventTarget", true),
-        ("BroadcastChannel", "EventTarget", true),
-        ("CustomEvent", "Event", true),
-        ("MessageEvent", "Event", true),
-        ("DOMException", "Error", false),
-    ] {
+    // A lazy child links in its own birth (`link_interface_parent`).
+    for (child, parent, constructor_inherits) in INTERFACE_PARENTS {
+        if crate::object::BuiltinConstructorIdentity::for_name(child)
+            .is_some_and(|identity| identity.declaration().lazy)
+        {
+            continue;
+        }
         let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
         let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
         let child_proto = builtin_prototype_value(child);
@@ -342,7 +347,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 false,
             ),
             "fetch" => (
-                crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), Iterate); coerce(elems(field(arg(1), headers)), Iterate); coerce(field(arg(1), headers), OwnKeys); coerce(elems(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), Iterate); coerce(elems(field(arg(1), headers)), Iterate); coerce(field(arg(1), headers), OwnKeys); coerce(elems(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype, slots = {bodyError: islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason)}), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
                 1,
                 true,
             ),
@@ -719,6 +724,42 @@ pub(super) struct FamilyBirthState {
     pub(super) typed_array_intrinsic_ctor: *mut crate::closure::ClosureHeader,
 }
 
+/// (child, parent, the constructor also inherits) for the interface families.
+const INTERFACE_PARENTS: [(&str, &str, bool); 5] = [
+    ("AbortSignal", "EventTarget", true),
+    ("BroadcastChannel", "EventTarget", true),
+    ("CustomEvent", "Event", true),
+    ("MessageEvent", "Event", true),
+    ("DOMException", "Error", false),
+];
+
+/// A lazy interface child's links to its (eager) parent, made in its birth:
+/// the same two links the population makes for an eager child.
+fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHeader, proto_obj: *mut ObjectHeader) {
+    let Some(&(_, parent, constructor_inherits)) =
+        INTERFACE_PARENTS.iter().find(|(child, _, _)| *child == name)
+    else {
+        return;
+    };
+    let Some(parent) = crate::object::BuiltinConstructorIdentity::for_name(parent) else {
+        return;
+    };
+    let parent_ctor = crate::array::intrinsic_constructor_addr_if_bound(parent);
+    let parent_proto = crate::array::intrinsic_prototype_addr(parent);
+    if constructor_inherits && parent_ctor != 0 {
+        crate::closure::closure_set_static_prototype(
+            closure_ptr as usize,
+            crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits(),
+        );
+    }
+    if parent_proto != 0 && !proto_obj.is_null() {
+        super::super::prototype_chain::object_set_static_prototype(
+            proto_obj as usize,
+            crate::value::js_nanbox_pointer(parent_proto as i64).to_bits(),
+        );
+    }
+}
+
 /// One builtin family's birth after its constructor exists: the prototype,
 /// the constructor's own properties, the prototype's members and hooks, and
 /// the realm's [[Intrinsics]] entry. Returns the constructor value.
@@ -935,13 +976,11 @@ fn birth_family(
                 crate::event_target_hook_slots::install_web_event_proto_methods(name, proto_obj);
             }
         }
+        if declaration.lazy {
+            link_interface_parent(name, closure_ptr, proto_obj);
+        }
         if name == "Storage" {
-            crate::web_storage::install_storage_globals(
-                singleton(),
-                closure_ptr,
-                proto_obj,
-                ctor_value,
-            );
+            crate::web_storage::install_storage_prototype(proto_obj, ctor_value);
         }
         if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
             super::super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
