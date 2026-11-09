@@ -123,9 +123,15 @@ def main():
         ("signature-range-negative", "signature-range", "signature"),
     ]:
         source = fixtures / (name + ".ts")
+        # The array arms written before PR-B (DESIGN-p4l1) test the
+        # element-read and int32 witnesses. With `Rep::Arr` on, the array
+        # rep witness reports the same false length first, so these arms
+        # run with it off to reach the witness each was written for.
+        older_array_arm = wrong_claim in ("arrlen", "densebirth", "arrfloor", "arrappend", "arrcap", "arrfwd")
+        extra = {"PERRY_FACTS_ARRAY_REPS": "0"} if older_array_arm else {}
         for claim in ["", wrong_claim]:
             arm = name + ("-false" if claim else "-correct")
-            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim)
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim, **extra)
             observed = observe(exe, e)
             if claim:
                 value = report(observed)
