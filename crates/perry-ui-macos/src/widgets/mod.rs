@@ -48,6 +48,9 @@ pub mod vstack;
 pub mod webview;
 pub mod zstack;
 
+#[cfg(test)]
+mod stack_tests;
+
 use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -513,19 +516,33 @@ pub fn clear_children(handle: i64) {
     }
 }
 
+fn registered_view_pointer(view: &Retained<NSView>) -> *const NSView {
+    #[cfg(test)]
+    stack_tests::REGISTRY_LOOKUPS.with(|count| count.set(count.get() + 1));
+    Retained::as_ptr(view)
+}
+
 /// Refresh positions used when AppKit detaches and later reattaches hidden views.
 fn refresh_stack_parent_map(parent_handle: i64, stack: &NSStackView) {
     let views = stack.viewsInGravity(NSStackViewGravity::Top);
     WIDGETS.with(|widgets| {
         let widgets = widgets.borrow();
+        // Build once per refresh, not once per sibling. A transient index also
+        // observes layout-slot replacements without a second registry to sync.
+        // Refresh remains O(registered widgets + siblings); repeated insertions
+        // still refresh siblings before the next ForEach callback can see them.
+        let mut handles = std::collections::HashMap::with_capacity(widgets.len());
+        for (index, registered) in widgets.iter().enumerate() {
+            // External views may be registered twice; lookup uses the first handle.
+            handles
+                .entry(registered_view_pointer(registered))
+                .or_insert(index as i64 + 1);
+        }
         PARENT_MAP.with(|parents| {
             let mut parents = parents.borrow_mut();
             for (index, view) in views.iter().enumerate() {
-                if let Some(handle_index) = widgets
-                    .iter()
-                    .position(|registered| Retained::as_ptr(registered) == Retained::as_ptr(&view))
-                {
-                    parents.insert(handle_index as i64 + 1, (parent_handle, index));
+                if let Some(&handle) = handles.get(&Retained::as_ptr(&view)) {
+                    parents.insert(handle, (parent_handle, index));
                 }
             }
         });
