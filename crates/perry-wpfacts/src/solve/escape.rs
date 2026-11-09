@@ -191,10 +191,7 @@ impl Model {
                 self.note_shared(SharedWrite::Unmodeled(s));
             }
         }
-        if matches!(
-            self.toks[t as usize],
-            TokKind::Builtin(BuiltinNs::GlobalThis)
-        ) {
+        if builtins::global_object(self, t) {
             crate::builtins::note_global_in_top(self);
             if !self.unit_mode {
                 crate::builtins::note_native_write(
@@ -224,7 +221,7 @@ impl Model {
         if !self.chain_escape {
             if let Some(s) = self
                 .shared_of(t)
-                .filter(|s| *s != Shared::Builtin(BuiltinNs::GlobalThis))
+                .filter(|_| !builtins::global_object(self, t))
             {
                 self.note_shared(SharedWrite::Handed(s));
             }
@@ -247,10 +244,9 @@ impl Model {
             }
             // Unknown code given `process` (or the global object) may write
             // the arrays `process.argv` and `process.execArgv` hold.
-            if matches!(
-                self.toks[t as usize],
-                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
-            ) {
+            if builtins::global_object(self, t)
+                || matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
+            {
                 for i in 0..self.process_arrays.len() {
                     let a = self.process_arrays[i].2;
                     self.escape(a, reason);
