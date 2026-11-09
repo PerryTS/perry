@@ -57,6 +57,14 @@ pub const WEAKSET_BIRTH_LAYOUT: u32 = WEAKMAP_BIRTH_LAYOUT + 1;
 /// `array::ArrayHeader` size: element 0 follows it.
 pub const ARRAY_HEADER_SIZE: usize = 24;
 
+/// The longest fresh `new Array(k)` the runtime backs with a dense store
+/// (`js_array_constructor_single`): `capacity >= k`, every slot a hole. A
+/// longer one records length `k` over an empty store, as a sparse length
+/// extension does, so its capacity says nothing about its length. wpfacts
+/// proves an element read slot-addressable only up to this length
+/// (`bindings::element_read`).
+pub const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
+
 /// `PerryLayoutKey.attrs` bit (the runtime's key entry byte, `ENTRY_OPTIONAL`):
 /// the key is a layout's optional or late member. Its slot may hold the hole
 /// marker, and while it does the key is absent (OBJECT_MODEL_2026-10-13.md

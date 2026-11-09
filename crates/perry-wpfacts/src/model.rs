@@ -1233,6 +1233,11 @@ pub struct Model {
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=densebirth`): an element read
+    /// is proven past `MAX_FRESH_DENSE_ARRAY_LENGTH`, over a store the
+    /// runtime does not back densely, a wrong claim the read's capacity
+    /// witness must catch.
+    pub dense_birth_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
