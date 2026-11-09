@@ -243,6 +243,9 @@ pub struct RealmEntry {
     pub kind: RealmKind,
     pub births: &'static [&'static str],
     pub module: Option<&'static str>,
+    /// The declared [[Prototype]] (`RealmDeclaration::prototype`): another
+    /// declaration's name (`node:stream.Readable`'s is `node:stream.Stream`).
+    pub prototype: Option<&'static str>,
     pub facts: &'static str,
     /// The declared effects of the body (empty: undeclared, unknown code).
     pub effects: &'static [RealmEffect],
