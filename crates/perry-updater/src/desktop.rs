@@ -151,38 +151,12 @@ fn app_id() -> String {
 // Atomic install
 // ============================================================================
 
-/// Replace `target_path` with `staged_path`, keeping the displaced version at
-/// `<target>.prev` for rollback. Atomic on the same filesystem on every
-/// supported platform — but "atomic" means something subtly different on
-/// each OS, so the live-process-survives-its-own-replacement guarantee is
-/// worth spelling out:
-///
-/// **macOS / Linux (POSIX `rename(2)`)**: rename swaps the directory entry
-/// in one syscall — the new name points at the new inode atomically.
-/// Crucially, the *currently-running* process holds open file descriptors
-/// (or, more precisely, an mmap'd image-section reference) to the OLD
-/// inode. POSIX guarantees the inode stays alive until every reference is
-/// dropped, so the running binary keeps executing happily out of the now-
-/// unreachable inode while the new binary takes over the path. Same logic
-/// applies to swapping a `.app` bundle on macOS — bundle swap is a
-/// directory rename, not a file replace, but the running Mach-O lives
-/// inside `Contents/MacOS/...` and that file's inode is held by the
-/// process's image section.
-///
-/// **Windows (NTFS rename via `MoveFileExW`)**: NTFS allows a file to be
-/// renamed even while it's mapped as a code section by the loader,
-/// provided the loader opened the file with `FILE_SHARE_DELETE` — which
-/// it has on every Windows version since Vista. `std::fs::rename` calls
-/// `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` which honors that share mode.
-/// The running EXE's image section continues to reference the renamed
-/// file (now at `<exe>.prev`) until process exit; the next launch sees
-/// the new file at the original path.
-///
-/// In both cases the relaunch is what actually flips the process onto
-/// the new code; the rename just makes sure the path the OS will look
-/// up next time points at the new bytes.
-///
-/// Returns 1 on success, 0 on any IO error.
+/// Publish a desktop update with a completed `<target>.prev` backup first.
+/// Regular files use one POSIX rename; macOS directories use a native swap.
+/// Unsupported platforms/filesystems fail without removing the live target.
+/// This is namespace atomicity, not power-loss durability or a snapshot of
+/// concurrently modified bundles. See the updater guide for recovery states.
+/// Returns 1 after publication, even if subsequent cleanup fails, or 0 on error.
 #[no_mangle]
 pub extern "C" fn perry_updater_install(staged_path_val: i64, target_path_val: i64) -> i64 {
     let staged = match unsafe { extract_str(staged_path_val) } {
@@ -193,87 +167,297 @@ pub extern "C" fn perry_updater_install(staged_path_val: i64, target_path_val: i
         Some(s) => s,
         None => return 0,
     };
-
-    let prev = format!("{}.prev", target);
-
-    // Best-effort: remove a stale .prev from a previous update. Ignore errors
-    // (Windows EBUSY on the file is acceptable — we accept the leak in MVP).
-    let _ = remove_path(&prev);
-
-    // 1) Move current target → .prev
-    if std::path::Path::new(&target).exists() && rename_path(&target, &prev).is_err() {
-        return 0;
-    }
-
-    // 2) Move staged → target
-    if rename_path(&staged, &target).is_err() {
-        // Rollback step 1: try to put .prev back.
-        let _ = rename_path(&prev, &target);
-        return 0;
-    }
-
-    // 3) On Unix, ensure the new binary is executable.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&target) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o755);
-            let _ = std::fs::set_permissions(&target, perms);
-        }
-    }
-
-    1
+    i64::from(install_with(&staged, &target, &mut publish_path))
 }
 
-/// Restore `<target>.prev` over `target`, undoing a prior install. Returns 1
-/// on success, 0 if no backup exists or rename failed.
+fn install_with<F>(staged: &str, target: &str, publish: &mut F) -> bool
+where
+    F: FnMut(&str, &str) -> std::io::Result<()>,
+{
+    install_with_io(staged, target, publish, &mut snapshot_backup)
+}
+
+fn install_with_io<F, B>(staged: &str, target: &str, publish: &mut F, backup: &mut B) -> bool
+where
+    F: FnMut(&str, &str) -> std::io::Result<()>,
+    B: FnMut(&str, &std::path::Path) -> std::io::Result<()>,
+{
+    let Ok((staged, target, prev)) = install_paths(staged, target) else {
+        return false;
+    };
+    let mut scratch = None;
+    if std::path::Path::new(&target).exists() {
+        let Ok(prepared) = PreparedBackup::new(&target) else {
+            return false;
+        };
+        let snapshot = prepared.0.join("snapshot");
+        if backup(&target, &snapshot).is_err()
+            || publish(snapshot.to_str().unwrap(), &prev).is_err()
+        {
+            return false;
+        }
+        // The fresh backup now holds the current live version, so a later
+        // rollback swap is safe again. Clearing earlier would re-expose a
+        // stale broken prev when this install fails before the backup
+        // publishes.
+        let _ = remove_path(&format!("{}.rollback", prev));
+        scratch = Some(prepared);
+    }
+
+    // Execute permission must be in place before the new entry becomes live.
+    #[cfg(unix)]
+    let original_permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        if std::path::Path::new(&staged).is_file() {
+            let Ok(metadata) = std::fs::metadata(&staged) else {
+                return false;
+            };
+            let permissions = metadata.permissions();
+            if std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).is_err() {
+                return false;
+            }
+            Some(permissions)
+        } else {
+            None
+        }
+    };
+    if publish(&staged, &target).is_err() {
+        #[cfg(unix)]
+        if let Some(permissions) = original_permissions {
+            let _ = std::fs::set_permissions(&staged, permissions);
+        }
+        return false;
+    }
+    // A directory exchange leaves the old tree at staged. Backup already
+    // exists at prev, so interruption or cleanup failure cannot strand it.
+    let _ = remove_path(&staged);
+    drop(scratch);
+    true
+}
+
+/// Restore a completed backup without first removing the live target.
+/// Windows and uncertified directory protocols return 0 without mutation.
 #[no_mangle]
 pub extern "C" fn perry_updater_perform_rollback(target_path_val: i64) -> i64 {
     let target = match unsafe { extract_str(target_path_val) } {
         Some(s) => s,
         None => return 0,
     };
-
-    let mut rename = rename_path;
-    if perform_rollback_with(&target, &mut rename) {
-        1
-    } else {
-        0
-    }
+    i64::from(perform_rollback_with(&target, &mut publish_path))
 }
 
-/// Rollback implementation factored for deterministic failure-path tests.
-/// The native ABI above supplies `rename_path`; tests can inject a failed
-/// second rename and verify that the broken executable is restored.
-fn perform_rollback_with<F>(target: &str, rename: &mut F) -> bool
+fn perform_rollback_with<F>(target: &str, publish: &mut F) -> bool
 where
     F: FnMut(&str, &str) -> std::io::Result<()>,
 {
+    // Derive `.prev` from the normalized target, mirroring install_paths: a
+    // caller-supplied trailing separator must not resolve the backup inside
+    // the target bundle.
+    let Ok(normalized) = normalized_path(target) else {
+        return false;
+    };
+    let Some(target) = normalized.to_str() else {
+        return false;
+    };
     let prev = format!("{}.prev", target);
-
-    if !std::path::Path::new(&prev).exists() {
+    let marker = format!("{}.rollback", prev);
+    // The marker is write-ahead intent, not proof: the swap may have
+    // committed, or the process may have died between the marker write and
+    // the swap, in which case prev still holds the only good backup. Nothing
+    // distinguishes the two states, so the armed path swaps nothing and
+    // deletes nothing; the next install refreshes prev and clears the marker.
+    if std::path::Path::new(&marker).exists() {
+        return true;
+    }
+    let Ok((prev, target)) = replacement_paths(&prev, target) else {
+        return false;
+    };
+    if std::fs::write(&marker, b"").is_err() {
         return false;
     }
-
-    // Move current (likely-broken) target out of the way.
-    let broken = format!("{}.broken", target);
-    let _ = remove_path(&broken);
-    let _ = rename(target, &broken);
-
-    if rename(&prev, target).is_err() {
-        // Try to put broken back so the system isn't left without an exe.
-        let _ = rename(&broken, target);
+    if publish(&prev, &target).is_err() {
+        // An atomic rename either commits or does not, so a failed publish
+        // leaves no swap to record; drop the intent so a later rollback can
+        // retry from the intact backup.
+        let _ = remove_path(&marker);
         return false;
     }
-
-    let _ = remove_path(&broken);
+    // A successful directory swap puts the broken version at prev. Cleanup
+    // is not part of the publication result; leaving the marker armed when
+    // cleanup fails makes every later attempt stop without touching either
+    // path, since the armed branch cannot tell a completed swap from a
+    // crashed one.
+    if remove_path(&prev).is_ok() {
+        let _ = remove_path(&marker);
+    }
     true
 }
 
-fn rename_path(from: &str, to: &str) -> std::io::Result<()> {
-    // For directories (macOS .app bundles), `std::fs::rename` works the same
-    // as for files when both ends are on the same filesystem.
+fn invalid_paths() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "unsupported updater paths",
+    )
+}
+
+fn normalized_path(path: &str) -> std::io::Result<std::path::PathBuf> {
+    let path = std::path::Path::new(path);
+    let name = path.file_name().ok_or_else(invalid_paths)?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    Ok(parent.canonicalize()?.join(name))
+}
+
+fn checked_metadata(path: &std::path::Path) -> std::io::Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() || meta.is_dir() => Ok(Some(meta)),
+        Ok(_) => Err(invalid_paths()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn replacement_paths(source: &str, target: &str) -> std::io::Result<(String, String)> {
+    // Do not probe replacement alternatives that could remove a mapped EXE.
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
+        return Err(invalid_paths());
+    }
+    let source = normalized_path(source)?;
+    let target = normalized_path(target)?;
+    let src = checked_metadata(&source)?.ok_or_else(invalid_paths)?;
+    let dst = checked_metadata(&target)?;
+    if source == target
+        || source.starts_with(&target)
+        || target.starts_with(&source)
+        || (src.is_dir() && !cfg!(target_os = "macos"))
+        || dst.as_ref().is_some_and(|m| m.is_dir() != src.is_dir())
+    {
+        return Err(invalid_paths());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let parent = std::fs::metadata(target.parent().ok_or_else(invalid_paths)?)?;
+        if src.dev() != parent.dev()
+            || dst
+                .as_ref()
+                .is_some_and(|m| m.dev() != src.dev() || m.ino() == src.ino())
+        {
+            return Err(invalid_paths());
+        }
+    }
+    Ok((
+        source.to_str().ok_or_else(invalid_paths)?.to_owned(),
+        target.to_str().ok_or_else(invalid_paths)?.to_owned(),
+    ))
+}
+
+fn install_paths(staged: &str, target: &str) -> std::io::Result<(String, String, String)> {
+    let (staged, target) = replacement_paths(staged, target)?;
+    let prev = format!("{}.prev", target);
+    let prev_meta = checked_metadata(std::path::Path::new(&prev))?;
+    let stage_meta = std::fs::metadata(&staged)?;
+    if staged == prev
+        || std::path::Path::new(&staged).starts_with(&prev)
+        || std::path::Path::new(&prev).starts_with(&staged)
+        || prev_meta
+            .as_ref()
+            .is_some_and(|m| m.is_dir() != stage_meta.is_dir())
+    {
+        return Err(invalid_paths());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if prev_meta
+            .as_ref()
+            .is_some_and(|m| m.dev() != stage_meta.dev() || m.ino() == stage_meta.ino())
+        {
+            return Err(invalid_paths());
+        }
+    }
+    Ok((staged, target, prev))
+}
+
+// An exclusively-created sibling directory owns only this attempt's scratch.
+// An interrupted process can leave it behind, but never an incomplete prev.
+struct PreparedBackup(std::path::PathBuf);
+
+impl PreparedBackup {
+    fn new(target: &str) -> std::io::Result<Self> {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::path::PathBuf::from(format!(
+            "{}.prev.prepare-{}-{}",
+            target,
+            std::process::id(),
+            sequence
+        ));
+        std::fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for PreparedBackup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn snapshot_backup(target: &str, snapshot: &std::path::Path) -> std::io::Result<()> {
+    if std::path::Path::new(target).is_file() {
+        return std::fs::hard_link(target, snapshot);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        unsafe extern "C" {
+            fn copyfile(
+                from: *const std::ffi::c_char,
+                to: *const std::ffi::c_char,
+                state: *mut std::ffi::c_void,
+                flags: u32,
+            ) -> i32;
+        }
+        let from = std::ffi::CString::new(target)?;
+        let to = std::ffi::CString::new(snapshot.as_os_str().as_bytes())?;
+        // copyfile.h: ALL includes stat/ACL/xattrs/data; recursive clone
+        // preserves symlinks and requires a nonexistent snapshot destination.
+        let flags = 0xf | (1 << 15) | (1 << 24);
+        // SAFETY: NUL-terminated paths outlive the call; null requests no state.
+        if unsafe { copyfile(from.as_ptr(), to.as_ptr(), std::ptr::null_mut(), flags) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err(invalid_paths())
+}
+
+fn publish_path(from: &str, to: &str) -> std::io::Result<()> {
+    if std::path::Path::new(from).is_dir() && std::path::Path::new(to).exists() {
+        #[cfg(target_os = "macos")]
+        {
+            unsafe extern "C" {
+                fn renamex_np(
+                    from: *const std::ffi::c_char,
+                    to: *const std::ffi::c_char,
+                    flags: u32,
+                ) -> i32;
+            }
+            let from = std::ffi::CString::new(from)?;
+            let to = std::ffi::CString::new(to)?;
+            // SAFETY: both C strings are live; RENAME_SWAP is 2 in sys/stdio.h.
+            if unsafe { renamex_np(from.as_ptr(), to.as_ptr(), 2) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        return Err(invalid_paths());
+    }
     std::fs::rename(from, to)
 }
 
@@ -318,111 +502,5 @@ pub extern "C" fn perry_updater_relaunch(exe_path_val: i64) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_str(s: &str) -> i64 {
-        js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64
-    }
-
-    fn read_str(p: *mut StringHeader) -> String {
-        unsafe {
-            if p.is_null() {
-                return String::new();
-            }
-            let len = (*p).byte_len as usize;
-            let data = (p as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            std::str::from_utf8(bytes).unwrap_or("").to_string()
-        }
-    }
-
-    #[test]
-    fn install_and_rollback_roundtrip() {
-        let dir =
-            std::env::temp_dir().join(format!("perry-updater-install-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let target = dir.join("app.bin");
-        let staged = dir.join("staged.bin");
-
-        std::fs::write(&target, b"v1").unwrap();
-        std::fs::write(&staged, b"v2").unwrap();
-
-        let target_s = target.to_string_lossy().to_string();
-        let staged_s = staged.to_string_lossy().to_string();
-        assert_eq!(
-            perry_updater_install(make_str(&staged_s), make_str(&target_s)),
-            1
-        );
-
-        assert_eq!(std::fs::read(&target).unwrap(), b"v2");
-        let prev = format!("{}.prev", target_s);
-        assert_eq!(std::fs::read(&prev).unwrap(), b"v1");
-        assert!(!staged.exists(), "staged should have moved");
-
-        // Now roll back.
-        assert_eq!(perry_updater_perform_rollback(make_str(&target_s)), 1);
-        assert_eq!(std::fs::read(&target).unwrap(), b"v1");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn rollback_without_backup_fails() {
-        let dir = std::env::temp_dir().join(format!("perry-updater-rb-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let target = dir.join("only.bin");
-        std::fs::write(&target, b"x").unwrap();
-
-        let s = target.to_string_lossy().to_string();
-        assert_eq!(perry_updater_perform_rollback(make_str(&s)), 0);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn rollback_rename_failure_restores_broken_target() {
-        let dir = std::env::temp_dir().join(format!(
-            "perry-updater-rb-rename-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let target = dir.join("app.bin");
-        let prev = format!("{}.prev", target.display());
-        std::fs::write(&target, b"broken-v2").unwrap();
-        std::fs::write(&prev, b"backup-v1").unwrap();
-
-        let target_s = target.to_string_lossy().to_string();
-        let prev_for_failure = prev.clone();
-        let mut rename = move |from: &str, to: &str| {
-            if from == prev_for_failure {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "injected rollback rename failure",
-                ));
-            }
-            std::fs::rename(from, to)
-        };
-
-        assert!(!perform_rollback_with(&target_s, &mut rename));
-        assert_eq!(std::fs::read(&target).unwrap(), b"broken-v2");
-        assert_eq!(std::fs::read(&prev).unwrap(), b"backup-v1");
-        assert!(!std::path::Path::new(&format!("{}.broken", target.display())).exists());
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn sentinel_path_uses_app_id() {
-        std::env::set_var("PERRY_APP_ID", "test-app-id-zzz");
-        let p = read_str(perry_updater_get_sentinel_path());
-        assert!(p.contains("test-app-id-zzz"), "sentinel path = {}", p);
-        assert!(p.ends_with("updater.sentinel"));
-        std::env::remove_var("PERRY_APP_ID");
-    }
-}
+#[path = "desktop_tests.rs"]
+mod tests;
