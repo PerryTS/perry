@@ -162,12 +162,16 @@ pub(crate) struct SpecFnPlan {
     pub sig_public: MainPublic,
 }
 
-/// The public symbol main emits for a function (`compile_function`).
+/// The public symbol main emits for a function (`compile_function`). `F$sig`
+/// takes the admission of the body main's direct sites entered: a spec
+/// clone's (`GuardedSpec`, `SpecBody`) or the public body's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum MainPublic {
     /// The ordinary body (`function::apply_public_inline_attrs`).
     #[default]
     Body,
+    /// The ordinary body, beside a Tier A static spec clone (`$spec_…`).
+    SpecBody,
     /// The Tier B guarded trampoline (`emit_public_spec_function_trampoline`).
     GuardedSpec,
     /// The typed_abi `typed_f64`/`typed_i32` trampoline.
