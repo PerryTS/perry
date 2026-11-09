@@ -286,25 +286,34 @@ fn a_hook_enabled_after_the_watcher_still_gets_it() {
 }
 
 /// A computed specifier whose value is the module's name: the callee of
-/// `.createHook(...)` is the native createHook.
+/// `.createHook(...)` is the native createHook. The loader is
+/// `createRequire`'s `require`, the one a CommonJS module's `require` hands a
+/// computed specifier to (`cjs_wrap` `__perry_cjs_reloader`). This harness
+/// does not wrap the source, so a bare `require` here would be an unbound
+/// global (rule G): a ReferenceError before createHook, as in node.
 #[test]
 fn a_hook_through_a_computed_specifier_gets_the_watcher() {
     let pf = facts(&format!(
         r#"
-        function load(n: string): any {{ return require(n); }}
+        import {{ createRequire }} from "node:module";
+        const req: any = createRequire(import.meta.url);
+        function load(n: string): any {{ return req(n); }}
         load(["async", "hooks"].join("_")).createHook({{ init(id: any, type: any, tid: any, res: any) {{ res.foo = {{ zz: 1 }}; }} }}).enable();
         {WATCHERS}"#
     ));
     watchers_escape(&pf);
 }
 
-/// Control: a computed `require(x)` whose result is used, with no call of
-/// createHook anywhere: the watchers keep their facts.
+/// Control: a computed `require(x)` (`createRequire`'s, as above) whose
+/// result is every builtin module object, with no call of createHook
+/// anywhere: the watchers keep their facts.
 #[test]
 fn a_computed_require_without_create_hook_keeps_the_watcher() {
     let pf = facts(&format!(
         r#"
-        function load(n: string): any {{ return require(n); }}
+        import {{ createRequire }} from "node:module";
+        const req: any = createRequire(import.meta.url);
+        function load(n: string): any {{ return req(n); }}
         const os: any = load(["o", "s"].join(""));
         console.log(os.platform());
         {WATCHERS}"#

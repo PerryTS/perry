@@ -134,11 +134,11 @@ pub(crate) unsafe fn js_fs_utimes_result(
     }
 }
 
-/// `fs.utimesSync(path, atime, mtime)`.
 // The path; a time is a number, a numeric string or a Date's time value,
 // read as it is (no valueOf: `to_unix_timestamp_or_throw`, as node's
 // toUnixTimestamp); the dispatch arm returns undefined.
 crate::realm_decl! { "node:fs.utimesSync", effects = { path(arg(0)); stores(fresh); returns(prim(undefined)) } }
+/// `fs.utimesSync(path, atime, mtime)`.
 #[no_mangle]
 pub extern "C" fn js_fs_utimes_sync(path_value: f64, atime_value: f64, mtime_value: f64) -> i32 {
     validate::validate_path("path", path_value);

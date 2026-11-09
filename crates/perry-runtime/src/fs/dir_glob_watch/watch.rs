@@ -1582,8 +1582,6 @@ fn normalized_watch_args(arg1: f64, arg2: f64) -> (f64, Option<f64>) {
     }
 }
 
-/// `fs.watch(path[, options][, listener])` — OS-event-backed watcher (#9591);
-/// see `watch_backend`.
 // What it does to the program's values: the path, the options' four keys
 // ([[Get]]; a string options is the encoding), the listener (arg(1) when
 // callable, else arg(2)) kept on the watcher it returns; every listener the
@@ -1594,6 +1592,8 @@ fn normalized_watch_args(arg1: f64, arg2: f64) -> (f64, Option<f64>) {
 // The watcher it makes is the resource `init_resource("FSEVENTWRAP")` hands to
 // `init` of every enabled async hook.
 crate::realm_decl! { "node:fs.watch", effects = { path(arg(0)); reads(field(arg(1), encoding)); reads(field(arg(1), persistent)); reads(field(arg(1), recursive)); reads(field(arg(1), signal)); stores(arg(1) -> islot(result, listeners)); stores(arg(2) -> islot(result, listeners)); stores(fresh); async_resource(result); returns(fresh(Object.prototype, fields = {close: native("%FsWatcherClose%"), ref: native("%FsWatcherRef%"), unref: native("%FsWatcherUnref%"), on: native("%FsWatcherOn%"), once: native("%FsWatcherOnce%"), addListener: native("%FsWatcherOn%"), removeListener: native("%FsWatcherOff%"), off: native("%FsWatcherOff%")})); calls(islot(result, listeners), this = result, args = [prim(str | undefined) | fresh(Error.prototype), prim(str | undefined) | fresh(Buffer.prototype)]) } }
+/// `fs.watch(path[, options][, listener])` — OS-event-backed watcher (#9591);
+/// see `watch_backend`.
 #[no_mangle]
 pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     crate::fs::install_watcher_roots();
@@ -1653,7 +1653,6 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     object_value
 }
 
-/// `fs.watchFile(path[, options], listener)` — stat-polling watcher.
 // One StatWatcher per path, kept by the runtime (`WATCH_FILE_PATHS`): a
 // second call on a watched path adds its listener to that watcher and
 // returns it. The facts keep every watcher it returned in an internal slot
@@ -1664,6 +1663,7 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
 // The watcher it makes is the resource `init_resource("STATWATCHER")` hands to
 // `init` of every enabled async hook.
 crate::realm_decl! { "node:fs.watchFile", effects = { path(arg(0)); reads(field(arg(1), interval)); reads(field(arg(1), persistent)); reads(field(arg(1), bigint)); stores(fresh); async_resource(result); returns(fresh(Object.prototype, fields = {ref: native("%StatWatcherRef%"), unref: native("%StatWatcherUnref%"), on: native("%StatWatcherOn%"), once: native("%StatWatcherOnce%"), addListener: native("%StatWatcherOn%"), removeListener: native("%StatWatcherOff%"), off: native("%StatWatcherOff%")})); returns(islot(callee, watchers)); stores(result -> islot(callee, watchers)); stores(arg(1) -> islot(result, listeners)); stores(arg(2) -> islot(result, listeners)); calls(islot(result, listeners), this = result, args = [fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)}), fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)})]) } }
+/// `fs.watchFile(path[, options], listener)` — stat-polling watcher.
 #[no_mangle]
 pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     crate::fs::install_watcher_roots();
@@ -1729,9 +1729,9 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
     object_value
 }
 
-/// `fs.unwatchFile(path[, listener])`.
 // The listener is compared, never called or kept.
 crate::realm_decl! { "node:fs.unwatchFile", effects = { path(arg(0)); stores(fresh); returns(prim(undefined)) } }
+/// `fs.unwatchFile(path[, listener])`.
 #[no_mangle]
 pub extern "C" fn js_fs_unwatch_file(path_value: f64, listener: f64) -> f64 {
     validate::validate_path("filename", path_value);
