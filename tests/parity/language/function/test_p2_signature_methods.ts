@@ -91,3 +91,40 @@ console.log(
   Object.setPrototypeOf({ x: 10, z: 1, y: 20 }, P4c.prototype).sum(3),
   Object.create(P4c.prototype).sum(1),
 );
+
+// S25 (§3.2.1 tower: composes): a tower-routable method (two `this` field
+// reads), typed at `c25.m(i)` in `typed25`, whose receiver is C25 alone. In
+// `mixed25` the receiver may be C25 or D25, which overrides `m`: there
+// `typed_calls` refuses and the site keeps the dispatch tower.
+class C25 {
+  x: number;
+  y: number;
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+  m(k: number): number {
+    return (this.x * 3 + this.y + k) | 0;
+  }
+}
+class D25 extends C25 {
+  constructor() {
+    super(4, 5);
+  }
+  m(k: number): number {
+    return (this.x - this.y - k) | 0;
+  }
+}
+const c25 = new C25(1, 2);
+const objs25: C25[] = [new C25(2, 3), new D25()];
+function typed25(n: number): number {
+  let s = 0;
+  for (let i = 0; i < n; i++) s += c25.m(i);
+  return s;
+}
+function mixed25(n: number): number {
+  let s = 0;
+  for (let i = 0; i < n; i++) s += objs25[i & 1].m(i);
+  return s;
+}
+console.log("S25", typed25(100 * RUN), mixed25(100 * RUN));
