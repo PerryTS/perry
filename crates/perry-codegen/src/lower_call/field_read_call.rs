@@ -46,6 +46,24 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
         return None;
     }
     let index = args.get(fact.index_arg as usize)?.clone();
+    // Condition 5a proved the index an integer Number; inside int32 it is
+    // exactly `index | 0`, which the element read lowers as an i32 (no
+    // runtime normalization of a double key).
+    let int32 = ctx
+        .wpfacts
+        .call_arg_ranges
+        .get(byte_offset)
+        .and_then(|r| r.get(fact.index_arg as usize).copied().flatten())
+        .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX));
+    let index = if int32 {
+        Expr::Binary {
+            op: perry_hir::BinaryOp::BitOr,
+            left: Box::new(index),
+            right: Box::new(Expr::Integer(0)),
+        }
+    } else {
+        index
+    };
     let read = Expr::IndexGet {
         element_offset: fact.element_offset,
         byte_offset: fact.element_offset,
