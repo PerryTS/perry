@@ -5291,11 +5291,15 @@ fn string_text(bits: u64) -> Option<String> {
         let n = v.short_string_to_buf(&mut buf);
         return Some(String::from_utf8_lossy(&buf[..n]).into_owned());
     }
-    (bits >> 48 == 0x7fff).then(|| {
-        input_record::Value::input_value(
-            &((bits & 0x0000_ffff_ffff_ffff) as *mut crate::StringHeader),
-        )
-    })
+    let p = (bits & 0x0000_ffff_ffff_ffff) as *const crate::StringHeader;
+    if bits >> 48 != 0x7fff || p.is_null() {
+        return None;
+    }
+    // The text itself, not the K2a value encoding: a short and a heap string
+    // with equal text compare equal, and the row holds the text.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(p.add(1).cast::<u8>(), (*p).byte_len as usize) };
+    Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// Where a string operand came from: a host value's birth (argv element,
