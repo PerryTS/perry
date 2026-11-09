@@ -168,13 +168,13 @@ fn print_lifecycle_summary(summary: &lifecycle::RunSummary, use_color: bool) {
             eprintln!(
                 "\x1b[2mperry install: ran lifecycle scripts for {} explicitly approved package(s): {}\x1b[0m",
                 summary.ran.len(),
-                summary.ran.join(", ")
+                summary.ran_locations.join(", ")
             );
         } else {
             eprintln!(
                 "perry install: ran lifecycle scripts for {} explicitly approved package(s): {}",
                 summary.ran.len(),
-                summary.ran.join(", ")
+                summary.ran_locations.join(", ")
             );
         }
     }
@@ -184,7 +184,7 @@ fn print_lifecycle_summary(summary: &lifecycle::RunSummary, use_color: bool) {
                 "\x1b[33m▲\x1b[0m perry install: skipped lifecycle scripts for {} unapproved \
                  package(s): {}",
                 summary.skipped.len(),
-                summary.skipped.join(", ")
+                summary.skipped_locations.join(", ")
             );
             eprintln!(
                 "  add to `perry.allowScripts` in package.json, or use `--run-scripts <pkg>` to run."
@@ -193,7 +193,7 @@ fn print_lifecycle_summary(summary: &lifecycle::RunSummary, use_color: bool) {
             eprintln!(
                 "perry install: skipped lifecycle scripts for {} unapproved package(s): {}",
                 summary.skipped.len(),
-                summary.skipped.join(", ")
+                summary.skipped_locations.join(", ")
             );
             eprintln!(
                 "  add to `perry.allowScripts` in package.json, or use `--run-scripts <pkg>` to run."

@@ -410,3 +410,51 @@ fn lifecycle_preserves_project_and_blanket_approvals() {
         "approved"
     );
 }
+
+#[test]
+fn lifecycle_follows_an_alias_whose_scope_directory_is_a_link() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    write_package(root.path(), "@source/esbuild", "esbuild");
+    let physical = root.path().join("node_modules/@source/esbuild");
+    // A linked scope folder makes @other and @source one physical directory.
+    fs::create_dir_all(physical.join("node_modules")).unwrap();
+    std::os::unix::fs::symlink(
+        root.path().join("node_modules/@source"),
+        physical.join("node_modules/@other"),
+    )
+    .unwrap();
+
+    let summary = run(root.path(), &args(&["--run-scripts", "@other/esbuild"]));
+    assert_eq!(summary.ran, ["@other/esbuild"]);
+    assert_eq!(
+        fs::read_to_string(physical.join("ran.txt")).unwrap(),
+        "approved"
+    );
+}
+
+#[test]
+fn lifecycle_summary_names_the_version_and_directory_of_each_copy() {
+    let _env = crate::test_env_lock::env_lock();
+    let root = TempDir::new().unwrap();
+    write_package(root.path(), "esbuild", "esbuild");
+    write_package(root.path(), "outer-fixture/node_modules/esbuild", "esbuild");
+
+    let summary = run(root.path(), &args(&["--run-scripts", "esbuild"]));
+    let mut reported = summary.ran_locations.clone();
+    reported.sort();
+    let mut expected = [
+        format!(
+            "esbuild@1.0.0 at {}",
+            root.path().join("node_modules/esbuild").display()
+        ),
+        format!(
+            "esbuild@1.0.0 at {}",
+            root.path()
+                .join("node_modules/outer-fixture/node_modules/esbuild")
+                .display()
+        ),
+    ];
+    expected.sort();
+    assert_eq!(reported, expected);
+}

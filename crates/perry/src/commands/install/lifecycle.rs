@@ -41,6 +41,7 @@ pub fn run_all(
         let trusted = is_trusted(&pkg.name, &user_opt_in, args);
         if !trusted {
             summary.skipped.push(pkg.name.clone());
+            summary.skipped_locations.push(describe(pkg));
             continue;
         }
 
@@ -59,6 +60,7 @@ pub fn run_all(
         }
         run_package(pkg, project_root)?;
         summary.ran.push(pkg.name.clone());
+        summary.ran_locations.push(describe(pkg));
     }
     Ok(summary)
 }
@@ -67,6 +69,14 @@ pub fn run_all(
 pub struct RunSummary {
     pub ran: Vec<String>,
     pub skipped: Vec<String>,
+    /// Parallel to `ran` and `skipped`, naming the copy that ran: one approved name can
+    /// match several installed directories.
+    pub ran_locations: Vec<String>,
+    pub skipped_locations: Vec<String>,
+}
+
+fn describe(pkg: &ScannedPackage) -> String {
+    format!("{}@{} at {}", pkg.name, pkg.version, pkg.dir.display())
 }
 
 fn has_lifecycle_scripts(pkg: &ScannedPackage) -> bool {

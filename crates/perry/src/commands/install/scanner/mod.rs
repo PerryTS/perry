@@ -107,10 +107,13 @@ fn record_and_recurse(
         let Some(parent) = pkg_dir.parent() else {
             return;
         };
+        // A linked scope directory canonicalises onto the store's own scope, so the literal
+        // scope name is what separates an approved alias from the store entry.
+        let same_scope = parent.file_name() == excluded.parent().and_then(Path::file_name);
         let Ok(parent) = fs::canonicalize(parent) else {
             return;
         };
-        if Some(parent.as_path()) == excluded.parent() {
+        if same_scope && Some(parent.as_path()) == excluded.parent() {
             return;
         }
     }
