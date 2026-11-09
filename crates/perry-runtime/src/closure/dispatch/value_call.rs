@@ -403,9 +403,13 @@ unsafe fn call_array_this(
         return dispatch_body_args(closure, info, this, &vec![0.0; n]);
     }
     let args = std::slice::from_raw_parts(args_ptr, n);
-    // V8 supplies INT32-tagged numbers; compiled code supplies doubles. Keep
-    // conversion at this bridge, and leave class references (the same tag)
-    // intact. Only a slice containing a numeric INT32 needs scratch storage.
+    // Defensive decode of INT32-tagged words; class references (the same tag)
+    // stay intact. No caller supplies one today: the V8 embedding that did
+    // (perry-jsruntime) was removed in #1696, `js_create_callback` is a stub
+    // (`closure/v8_stubs.rs`), and the remaining callers (perry-ffi
+    // `Closure::call`, ext-http) pass plain doubles (P3 B1 audit,
+    // perry-wpfacts/NUM_SEEDS.md). Deleted with the other INT32 consumers in
+    // P3 B4b. Only a slice containing a numeric INT32 needs scratch storage.
     let is_int = |raw: f64| {
         raw.to_bits() & 0xFFFF_0000_0000_0000 == crate::value::INT32_TAG
             && crate::object::class_ref_id(raw).is_none()
