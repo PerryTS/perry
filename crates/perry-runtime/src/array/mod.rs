@@ -255,7 +255,9 @@ pub use self::iter_object::{
     js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::iter_bt_dump;
-pub(crate) use self::iterator::{is_builtin_iterator_class_id, spread_values};
+pub(crate) use self::iterator::{
+    entries_array_for_small_handle_value, is_builtin_iterator_class_id, spread_values,
+};
 pub use self::iterator::{
     js_array_spread_append, js_array_spread_append_iterator, js_for_of_to_array, js_get_async_iterator,
     js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_kind,

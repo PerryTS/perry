@@ -69,7 +69,9 @@ pub(crate) use get::{
 };
 
 // Iterator protocol, getOwnPropertySymbols, ToPrimitive.
-pub(crate) use iterator::{class_ref_resolves_iterator, get_iterator_from_method};
+pub(crate) use iterator::{
+    class_ref_resolves_iterator, get_iterator_from_method, iterator_from_method,
+};
 pub use iterator::{
     js_get_iterator, js_iterator_result_validate, js_object_get_own_property_symbols,
     js_to_primitive,

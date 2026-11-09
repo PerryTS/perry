@@ -1517,6 +1517,11 @@ fn get_field_by_name_past_data_probe(
                     if let Some(value) = crate::object::http_handle_prototype::field(raw, key) {
                         return value;
                     }
+                    if key_bytes == b"constructor" {
+                        if let Some(ctor) = crate::object::fetch_handle_constructor_value(raw) {
+                            return ctor;
+                        }
+                    }
                     if let Some(dispatch) = handle_property_dispatch() {
                         let bits = dispatch(raw as i64, key_ptr, key_len);
                         if key_bytes == b"constructor" {
