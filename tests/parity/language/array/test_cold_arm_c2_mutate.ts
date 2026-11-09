@@ -14,9 +14,9 @@ Object.defineProperty(Array.prototype, "1.5", {
     return 0;
   },
 });
-function run(): string {
+function run(n: number): string {
   let s = 0, und = 0, acc = 0, num = 0;
-  for (let k = 0; k < 12; k++) {
+  for (let k = 0; k < n; k++) {
     if (a[k & 3] === S) s++;
     if (a[k & 3] === undefined) und++;
     if (a[k & 3] === ACC) acc++;
@@ -27,6 +27,6 @@ function run(): string {
 }
 for (mode = 0; mode < 4; mode++) {
   a = [1, 2, 3, 4, 5, 6, 7, 8];
-  console.log(mode, run(), a.length);
+  console.log(mode, run(12), a.length);
 }
 delete (Array.prototype as any)["1.5"];
