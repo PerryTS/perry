@@ -409,10 +409,8 @@ fn a_headerless_symbol_behind_a_date_cell_tag_is_not_a_date() {
 }
 
 /// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
-/// 5, and a `0x7FFE` word with high payload bits: neither is an int32
-/// Number, and a top-16-only test reads both as one.
+/// 5: not an int32 Number, though a top-16-only test reads it as one.
 const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
-const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
 
 #[test]
 fn a_non_number_0x7ffe_word_converts_to_nan() {
