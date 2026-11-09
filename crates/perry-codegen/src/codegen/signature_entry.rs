@@ -784,6 +784,12 @@ fn emit_entry(
         .enumerate()
         .map(|(i, rep)| {
             (check && *rep != FactsRep::Boxed).then(|| {
+                // A claim names the emission allocated next: record it right
+                // before its site.
+                crate::verify_facts::covered(
+                    Fact::Signature,
+                    || serde_json::json!({ "entry": public_name, "argument": i }),
+                );
                 crate::verify_facts::raw_entry_site(
                     public_name,
                     public_name,
@@ -794,15 +800,18 @@ fn emit_entry(
         })
         .collect();
     let this_site = match receiver {
-        Some(Some(cid)) if check => Some((
-            cid,
+        Some(Some(cid)) if check => Some((cid, {
+            crate::verify_facts::covered(
+                Fact::Signature,
+                || serde_json::json!({ "entry": public_name, "this_class": cid }),
+            );
             crate::verify_facts::raw_entry_site(
                 public_name,
                 public_name,
                 Fact::Signature,
                 "boxed entry this class",
-            ),
-        )),
+            )
+        })),
         _ => None,
     };
     let wf = llmod.define_function(public_name, DOUBLE, params);
@@ -813,10 +822,6 @@ fn emit_entry(
         raw.push((DOUBLE, "%this_arg".to_string()));
     }
     if let Some((cid, site)) = &this_site {
-        crate::verify_facts::covered(
-            Fact::Signature,
-            || serde_json::json!({ "entry": public_name, "this_class": cid }),
-        );
         let blk = wf.block_mut(cur).unwrap();
         blk.call_void("perry_verify_facts_tick", &[]);
         let bits = blk.bitcast_double_to_i64("%this_arg");
@@ -859,10 +864,6 @@ fn emit_entry(
         }
         let value = super::facts_number_locals::emit_entry_number(blk, &value);
         if let Some(site) = &sites[i] {
-            crate::verify_facts::covered(
-                Fact::Signature,
-                || serde_json::json!({ "entry": public_name, "argument": i }),
-            );
             let ok = emit_rep_test(blk, rep, sig.ranges[i], &value).unwrap();
             blk.call_void("perry_verify_facts_tick", &[]);
             let miss = wf.blocks().len();
