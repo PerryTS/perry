@@ -145,7 +145,7 @@ fn missing(list: &str) -> Vec<String> {
         // An accessor row names its two entries after the key; the key must be
         // known to the solver like any other own key of the holder.
         let (kind, holder, key) = match row[..] {
-            ["accessor", holder, key, _, _] => ("accessor", holder, key),
+            ["accessor", holder, key, ..] => ("accessor", holder, key),
             [kind, holder, key] => (kind, holder, key),
             _ => panic!("bad row {line:?}"),
         };
