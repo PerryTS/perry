@@ -1,9 +1,14 @@
 use super::*;
 
-fn call(port: f64, method: &str, args: &[f64]) -> f64 {
+pub(super) fn call(port: f64, method: &str, args: &[f64]) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let port = scope.root_nanbox_f64(port);
+    let args: Vec<_> = args
+        .iter()
+        .map(|value| scope.root_nanbox_f64(*value))
+        .collect();
     let method = scope.root_nanbox_f64(get_object_field_from_value(port.get_nanbox_f64(), method));
+    let args: Vec<_> = args.iter().map(|value| value.get_nanbox_f64()).collect();
     unsafe {
         perry_runtime::closure::js_native_call_value(
             method.get_nanbox_f64(),
@@ -445,5 +450,75 @@ fn closing_dispatch_drains_the_shared_inbox_before_close_but_cannot_transfer() {
             );
             call(peer.get_nanbox_f64(), "close", &[]);
         }
+    });
+}
+
+#[test]
+fn port_listener_admission_rejects_primitives_without_changing_valid_delivery() {
+    isolated(|| {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let (port, peer) = channel();
+        let port = scope.root_nanbox_f64(port);
+        let peer = scope.root_nanbox_f64(peer);
+        let event = scope.root_nanbox_f64(string_value("message"));
+        let callback = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(retired_message, 1; with_declared(1)),
+            0,
+        ));
+        call(
+            port.get_nanbox_f64(),
+            "on",
+            &[
+                event.get_nanbox_f64(),
+                object_value(callback.get_raw_mut_ptr::<ClosureHeader>().cast()),
+            ],
+        );
+        for method in [
+            "on",
+            "once",
+            "addListener",
+            "off",
+            "removeListener",
+            "addEventListener",
+            "removeEventListener",
+        ] {
+            let caught = perry_runtime::exception::catch_thrown(|| {
+                call(
+                    port.get_nanbox_f64(),
+                    method,
+                    &[event.get_nanbox_f64(), 1.0],
+                )
+            })
+            .expect_err(method);
+            let error = scope.root_nanbox_f64(caught.value());
+            for (key, expected) in [
+                ("name", "TypeError"),
+                ("code", "ERR_INVALID_ARG_TYPE"),
+                ("message", "The \"listener\" argument must be an instance of EventListener. Received type number (1)"),
+            ] {
+                assert_eq!(string_value_to_string(get_object_field_from_value(error.get_nanbox_f64(), key)).as_deref(), Some(expected), "{method}: {key}");
+            }
+            for listener in [
+                js_null(),
+                js_undefined(),
+                object_value(
+                    scope
+                        .root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0))
+                        .get_raw_mut_ptr(),
+                ),
+            ] {
+                call(
+                    port.get_nanbox_f64(),
+                    method,
+                    &[event.get_nanbox_f64(), listener],
+                );
+            }
+        }
+        RETIRED_ORDER.store(0, Ordering::Relaxed);
+        call(peer.get_nanbox_f64(), "postMessage", &[7.0]);
+        js_worker_threads_channels_process_pending();
+        assert_eq!(RETIRED_ORDER.load(Ordering::Relaxed), 7);
+        call(port.get_nanbox_f64(), "close", &[]);
+        call(peer.get_nanbox_f64(), "close", &[]);
     });
 }

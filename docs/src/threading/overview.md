@@ -33,6 +33,19 @@ ports. Worker and channel message listeners receive the same canonical event
 values, with dispatch targets and phases restored after callbacks return or throw.
 Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
 
+## Worker listeners
+
+Worker `on`, `once`, `addListener`, `off` and `removeListener` require function
+listeners, including for unknown events and exited workers. The add/remove
+aliases use the same listener registry as `on`/`off`.
+
+MessagePort uses EventListener admission instead: nullish values and objects are
+accepted, while other primitives throw `TypeError` with `ERR_INVALID_ARG_TYPE`.
+This applies to its Node-style methods and Web-style add/remove methods.
+Adding a nullish listener schedules an `AddEventListenerArgumentTypeWarning`;
+removing one is a silent no-op.
+Perry does not dispatch MessagePort listener objects through `handleEvent`.
+
 ## Transferring MessagePorts
 
 Closing a port outside message dispatch discards its incoming queue. Closing it
