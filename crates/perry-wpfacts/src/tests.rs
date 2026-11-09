@@ -1983,6 +1983,7 @@ mod uri_coercion;
 mod accessor_lookup_values;
 mod buffer_iterator_absent;
 mod native_fs_effects;
+mod native_util_types_effects;
 mod native_module_ref;
 mod fresh_proto_chain;
 mod host_browser_effects;
