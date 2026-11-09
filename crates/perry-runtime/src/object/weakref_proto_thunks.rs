@@ -278,9 +278,8 @@ pub(super) extern "C" fn finreg_proto_unregister_thunk(
 }
 
 /// Install the brand-checking `.prototype` methods for `WeakRef` /
-/// `FinalizationRegistry`. Returns `true` when `builtin_name` is one of those —
-/// the caller then adds the shared `OBJECT_PROTO_METHODS` — and `false`
-/// otherwise. Called from `global_this::populate_builtin_prototype_methods`.
+/// `FinalizationRegistry`. Returns `true` when `builtin_name` is one of those
+/// and `false` otherwise. Called from `global_this::populate_builtin_prototype_methods`.
 ///
 /// Arities are the spec `.length` values: `deref` 0, `register` 2 (the
 /// unregister token is optional and does not count), `unregister` 1.
