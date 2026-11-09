@@ -264,6 +264,8 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         ("native", Some(inner)) => Ok(tagged("native", Value::String(super::facts::path(inner)?))),
         ("bound", None) => Ok(Value::String("bound".into())),
+        ("json", None) => Ok(Value::String("json".into())),
+        ("unknown", None) => Ok(Value::String("unknown".into())),
         ("species", Some(inner)) => {
             let parts = info::split(inner, ",");
             let usage = "species(slot, args = [operand, ...], elems = [slot, ...])";
