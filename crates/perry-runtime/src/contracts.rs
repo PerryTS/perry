@@ -406,7 +406,7 @@ fn violate(fact: &str, c: &Claim, cid: u32, op: &str, detail: &str) -> ! {
 /// The class whose prototype `v` is: a `C.prototype` reference immediate or
 /// the declared prototype object itself.
 fn proto_class_id(v: f64) -> Option<u32> {
-    if let Some(cid) = crate::object::class_prototype_ref_id(v) {
+    if let Some(cid) = crate::object::class_method_home_id(v) {
         return Some(cid);
     }
     let bits = v.to_bits();

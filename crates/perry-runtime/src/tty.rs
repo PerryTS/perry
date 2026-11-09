@@ -1488,14 +1488,8 @@ mod tests {
         assert_eq!(tty_isatty_fd_arg(f64::INFINITY), None);
         assert_eq!(tty_isatty_fd_arg(f64::NEG_INFINITY), None);
 
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(7).bits())),
-            Some(7)
-        );
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(-1).bits())),
-            None
-        );
+        assert_eq!(tty_isatty_fd_arg(f64::from(7)), Some(7));
+        assert_eq!(tty_isatty_fd_arg(f64::from(-1)), None);
 
         assert_eq!(tty_isatty_fd_arg(TAG_TRUE_F64), None);
         assert_eq!(tty_isatty_fd_arg(TAG_FALSE_F64), None);

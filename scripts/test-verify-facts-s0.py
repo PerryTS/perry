@@ -108,6 +108,7 @@ def main():
         ("int32-negative", "range", "int32 input"),
         ("arrlen-negative", "arrlen", "array constant length"),
         ("element-read-negative", "arrlen", "proven element read"),
+        ("element-read-sparse-birth", "densebirth", "proven element read"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
     ]:

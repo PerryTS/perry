@@ -67,7 +67,6 @@ pub(super) fn ordinary_proxy_has_instance(constructor: f64, value: f64) -> bool 
     ));
     if !rhs_is_object_value(prototype.get_nanbox_f64())
         && class_ref_id(prototype.get_nanbox_f64()).is_none()
-        && class_prototype_ref_id(prototype.get_nanbox_f64()).is_none()
     {
         throw_type_error(b"Function has non-object prototype in instanceof check");
     }

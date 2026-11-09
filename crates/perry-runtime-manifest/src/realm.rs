@@ -290,11 +290,14 @@ impl RealmProperty {
                 RealmValue::Undefined => "Undefined".into(),
                 RealmValue::Null => "Null".into(),
                 RealmValue::Boolean(_) => "Boolean".into(),
-                RealmValue::NumberBits(_) | RealmValue::Int32(_) => "Number".into(),
+                RealmValue::NumberBits(_) => "Number".into(),
                 RealmValue::String(_) => "String".into(),
                 RealmValue::Symbol(_) => "Symbol".into(),
                 RealmValue::Reference(r) => format!("Reference({r:?})"),
-                RealmValue::RawReference(_)
+                // A constructor identity capture (`realm_facts.rs`): a
+                // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
+                RealmValue::Int32(_)
+                | RealmValue::RawReference(_)
                 | RealmValue::Bytes(_)
                 | RealmValue::RawWord(_)
                 | RealmValue::Dynamic(_) => "Other".into(),

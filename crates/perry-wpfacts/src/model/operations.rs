@@ -362,9 +362,10 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn(crate::model::Native::Member { identity }) => {
-                format!("builtin-fn:{identity}")
-            }
+            TokKind::BuiltinFn(crate::model::Native::Member { identity, holder }) => match holder {
+                None => format!("builtin-fn:{identity}"),
+                Some(h) => format!("builtin-fn:{identity}@{h}"),
+            },
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),

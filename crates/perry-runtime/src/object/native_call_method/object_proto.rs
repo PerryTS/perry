@@ -236,7 +236,17 @@ unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
     if let Some(result) = call_object_to_string_method(receiver.get_nanbox_f64()) {
         return result;
     }
-    crate::object::js_object_to_string(receiver.get_nanbox_f64())
+    // `Invoke(O, "toString")`: a receiver the by-name field read does not
+    // answer (an error, an array, any builtin with its own header) still
+    // resolves `toString` on its [[Prototype]] chain (`Error.prototype`,
+    // `Array.prototype`), as every other method call does.
+    js_native_call_method(
+        receiver.get_nanbox_f64(),
+        b"toString".as_ptr() as *const i8,
+        "toString".len(),
+        std::ptr::null(),
+        0,
+    )
 }
 
 /// The body of `%Object.prototype.toLocaleString%`.

@@ -147,10 +147,6 @@ fn proxy_arg_is_object(value: f64) -> bool {
     if top == 0 && bits > 0x10000 {
         return true;
     }
-    // A `C.prototype` ref word is an object (an INT32 number is not).
-    if top == 0x7FFE {
-        return crate::object::class_prototype_ref_id(f64::from_bits(bits)).is_some();
-    }
     false
 }
 
