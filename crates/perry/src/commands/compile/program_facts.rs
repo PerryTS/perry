@@ -532,6 +532,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
         out.number_calls.extend(mb.number_calls.iter().copied());
+        out.number_element_reads
+            .extend(mb.number_element_reads.iter().copied());
         for (offset, c) in &mb.field_read_calls {
             let default = match &c.default {
                 None => None,
