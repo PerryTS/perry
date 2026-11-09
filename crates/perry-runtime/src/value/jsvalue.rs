@@ -44,14 +44,6 @@ impl JSValue {
         }
     }
 
-    /// Create an i32 value (stored in payload, faster than f64 for integers)
-    #[inline]
-    pub const fn int32(value: i32) -> Self {
-        Self {
-            bits: INT32_TAG | ((value as u32) as u64),
-        }
-    }
-
     /// Create a pointer value (for heap-allocated objects)
     #[inline]
     pub fn pointer(ptr: *const u8) -> Self {
@@ -123,7 +115,7 @@ impl JSValue {
     /// Check if this is an int32
     #[inline]
     pub fn is_int32(&self) -> bool {
-        (self.bits & !INT32_MASK) == INT32_TAG
+        super::tags::is_int32_bits(self.bits)
     }
 
     /// A `POINTER_TAG` word: a GC-headed heap allocation whose header may be

@@ -272,7 +272,7 @@ impl Model {
                 self.atoms[key as usize].clone(),
                 setter
             ),
-            Cons::AccessorInstall { key, f, setter } => format!(
+            Cons::AccessorInstall { key, f, setter, .. } => format!(
                 "AccessorInstall key={:?} f={:?} setter={:?}",
                 self.atoms[key as usize].clone(),
                 self.packet_token(f, packet),
@@ -443,7 +443,7 @@ impl Model {
                     .get(site as usize)
                     .map(|s| (&s.desc, s.birth, s.rooted))
             ),
-            Cons::SpreadFrom { src, site } => format!(
+            Cons::SpreadFrom { src, site, .. } => format!(
                 "SpreadFrom src={:?} site={:?}",
                 self.packet_token(src, packet),
                 self.stores

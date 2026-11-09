@@ -1009,11 +1009,20 @@ extern "C" fn worker_add_event_listener(
 /// `worker.removeEventListener(type, listener)`.
 extern "C" fn worker_remove_event_listener(
     closure: *const ClosureHeader,
-    this: perry_runtime::closure::JsThis,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    worker_off(closure, this, event, callback)
+    worker_remove_listener(captured_worker_id(closure), event, callback, true)
+}
+
+fn worker_listener_bits(callback: f64, web_event: bool) -> Option<u64> {
+    if web_event {
+        callback_bits_from_value(callback)
+    } else {
+        perry_runtime::validators::validate_function(callback, "listener");
+        Some(closure_arg_bits(callback))
+    }
 }
 
 fn worker_add_listener(
@@ -1023,6 +1032,9 @@ fn worker_add_listener(
     once: bool,
     web_event: bool,
 ) -> f64 {
+    let Some(callback_bits) = worker_listener_bits(callback, web_event) else {
+        return js_undefined();
+    };
     ensure_worker_gc_scanner();
     let Some(event) = event_name(event) else {
         return js_undefined();
@@ -1034,7 +1046,7 @@ fn worker_add_listener(
             .entry(event)
             .or_default()
             .push(WorkerListener {
-                callback_bits: closure_arg_bits(callback),
+                callback_bits,
                 once,
                 web_event,
             });
@@ -1048,11 +1060,16 @@ extern "C" fn worker_off(
     event: f64,
     callback: f64,
 ) -> f64 {
-    let worker_id = captured_worker_id(closure);
+    worker_remove_listener(captured_worker_id(closure), event, callback, false)
+}
+
+fn worker_remove_listener(worker_id: u64, event: f64, callback: f64, web_event: bool) -> f64 {
+    let Some(callback_bits) = worker_listener_bits(callback, web_event) else {
+        return js_undefined();
+    };
     let Some(event) = event_name(event) else {
         return js_undefined();
     };
-    let callback_bits = closure_arg_bits(callback);
     let mut workers = WORKERS.lock().unwrap();
     if let Some(worker) = workers.get_mut(&worker_id) {
         if let Some(listeners) = worker.listeners.get_mut(&event) {

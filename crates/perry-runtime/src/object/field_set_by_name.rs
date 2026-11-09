@@ -479,17 +479,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     let name = name_storage.as_slice();
                     let name_str = std::str::from_utf8(name).ok();
                     let recv = crate::object::class_value::boxed_class_word(bits);
-                    let is_prototype_ref = super::class_prototype_ref_id(recv).is_some();
-                    if is_prototype_ref {
-                        super::class_registry::class_prototype_set_bytes(
-                            class_id,
-                            name,
-                            value.to_bits(),
-                        );
-                        return;
-                    }
-                    if !is_prototype_ref
-                        && name_str == Some("name")
+                    if name_str == Some("name")
                         && !super::class_registry::class_static_key_deleted_bytes(class_id, name)
                         && super::class_registry::lookup_static_method_in_chain_bytes(
                             class_id, name,
@@ -512,11 +502,8 @@ pub extern "C" fn js_object_set_field_by_name(
                     }
                     // Writing `.caller` / `.arguments` on a class constructor
                     // hits the poison-pill %ThrowTypeError% accessor inherited
-                    // from Function.prototype. Prototype refs are plain objects.
-                    if !is_prototype_ref
-                        && !has_own_data
-                        && matches!(name_str, Some("caller" | "arguments"))
-                    {
+                    // from Function.prototype.
+                    if !has_own_data && matches!(name_str, Some("caller" | "arguments")) {
                         crate::fs::validate::throw_type_error_with_code(
                             "Restricted function property access",
                             "ERR_INVALID_ARG_TYPE",

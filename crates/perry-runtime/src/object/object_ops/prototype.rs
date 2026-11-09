@@ -370,12 +370,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // null (15.2.3.2-1*).
     {
         let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
-        // An INT32-tagged value may be a class ref (same 0x7FFE tag as small
-        // integers) — those must keep flowing to the class resolution below.
-        let is_class_ref = super::super::class_ref_id(obj_value).is_some();
-        let wrapper = if is_class_ref {
-            None
-        } else if jv.is_number() {
+        let wrapper = if jv.is_number() {
             Some("Number")
         } else if jv.is_any_string() {
             Some("String")
@@ -589,67 +584,6 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         } else {
             crate::value::js_nanbox_pointer(parent as i64)
         };
-    }
-    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
-        // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
-        // derived answer below — it IS the constructor's [[Prototype]].
-        if super::super::class_prototype_ref_id(obj_value).is_none() {
-            let static_proto = super::super::class_registry::class_static_prototype(class_id);
-            if !static_proto.is_null() {
-                return f64::from_bits(
-                    crate::value::js_nanbox_pointer(static_proto as i64).to_bits(),
-                );
-            }
-            if super::super::class_registry::class_static_prototype_is_nulled(class_id) {
-                return f64::from_bits(TAG_NULL);
-            }
-        }
-        if super::super::class_prototype_ref_id(obj_value).is_none() {
-            // A class whose heritage is a runtime function value has no Perry
-            // parent class id. Its constructor's [[Prototype]] is that exact
-            // function object (not Function.prototype), as observed by
-            // Object.getPrototypeOf(D) and static `super` lookup.
-            let dynamic_parent = super::super::js_get_dynamic_parent_value(class_id);
-            let parent_value = crate::value::JSValue::from_bits(dynamic_parent.to_bits());
-            if !parent_value.is_undefined() && !parent_value.is_null() {
-                return dynamic_parent;
-            }
-        }
-        if let Some(parent_id) = get_parent_class_id(class_id) {
-            // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
-            // sentinel, not a real class. A prior `Object.create(proto)` whose
-            // `proto` was a native-module namespace object registered it as a
-            // synthetic class's parent. Returning the raw sentinel as an
-            // INT32-tagged class ref (`-2`) trips `Object.create` with
-            // `TypeError: Object prototype may only be an Object or null: -2`.
-            // Treat it as a root: a native-module namespace's [[Prototype]] is
-            // %Object.prototype%, so the synthetic class whose proto was that
-            // namespace inherits Object.prototype too.
-            // A builtin parent id (`extends Error`) is not a compiled class
-            // and never gets a class function object: its constructor is the
-            // dynamic parent value above, and without one this is a root.
-            if parent_id != 0
-                && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
-                && crate::object::is_class_id_registered(parent_id)
-            {
-                return crate::object::class_value::class_value(parent_id);
-            }
-        }
-        // Root of the class hierarchy. In JS `Object.getPrototypeOf` of a base
-        // class *constructor* is `Function.prototype`, and of a base class's
-        // `.prototype` object is `Object.prototype` — NOT null. class-transformer
-        // walks `Object.getPrototypeOf(target.prototype.constructor)` and then
-        // dereferences `.prototype` on the result; the old `null` made that
-        // `null.prototype` throw, blocking class-transformer/class-validator on
-        // any flat (no-`extends`) DTO. (#420 followup)
-        if super::super::class_prototype_ref_id(obj_value).is_some() {
-            let proto = crate::object::builtin_prototype_value("Object");
-            if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                return proto;
-            }
-            return f64::from_bits(TAG_NULL);
-        }
-        return function_prototype_or_null();
     }
     // Heap-pointer receiver — return the input value itself. For
     // class-id-tagged instances, `.constructor` then returns the class

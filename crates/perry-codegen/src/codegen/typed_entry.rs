@@ -68,8 +68,15 @@ pub(crate) fn emit_ordered_number_test(blk: &mut LlBlock, value: &str) -> String
 /// `JSValue::is_int32` — the INT32 tag with any 32-bit payload.
 pub(crate) fn emit_int32_box_test(blk: &mut LlBlock, value: &str) -> String {
     let bits = blk.bitcast_double_to_i64(value);
+    emit_int32_bits_test(blk, &bits)
+}
+
+/// THE emitted int32-Number test on raw bits (`perry_runtime::value::
+/// is_int32_bits`): tag `0x7FFE` with bits 32..47 clear. A top-16-only test
+/// reads a `C.prototype` ref or an internal marker as an int32 Number.
+pub(crate) fn emit_int32_bits_test(blk: &mut LlBlock, bits: &str) -> String {
     let identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let identity = blk.and(I64, &bits, &identity_mask);
+    let identity = blk.and(I64, bits, &identity_mask);
     blk.icmp_eq(I64, &identity, crate::nanbox::INT32_TAG_I64)
 }
 

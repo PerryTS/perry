@@ -101,7 +101,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
     // Numbers: real f64 values (`is_number`) and INT32-tagged small integers
     // (0x7FFE), which `is_number` excludes because the tag sits in the
     // string/special band.
-    if top16(b) == 0x7FFE || JSValue::from_bits(b).is_number() {
+    if crate::value::is_int32_bits(b) || JSValue::from_bits(b).is_number() {
         return crate::builtins::js_boxed_number_new(recv);
     }
     // BigInt boxes into a `BigInt` wrapper object (`ToObject`): no indexed

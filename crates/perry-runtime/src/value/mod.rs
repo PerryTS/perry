@@ -62,7 +62,7 @@ mod tests;
 // named constant for documentation + external tooling but not re-exported
 // since no in-crate consumer references it directly.
 pub(crate) use tags::{
-    BIGINT_TAG, INT32_MASK, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
+    is_int32_bits, BIGINT_TAG, INT32_MASK, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
     SHORT_STRING_DATA_MASK, SHORT_STRING_LEN_MASK, SHORT_STRING_LEN_SHIFT, SHORT_STRING_TAG,
     STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MARKER, TAG_MASK, TAG_NULL, TAG_TDZ, TAG_TRUE,
     TAG_UNDEFINED,
@@ -91,6 +91,9 @@ pub(crate) use tags::{
     JsNativeZlibDispatchFn, JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
     JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
 };
+
+#[cfg(test)]
+mod int32_exact_tests;
 
 // ----- JSValue type + impls -----
 pub use jsvalue::JSValue;

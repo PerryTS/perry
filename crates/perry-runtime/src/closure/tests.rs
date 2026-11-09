@@ -26,7 +26,7 @@ fn test_closure_capture_bits_roundtrip_tagged_values() {
         crate::value::TAG_NULL,
         crate::value::TAG_FALSE,
         crate::value::TAG_TRUE,
-        crate::value::JSValue::int32(-17).bits(),
+        f64::from(-17).to_bits(),
         crate::value::JSValue::try_short_string(b"cap")
             .unwrap()
             .bits(),

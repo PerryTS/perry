@@ -72,11 +72,20 @@ impl<'a> Gen<'a> {
         let args = args.iter().map(|a| self.expr(fx, a)).collect();
         let t = self
             .m
-            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name }));
+            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name, holder: None }));
         let callee = self.tok_node(t);
         let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
         self.m.cons(callee, Cons::Call { call });
         Some(ret)
+    }
+
+    /// The token of module member `module.method` when the solver models a
+    /// call of it by that token (`builtins::solved_namespace_call`), so a
+    /// direct HIR call of it runs the same arm a call through the namespace
+    /// runs.
+    pub(crate) fn namespace_member_callee(&mut self, module: &str, method: &str) -> Option<Tok> {
+        let identity = crate::builtins::solved_namespace_call(module, method)?;
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
     }
 
     /// Operands only ever read as primitives by the runtime: objects get the
@@ -651,6 +660,11 @@ impl<'a> Gen<'a> {
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let n = self.expr_inner(fx, e);
+        if let Expr::IndexGet { element_offset, .. } = e {
+            if *element_offset != 0 {
+                self.element_values.push((fx.module, *element_offset, n));
+            }
+        }
         if self.diagnostic.is_some() {
             self.diagnostic_expr(fx, e, n);
         }

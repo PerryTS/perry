@@ -358,7 +358,9 @@ fn kind_of(v: f64) -> u16 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG => K_NUM,
+        INT32_TAG if crate::value::is_int32_bits(bits) => K_NUM,
+        // A `C.prototype` ref or another non-Number `0x7FFE` word.
+        INT32_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -404,7 +406,7 @@ fn violate(fact: &str, c: &Claim, cid: u32, op: &str, detail: &str) -> ! {
 /// The class whose prototype `v` is: a `C.prototype` reference immediate or
 /// the declared prototype object itself.
 fn proto_class_id(v: f64) -> Option<u32> {
-    if let Some(cid) = crate::object::class_prototype_ref_id(v) {
+    if let Some(cid) = crate::object::class_method_home_id(v) {
         return Some(cid);
     }
     let bits = v.to_bits();
@@ -748,5 +750,17 @@ mod tests {
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 4)), K_BOOL);
         assert_eq!(kind_of(f64::from_bits(STRING_TAG | 0x1000)), K_STR);
         assert_eq!(kind_of(f64::from_bits(BIGINT_TAG | 0x1000)), K_BIGINT);
+    }
+    /// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+    /// 5, and a `0x7FFE` word with high payload bits: neither is an int32
+    /// Number, and a top-16-only test reads both as one.
+    const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+    const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_k_num() {
+        assert_eq!(kind_of(f64::from_bits(INT32_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(PROTO_REF_5)), K_OBJ);
+        assert_eq!(kind_of(f64::from_bits(HIGH_BITS)), K_OBJ);
     }
 }
