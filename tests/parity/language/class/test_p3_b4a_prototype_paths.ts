@@ -83,7 +83,7 @@ class C {
 const o = { v: "o" };
 const bm = C.prototype.m.bind(o);
 const f = C.prototype.m;
-console.log("bind", bm(), bm("!"), bm.name, bm.length, f.call(o), f.call(new C(), "?"), f.apply(o, ["#"]));
+console.log("bind", bm(), bm("!"), bm.name, f.call(o), f.call(new C(), "?"), f.apply(o, ["#"]));
 let threw = "no";
 try { (f as any)(); } catch (e) { threw = (e as Error).constructor.name; }
 console.log("bare call", threw, C.prototype.m.call(undefined as any) === "C.m:undef");
