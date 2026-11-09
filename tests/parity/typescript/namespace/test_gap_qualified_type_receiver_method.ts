@@ -1,6 +1,6 @@
 // A receiver annotated with a namespace-qualified type (`ns.Service`) calls
 // its own `join`/`find`, not the Array fast path those names share.
-import type * as Svc from "./_helpers/qualified_type_receiver/service.ts";
+import type * as Svc from "./fixtures/qualified_type_receiver/service.ts";
 
 const service: Svc.Service = {
   sep: "/",
