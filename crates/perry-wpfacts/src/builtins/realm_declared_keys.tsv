@@ -13,6 +13,12 @@ getter	Temporal	__proto__	Object.prototype.__proto__.<get>
 getter	WebAssembly	__proto__	Object.prototype.__proto__.<get>
 getter	console	__proto__	Object.prototype.__proto__.<get>
 getter	navigator	__proto__	Object.prototype.__proto__.<get>
+getter	navigator	hardwareConcurrency	Navigator.prototype.hardwareConcurrency.<get>
+getter	navigator	language	Navigator.prototype.language.<get>
+getter	navigator	languages	Navigator.prototype.languages.<get>
+getter	navigator	locks	Navigator.prototype.locks.<get>
+getter	navigator	platform	Navigator.prototype.platform.<get>
+getter	navigator	userAgent	Navigator.prototype.userAgent.<get>
 getter	node:assert.strict	__proto__	Object.prototype.__proto__.<get>
 getter	node:async_hooks.default	__proto__	Object.prototype.__proto__.<get>
 getter	node:buffer.constants	__proto__	Object.prototype.__proto__.<get>
@@ -9424,12 +9430,6 @@ ns	console.trace	length
 ns	console.trace	name
 ns	console.warn	length
 ns	console.warn	name
-ns	navigator	hardwareConcurrency
-ns	navigator	language
-ns	navigator	languages
-ns	navigator	locks
-ns	navigator	platform
-ns	navigator	userAgent
 ns	node:assert.Assert	length
 ns	node:assert.Assert	name
 ns	node:assert.Assert	prototype
