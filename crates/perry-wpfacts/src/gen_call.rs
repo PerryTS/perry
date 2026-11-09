@@ -275,12 +275,15 @@ impl<'a> Gen<'a> {
                         func: fx.f,
                     });
                 }
-                let r = self.call_value(c, ThisArg::Undef, args, spread);
+                // The literal is the call's before its callee resolves it:
+                // a callee node that already holds the callee (the program's
+                // `require` from `createRequire`) runs the call at `cons`.
+                let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
                 if let Some(a) = lit {
-                    let call = self.m.calls.len() as CallId - 1;
                     self.m.call_lit.insert(call, a);
                 }
-                r
+                self.m.cons(c, Cons::Call { call });
+                ret
             }
         }
     }

@@ -1344,6 +1344,8 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             );
             web_method_enumerable(proto(), "toJSON");
         }
+        // Node's getters, installed only for a program that reaches navigator.
+        "Navigator" => crate::navigator::populate_prototype(proto_obj),
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
         | "DOMException" | "MessageEvent" => {
             let _gc = crate::gc::GcSuppressScope::new();
@@ -1754,6 +1756,15 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                 ],
             );
             install_object_proto_copies(builtin_name, proto_obj);
+            if let Some(entries) = unsafe {
+                crate::object::own_property_get_by_bytes(
+                    proto_obj,
+                    b"entries",
+                    crate::value::js_nanbox_pointer(proto_obj as i64),
+                )
+            } {
+                install_builtin_iterator_symbol(proto_obj, f64::from_bits(entries.bits()));
+            }
             unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
         _ => {}
