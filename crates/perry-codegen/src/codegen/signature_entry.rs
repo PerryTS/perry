@@ -198,17 +198,7 @@ pub(crate) fn select(
     }
     let reached: HashSet<u32> = facts.typed_calls.values().copied().collect();
     let mut typed: Vec<(u32, SpecFnPlan)> = Vec::new();
-    let debug = std::env::var("PERRY_P2_DEBUG").is_ok();
     for f in &hir.functions {
-        if debug {
-            eprintln!(
-                "p2: fn {} #{} sig={:?} reached={}",
-                f.name,
-                f.id,
-                facts.signatures.get(&f.id),
-                reached.contains(&f.id)
-            );
-        }
         if !reached.contains(&f.id) {
             continue;
         }
@@ -217,8 +207,6 @@ pub(crate) fn select(
         };
         if let Some(plan) = typed_plan(f, sig, cm, func_synthetic_arguments, triple) {
             typed.push((f.id, plan));
-        } else if debug {
-            eprintln!("p2: fn {} excluded", f.name);
         }
     }
     for (id, plan) in typed {
@@ -266,16 +254,6 @@ pub(crate) fn select_methods(
             continue;
         };
         for m in &class.methods {
-            if std::env::var("PERRY_P2_DEBUG").is_ok() {
-                eprintln!(
-                    "p2: method {}::{} #{} sig={:?} reached={}",
-                    class.name,
-                    m.name,
-                    m.id,
-                    facts.signatures.get(&m.id),
-                    reached.contains(&m.id)
-                );
-            }
             if !reached.contains(&m.id) {
                 continue;
             }
@@ -294,23 +272,6 @@ pub(crate) fn select_methods(
                 continue;
             }
             let key = (class.name.clone(), m.name.clone());
-            if std::env::var("PERRY_P2_DEBUG").is_ok() {
-                eprintln!(
-                    "p2: method {}::{} tiers i1={} str={} f64recv={} tower={} undef={} falsy={} ptrarr={} arglen={} pshape={} class={}",
-                    class.name,
-                    m.name,
-                    cm.typed_i1_methods.contains(&key),
-                    cm.typed_string_methods.contains(&key),
-                    cm.typed_f64_receiver_methods.contains_key(&key),
-                    cm.pshape_tower_routable.contains(&key),
-                    cm.guarded_undefined_method_params.contains_key(&key),
-                    cm.guarded_falsy_field_default_methods.contains_key(&key),
-                    crate::collectors::ptr_array_cached_method(class, m).is_some(),
-                    super::arguments::method_supports_arguments_length_direct_abi(m),
-                    cm.pshape_methods.contains_key(&key),
-                    class_id,
-                );
-            }
             // Excluded tiers (§3.2.1).
             if cm.typed_i1_methods.contains(&key)
                 || cm.typed_string_methods.contains(&key)
@@ -662,7 +623,7 @@ pub(crate) fn emit_boxed_entry(
     public_name: &str,
     plan: &SpecFnPlan,
 ) {
-    emit_entry(llmod, f, public_name, plan, false);
+    emit_entry(llmod, f, public_name, plan, None);
 }
 
 /// The boxed entry of a typed method: `emit_boxed_entry` with the receiver
@@ -674,7 +635,14 @@ pub(crate) fn emit_boxed_method_entry(
     public_name: &str,
     tm: &TypedMethod,
 ) {
-    emit_entry(llmod, m, public_name, &tm.plan, true);
+    // The `this`-class witness (§3.2.1 pshape row): `M$sig` addresses
+    // `this` with its class's fixed layout only when `proven_this` is set.
+    let this_class = tm
+        .proven_this
+        .as_ref()
+        .and(tm.plan.signature.as_ref())
+        .and_then(|sig| sig.this_class);
+    emit_entry(llmod, m, public_name, &tm.plan, Some(this_class));
     if tm.published_pshape {
         let tys = vec!["double"; m.params.len() + 1].join(", ");
         llmod.add_raw_global(format!(
@@ -689,11 +657,13 @@ fn emit_entry(
     f: &Function,
     public_name: &str,
     plan: &SpecFnPlan,
-    receiver: bool,
+    // `Some` for a method (it takes `this`); `Some(Some(cid))` when its
+    // body assumes `this` is an instance of class `cid`.
+    receiver: Option<Option<u32>>,
 ) {
     let sig = plan.signature.as_ref().expect("a typed plan");
     let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(f.params.len() + 1);
-    if receiver {
+    if receiver.is_some() {
         params.push((DOUBLE, "%this_arg".to_string()));
     }
     params.extend(f.params.iter().map(|p| (DOUBLE, format!("%arg{}", p.id))));
@@ -714,12 +684,57 @@ fn emit_entry(
             })
         })
         .collect();
+    let this_site = match receiver {
+        Some(Some(cid)) if check => Some((
+            cid,
+            crate::verify_facts::raw_entry_site(
+                public_name,
+                public_name,
+                Fact::Signature,
+                "boxed entry this class",
+            ),
+        )),
+        _ => None,
+    };
     let wf = llmod.define_function(public_name, DOUBLE, params);
     let _ = wf.create_block("entry");
     let mut cur = 0usize;
     let mut raw: Vec<(LlvmType, String)> = Vec::with_capacity(f.params.len() + 1);
-    if receiver {
+    if receiver.is_some() {
         raw.push((DOUBLE, "%this_arg".to_string()));
+    }
+    if let Some((cid, site)) = &this_site {
+        crate::verify_facts::covered(
+            Fact::Signature,
+            || serde_json::json!({ "entry": public_name, "this_class": cid }),
+        );
+        let blk = wf.block_mut(cur).unwrap();
+        blk.call_void("perry_verify_facts_tick", &[]);
+        let bits = blk.bitcast_double_to_i64("%this_arg");
+        let recv = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
+        let load = wf.blocks().len();
+        let load_l = wf.create_block("signature.this_object").label.clone();
+        let miss = wf.blocks().len();
+        let miss_l = wf.create_block("signature.this_miss").label.clone();
+        let next = wf.blocks().len();
+        let next_l = wf.create_block("signature.this_admitted").label.clone();
+        wf.block_mut(cur)
+            .unwrap()
+            .cond_br(&recv.is_object_pointer, &load_l, &miss_l);
+        let lb = wf.block_mut(load).unwrap();
+        let hdr = crate::expr::receiver_range::emit_field_ptr(lb, &recv.biased, 0);
+        let got = lb.load(I32, &hdr);
+        let same = lb.icmp_eq(I32, &got, &cid.to_string());
+        lb.cond_br(&same, &next_l, &miss_l);
+        let mb = wf.block_mut(miss).unwrap();
+        let len = site.len.clone().unwrap();
+        let _ = mb.call(
+            I32,
+            "perry_verify_facts_miss",
+            &[(DOUBLE, "%this_arg"), (I64, &site.pointer), (I64, &len)],
+        );
+        mb.unreachable();
+        cur = next;
     }
     for (i, p) in f.params.iter().enumerate() {
         let arg = format!("%arg{}", p.id);
