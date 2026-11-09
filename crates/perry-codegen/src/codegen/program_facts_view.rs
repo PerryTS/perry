@@ -250,6 +250,11 @@ pub struct ElisionFacts {
     /// plain Number; `true` when it may also be `undefined` (wpfacts
     /// `canonical_numbers`, P3 B1).
     pub number_element_reads: std::collections::BTreeMap<u32, bool>,
+    /// Check mode: element reads (by `element_offset`) whose past-the-end
+    /// `undefined` the facts withheld, with the least length lower bound of
+    /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
+    /// `expr::index_get::elem_floor`).
+    pub element_floors: std::collections::BTreeMap<u32, u32>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the

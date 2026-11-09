@@ -447,6 +447,21 @@ impl<'a> Gen<'a> {
         if self.walked.contains(&cfx.f) {
             return;
         }
+        let plain_async = matches!(
+            e,
+            Expr::Closure {
+                is_async: true,
+                is_generator: false,
+                ..
+            }
+        );
+        if plain_async {
+            let (afx, rejected) = self.async_body(cfx);
+            let region = std::mem::replace(&mut self.m.gen_region, Some(rejected));
+            self.walk_closure_body_region(&afx, e);
+            self.m.gen_region = region;
+            return;
+        }
         let r = self.m.raise_of(cfx.f);
         let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_closure_body_region(cfx, e);
@@ -472,7 +487,9 @@ impl<'a> Gen<'a> {
         else {
             return;
         };
-        let ret = self.m.funcs[f as usize].ret;
+        // The body's completion: the call result, or for an async function
+        // the value its promise settles with (`async_body`).
+        let ret = cfx.ret;
         // A sloppy function expression's body reads its `this` through the
         // view (`sloppy_this`); an arrow's `this` is its creator's.
         let sloppy = !*is_strict && !*is_arrow && crate::ctor_phase::body_mentions_this(body);
@@ -497,7 +514,7 @@ impl<'a> Gen<'a> {
         #[cfg(test)]
         self.m.packet_declarations(body);
         self.params(cfx, params);
-        if *is_async || *is_generator {
+        if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());
         }
@@ -589,14 +606,23 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
-        // `new Array(k)` of an integer literal: the length its birth has.
+        // `new Array(k)` of an integer literal: the length its birth has,
+        // when the runtime backs it densely (`capacity >= k`, every slot a
+        // hole: `js_array_constructor_single`). A longer one has length `k`
+        // over an empty store, so no birth length: its capacity says
+        // nothing about its length (`solve::arr_len`).
+        let dense = if self.m.arr_cap_sabotage {
+            u32::MAX
+        } else {
+            perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
+        };
         let birth_len = match args.as_slice() {
             [a] if self.arr_lengths && name == "Array" && spread.is_empty() => self
                 .num_lits
                 .iter()
                 .find(|(_, &n)| n == *a)
                 .map(|(&k, _)| k)
-                .filter(|k| (0..=i64::from(u32::MAX)).contains(k)),
+                .filter(|k| (0..=i64::from(dense)).contains(k)),
             _ => None,
         };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);

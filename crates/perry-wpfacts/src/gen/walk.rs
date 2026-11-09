@@ -648,7 +648,13 @@ impl<'a> Gen<'a> {
         let packet_read_start = self.read_sites.len();
         #[cfg(test)]
         self.m.packet_declarations(&f.body);
-        let r = self.m.raise_of(fxi);
+        // An async function body that runs untransformed throws into its
+        // promise (`async_body`), never into its caller.
+        let r = if f.is_async && !f.is_generator {
+            self.thrown
+        } else {
+            self.m.raise_of(fxi)
+        };
         let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
         self.m.gen_region = region;
@@ -688,8 +694,11 @@ impl<'a> Gen<'a> {
             fx.this = self.sloppy_this(info.this);
             self.m.cur_fn = prev;
         }
+        if f.is_async && !f.is_generator {
+            fx = self.async_body(&fx).0;
+        }
         self.params(&fx, &f.params);
-        if f.is_async || f.is_generator {
+        if f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
             self.m.add_top(info.ret, |_| {
@@ -717,7 +726,7 @@ impl<'a> Gen<'a> {
             // The body's normal completion returns `undefined` (a class
             // constructor's completion is never its result: `new` and
             // `super()` yield `this`).
-            self.m.add_prim(info.ret, prim::UNDEF);
+            self.m.add_prim(fx.ret, prim::UNDEF);
         }
         self.narrow_exit_body(scope);
         self.own_helper_finish(fxi, own);
