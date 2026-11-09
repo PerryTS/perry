@@ -271,14 +271,14 @@ pub(crate) fn select(
 /// A typed class method (§3.2): its plan, and the proven-`this` layout
 /// `M$sig` is compiled with (E2): `Some` only when the signature's
 /// `this_class` is the method's own class, that class's layout is fixed,
-/// and main selected a `$pshape` body for it.
+/// and main selected a proven-`this` body for it.
 #[derive(Debug, Clone)]
 pub(crate) struct TypedMethod {
     pub class: String,
     pub name: String,
     pub plan: SpecFnPlan,
     pub proven_this: Option<crate::collectors::PtrShapeLocal>,
-    /// Main published a `$pshape` capability for this method to importing
+    /// Main published a proven-`this` capability for this method to importing
     /// modules (`exported_proven_this_method_capabilities`): that symbol
     /// stays, as an alias of the boxed entry, so an importer's guarded call
     /// still links.
@@ -293,7 +293,7 @@ pub(crate) struct TypedMethod {
 }
 
 /// The typed methods of `hir` (T2), installed after every method selector
-/// ran as on main; their subsumed tiers (`$pshape`, `$pshape_args`, the
+/// ran as on main; their subsumed tiers (proven-`this`, the proven-argument clone, the
 /// index clones, typed_abi `typed_f64`/`typed_i32`) are dropped for them
 /// only (T3).
 pub(crate) fn select_methods(
@@ -390,7 +390,7 @@ pub(crate) fn select_methods(
             // subsume must be no more precise than the signature, parameter
             // by parameter (`this` included): typed_abi's all-I32/all-F64
             // clones, the index clone's non-negative int32 indices, the
-            // `$pshape` layout, and `$pshape_args`' proven argument shapes
+            // proven-`this` layout, and the proven-argument clone's proven argument shapes
             // (which no representation carries).
             let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
             let index_ok = cm.nonnegative_index_methods.get(&key).is_none_or(|ids| {
@@ -713,7 +713,7 @@ pub(crate) fn emit_boxed_entry(
 }
 
 /// The boxed entry of a typed method: `emit_boxed_entry` with the receiver
-/// passed through unchanged. A published `$pshape` capability becomes an
+/// passed through unchanged. A published proven-`this` capability becomes an
 /// alias of it.
 pub(crate) fn emit_boxed_method_entry(
     llmod: &mut LlModule,
