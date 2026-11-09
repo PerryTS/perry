@@ -239,6 +239,9 @@ const B2_LAZY: &[&str] = &[
     "Crypto",
     "CryptoKey",
     "Storage",
+    "DisposableStack",
+    "AsyncDisposableStack",
+    "SuppressedError",
 ];
 
 #[test]
