@@ -87,6 +87,19 @@ const grown = [1, 2];
 grown[4] = 5;
 for (const x of grown) out.push("r" + String(x ?? -1));
 
+// Past the runtime's dense bound a fresh `new Array(k)` has length k over
+// an empty store: the walk's proven read must not address its slots.
+const big = new Array(2_000_000);
+let bigHoles = 0;
+for (const x of big) if (x === undefined) bigHoles++;
+const filled = new Array(2_000_000).fill(7);
+let bigSum = 0;
+for (const x of filled) bigSum += x;
+const small = new Array(16).fill(3);
+let smallSum = 0;
+for (const x of small) smallSum += x;
+out.push("B" + bigHoles + "," + bigSum + "," + smallSum);
+
 // A walk whose element feeds arithmetic and comparisons in a hot loop.
 let acc = 0;
 for (let i = 0; i < 2000; i++) {
