@@ -8,6 +8,9 @@
 
 use super::*;
 
+mod deferred;
+pub(crate) use deferred::try_start_deferred_write_file;
+
 fn write_file_data_type_error(value: f64) -> f64 {
     let message = format!(
         "The \"data\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received {}",
@@ -150,43 +153,47 @@ fn well_known_iterator_method(value: f64, name: &str) -> Option<f64> {
 }
 
 fn call_well_known_iterator(value: f64, name: &str) -> Option<f64> {
-    let method = well_known_iterator_method(value, name)?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let method = scope.root_nanbox_f64(well_known_iterator_method(value.get_nanbox_f64(), name)?);
     let iterator = unsafe {
         crate::closure::native_call_value_this(
-            method,
-            crate::closure::JsThis::from_f64(value),
+            method.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(value.get_nanbox_f64()),
             std::ptr::null(),
             0,
         )
     };
-    if iterator.to_bits() == crate::value::TAG_UNDEFINED {
-        None
-    } else {
-        Some(iterator)
-    }
+    (iterator.to_bits() != crate::value::TAG_UNDEFINED).then_some(iterator)
 }
 
 fn value_has_named_next(value: f64) -> bool {
-    let Some(obj) = write_file_object_ptr_from_value(value) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if write_file_object_ptr_from_value(value.get_nanbox_f64()).is_none() {
+        return false;
+    }
+    let key = scope.root_string_ptr(js_string_from_bytes(b"next".as_ptr(), 4));
+    let Some(obj) = write_file_object_ptr_from_value(value.get_nanbox_f64()) else {
         return false;
     };
-    let key = js_string_from_bytes(b"next".as_ptr(), 4);
-    let field = crate::object::js_object_get_field_by_name(obj, key);
-    let field_value = f64::from_bits(field.bits());
-    is_callable_write_value(field_value)
+    let field = crate::object::js_object_get_field_by_name(obj, key.get_raw_const_ptr());
+    is_callable_write_value(f64::from_bits(field.bits()))
 }
 
 fn write_file_iterator_for_value(value: f64) -> Option<f64> {
     if write_file_raw_ptr_from_value(value) == 0 {
         return None;
     }
-    if let Some(iter) = call_well_known_iterator(value, "asyncIterator") {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if let Some(iter) = call_well_known_iterator(value.get_nanbox_f64(), "asyncIterator") {
         return Some(iter);
     }
-    if value_has_named_next(value) {
-        return Some(value);
+    if value_has_named_next(value.get_nanbox_f64()) {
+        return Some(value.get_nanbox_f64());
     }
-    call_well_known_iterator(value, "iterator")
+    call_well_known_iterator(value.get_nanbox_f64(), "iterator")
 }
 
 fn write_file_data_has_source(value: f64) -> bool {
@@ -196,9 +203,11 @@ fn write_file_data_has_source(value: f64) -> bool {
     if write_file_raw_ptr_from_value(value) == 0 {
         return false;
     }
-    well_known_iterator_method(value, "asyncIterator").is_some()
-        || value_has_named_next(value)
-        || well_known_iterator_method(value, "iterator").is_some()
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    well_known_iterator_method(value.get_nanbox_f64(), "asyncIterator").is_some()
+        || value_has_named_next(value.get_nanbox_f64())
+        || well_known_iterator_method(value.get_nanbox_f64(), "iterator").is_some()
 }
 
 fn validate_write_file_data_source(value: f64) -> Result<(), f64> {
@@ -259,14 +268,20 @@ fn settle_write_file_value(value: f64) -> Result<f64, f64> {
 }
 
 fn iterator_result_value_done(result: f64) -> Option<(f64, bool)> {
-    let obj = write_file_object_ptr_from_value(result)?;
-    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
-    let done = crate::object::js_object_get_field_by_name(obj, done_key);
-    let value = crate::object::js_object_get_field_by_name(obj, value_key);
-    let done_f64 = f64::from_bits(done.bits());
-    let value_f64 = f64::from_bits(value.bits());
-    Some((value_f64, crate::value::js_is_truthy(done_f64) != 0))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(result);
+    write_file_object_ptr_from_value(result.get_nanbox_f64())?;
+    let done_key = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
+    let value_key = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
+    let obj = write_file_object_ptr_from_value(result.get_nanbox_f64())?;
+    let done = crate::object::js_object_get_field_by_name(obj, done_key.get_raw_const_ptr());
+    let done = scope.root_nanbox_f64(f64::from_bits(done.bits()));
+    let obj = write_file_object_ptr_from_value(result.get_nanbox_f64())?;
+    let value = crate::object::js_object_get_field_by_name(obj, value_key.get_raw_const_ptr());
+    Some((
+        f64::from_bits(value.bits()),
+        crate::value::js_is_truthy(done.get_nanbox_f64()) != 0,
+    ))
 }
 
 fn consume_iterator_for_write_file<F>(
@@ -314,37 +329,6 @@ fn fs_read_stream_id(value: f64) -> Option<usize> {
     })
 }
 
-fn consume_fs_read_stream_for_write_file<F>(
-    id: usize,
-    signal: Option<*mut ObjectHeader>,
-    mut write_chunk: F,
-) -> Result<(), f64>
-where
-    F: FnMut(&[u8]) -> Result<(), f64>,
-{
-    // A stream whose constructor open failed has no fd, so reading it would
-    // report EBADF and lose the failure the constructor stored — node rejects
-    // `fs.promises.writeFile(out, createReadStream(missing))` with that
-    // stream's `ENOENT ... open '<path>'` (#10451 review).
-    if let Some(error_value) = stored_node_error_value(id) {
-        return Err(error_value);
-    }
-    loop {
-        check_write_file_aborted(signal)?;
-        match read_next_chunk(id) {
-            Ok(Some(bytes)) => {
-                check_write_file_aborted(signal)?;
-                write_chunk(&bytes)?;
-            }
-            Ok(None) => {
-                finish_read_stream(id);
-                return Ok(());
-            }
-            Err(failure) => return Err(unsafe { failure.error_value() }),
-        }
-    }
-}
-
 fn consume_write_file_input<F>(data: f64, options: f64, mut write_chunk: F) -> Result<(), f64>
 where
     F: FnMut(&[u8]) -> Result<(), f64>,
@@ -357,7 +341,9 @@ where
         return write_chunk(&bytes);
     }
     if let Some(id) = fs_read_stream_id(data) {
-        return consume_fs_read_stream_for_write_file(id, signal, write_chunk);
+        if let Some(error) = stored_node_error_value(id) {
+            return Err(error);
+        }
     }
     if let Some(iterator) = write_file_iterator_for_value(data) {
         return consume_iterator_for_write_file(iterator, encoding_tag, signal, write_chunk);

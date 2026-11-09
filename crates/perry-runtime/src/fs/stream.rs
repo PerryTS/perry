@@ -1271,22 +1271,6 @@ fn read_next_chunk(id: usize) -> Result<Option<Vec<u8>>, FsReadFailure> {
     Ok(Some(result))
 }
 
-/// Ends a read stream whose bytes `fs.promises.writeFile` consumed directly.
-fn finish_read_stream(id: usize) {
-    let object = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let state = registry.get_mut(&id)?;
-        if state.ended {
-            return None;
-        }
-        state.ended = true;
-        Some(state.object_value)
-    });
-    if let Some(object) = object.filter(|object| object_ptr_from_value(*object).is_some()) {
-        call_js_method0(object, b"destroy");
-    }
-}
-
 fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
     let event = event_name(event_value);
     let immediate = STREAM_REGISTRY.with(|registry| {
