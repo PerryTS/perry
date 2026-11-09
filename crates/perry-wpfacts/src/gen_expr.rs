@@ -604,6 +604,27 @@ impl<'a> Gen<'a> {
         self.tok_node(t)
     }
 
+    /// The body of an async function that runs untransformed: one without
+    /// `await`, which `async_to_generator` leaves `is_async` and codegen
+    /// lowers direct (`lower_async_rejecting_stmts`): a call returns a fresh
+    /// promise (`js_async_fn_result`) settled with what the body returns, a
+    /// returned thenable adopted, and rejected with what the body throws; a
+    /// call never throws. Returns the body's context, whose `ret` is the
+    /// settled value, and its throw region, the realm's rejection cell (as
+    /// for the async-step driver's step closure, `async_callback`).
+    pub(crate) fn async_body(&mut self, fx: &Fx) -> (Fx, NodeId) {
+        let settled = self.tmp("async-settled");
+        let p = self.promise_of(fx.module, settled);
+        self.m.edge(p, fx.ret);
+        (
+            Fx {
+                ret: settled,
+                ..fx.clone()
+            },
+            self.thrown,
+        )
+    }
+
     /// A fresh promise template whose settled value is `value`.
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
         let tm = self.new_bobj_template(mi, "Promise");

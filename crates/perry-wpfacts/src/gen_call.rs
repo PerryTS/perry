@@ -421,6 +421,21 @@ impl<'a> Gen<'a> {
         if self.walked.contains(&cfx.f) {
             return;
         }
+        let plain_async = matches!(
+            e,
+            Expr::Closure {
+                is_async: true,
+                is_generator: false,
+                ..
+            }
+        );
+        if plain_async {
+            let (afx, rejected) = self.async_body(cfx);
+            let region = std::mem::replace(&mut self.m.gen_region, Some(rejected));
+            self.walk_closure_body_region(&afx, e);
+            self.m.gen_region = region;
+            return;
+        }
         let r = self.m.raise_of(cfx.f);
         let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_closure_body_region(cfx, e);
@@ -446,7 +461,9 @@ impl<'a> Gen<'a> {
         else {
             return;
         };
-        let ret = self.m.funcs[f as usize].ret;
+        // The body's completion: the call result, or for an async function
+        // the value its promise settles with (`async_body`).
+        let ret = cfx.ret;
         // A sloppy function expression's body reads its `this` through the
         // view (`sloppy_this`); an arrow's `this` is its creator's.
         let sloppy = !*is_strict && !*is_arrow && crate::ctor_phase::body_mentions_this(body);
@@ -471,7 +488,7 @@ impl<'a> Gen<'a> {
         #[cfg(test)]
         self.m.packet_declarations(body);
         self.params(cfx, params);
-        if *is_async || *is_generator {
+        if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());
         }

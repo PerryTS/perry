@@ -1884,6 +1884,7 @@ mod cycle_e20_own_field;
 mod realm_read_static;
 mod builtin_ctor_statics;
 mod promise_capability_executor;
+mod async_result;
 mod cycle_locked_member;
 mod collection_entries;
 mod concat_elements;
