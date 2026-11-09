@@ -773,6 +773,8 @@ impl Model {
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native.
         self.builtin_field_use(t, key, ChainAct::Store(src));
+        // A setter a declaration made the receiver with (`onabort`).
+        self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
@@ -798,7 +800,8 @@ impl Model {
                 TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
                 _ => false,
             };
-        if (!builtins::builtin_function(self, t) || (namespace && builtins::realm_reads_store(self, t, key)))
+        if (!builtins::builtin_function(self, t)
+            || (namespace && builtins::realm_reads_store(self, t, key)))
             && !own_index
         {
             self.with_b(|m| builtins::tok_store(m, t, key, src));

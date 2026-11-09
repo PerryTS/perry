@@ -226,7 +226,13 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 /// may be `throw`.
 /// `thrown` is the region of the `throw` call, or the shared cell for an
 /// async generator's (it rejects).
-fn gen_throw_passes(m: &mut Model, name: Option<&str>, thrown: NodeId, args: &[NodeId], spread: &[NodeId]) {
+fn gen_throw_passes(
+    m: &mut Model,
+    name: Option<&str>,
+    thrown: NodeId,
+    args: &[NodeId],
+    spread: &[NodeId],
+) {
     if !matches!(name, Some("throw") | None) {
         return;
     }
@@ -1294,7 +1300,15 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         _ => what,
     };
     match (what, name) {
+        // A method the realm declares on the prototype of an object a
+        // declaration made (`AbortController.prototype.abort`): its
+        // declaration runs.
+        (w, Some(n)) if w.ends_with(".prototype") && effects::declared_at(w, n).is_some() => {
+            let e = effects::declared_at(w, n).expect("declared");
+            effects::run_native(m, e, t, call);
+        }
         ("Iterator", _) => iterator_method(m, t, name, call),
+
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
         (
