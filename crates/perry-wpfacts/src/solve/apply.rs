@@ -451,7 +451,9 @@ impl Model {
                         self.add_top(dst, |m| m.reasons[r as usize].clone());
                         self.add_prim(dst, prim::ALL);
                     }
-                    self.edge(from, dst);
+                    if from != dst {
+                        self.edge(from, dst);
+                    }
                 }
             }
             Cons::DeleteKey { key, reason } => {
@@ -847,7 +849,15 @@ impl Model {
                     if matches!(self.toks[t as usize], TokKind::Func(..))
                         || builtins::accessor_callable(self, t)
                     {
-                        self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
+                        self.cons(
+                            holder,
+                            Cons::AccessorInstall {
+                                key,
+                                f: t,
+                                setter,
+                                from: n,
+                            },
+                        );
                     }
                 }
             }
@@ -864,7 +874,12 @@ impl Model {
                     self.with_b(|m| builtins::annexb_lookup(m, None, call, setter));
                 }
             }
-            Cons::AccessorInstall { key, f, setter } => {
+            Cons::AccessorInstall {
+                key,
+                f,
+                setter,
+                from,
+            } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
                     if f == TOP {
@@ -878,6 +893,14 @@ impl Model {
                         let group = Key::Named(key);
                         self.acc_group(t, group);
                         let fa = self.acc_groups[&(t, group)].ar;
+                        // Census only: the accessor's ⊤ and the holder's
+                        // sink propagate the ⊤ its function value holds, so
+                        // they are attributed to the node that held it, not
+                        // to the holder whose rule runs.
+                        let saved = match self.diagnostic.as_mut() {
+                            Some(dg) if from != NO_NODE => Some(dg.cause_node.replace(from)),
+                            _ => None,
+                        };
                         self.add_top(fa, |_| "accessor of unknown function value".into());
                         let site = self.anon_post_site("unknown accessor");
                         let k = if self.atoms[key as usize] == crate::STAR_KEY {
@@ -895,6 +918,9 @@ impl Model {
                         );
                         let reason = self.reason("accessor of unknown function value");
                         self.cons(n, Cons::TopSink { reason });
+                        if let (Some(dg), Some(saved)) = (self.diagnostic.as_mut(), saved) {
+                            dg.cause_node = saved;
+                        }
                         continue;
                     }
                     if let Some(s) = self.shared_of(t) {
