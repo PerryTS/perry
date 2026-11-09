@@ -86,8 +86,7 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
 pub(crate) use array_error::{
     function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
     generic_array_like_to_vec, global_this_rest_array_values, is_native_error_subclass_constructor,
-    object_prototype_has_own_property_thunk, object_prototype_is_prototype_of_thunk,
-    object_prototype_property_is_enumerable_thunk, object_prototype_to_string_thunk,
+    object_prototype_to_string_thunk, object_prototype_value_of_thunk,
 };
 pub(crate) use async_generator_state::is_async_generator_instance_value;
 pub use async_generator_state::js_async_generator_create;
@@ -187,9 +186,7 @@ pub(crate) use global_this_webassembly::owned_wrappers as test_wasm_wrapper_stat
 // Existing unit fixtures invoke these bodies directly; production installers
 // now name their owning module in the exported info declaration.
 #[cfg(test)]
-pub(crate) use array_error::{
-    object_prototype_to_locale_string_thunk, object_prototype_value_of_thunk,
-};
+pub(crate) use array_error::object_prototype_to_locale_string_thunk;
 #[cfg(test)]
 pub(crate) use typed_array::array_buffer_is_view_thunk;
 
