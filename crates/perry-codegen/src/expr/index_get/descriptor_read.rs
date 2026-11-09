@@ -48,8 +48,10 @@ fn enabled() -> bool {
 /// Negative controls (`PERRY_RECEIVER_COLD_ARM_SABOTAGE`): drop one step of
 /// the recipe. `reload`: no box reload after the slow arm; `guard`: the
 /// valid slot is cleared neither by calls nor by the refresh; `clear`: only
-/// the clear at every call is dropped; `handle`: neither the refresh nor
-/// revalidation re-derives the handle. Each must make a fixture fail.
+/// the clear at every call is dropped; `handle`: no step re-derives the
+/// handle (the poll's included); `coldhandle`: only the cold arm's steps
+/// (the refresh and revalidation) do not, the poll's still does. Each must
+/// make a fixture fail.
 fn sabotage(step: &str) -> bool {
     std::env::var("PERRY_RECEIVER_COLD_ARM_SABOTAGE").as_deref() == Ok(step)
 }
@@ -167,7 +169,7 @@ fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, receiver: u32, numeric: bool) -> Re
         let handle = blk.and(I64, &bits, POINTER_MASK_I64);
         let word = super::guarded_array::emit_array_guard_word(blk, &handle);
         let ok = super::guarded_array::emit_array_guard_word_ok(blk, &word, &handle);
-        if !sabotage("handle") {
+        if !sabotage("handle") && !sabotage("coldhandle") {
             blk.store(I64, &handle, &access.base_handle_slot);
         }
         let byte = blk.zext(I1, &ok, I8);
@@ -262,7 +264,7 @@ fn emit_cold_arm_refresh(ctx: &mut FnCtx<'_>) {
         let fresh = blk.load(DOUBLE, &r.refresh.source_root);
         blk.store(DOUBLE, &fresh, &r.refresh.rooted_box_slot);
         // Design step 4: the handle follows the reloaded box.
-        if !sabotage("handle") {
+        if !sabotage("handle") && !sabotage("coldhandle") {
             let bits = blk.bitcast_double_to_i64(&fresh);
             let handle = blk.and(I64, &bits, POINTER_MASK_I64);
             blk.store(I64, &handle, &r.refresh.base_handle_slot);
