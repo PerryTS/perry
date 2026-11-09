@@ -682,12 +682,14 @@ pub(super) struct FamilyBirthState {
 /// One builtin family's birth after its constructor exists: the prototype,
 /// the constructor's own properties, the prototype's members and hooks, and
 /// the realm's [[Intrinsics]] entry. Returns the constructor value.
-// Once per family, compacted like the population that calls it.
+// Once per family, compacted like the population that calls it. One instance
+// for both callers (the population and `birth_lazy_family`): the realm global
+// comes as `&dyn Fn`, so the body is not monomorphized per caller.
 #[optimize(size)]
-fn birth_family<S: Fn() -> *mut ObjectHeader>(
+fn birth_family(
     declaration: &BuiltinConstructorDeclaration,
     closure_ptr: *mut crate::closure::ClosureHeader,
-    singleton: &S,
+    singleton: &dyn Fn() -> *mut ObjectHeader,
     state: &mut FamilyBirthState,
 ) -> f64 {
     let name = declaration.name;
