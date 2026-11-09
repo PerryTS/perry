@@ -232,6 +232,10 @@ pub(crate) struct TypedMethod {
     /// stays, as an alias of the boxed entry, so an importer's guarded call
     /// still links.
     pub published_pshape: bool,
+    /// Main selected a nonnegative-index clone of this method (`$idx`), the
+    /// tier `M$sig` subsumes: `M$sig` inherits that clone's early-inline
+    /// admission (`method.rs`, CWN 11-09).
+    pub index_admission: bool,
 }
 
 /// The typed methods of `hir` (T2), installed after every method selector
@@ -339,6 +343,7 @@ pub(crate) fn select_methods(
             }
             typed.push(TypedMethod {
                 published_pshape: cm.pshape_methods.contains_key(&key),
+                index_admission: cm.nonnegative_index_methods.contains_key(&key),
                 class: class.name.clone(),
                 name: m.name.clone(),
                 plan: SpecFnPlan {
@@ -643,6 +648,15 @@ pub(crate) fn emit_boxed_method_entry(
         .and(tm.plan.signature.as_ref())
         .and_then(|sig| sig.this_class);
     emit_entry(llmod, m, public_name, &tm.plan, Some(this_class));
+    // CWN 11-09: the boxed entry is the public symbol, so it takes the
+    // primary body's admission (`method.rs`): the early inliner when the
+    // facts close a call site over it and the body fits the budget.
+    let body_bytes = llmod.function_estimated_ir_bytes(&format!("{public_name}$sig"));
+    if let Some(entry) = llmod.function_named_mut(public_name) {
+        entry.closed_target_preinline = body_bytes.is_some_and(|bytes| {
+            super::helpers::guarded_specialization_admits_preinline(bytes, m.body.len())
+        });
+    }
     if tm.published_pshape {
         let tys = vec!["double"; m.params.len() + 1].join(", ");
         llmod.add_raw_global(format!(

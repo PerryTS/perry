@@ -364,7 +364,10 @@ pub(super) fn compile_method(
         lf.linkage = "internal".to_string();
     }
     super::helpers::apply_pshape_inline_policy(lf, method, is_pshape_clone || pshape_arg_clone);
-    if is_index_clone {
+    // P2 (CWN 11-09): `M$sig` subsuming main's index clone inherits its
+    // admission, and so takes no other admission below.
+    let index_admitted = is_index_clone || sig.is_some_and(|tm| tm.index_admission);
+    if index_admitted {
         lf.pre_statepoint_inline = true;
     }
     // #8872: methods participate in the same allocation-hot analysis as
@@ -1829,7 +1832,7 @@ pub(super) fn compile_method(
     // inliner so direct method chains can flatten without guessing from HIR
     // statement count.  Indexed clones are already admitted above and
     // pshape-argument clones do not carry an exact receiver proof.
-    if is_pshape_clone && !is_index_clone && !method.is_async && !method.is_generator {
+    if is_pshape_clone && !index_admitted && !method.is_async && !method.is_generator {
         let callable_worker = llmod.callable_worker;
         let lowered = llmod
             .function_mut(lowered_function_index)
@@ -1849,7 +1852,7 @@ pub(super) fn compile_method(
     // budget. Clones and wrappers are excluded; async and generator bodies
     // are state machines.
     if !is_pshape_clone
-        && !is_index_clone
+        && !index_admitted
         && !arguments_length_clone
         && !ptr_array_cache_clone
         && !guarded_undefined_clone
