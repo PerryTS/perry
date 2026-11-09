@@ -321,6 +321,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if key_bytes == b"constructor" {
+                if let Some(ctor) = crate::object::fetch_handle_constructor_value(obj as usize) {
+                    return f64::from_bits(ctor.bits());
+                }
                 if let Some(dispatch) = handle_property_dispatch() {
                     let bits = dispatch(obj as i64, key_ptr, key_len);
                     if bits.to_bits() != crate::value::TAG_UNDEFINED {

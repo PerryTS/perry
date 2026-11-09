@@ -181,6 +181,16 @@ unsafe fn with_function_name_for_closure<R>(
         let bytes = std::slice::from_raw_parts(descriptor_pointer(base, delta), len);
         return Some(read(std::str::from_utf8_unchecked(bytes)));
     }
+    // A lazy builtin family's constructor is named by its construct identity
+    // (its info may be shared by several builtins): its `name` is read before
+    // its bag exists.
+    if let Some(identity) =
+        crate::object::BuiltinConstructorIdentity::from_header(closure.capture_count)
+    {
+        if identity.declaration().lazy {
+            return Some(read(identity.name()));
+        }
+    }
     with_registered_name(info, |name| (!name.is_empty()).then(|| read(name))).flatten()
 }
 

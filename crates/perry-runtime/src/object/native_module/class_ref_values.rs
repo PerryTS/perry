@@ -3,7 +3,10 @@
 //
 // A class constructor value is its function object (`class_value`); the
 // `C.prototype` half is a `0x7FFE` word with `CLASS_PROTOTYPE_REF_FLAG` set,
-// which is never an int32 number. Extracted from `native_module.rs` to keep that file
+// which is never an int32 number. Since P3 B2 that word is runtime-internal
+// only (a method's home for super/brand lookup): a `C.prototype` read returns
+// the declaration's prototype object, or `undefined` for an id with no
+// declaration (`get_field_by_name.rs`, `construct.rs`), never this word. Extracted from `native_module.rs` to keep that file
 // under the repository's 2000-line cap. Textually `include!`d (like
 // `class_method_values.rs`), so every item keeps the module path and visibility
 // it had before -- hence line comments, not `//!` inner docs, which are illegal
