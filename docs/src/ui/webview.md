@@ -15,7 +15,7 @@ app" surface. The cross-platform implementation shipped under closed issue
 > **Scope.** This is a "browser tab embedded in your native widget tree"
 > primitive — explicit non-goals: a Tauri / Electron-style native↔JS RPC
 > bridge, custom protocol / scheme handlers, DevTools, file downloads,
-> WebGL / camera / mic / clipboard permission negotiation, service
+> custom permission-policy callbacks, service
 > workers, WebRTC. If you need any of those, reach for Tauri or
 > Electron; the rest of `perry/ui` still applies.
 
@@ -123,6 +123,16 @@ at logout, or between accounts:
 | `onLoaded` | `(url) => void` | — | Fires when a page finishes loading. |
 | `onError` | `(code, message) => void` | — | DNS / TLS / HTTP / cancellation. |
 | `width`, `height` | `number` | layout-engine controlled | Initial pixel bounds; layout engine still has final say. |
+
+## Media capture on macOS
+
+WebKit owns camera and microphone permission decisions for the requesting
+origin, frame and capture type. Perry does not grant capture on behalf of web
+content or preemptively request both devices when constructing a WebView.
+macOS consent and the host app's required usage descriptions still apply.
+
+WebKit and macOS may reuse remembered decisions, so a request does not always
+show a new prompt. Perry does not expose a custom media-permission callback.
 
 ## Platform Notes
 
