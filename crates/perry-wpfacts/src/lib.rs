@@ -887,10 +887,7 @@ fn compute_act<'a>(
             &sites,
             &mut bindings,
             interp_guard.is_some(),
-            matches!(
-                cfg.sabotage.as_deref(),
-                Some("signature") | Some("signature-escape")
-            ),
+            cfg.sabotage.as_deref(),
         );
     }
     if g.m.aborted {

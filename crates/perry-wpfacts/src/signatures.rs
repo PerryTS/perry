@@ -39,6 +39,8 @@ pub(crate) struct CallSiteRec {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Signature {
     pub params: Vec<Rep>,
+    /// Each parameter's int interval, from the same entry node (T1).
+    pub ranges: Vec<Option<(i64, i64)>>,
     pub ret: Rep,
     /// The class id of the one class `this` holds (E2).
     pub this_class: Option<u32>,
@@ -101,13 +103,14 @@ fn excluded(f: &perry_hir::Function) -> bool {
 
 /// Fill `ModuleBindings::signatures` and `ModuleBindings::typed_calls`.
 /// `sabotage`: the negative controls `signature` / `signature-escape` claim
-/// I32 for every F64 parameter of a function with a typed call.
+/// I32 for every F64 parameter of a function with a typed call;
+/// `signature-range` claims `[0, 127]` for a negative I32 interval.
 pub(crate) fn collect(
     g: &Gen<'_>,
     sites: &[SiteFacts],
     bindings: &mut [ModuleBindings],
     interpreted: bool,
-    sabotage: bool,
+    sabotage: Option<&str>,
 ) {
     let m = &g.m;
     if m.aborted || interpreted {
@@ -155,10 +158,12 @@ pub(crate) fn collect(
             continue;
         }
         let mut params = Vec::with_capacity(hir.params.len());
+        let mut ranges = Vec::with_capacity(hir.params.len());
         // E1: a literal default is applied outside the body only when no
         // earlier parameter has a non-literal default.
         let mut earlier_nonliteral = false;
         for p in &hir.params {
+            let local = g.mods[f.module as usize].locals.get(&p.id).copied();
             let rep = match &p.default {
                 Some(d) if !is_literal(d) || earlier_nonliteral => {
                     earlier_nonliteral |= !is_literal(d);
@@ -172,6 +177,10 @@ pub(crate) fn collect(
                     None => Rep::Boxed,
                 },
             };
+            ranges.push(match (rep, local) {
+                (Rep::I32, Some(n)) if live(n) => crate::bindings::facts_of_node(g, n).int_range,
+                _ => None,
+            });
             params.push(rep);
         }
         let mut ret = rep_at(f.ret);
@@ -185,6 +194,7 @@ pub(crate) fn collect(
         let this_class = one_class(g, &this_nodes);
         let sig = Signature {
             params,
+            ranges,
             ret,
             this_class,
         };
@@ -245,7 +255,7 @@ pub(crate) fn collect(
             typed.push(((mi, offset), t));
         }
     }
-    if sabotage {
+    if matches!(sabotage, Some("signature") | Some("signature-escape")) {
         let has_site: std::collections::HashSet<(u32, u32)> =
             typed.iter().map(|(_, t)| *t).collect();
         for (k, sig) in sigs.iter_mut() {
@@ -254,6 +264,17 @@ pub(crate) fn collect(
                     if *p == Rep::F64 {
                         *p = Rep::I32;
                     }
+                }
+            }
+        }
+    }
+    if sabotage == Some("signature-range") {
+        // T1's negative control: claim `[0, 127]` for an I32 parameter some
+        // caller passes a negative value.
+        for sig in sigs.values_mut() {
+            for r in sig.ranges.iter_mut().flatten() {
+                if r.0 < 0 {
+                    *r = (0, 127);
                 }
             }
         }
