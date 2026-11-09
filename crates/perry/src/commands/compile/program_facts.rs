@@ -139,6 +139,14 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_floor: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_elem_undef: matches!(
+            std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_guard_ranges: matches!(
             std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -534,6 +542,30 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.number_calls.extend(mb.number_calls.iter().copied());
         out.number_element_reads
             .extend(mb.number_element_reads.iter().copied());
+        out.element_floors.extend(mb.element_floors.iter().copied());
+        let rep = |r: &perry_wpfacts::Rep| match r {
+            perry_wpfacts::Rep::Boxed => perry_codegen::FactsRep::Boxed,
+            perry_wpfacts::Rep::F64 => perry_codegen::FactsRep::F64,
+            perry_wpfacts::Rep::I32 => perry_codegen::FactsRep::I32,
+        };
+        for (id, sig) in &mb.signatures {
+            out.signatures.insert(
+                *id,
+                perry_codegen::FactsSignature {
+                    params: sig.params.iter().map(rep).collect(),
+                    ranges: sig.ranges.clone(),
+                    ret: rep(&sig.ret),
+                    this_class: sig.this_class,
+                },
+            );
+        }
+        // Same-module typed calls only (DESIGN-p2 rev 2.2 §2).
+        let module_index = pf.module_paths.iter().position(|p| p == path);
+        for (offset, (callee_module, func_id)) in &mb.typed_calls {
+            if Some(*callee_module as usize) == module_index {
+                out.typed_calls.insert(*offset, *func_id);
+            }
+        }
         for (offset, c) in &mb.field_read_calls {
             let default = match &c.default {
                 None => None,
@@ -845,6 +877,14 @@ pub(crate) fn activation(
         ),
         no_array_lengths: matches!(
             std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_floor: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_elem_undef: matches!(
+            std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_guard_ranges: matches!(

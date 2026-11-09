@@ -336,17 +336,27 @@ pub struct ModuleBindings {
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
+    /// P2: typed signatures by HIR function id, sorted (`signatures`).
+    pub signatures: Vec<(u32, crate::signatures::Signature)>,
+    /// P2: call byte offset -> the one body `(module, func_id)` a typed
+    /// entry serves, sorted (`signatures`, DESIGN-p2 §2).
+    pub typed_calls: Vec<(u32, (u32, u32))>,
     /// Element reads whose value is a plain Number at every copy, by
     /// `element_offset`, sorted; `true` when the value may also be
     /// `undefined` (`canonical_numbers`, P3 B1).
     pub number_element_reads: Vec<(u32, bool)>,
+    /// Check mode: element reads by `element_offset` whose past-the-end
+    /// `undefined` the solve withheld at every copy (`Cons::ElemUndef`,
+    /// PR-C1), with the least length lower bound of their receivers; sorted
+    /// (`element_floors`).
+    pub element_floors: Vec<(u32, u32)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
 /// keeps its birth length for the whole program (`const_length`): no store
 /// moves it, so its storage never grows, is never forwarded and holds `len`
-/// slots (a birth of at most `perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH`, the
-/// longest the runtime backs densely), and no `defineProperty` ever gave it an element descriptor
+/// slots (a birth length is recorded only for a densely backed birth:
+/// `solve::arr_len`), and no `defineProperty` ever gave it an element descriptor
 /// (`solve::arr_len`). A slot holds its own data or a hole; a hole reads
 /// through the prototype chain, which the read leaves to the generic path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -382,16 +392,11 @@ fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead
             return None;
         }
     }
-    // The read addresses slot `i` of the store, so the store must hold
-    // `len` slots: the runtime backs a fresh `new Array(k)` densely only up
-    // to `MAX_FRESH_DENSE_ARRAY_LENGTH`; a longer one has length `k` over an
-    // empty store.
-    let dense = if m.dense_birth_sabotage {
-        i32::MAX as u32
-    } else {
-        perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
-    };
-    let len = u32::try_from(len).ok().filter(|&l| l >= 1 && l <= dense)?;
+    // The read addresses slot `i` of the store, which holds `len` slots: a
+    // birth length is recorded only for a birth whose capacity is at least
+    // its length, and capacity never falls below it while the length is
+    // defined (`solve::arr_len`).
+    let len = u32::try_from(len).ok().filter(|&l| l >= 1)?;
     let key = number_range(m, site.idx);
     let key_in_bounds = key.is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(len));
     Some(ElementRead { len, key_in_bounds })
@@ -406,6 +411,16 @@ fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
     }
     let r = node.range;
     (!r.is_top() && !r.is_empty()).then_some((r.lo, r.hi))
+}
+
+/// `facts_of` for P2's signatures (`signatures`).
+pub(crate) fn facts_of_node(g: &Gen, n: u32) -> BindingFacts {
+    facts_of(g, n)
+}
+
+/// The one representation of node `n` (`rep_of`), for P2's signatures.
+pub(crate) fn rep_of_node(g: &Gen, n: u32) -> Rep {
+    facts_of(g, n).rep
 }
 
 fn facts_of(g: &Gen, n: u32) -> BindingFacts {

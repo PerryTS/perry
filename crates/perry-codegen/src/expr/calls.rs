@@ -857,7 +857,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.strings.debug_locations_enabled() {
                 ctx.strings.set_pending_call_offset(*byte_offset);
             }
-            lower_call(ctx, callee, args)
+            crate::codegen::signature_entry::with_direct_call(*byte_offset, || {
+                lower_call(ctx, callee, args)
+            })
         }
 
         // -------- Proxy / Reflect (metaprogramming) --------

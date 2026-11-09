@@ -573,6 +573,15 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             }
             crate::expr::private_resume_frame::write_out_kind(ctx)?;
             crate::expr::resume_locals::write_back(ctx)?;
+            if let Some(rep) = ctx.sig_return {
+                // P2: a typed entry returns in its signature's `ret`.
+                crate::codegen::signature_entry::witness_return(ctx, rep, &final_v);
+                if rep == crate::codegen::FactsRep::I32 {
+                    let raw = ctx.block().fptosi(DOUBLE, &final_v, crate::types::I32);
+                    ctx.block().ret(crate::types::I32, &raw);
+                    return Ok(());
+                }
+            }
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }
@@ -620,6 +629,16 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                     ctx.block().call_void("js_derived_super_scope_pop", &[]);
                 }
                 crate::expr::resume_locals::write_back(ctx)?;
+                if ctx.sig_return == Some(crate::codegen::FactsRep::I32) {
+                    // The facts prove no `return;` completes an I32 entry.
+                    crate::codegen::signature_entry::witness_return(
+                        ctx,
+                        crate::codegen::FactsRep::I32,
+                        &undef,
+                    );
+                    ctx.block().unreachable();
+                    return Ok(());
+                }
                 ctx.block().ret(DOUBLE, &undef);
             }
             Ok(())

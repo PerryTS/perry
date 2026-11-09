@@ -29,6 +29,7 @@ impl<'a> Gen<'a> {
         args: &[Expr],
         _extra: &[NodeId],
         byte_offset: u32,
+        byte_end: u32,
     ) -> NodeId {
         // The object-literal IIFE: `(o => { js_object_literal_define(o, …);
         // …; return o })(seed)`. Its defines are the literal's birth.
@@ -121,7 +122,7 @@ impl<'a> Gen<'a> {
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        let result = self.call_with(fx, callee, a, vec![], byte_offset);
+        let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
         if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
             self.call_results_at.push((fx.module, byte_offset, result));
         }
@@ -144,7 +145,7 @@ impl<'a> Gen<'a> {
         callee: &Expr,
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
-        byte_offset: u32,
+        (byte_offset, byte_end): (u32, u32),
     ) -> NodeId {
         let lit = self.call_lit_arg.take();
         match callee {
@@ -152,6 +153,7 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 byte_offset: pb,
+                byte_end: pe,
                 ..
             } => {
                 let o = match self.ns_member(fx.module, object, property, true) {
@@ -161,7 +163,21 @@ impl<'a> Gen<'a> {
                 self.own_test_recv = Some(o);
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
-                let off = if *pb != 0 { *pb } else { byte_offset };
+                let (off, end) = if *pb != 0 {
+                    (*pb, *pe)
+                } else {
+                    (byte_offset, byte_end)
+                };
+                if off != 0 {
+                    self.call_sites_at.push(crate::signatures::CallSiteRec {
+                        module: fx.module,
+                        offset: off,
+                        end,
+                        args: args.clone(),
+                        spread: !spread.is_empty(),
+                        callee: None,
+                    });
+                }
                 if off != 0 {
                     self.read_sites.push(ReadSite {
                         module: fx.module,
@@ -255,6 +271,16 @@ impl<'a> Gen<'a> {
             _ => {
                 let c = self.expr(fx, callee);
                 self.own_test_recv = Some(c);
+                if byte_offset != 0 {
+                    self.call_sites_at.push(crate::signatures::CallSiteRec {
+                        module: fx.module,
+                        offset: byte_offset,
+                        end: byte_end,
+                        args: args.clone(),
+                        spread: !spread.is_empty(),
+                        callee: Some(c),
+                    });
+                }
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.
@@ -563,14 +589,23 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
-        // `new Array(k)` of an integer literal: the length its birth has.
+        // `new Array(k)` of an integer literal: the length its birth has,
+        // when the runtime backs it densely (`capacity >= k`, every slot a
+        // hole: `js_array_constructor_single`). A longer one has length `k`
+        // over an empty store, so no birth length: its capacity says
+        // nothing about its length (`solve::arr_len`).
+        let dense = if self.m.arr_cap_sabotage {
+            u32::MAX
+        } else {
+            perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
+        };
         let birth_len = match args.as_slice() {
             [a] if self.arr_lengths && name == "Array" && spread.is_empty() => self
                 .num_lits
                 .iter()
                 .find(|(_, &n)| n == *a)
                 .map(|(&k, _)| k)
-                .filter(|k| (0..=i64::from(u32::MAX)).contains(k)),
+                .filter(|k| (0..=i64::from(dense)).contains(k)),
             _ => None,
         };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);

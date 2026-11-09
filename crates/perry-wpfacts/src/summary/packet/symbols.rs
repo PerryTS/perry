@@ -41,6 +41,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
+            Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
             Cons::Store { key, src, site } => format!(
                 "Store key={:?} src={:?} site={:?}",
@@ -315,6 +316,12 @@ impl Model {
                     self.packet_shape(shape)
                 )
             }
+            Cons::ElemUndef { obj, key, dst } => format!(
+                "ElemUndef obj={:?} key={:?} dst={:?}",
+                self.packet_token(obj, packet),
+                key,
+                dst
+            ),
             Cons::IdxKey { obj, dst, shape } => format!(
                 "IdxKey obj={:?} dst={:?} shape={:?}",
                 self.packet_token(obj, packet),
