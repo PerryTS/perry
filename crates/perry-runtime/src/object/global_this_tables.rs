@@ -198,9 +198,9 @@ builtin_constructors! {
     // no-op constructor thunk so `typeof DisposableStack === "function"`;
     // real `new DisposableStack()` / `new SuppressedError(...)` flow through
     // codegen's `lower_builtin_new` to the dedicated runtime ctors.
-    DisposableStack => NOOP_CONSTRUCTOR_INFO,
-    AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO,
-    SuppressedError => NOOP_CONSTRUCTOR_INFO,
+    DisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
+    AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
+    SuppressedError => NOOP_CONSTRUCTOR_INFO; lazy true,
     // Abstract: `prototype` is the realm's %IteratorPrototype% (`iterator_ctor`).
     Iterator => CONSTRUCT_ONLY_INFO,
     Buffer => NOOP_CONSTRUCTOR_INFO,
