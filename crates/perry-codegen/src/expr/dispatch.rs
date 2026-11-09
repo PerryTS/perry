@@ -794,6 +794,9 @@ pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Str
 /// node (`perry_hir::patched_builtins`, #10848; under dynamic code the node
 /// sits inside the `NamespacePatched` guard, #12643).
 pub(crate) fn math_intrinsic_operands(e: &Expr) -> Option<&[Expr]> {
+    if !inert_math_enabled() {
+        return None;
+    }
     match e {
         Expr::MathAbs(x) | Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathSqrt(x) => {
             Some(std::slice::from_ref(x.as_ref()))
@@ -801,6 +804,18 @@ pub(crate) fn math_intrinsic_operands(e: &Expr) -> Option<&[Expr]> {
         Expr::MathMin(v) | Expr::MathMax(v) => Some(v.as_slice()),
         _ => None,
     }
+}
+
+/// `PERRY_INERT_MATH=0` turns c1 off (the Math-intrinsic and conditional arms
+/// of `expr_is_inert_primitive` and everything that reads it).
+pub(crate) fn inert_math_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_INERT_MATH").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
 }
 
 /// The operand lowers to a plain double by construction.
