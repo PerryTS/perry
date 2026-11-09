@@ -796,7 +796,10 @@ fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
         if unsafe { super::super::value_is_object_like(declared) } {
             return Some(declared.to_bits());
         }
-        return Some(super::super::class_prototype_ref_value(class_id).to_bits());
+        // P3 B2 (REVIEW-p3 D3): `newTarget.prototype` is not an object (an id
+        // with no declaration reads `undefined`, the same answer as the
+        // `prototype` read), so the default per-kind prototype applies.
+        return None;
     }
     let proto = new_target_prototype_get(new_target)?;
     if unsafe { super::super::value_is_object_like(proto) }

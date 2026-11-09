@@ -246,6 +246,9 @@ pub(crate) mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
+#[cfg(test)]
+#[path = "field_get_set/undeclared_prototype_tests.rs"]
+mod undeclared_prototype_tests;
 mod map_set_receiver;
 #[cfg(test)]
 mod map_set_receiver_tests;
