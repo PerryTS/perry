@@ -168,11 +168,13 @@ pub(crate) fn class_value_get_field(
             && is_class_id_registered(class_id)
             && !is_prototype_ref
         {
+            // P3 B2 (DESIGN-p3 rev 3.1 §3, REVIEW-p3 D3): the declaration
+            // path is the answer. A declared class builds its prototype
+            // lazily on this first read (`class_decl_prototype_value`); an id
+            // with no declaration (`!class_identity_has_surface`) has none and
+            // reads `undefined`, decided here at the read and never at
+            // registration. No INT32-space prototype word reaches JS.
             let value = super::super::class_registry::class_decl_prototype_value(class_id);
-            if value.to_bits() == crate::value::TAG_UNDEFINED {
-                let value = super::super::class_prototype_ref_value(class_id);
-                return JSValue::from_bits(value.to_bits());
-            }
             return JSValue::from_bits(value.to_bits());
         }
         // A capture-carrying class declaration is materialized as a
@@ -1516,6 +1518,11 @@ fn get_field_by_name_past_data_probe(
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                     if let Some(value) = crate::object::http_handle_prototype::field(raw, key) {
                         return value;
+                    }
+                    if key_bytes == b"constructor" {
+                        if let Some(ctor) = crate::object::fetch_handle_constructor_value(raw) {
+                            return ctor;
+                        }
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
                         let bits = dispatch(raw as i64, key_ptr, key_len);

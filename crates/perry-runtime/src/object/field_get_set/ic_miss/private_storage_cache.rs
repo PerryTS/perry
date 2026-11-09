@@ -640,6 +640,16 @@ pub(crate) fn intrinsic_private_set(receiver: f64, name: &'static str, value: f6
     true
 }
 
+/// A runtime intrinsic's field value, `None` when `receiver` has no such
+/// field (the intrinsic's brand check).
+pub(crate) fn intrinsic_private_get(receiver: f64, name: &'static str) -> Option<f64> {
+    let key = private_storage_key_by_id(0, 0, name);
+    if let Some(value) = key.get_cached(receiver) {
+        return Some(value);
+    }
+    key.is_present(receiver).then(|| key.get(receiver))
+}
+
 /// Install the private entry before the intrinsic publishes its receiver.
 /// A property with the qualified spelling is never a private field.
 pub(crate) fn intrinsic_private_add(receiver: f64, name: &'static str, value: f64) {

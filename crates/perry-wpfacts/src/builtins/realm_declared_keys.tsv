@@ -1178,6 +1178,7 @@ native	FormData	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	FormData	toLocaleString	Object.prototype.toLocaleString
 native	FormData	toString	Function.prototype.toString
 native	FormData	valueOf	Object.prototype.valueOf
+native	FormData.prototype	@@iterator	FormData.prototype.entries
 native	FormData.prototype	append	FormData.prototype.append
 native	FormData.prototype	constructor	FormData
 native	FormData.prototype	delete	FormData.prototype.delete
@@ -9154,12 +9155,6 @@ ns	console.trace	length
 ns	console.trace	name
 ns	console.warn	length
 ns	console.warn	name
-ns	navigator	hardwareConcurrency
-ns	navigator	language
-ns	navigator	languages
-ns	navigator	locks
-ns	navigator	platform
-ns	navigator	userAgent
 ns	node:assert.Assert	length
 ns	node:assert.Assert	name
 ns	node:assert.Assert	prototype
