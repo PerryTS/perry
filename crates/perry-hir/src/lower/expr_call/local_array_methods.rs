@@ -204,7 +204,17 @@ pub(super) fn try_local_array_methods(
                 // (push, pop, etc.), NOT for methods shared with strings (indexOf,
                 // includes, split) — those are handled by the general dispatch which
                 // checks is_string at codegen time.
-                let type_info = ctx.lookup_local_type(&arr_name);
+                //
+                // A receiver typed `Null`/`Void` is no evidence about the value
+                // the call sees: a method call on a real `null`/`undefined`
+                // throws, so the call only runs when the binding was reassigned
+                // (`let s = null; s = "<"; s.includes("<")`). The declared type
+                // is still the initializer's at this point — `type_widening`
+                // widens it only after lowering — so read it as unknown here
+                // rather than as "known not a string".
+                let type_info = ctx
+                    .lookup_local_type(&arr_name)
+                    .filter(|ty| !matches!(ty, Type::Null | Type::Void));
                 // #8138: these methods exist on Array.prototype but not on
                 // %TypedArray%.prototype. Preserve ordinary property lookup so
                 // a user-installed method wins and an absent one throws.
