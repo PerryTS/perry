@@ -1,0 +1,1 @@
+25 more builtin prototype families (Headers, Request, Blob, File, FormData, TextEncoder, TextDecoder, the web streams, MessageChannel, MessagePort, BroadcastChannel, Crypto, CryptoKey, Storage, DisposableStack, SuppressedError, ...) are created on first use instead of at startup. The `localStorage` and `sessionStorage` areas are created by their getters.

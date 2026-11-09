@@ -750,7 +750,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                crate::fn_info!(#[realm(Object.prototype.hasOwnProperty)] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.hasOwnProperty, effects = { coerce(arg(0), ToPrimitive); returns(prim(bool)) })] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
@@ -768,7 +768,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(#[realm(Object.prototype.valueOf)] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.valueOf, effects = { returns(this) })] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // Annex B §B.2.2: own methods of `%Object.prototype%`, as its
@@ -1147,7 +1147,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 install_proto_method(
                     proto_obj,
                     "toString",
-                    crate::fn_info!(#[realm(Error.prototype.toString)] export crate::object::global_this::array_error::error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Error.prototype.toString, effects = { reads(field(this, name), field(this, message)); coerce(field(this, name), ToPrimitive); coerce(field(this, message), ToPrimitive); returns(prim(str)) })] export crate::object::global_this::array_error::error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     0,
                 );
             }

@@ -48,6 +48,11 @@ The NaN-boxing scheme matches the native `perry-runtime` — f64 values with STR
 - **FFI**: `declare function` declarations become WASM imports under the `ffi` namespace
 - **Compile-time i18n**: `perry/i18n` `t()` calls work the same as native targets
 
+Array `splice(start, deleteCount, ...items)` evaluates its arguments left to right
+before changing the array, inserts every supplied item, and returns the removed
+elements. With no insertion items, it only deletes; omitting `deleteCount`
+deletes from `start` to the end.
+
 ## UI Mapping
 
 Perry widgets map to HTML elements:
