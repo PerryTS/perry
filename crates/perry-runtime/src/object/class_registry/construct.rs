@@ -935,6 +935,9 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | BuiltinConstructorIdentity::Navigator
                 | BuiltinConstructorIdentity::ReadableStreamDefaultController
                 | BuiltinConstructorIdentity::ReadableStreamDefaultReader
+                | BuiltinConstructorIdentity::ReadableByteStreamController
+                | BuiltinConstructorIdentity::ReadableStreamBYOBReader
+                | BuiltinConstructorIdentity::ReadableStreamBYOBRequest
                 | BuiltinConstructorIdentity::MessagePort
                 | BuiltinConstructorIdentity::Storage
         ) {

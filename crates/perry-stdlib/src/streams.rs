@@ -588,11 +588,17 @@ pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class:
 /// no registry: stream/reader/writer/transform ids are allocated below
 /// `STREAM_ALLOC_END`, and `id | STREAM_CONTROLLER_BIT` fills the top half.
 pub(crate) const STREAM_CONTROLLER_BIT: usize = (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 2;
-/// End of the allocator's range: the lower half of the stream band.
-pub(crate) const STREAM_ALLOC_END: usize = STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT;
+/// A byte stream's BYOB request is its own value the same way (no object, no
+/// registry): `id | STREAM_BYOB_REQUEST_BIT` fills the second quarter.
+pub(crate) const STREAM_BYOB_REQUEST_BIT: usize =
+    (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 4;
+/// End of the allocator's range: the first quarter of the stream band.
+pub(crate) const STREAM_ALLOC_END: usize = STREAM_HANDLE_ID_START + STREAM_BYOB_REQUEST_BIT;
 const _: () = assert!(STREAM_CONTROLLER_BIT.is_power_of_two());
-const _: () = assert!(STREAM_HANDLE_ID_START & STREAM_CONTROLLER_BIT == 0);
-const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT == STREAM_HANDLE_ID_END - 1);
+const _: () = assert!(STREAM_BYOB_REQUEST_BIT.is_power_of_two());
+const _: () = assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
+const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1);
+const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1);
 
 /// The controller value of readable stream `id`.
 #[inline]
@@ -610,8 +616,24 @@ pub(crate) fn controller_stream_id(value: f64) -> usize {
 /// The readable stream id of controller id `id`, else 0.
 #[inline]
 pub(crate) fn controller_id_stream(id: usize) -> usize {
-    if (STREAM_ALLOC_END..STREAM_HANDLE_ID_END).contains(&id) {
+    if (STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT..STREAM_HANDLE_ID_END).contains(&id) {
         id & !STREAM_CONTROLLER_BIT
+    } else {
+        0
+    }
+}
+
+/// The BYOB request value of byte stream `id`.
+#[inline]
+pub(crate) fn byob_request_value(id: usize) -> f64 {
+    stream_value(id | STREAM_BYOB_REQUEST_BIT)
+}
+
+/// The byte stream id of BYOB request id `id`, else 0.
+#[inline]
+pub(crate) fn byob_request_id_stream(id: usize) -> usize {
+    if (STREAM_ALLOC_END..STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT).contains(&id) {
+        id & !STREAM_BYOB_REQUEST_BIT
     } else {
         0
     }

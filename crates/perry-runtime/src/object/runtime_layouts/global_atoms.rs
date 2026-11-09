@@ -975,6 +975,27 @@ global_atom!(
     "perry_image_literal_0_5265616461626c6553747265616d44656661756c74526561646572",
     "perry_atom_5265616461626c6553747265616d44656661756c74526561646572"
 );
+global_atom!(
+    G130,
+    GA130,
+    "ReadableByteStreamController",
+    "perry_image_literal_0_5265616461626c654279746553747265616d436f6e74726f6c6c6572",
+    "perry_atom_5265616461626c654279746553747265616d436f6e74726f6c6c6572"
+);
+global_atom!(
+    G131,
+    GA131,
+    "ReadableStreamBYOBReader",
+    "perry_image_literal_0_5265616461626c6553747265616d42594f42526561646572",
+    "perry_atom_5265616461626c6553747265616d42594f42526561646572"
+);
+global_atom!(
+    G132,
+    GA132,
+    "ReadableStreamBYOBRequest",
+    "perry_image_literal_0_5265616461626c6553747265616d42594f4252657175657374",
+    "perry_atom_5265616461626c6553747265616d42594f4252657175657374"
+);
 
 // The global object's own builtin keys in their enumeration (populate) order,
 // each with its attribute byte: 2 = writable, configurable (not enumerable);
@@ -1037,6 +1058,9 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
     GA48 => 2,
     GA128 => 2,
     GA129 => 2,
+    GA130 => 2,
+    GA131 => 2,
+    GA132 => 2,
     GA49 => 2,
     GA50 => 2,
     GA51 => 2,
