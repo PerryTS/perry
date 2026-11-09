@@ -142,8 +142,12 @@ fn missing(list: &str) -> Vec<String> {
             assert_eq!(native_identity(owner, key), Some(identity));
             continue;
         }
-        let [kind, holder, key] = row[..] else {
-            panic!("bad row {line:?}")
+        // An accessor row names its two entries after the key; the key must be
+        // known to the solver like any other own key of the holder.
+        let (kind, holder, key) = match row[..] {
+            ["accessor", holder, key, _, _] => ("accessor", holder, key),
+            [kind, holder, key] => (kind, holder, key),
+            _ => panic!("bad row {line:?}"),
         };
         // R1 never takes these keys (`undeclared::field_key`).
         if matches!(key, "prototype" | "__proto__") {
@@ -152,7 +156,9 @@ fn missing(list: &str) -> Vec<String> {
         let known = match kind {
             // A global the solver does not name as a namespace is no R1 holder;
             // an undescribed namespace (`ns_member` None) keeps every key opaque.
-            "ns" => ns_by_name(holder).is_none_or(|ns| members::ns_member(ns, key) != Some(None)),
+            "ns" | "accessor" => {
+                ns_by_name(holder).is_none_or(|ns| members::ns_member(ns, key) != Some(None))
+            }
             "proto" | "fn" => members::member(Family::Function, key).is_some(),
             // The global object is no R1 holder (`undeclared`); its own keys
             // decide which globals the program owns (`global_user_key`).
@@ -191,6 +197,10 @@ fn twin_a_key_the_description_lacks_is_reported() {
     let twin = "ns\tObject\tlineMap\nproto\tFunction.prototype\tlineMap\nns\tDate\tlineMap\nns\tRegExp\tlineMap\n";
     assert_eq!(
         missing(twin),
-        ["Object.lineMap", "Function.prototype.lineMap", "Date.lineMap"]
+        [
+            "Object.lineMap",
+            "Function.prototype.lineMap",
+            "Date.lineMap"
+        ]
     );
 }
