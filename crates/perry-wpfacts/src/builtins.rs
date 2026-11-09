@@ -1399,6 +1399,16 @@ pub(crate) fn global_function(m: &Model, name: &str) -> bool {
         .is_some_and(|p| p.native.is_some())
 }
 
+/// [[Set]] of `key` on the declared holder `t` meets the realm's accessor
+/// with a getter and no setter (`navigator` on the global object, Node 26:
+/// `get navigator`, no `set`): no setter runs and nothing is written; strict
+/// code throws a TypeError, the runtime error every `catch` already receives
+/// (`Model::thrown`).
+pub(crate) fn getter_only(m: &Model, t: Tok, key: &str) -> bool {
+    m.native_property(t, key)
+        .is_some_and(|p| p.get.is_some() && p.set.is_none())
+}
+
 pub(crate) fn namespace_receiver_getter(m: &Model, t: Tok, key: &str) -> bool {
     m.native_property(t, key).is_some_and(|p| p.getter_this)
 }
