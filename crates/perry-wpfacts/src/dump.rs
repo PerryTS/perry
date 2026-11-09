@@ -92,6 +92,15 @@ fn fact_lines(t: &TemplateFacts) -> Vec<String> {
             crate::model::esc_key(&f.key),
             b(f.ta_stable)
         ));
+        // DESIGN-p4l1 §3.1: only a field the facts give `Arr` gets a line.
+        if matches!(f.rep, crate::bindings::Rep::Arr(_)) {
+            v.push(format!(
+                "FACT FR rep {}.{} = {}",
+                t.display,
+                crate::model::esc_key(&f.key),
+                f.rep.name()
+            ));
+        }
     }
     v
 }
@@ -118,6 +127,13 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         for (id, b) in &bindings.locals {
             if let Some(o) = &b.indexed_owner {
                 out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
+            }
+            // DESIGN-p4l1 §5.6: each binding the facts give `Arr`.
+            if matches!(b.rep, crate::bindings::Rep::Arr(_)) {
+                out.push_str(&format!(
+                    "# arr_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
             }
         }
     }

@@ -312,9 +312,9 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsElementRead, FactsField, FactsFieldReadCall,
-    FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep, FactsSignature,
-    ProgramFactsView,
+    ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc,
+    FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction,
+    FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;

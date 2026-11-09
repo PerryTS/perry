@@ -390,6 +390,18 @@ pub enum SharedWrite {
     Removed(Option<String>),
 }
 
+/// What gen knows of the Array a `new Array(...)` call births
+/// (`Model::arr_len_at_site`, `builtins::site_new_array`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteBirth {
+    /// The integer literal `k` of `new Array(k)` when the runtime backs it
+    /// densely (`solve::arr_len`). Recorded only with array lengths on.
+    pub len: Option<i64>,
+    /// The birth is the receiver of a one-argument `fill`
+    /// (`new Array(k).fill(v)`, DESIGN-p4l1 §2.6): it holds no hole.
+    pub hole_free: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TmplKind {
     /// A HIR class (user class, `__AnonShape_*` literal class, class
@@ -417,10 +429,19 @@ pub enum TmplKind {
     /// the birth fills every index below its length (a program literal
     /// without an elision, a spread literal, an array record); every other
     /// birth may hold a hole (`Model::hole`).
+    ///
+    /// `plain` (DESIGN-p4l1 §2.3, PR-B): the birth is a fresh
+    /// `GC_TYPE_ARRAY` (never a lazy JSON header), its element storage starts
+    /// at the allocation's front (front offset 0), and its capacity is at
+    /// least its recorded birth length. Set only at the audited program
+    /// births: an array literal, a spread literal and `new Array`/`Array()`
+    /// (`bindings::arr_rep` admits only such tokens). Every runtime-born
+    /// array is not plain.
     Arr {
         module: u32,
         site: SiteId,
         hole_free: bool,
+        plain: bool,
     },
     /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
     /// no Array: its prototype is `%Object.prototype%`, and `length` and
@@ -1273,6 +1294,20 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrfwd`): an append keeps the
     /// length interval, so a token that is pushed to keeps `lo == hi`.
     pub arr_fwd_sabotage: bool,
+    /// PR-B (DESIGN-p4l1 §2.2-2.6): plain Array births, the fused-fill
+    /// birth and `Rep::Arr` (`PERRY_FACTS_ARRAY_REPS=0` turns them off).
+    pub array_reps: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrdense`): every
+    /// `new Array(...)` is born hole-free, a wrong claim the `Arr` witness
+    /// must catch at an in-floor hole.
+    pub arr_dense_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrelem`): an `Arr` value's
+    /// element representation counts only its Numbers (`bindings::arr_rep`).
+    pub arr_elem_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrlazy`): `JSON.parse`
+    /// (`Gen::json_value`) returns a plain Array of Numbers, a wrong claim the witness must
+    /// catch at a lazy JSON array header.
+    pub arr_lazy_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -1302,10 +1337,9 @@ pub struct Model {
     pub arr_len: FxHashMap<Tok, NodeId>,
     /// The birth length of an array literal template (`solve::arr_len`).
     pub arr_birth_len: FxHashMap<TmplId, i64>,
-    /// `new Array(k)` of an integer literal `k`, by its call's source site:
-    /// the Array its builtin births there (`builtins::site_tmpl_born`) has
-    /// birth length `k`. Recorded only with array lengths on.
-    pub arr_len_at_site: FxHashMap<SiteId, i64>,
+    /// `new Array(...)` by its call's source site: what gen knows of the
+    /// Array its builtin births there (`builtins::site_new_array`).
+    pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,
     /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
     /// judges against the birth length (`Model::arr_len_store`).
     pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
@@ -1526,7 +1560,11 @@ pub struct Model {
     /// (re-derived by the checker), b'B' builtin summaries (axioms).
     pub rel_phase: u8,
     pub stats_cons: u64,
-    pub site_tmpls: FxHashMap<(CallId, &'static str), Tok>,
+    /// Per-call-site templates (`builtins::site_tmpl_born`) by source site,
+    /// `what` and whether the birth is plain (`TmplKind::Arr::plain`): a
+    /// plain birth never shares its template with a runtime-born one at the
+    /// same site (REVIEW-p4l1 R1).
+    pub site_tmpls: FxHashMap<(CallId, &'static str, bool), Tok>,
     /// Generation-time birth templates (literals, arrays, builtin objects)
     /// -> the function whose body makes them.
     pub tmpl_fn: FxHashMap<TmplId, FnIdx>,

@@ -454,7 +454,7 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
 
 /// A per-call-site template (solve-time births: promises, arrays …).
 fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
-    site_tmpl_born(m, call, what, false)
+    site_tmpl_born(m, call, what, false, false)
 }
 
 /// A per-call-site Array born without holes: the builtin that makes it
@@ -462,14 +462,39 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
 /// whose holes it carries over (`collections::array_method`). Later stores
 /// mark their own holes as on any array.
 fn site_dense_arr(m: &mut Model, call: CallId) -> Tok {
-    site_tmpl_born(m, call, "DenseArray", true)
+    site_tmpl_born(m, call, "DenseArray", true, false)
 }
 
-fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bool) -> Tok {
+/// The Array `new Array(...)` or `Array(...)` births (`BuiltinNs::Array`):
+/// `js_array_constructor*` allocates a fresh `GC_TYPE_ARRAY` with its
+/// elements at the front, of at least its recorded birth length
+/// (`solve::arr_len`), so with `Model::array_reps` on it is plain
+/// (`TmplKind::Arr::plain`). The receiver of a fused fill
+/// (`SiteBirth::hole_free`, `Gen::call_with`) is born hole-free.
+fn site_new_array(m: &mut Model, call: CallId) -> Tok {
+    let site = m.calls[call as usize].site;
+    let birth = m.arr_len_at_site.get(&site).copied().unwrap_or_default();
+    let reps = m.array_reps;
+    let hole_free = reps && (birth.hole_free || m.arr_dense_sabotage);
+    site_tmpl_born(m, call, "Array", hole_free, reps)
+}
+
+/// The template of `what` born at `call`'s source site. The key holds
+/// `plain` (REVIEW-p4l1 R1): a call whose callee holds two builtins
+/// (`const f = c ? Array : JSON.parse; f(s)`) births one template per
+/// kind, so a lazy JSON array never shares the plain `Array` birth's
+/// template, and only a plain birth ever makes or finds a plain template.
+fn site_tmpl_born(
+    m: &mut Model,
+    call: CallId,
+    what: &'static str,
+    hole_free: bool,
+    plain: bool,
+) -> Tok {
     // Keyed by the SOURCE call site: calls derived while solving (bindings
     // through relays, protocol touches) share their origin's template.
     let site = m.calls[call as usize].site;
-    let key = (site, what);
+    let key = (site, what, plain);
     if let Some(&t) = m.site_tmpls.get(&key) {
         let tm = m.tmpl_of(t).expect("site template");
         let ctx = m.birth_ctx(call);
@@ -481,6 +506,7 @@ fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bo
             module: u32::MAX,
             site,
             hole_free,
+            plain,
         }
     } else {
         TmplKind::BObj {
@@ -512,8 +538,10 @@ fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bo
         per_evaluation: false,
         static_methods: Vec::new(),
     });
-    if what == "Array" {
-        if let Some(&k) = m.arr_len_at_site.get(&site) {
+    // The birth length is the `new Array(k)` birth's: with array reps on,
+    // only the plain template's (`site_new_array`).
+    if what == "Array" && plain == m.array_reps {
+        if let Some(k) = m.arr_len_at_site.get(&site).and_then(|b| b.len) {
             m.arr_birth_len.insert(tm, k);
         }
     }
@@ -2346,7 +2374,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::Array => {
-            let arr = site_tmpl(m, call, "Array");
+            let arr = site_new_array(m, call);
             let fa = m.field_any(arr);
             let c = m.calls[call as usize].clone();
             match (c.args.as_slice(), c.spread.is_empty()) {

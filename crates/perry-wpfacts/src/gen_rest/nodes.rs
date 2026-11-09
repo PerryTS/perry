@@ -120,7 +120,7 @@ impl<'a> Gen<'a> {
     }
 
     fn new_arr_of(&mut self, mi: u32, what: &str, elems: &[NodeId], dense: bool) -> NodeId {
-        let tm = self.new_arr_birth(mi, what, dense);
+        let tm = self.new_arr_birth(mi, what, dense, false);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {

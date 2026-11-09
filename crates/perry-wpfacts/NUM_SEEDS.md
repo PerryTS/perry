@@ -41,6 +41,9 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `bindings.rs:392` | read/map | read: tests or masks the fact, seeds nothing |
 | `bindings.rs:470` | read/map | read: tests or masks the fact, seeds nothing |
 | `bindings.rs:589` | read/map | read: tests or masks the fact, seeds nothing |
+| `bindings.rs:682` | read/map | read: tests or masks the fact, seeds nothing |
+| `bindings.rs:683` | read/map | read: tests or masks the fact, seeds nothing |
+| `signatures.rs:389` | read/map | read: tests or masks the fact, seeds nothing |
 | `dump.rs:470` | read/map | read: tests or masks the fact, seeds nothing |
 | `solve/arr_len.rs:42` | seed | array birth length `new Array(k)`: the header length `uitofp` |
 | `solve/lookup.rs:1289` | seed | array `.length` through the chain: header length `uitofp` (array/indexing.rs js_array_length -> u32) |
@@ -67,6 +70,7 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `gen/glue.rs:228` | seed | arrayRecordIndex default: codegen array_record lowering, an i32 counter `sitofp` |
 | `gen/glue.rs:230` | seed | arrayRecordLength: codegen array_record payload length `uitofp` |
 | `gen/glue.rs:233` | seed | arrayRecordForUpdate: codegen `mode ? 0 : update` over program Numbers |
+| `gen/glue.rs:182` | seed | `arrlazy` sabotage arm only (`PERRY_FACTS_SABOTAGE=arrlazy`): a deliberately false Array-of-Numbers claim for the S0 negative control; never seeded in a normal build |
 | `builtins/loads.rs:292` | seed | string computed key: STR|NUM|UNDEF|BOOL, not NUM-only |
 | `builtins/loads.rs:381` | seed | global `NaN`/`Infinity`/`undefined`: NUM|UNDEF; the constants are canonical doubles |
 | `builtins/loads.rs:633` | seed | function `length`: closure arity `as f64`; joined with own fields (lookup.rs:221; REVIEW-p3 D2.1) |

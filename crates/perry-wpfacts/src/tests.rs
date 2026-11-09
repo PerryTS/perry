@@ -22,6 +22,7 @@ mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
+mod array_reps;
 mod array_search;
 mod binding_write_gap;
 mod birth_elements;
