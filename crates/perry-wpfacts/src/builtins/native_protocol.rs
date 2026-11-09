@@ -495,6 +495,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
                     m.sink_node(f, r);
                 }
+                NativeMiss::Store(src, site) => {
+                    let prev = m.store_at.take();
+                    m.store_into(np, Key::Named(a), src, site);
+                    m.store_at = prev;
+                }
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
                     let name = m.atoms[a as usize].clone();

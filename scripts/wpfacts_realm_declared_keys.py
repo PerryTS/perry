@@ -23,6 +23,9 @@ the realm defines (every other global name is the program's).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
 strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
+`accessor <owner> <key> <get> [<set>]` rows name a key the realm declares an
+accessor: its getter (`-` none) and setter (no column: none). A [[Set]] of a key
+whose accessor has no setter writes nothing (sloppy) or throws (strict).
 `object <owner> <key> <namespace>` rows name a node module object's data property whose value
 is another declared node module object (`node:inspector` `default`: `node:inspector.default`).
 `native <owner> <key> <identity>` rows resolve callable property references on global, namespace, node module (`node:fs`) and prototype holders
@@ -93,6 +96,9 @@ def rows(realm):
                 getter = prop.get("get")
                 if getter and declarations[getter].get("effects") == receiver_result:
                     out.add(("getter-this", name, prop["key"], getter))
+                if not prop.get("symbol") and (getter or prop.get("set")):
+                    out.add(("accessor", name, prop["key"], getter or "-")
+                            + ((prop["set"],) if prop.get("set") else ()))
                 value = prop.get("value", {}).get("value")
                 if prop.get("value", {}).get("kind") == "reference" and value in callable_names:
                     out.add(("native", name, prop["key"], value))
