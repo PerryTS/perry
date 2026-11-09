@@ -18,6 +18,8 @@ function shape(label: string, p: any): void {
   for (const k of pub(p)) console.log(label, String(k), desc(p, k));
   console.log(label, "ctor", p.constructor && p.constructor.name, "tag", p[Symbol.toStringTag]);
 }
+// The first observation of the constructor is its own-keys listing: it lists the static from.
+console.log("ctor-first-keys", Object.getOwnPropertyNames(ReadableStream).join(","));
 const G: any = globalThis;
 const RS: any = ReadableStream;
 const P: any = RS.prototype;

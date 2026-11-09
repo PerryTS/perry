@@ -607,7 +607,7 @@ pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
 }
 
 pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
-    let bag = bag_of(ptr);
+    let bag = bag_observed(ptr);
     if bag.is_null() {
         return Vec::new();
     }
