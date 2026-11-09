@@ -7974,12 +7974,8 @@ fn lower_for_after_init_impl(
             false
         };
     // b2: cold-arm descriptors for the loop's other array reads.
-    let cold_arm_installed = if !in_call_free_clone && !ordinary_receiver_descriptor_installed {
-        let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
-        super::descriptor_read::install(ctx, body, &controls)
-    } else {
-        super::descriptor_read::Installed::none()
-    };
+    let skip = in_call_free_clone || ordinary_receiver_descriptor_installed;
+    let cold_arm = super::descriptor_read::install_for(ctx, skip, condition, update, body);
 
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
     // detect the simpler `i < n` shape where `n` is a statically proven
@@ -8382,7 +8378,7 @@ fn lower_for_after_init_impl(
 
     ctx.loop_targets.pop();
 
-    super::descriptor_read::uninstall(ctx, cold_arm_installed);
+    super::descriptor_read::uninstall(ctx, cold_arm);
     if ordinary_receiver_descriptor_installed {
         let arr_id = hoisted_length_arr_id.expect("installed descriptor has a length receiver");
         let removed = ctx.receiver_descriptors.dematerialize(arr_id);
@@ -10496,10 +10492,9 @@ pub(crate) fn lower_while(
     }
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        let installed = super::descriptor_read::install(ctx, body, &[condition]);
-        let r = lower_while_impl(ctx, condition, body);
-        super::descriptor_read::uninstall(ctx, installed);
-        r
+        super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_while_impl(c, condition, body)
+        })
     });
     super::region_loop::end(ctx, region);
     lowered
@@ -10586,10 +10581,9 @@ pub(crate) fn lower_do_while(
 ) -> Result<()> {
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        let installed = super::descriptor_read::install(ctx, body, &[condition]);
-        let r = lower_do_while_impl(ctx, body, condition);
-        super::descriptor_read::uninstall(ctx, installed);
-        r
+        super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_do_while_impl(c, body, condition)
+        })
     });
     super::region_loop::end(ctx, region);
     lowered
