@@ -54,8 +54,11 @@ fn assert_numeric_raw_values(arr: *mut ArrayHeader, expected: &[f64]) {
     }
 }
 
+/// A raw 0x7FFE word, not a Number: no API builds an INT32 Number (P3 B4a).
+/// These tests pin the store-side canonicalization of such a word, a consumer
+/// that B4b deletes with the rest of the INT32 consumers.
 fn int32_jsvalue_bits(value: i32) -> u64 {
-    f64::from(value).to_bits()
+    crate::value::INT32_TAG | u64::from(value as u32)
 }
 
 fn assert_canonical_raw_slot(arr: *mut ArrayHeader, index: u32, expected: f64) {
