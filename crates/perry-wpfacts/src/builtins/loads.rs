@@ -219,6 +219,15 @@ fn module_object(m: &Model, t: Tok, key: &str) -> Option<BuiltinNs> {
         .and_then(super::node_module)
 }
 
+/// The declared getter (`declared_getter`) of the accessor host object token
+/// `t` holds or inherits under `key` (the realm's `getter` rows: ordinary
+/// lookup on the object's chain).
+fn module_getter(m: &Model, t: Tok, key: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let getter = m.native_property(t, key)?.getter?;
+    let (proto, k) = getter.strip_suffix(".<get>")?.rsplit_once('.')?;
+    super::effects::declared_getter(proto, k)
+}
+
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
     m.census_native_read(t, a, NativeMiss::Load(dst));
     let name = m.atoms[a as usize].clone();
@@ -538,6 +547,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.native_missing.push((t, a, NativeMiss::Load(dst)));
                 let o = m.tok(TokKind::Builtin(ns));
                 m.add_tok(dst, o);
+            }
+            // An accessor the object holds or inherits (`performance
+            // .timeOrigin`, on `Performance.prototype`) whose getter returns
+            // primitives and receiver slots: its value on this object.
+            Some(n) if !m.unit_mode && module_getter(m, t, n).is_some() => {
+                let Key::Named(a) = key else { unreachable!() };
+                let e = module_getter(m, t, n).expect("guarded");
+                if native_written(m, t, a) {
+                    return opaque_member(m, dst);
+                }
+                m.native_missing.push((t, a, NativeMiss::Load(dst)));
+                super::effects::getter_value(m, e, t, dst);
             }
             _ => {
                 m.add_top(dst, |_| {

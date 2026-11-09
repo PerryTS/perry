@@ -31,7 +31,7 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_static, run_construct, run_function, run_native,
+    declared_construct, declared_member, declared_proto_method, declared_static, run_construct, run_function, run_native,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -125,9 +125,14 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     })
 }
 
-/// The node module object the realm declares as `name` (`node:fs`).
+/// The host object the realm declares as `name`: a realm namespace, a node
+/// module object (`node:fs`) or a global host object (`Intl`,
+/// `performance`). Its token is `BuiltinNs::Module(name)`; its keys read
+/// what its declaration (and its chain's, flattened into the realm rows)
+/// names. An object a declared object holds (`process.stdin`) is not a
+/// global name: only a node module or an undotted global host object is.
 fn node_module(name: &str) -> Option<BuiltinNs> {
-    if !name.starts_with("node:") {
+    if !name.starts_with("node:") && name.contains('.') {
         return None;
     }
     crate::native_effects::realm()

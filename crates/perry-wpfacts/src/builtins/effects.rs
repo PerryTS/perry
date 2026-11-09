@@ -120,8 +120,15 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
 /// (`node:inspector.Session`) whose effects the runtime declares at its
 /// body (`declared_member`): what `new` of it does, in forms `run_construct`
 /// runs.
+/// A constructor a host object holds (`Intl.Collator`, declared at its own
+/// definition) is found by owner and key, as `declared_static`.
 pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
-    declared_member(name).filter(|e| e.kind == RealmKind::Constructor)
+    declared_member(name)
+        .or_else(|| {
+            let (owner, key) = name.rsplit_once('.')?;
+            declared_at(owner, key).filter(|e| !names_this(e.effects))
+        })
+        .filter(|e| e.kind == RealmKind::Constructor)
 }
 
 fn by_proto() -> &'static ByProto {
@@ -192,6 +199,19 @@ pub(crate) fn declared_function(name: &str) -> Option<&'static RealmEntry> {
 pub(crate) fn declared_static(identity: &str) -> Option<&'static RealmEntry> {
     let (owner, key) = identity.rsplit_once('.')?;
     if owner.ends_with(".prototype") || key.starts_with('<') {
+        return None;
+    }
+    declared_at(owner, key).filter(|e| !names_this(e.effects))
+}
+
+/// The declaration of prototype method `identity`
+/// (`Performance.prototype.now`) when the runtime declares what a call
+/// does without naming `this`: what the call does to its arguments and
+/// result, whatever the receiver (a receiver of another brand throws
+/// before any of it: the declaration is a superset).
+pub(crate) fn declared_proto_method(identity: &str) -> Option<&'static RealmEntry> {
+    let (owner, key) = identity.rsplit_once('.')?;
+    if !owner.ends_with(".prototype") || key.starts_with('<') {
         return None;
     }
     declared_at(owner, key).filter(|e| !names_this(e.effects))

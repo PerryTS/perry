@@ -1976,6 +1976,7 @@ mod accessor_lookup_values;
 mod native_fs_effects;
 mod native_module_ref;
 mod host_browser_effects;
+mod host_performance_intl;
 mod host_fs_effects;
 mod host_inspector_effects;
 mod host_fs_read_effects;

@@ -51,7 +51,16 @@ impl Model {
         }
 
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
-            return false;
+            // A prototype method the runtime declares without naming `this`
+            // (`Performance.prototype.now` on `performance`): its declaration.
+            let Some(e) = builtins::declared_proto_method(identity) else {
+                return false;
+            };
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_function(m, e, call));
+            }
+            return true;
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let r = match (this_tok, &self.calls[call as usize].this) {
