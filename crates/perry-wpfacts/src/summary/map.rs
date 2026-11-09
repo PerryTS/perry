@@ -35,6 +35,7 @@ pub fn map_cons(
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
         LenIndex { lo, hi } => LenIndex { lo, hi },
+        LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,

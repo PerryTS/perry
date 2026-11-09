@@ -153,8 +153,9 @@ fn an_array_literal_keeps_its_length_until_something_moves_it() {
     // climb at the ladder's next step.
     let (lo, hi) = r["j"].expect("j is bounded by K.length");
     assert!(lo <= 0 && (8..=127).contains(&hi), "j: {:?}", r["j"]);
-    // `push` moves G's length: its counter has no bound.
-    assert!(unbounded(&r, "h"), "h: {:?}", r["h"]);
+    // `push` raises G's length to any array length (the length floor,
+    // `solve::arr_len`): its counter's bound is the largest index.
+    assert!(covers(&r, "h", 0, u32::MAX as i64 - 1), "h: {:?}", r["h"]);
 }
 
 #[test]
@@ -166,7 +167,8 @@ fn an_index_store_past_the_birth_length_moves_it() {
          put(2); put(9);\n\
          console.log(g(1));",
     );
-    assert!(unbounded(&r, "j"), "j: {:?}", r["j"]);
+    // The length floor (`solve::arr_len`): the length is `[4, 10]`.
+    assert!(covers(&r, "j", 0, 9), "j: {:?}", r["j"]);
 }
 
 #[test]
@@ -182,7 +184,7 @@ fn an_index_string_key_past_the_birth_length_moves_it() {
          put(1); put(id(id(id(\"9\"))));\n\
          console.log(g());",
     );
-    assert!(unbounded(&r, "j"), "j: {:?}", r["j"]);
+    assert!(covers(&r, "j", 0, 9), "j: {:?}", r["j"]);
 }
 
 #[test]

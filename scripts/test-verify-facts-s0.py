@@ -109,6 +109,10 @@ def main():
         ("arrlen-negative", "arrlen", "array constant length"),
         ("element-read-negative", "arrlen", "proven element read"),
         ("element-read-sparse-birth", "densebirth", "proven element read"),
+        ("array-floor-negative", "arrfloor", "proven element read"),
+        ("array-append-negative", "arrappend", "int32 input"),
+        ("array-cap-negative", "arrcap", "proven element read"),
+        ("array-fwd-negative", "arrfwd", "proven element read"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
     ]:

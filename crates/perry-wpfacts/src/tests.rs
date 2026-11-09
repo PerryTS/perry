@@ -11,6 +11,7 @@ mod annexb_known_accessor;
 mod annexb_method_value;
 mod args_beside_rest;
 mod arguments_object;
+mod arr_floor;
 mod array_ctor;
 mod array_elements;
 mod array_helper_nodes;

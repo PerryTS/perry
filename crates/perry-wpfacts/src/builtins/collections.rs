@@ -990,8 +990,12 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 | "with"
         )
     );
-    if !keeps_length {
+    if name == Some("push") {
+        m.arr_len_append(t);
+    } else if !keeps_length {
         m.arr_len_top(t);
+    } else if matches!(name, Some("reverse" | "copyWithin")) {
+        m.arr_len_permuted(t);
     }
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);

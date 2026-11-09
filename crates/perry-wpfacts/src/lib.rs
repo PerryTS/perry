@@ -74,6 +74,9 @@ pub struct FactsConfig {
     /// No array length intervals: every Array `length` is ⊤
     /// (`PERRY_FACTS_ARRAY_LENGTHS=0`).
     pub no_array_lengths: bool,
+    /// No length floor: growth makes an Array's `length` ⊤ instead of
+    /// raising its upper bound (`solve::arr_len`; `PERRY_FACTS_ARRAY_FLOOR=0`).
+    pub no_array_floor: bool,
     /// No guard narrowing, predicate summaries or String code intervals
     /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
     pub no_guard_ranges: bool,
@@ -449,7 +452,11 @@ fn generate<'a>(
     g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
     g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
     g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
-    g.m.dense_birth_sabotage = cfg.sabotage.as_deref() == Some("densebirth");
+    g.m.arr_cap_sabotage = matches!(cfg.sabotage.as_deref(), Some("arrcap" | "densebirth"));
+    g.m.arr_floor_sabotage = cfg.sabotage.as_deref() == Some("arrfloor");
+    g.m.arr_append_sabotage = cfg.sabotage.as_deref() == Some("arrappend");
+    g.m.arr_fwd_sabotage = cfg.sabotage.as_deref() == Some("arrfwd");
+    g.m.arr_floor_off = cfg.no_array_floor;
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
