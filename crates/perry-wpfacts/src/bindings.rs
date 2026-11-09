@@ -336,6 +336,11 @@ pub struct ModuleBindings {
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
+    /// P2: typed signatures by HIR function id, sorted (`signatures`).
+    pub signatures: Vec<(u32, crate::signatures::Signature)>,
+    /// P2: call byte offset -> the one body `(module, func_id)` a typed
+    /// entry serves, sorted (`signatures`, DESIGN-p2 §2).
+    pub typed_calls: Vec<(u32, (u32, u32))>,
     /// Element reads whose value is a plain Number at every copy, by
     /// `element_offset`, sorted; `true` when the value may also be
     /// `undefined` (`canonical_numbers`, P3 B1).
@@ -398,6 +403,16 @@ fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
     }
     let r = node.range;
     (!r.is_top() && !r.is_empty()).then_some((r.lo, r.hi))
+}
+
+/// `facts_of` for P2's signatures (`signatures`).
+pub(crate) fn facts_of_node(g: &Gen, n: u32) -> BindingFacts {
+    facts_of(g, n)
+}
+
+/// The one representation of node `n` (`rep_of`), for P2's signatures.
+pub(crate) fn rep_of_node(g: &Gen, n: u32) -> Rep {
+    facts_of(g, n).rep
 }
 
 fn facts_of(g: &Gen, n: u32) -> BindingFacts {

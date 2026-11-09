@@ -163,6 +163,15 @@ impl<'a> Gen<'a> {
                 let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
+                    self.call_sites_at.push(crate::signatures::CallSiteRec {
+                        module: fx.module,
+                        offset: off,
+                        hir: callee as *const Expr as usize,
+                        spread: !spread.is_empty(),
+                        callee: None,
+                    });
+                }
+                if off != 0 {
                     self.read_sites.push(ReadSite {
                         module: fx.module,
                         byte_offset: off,
@@ -255,6 +264,15 @@ impl<'a> Gen<'a> {
             _ => {
                 let c = self.expr(fx, callee);
                 self.own_test_recv = Some(c);
+                if byte_offset != 0 {
+                    self.call_sites_at.push(crate::signatures::CallSiteRec {
+                        module: fx.module,
+                        offset: byte_offset,
+                        hir: callee as *const Expr as usize,
+                        spread: !spread.is_empty(),
+                        callee: Some(c),
+                    });
+                }
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.

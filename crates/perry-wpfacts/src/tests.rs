@@ -1917,6 +1917,7 @@ mod string_results;
 mod string_this;
 mod guard_presence;
 mod field_read_calls;
+mod signatures;
 mod typed_array_methods;
 mod web_timer_methods;
 
