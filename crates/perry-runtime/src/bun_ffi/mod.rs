@@ -95,6 +95,15 @@ pub(crate) fn number_value(n: f64) -> f64 {
     f64::from_bits(JSValue::number(n).bits())
 }
 
+/// A native `double`/`float` (call return, `read.f64`/`read.f32`, callback
+/// argument) enters JS here. It may carry any NaN payload; it becomes the
+/// canonical NaN so it cannot spell a NaN-box tag. Out of line: one copy of
+/// the check serves every native-float ingress arm.
+#[inline(never)]
+pub(crate) fn float_value(n: f64) -> f64 {
+    number_value(crate::array::canonical_raw_f64(n))
+}
+
 /// Platform shared-library suffix, matching Bun's `suffix` export
 /// (WITHOUT the leading dot, e.g. `"dylib"`).
 pub(crate) fn suffix_str() -> &'static str {

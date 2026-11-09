@@ -459,11 +459,7 @@ fn a_regexp_method_call_is_a_native_member() {
         let pf = one(src, units);
         for key in ["test", "exec"] {
             let v = verdicts_in(&pf, 0, key, true);
-            assert!(
-                native(&v),
-                "units={units} {key}: {v:?}\n{}",
-                pf.dump_text()
-            );
+            assert!(native(&v), "units={units} {key}: {v:?}\n{}", pf.dump_text());
         }
     }
 }
@@ -497,11 +493,12 @@ fn a_regexp_key_not_described_or_a_mixed_receiver_is_no_native_member() {
     }
 }
 
-/// A RegExp's own `test`, its prototype replaced, `RegExp.prototype.test`
-/// replaced, or the RegExp handed to unknown code: its `.test` is no
-/// NativeMember; the same function without the write is one.
+/// A RegExp's own `test`, its prototype replaced,
+/// or the RegExp handed to unknown code: its `.test` is no
+/// NativeMember; the same function without the write is one. (A write to
+/// `RegExp.prototype` is not here: it is sealed, see the next test.)
 #[test]
-fn a_written_regexp_method_is_no_native_member() {
+fn an_own_key_or_escape_write_on_a_regexp_is_no_native_member() {
     let make = "const r: any = /a/;";
     for write in [
         "r.test = (s: string) => true;",
@@ -509,10 +506,23 @@ fn a_written_regexp_method_is_no_native_member() {
         "r.__proto__ = { test() { return false; } };",
         "Object.setPrototypeOf(r, { test() { return false; } });",
         "Object.defineProperty(r, \"test\", { get() { return () => false; } });",
-        "(RegExp.prototype as any).test = function () { return false; };",
-        "(Object.prototype as any).test = function () { return false; };",
         "(globalThis as any)[process.argv[2]](r);",
     ] {
         control_and_negative(make, write, "r.test(\"a\")", "test", true);
+    }
+}
+
+/// `RegExp.prototype` is sealed (DEC 250, rt/lock.ts): `RegExp.prototype.test = f`
+/// throws, so `.test` of a regexp stays an image member.
+#[test]
+fn a_sealed_regexp_prototype_write_keeps_the_native_member() {
+    // `Object.prototype.test = f` is shadowed by the own `RegExp.prototype.test`.
+    for w in ["RegExp", "Object"] {
+        for units in [false, true] {
+            let src = &format!("function main() {{ const r: any = /a/; ({w}.prototype as any).test = function () {{ return false; }}; return r.test(\"a\"); }}\nconsole.log(main());");
+            let pf = one(src, units);
+            let v = verdicts_in(&pf, 0, "test", true);
+            assert!(native(&v), "units={units}: {v:?}\n{}", pf.dump_text());
+        }
     }
 }

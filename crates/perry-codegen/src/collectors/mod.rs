@@ -22,6 +22,9 @@ mod escape_arrays;
 mod escape_check;
 mod escape_news;
 mod escape_objects;
+pub(crate) mod exact_i32_range;
+#[cfg(test)]
+mod exact_i32_range_source_tests;
 mod hir_facts;
 mod hoisted_callback_calls;
 mod hot_callees;
@@ -33,6 +36,9 @@ mod integer_locals;
 mod literal_method_home;
 mod local_refs;
 mod loop_bounded_i32;
+mod loop_pushed_arrays;
+#[cfg(test)]
+mod loop_pushed_arrays_tests;
 mod mutation;
 mod not_bigint_locals;
 mod number_by_construction;
@@ -111,6 +117,7 @@ pub(crate) use integer_locals::{
 };
 pub(crate) use literal_method_home::literal_method_home_classes;
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
+pub(crate) use loop_pushed_arrays::{loop_pushed_arrays, PushedArrays};
 pub(crate) use mutation::{
     body_contains_closure, flat_const_array_uses_are_read_only, has_any_mutation,
 };
@@ -139,13 +146,14 @@ pub(crate) use ptr_shape::{
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, FamilyProof, PtrShapeLocal};
 pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
+pub(crate) use receiver_regions::{region_enders_in_expr, region_enders_in_stmts_classified};
 pub(crate) use receiver_regions::{
     region_enders_in_stmts_with_trusted_operations, ByteViewParamAccess,
     ReceiverArrayValidationKind, ReceiverDescriptorTable, RegionEnder,
 };
 pub(crate) use refs::{
-    collect_free_ref_ids_in_stmts, collect_let_ids, collect_own_binding_ids, collect_ref_ids_in_expr,
-    collect_ref_ids_in_stmts, is_clamp_call,
+    collect_free_ref_ids_in_stmts, collect_let_ids, collect_own_binding_ids,
+    collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };
 pub(crate) use safepoint_sites::{count_body_nodes, count_safepoint_sites};
 pub(crate) use scalar_method_dispatch::{

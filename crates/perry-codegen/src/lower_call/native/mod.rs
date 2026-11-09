@@ -48,6 +48,7 @@ pub(super) use super::{
 
 mod box_style;
 mod perf_hooks;
+mod walk_entry;
 
 use box_style::apply_box_style;
 
@@ -622,3 +623,27 @@ pub(crate) fn lower_native_method_call(
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod fs_stream_list_tests {
+    /// Every method name the fs receiver arms match is in the one list
+    /// wpfacts reads (`perry_hir::folded_call::FS_STREAM_METHODS`), and the
+    /// list names no method without an arm.
+    #[test]
+    fn fs_receiver_arms_are_the_listed_methods() {
+        let src = include_str!("native_fs_branch.rs");
+        let end = src.find("// fs module functions").expect("receiver block end");
+        let mut arms: Vec<&str> = Vec::new();
+        for (i, part) in src[..end].split('"').enumerate() {
+            let ident = !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric());
+            if i % 2 == 1 && ident && !part.starts_with("js_") && part != "fs" && part != "node" {
+                arms.push(part);
+            }
+        }
+        arms.sort_unstable();
+        arms.dedup();
+        let mut listed = perry_hir::folded_call::FS_STREAM_METHODS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(arms, listed);
+    }
+}

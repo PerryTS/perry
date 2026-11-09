@@ -104,13 +104,24 @@ fn an_unknown_function_import_on_a_cycle_backedge_exposes_its_result() {
 
 #[test]
 fn an_opaque_builtin_value_can_return_its_receiver() {
-    // reverse stored as a value is an opaque builtin callee. Returning
-    // the holder makes its fields available through the unknown result.
+    // reverse stored as a value is `Array.prototype.reverse`, generic over
+    // `this`: it returns the holder, so the result's fields are the
+    // holder's (`retained.child` is `child`, whose `payload` the store
+    // writes).
     let pf = facts("const reverse = [].reverse; const child = { payload: 1 }; const holder = { child, length: 0, f: reverse }; const retained: any = holder.f(); retained.child.payload = 9; console.log(child.payload);");
-    let child = pf
+    let holder = pf
         .templates
         .iter()
-        .find(|t| t.fields.iter().any(|f| f.key == "payload"))
-        .expect("child layout");
-    assert!(child.escape.is_some(), "{}", pf.dump_text());
+        .find(|t| t.fields.iter().any(|f| f.key == "f"))
+        .expect("holder layout");
+    let read = pf
+        .sites
+        .iter()
+        .find(|s| !s.is_call && s.key == "child")
+        .expect("retained.child");
+    assert!(
+        read.top || read.receivers.contains(&holder.display),
+        "{}",
+        pf.dump_text()
+    );
 }

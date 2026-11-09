@@ -458,16 +458,7 @@ struct NumericView {
 ///   strictly equal a number.
 fn emit_canonical_numeric_view(ctx: &mut FnCtx<'_>, dv: &str) -> NumericView {
     let bits = ctx.block().bitcast_double_to_i64(dv);
-    let int32_band = ctx.block().and(
-        I64,
-        &bits,
-        &crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK),
-    );
-    let is_int32 = ctx.block().icmp_eq(
-        I64,
-        &int32_band,
-        &crate::nanbox::i64_literal(crate::nanbox::INT32_TAG),
-    );
+    let is_int32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
     let lo32 = ctx.block().trunc(I64, &bits, I32);
     let int32_as_double = ctx.block().sitofp(I32, &lo32, DOUBLE);
     let canonical = ctx

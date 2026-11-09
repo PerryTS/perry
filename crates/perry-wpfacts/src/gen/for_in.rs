@@ -223,6 +223,18 @@ impl<'a> Gen<'a> {
         let _ = self.expr(fx, f.guard);
         self.stmt(fx, f.bind);
         let g = self.m.funcs.len() as FnIdx;
+        #[cfg(test)]
+        let packet_prior = self.m.packet_header(
+            g,
+            crate::summary::packet::Identity(
+                self.modules[mi as usize].0.into(),
+                u32::MAX,
+                format!("<for-in:{}>", f.key),
+            ),
+            &[],
+        );
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
         let tok = self.m.tok(TokKind::Func(g, NO_CTX));
         self.m.closures.insert(g);
         let outer = std::mem::replace(&mut self.m.cur_fn, g);
@@ -238,8 +250,11 @@ impl<'a> Gen<'a> {
         self.m.for_in_key_vars.insert(key);
         self.m.cur_fn = outer;
         self.m.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: format!("{}:for-in#{g}", self.mods[mi as usize].path_short()),
             params: vec![key],
             rest: None,
@@ -280,6 +295,11 @@ impl<'a> Gen<'a> {
         self.for_in_key.push((mi, f.key, key));
         self.stmts(&bfx, f.body);
         self.for_in_key.pop();
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         let on = self.local(mi, f.obj);
         let gn = self.tok_node(tok);
         let k = self.tmp("forin-key");

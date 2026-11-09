@@ -81,8 +81,11 @@ def operand_text(op: dict) -> str:
     if kind == "union":
         return " | ".join(operand_text(o) for o in v)
     if kind == "fresh":
-        elems = ", ".join(slot_text(s) for s in v.get("elems", []))
-        return f"fresh({v['proto']}, elems = [{elems}])"
+        elems = ", ".join(operand_text(e) for e in v.get("elems", []))
+        fields = ", ".join(f"{f['key']}: {operand_text(f['value'])}" for f in v.get("fields", []))
+        return f"fresh({v['proto']}, elems = [{elems}], fields = {{{fields}}})"
+    if kind == "native":
+        return f"native({v})"
     if kind == "species":
         args = ", ".join(operand_text(o) for o in v.get("args", []))
         elems = ", ".join(slot_text(s) for s in v.get("elems", []))
@@ -106,7 +109,10 @@ def all_slots(effects) -> list[str]:
             for m in v:
                 op(m)
         elif kind == "fresh":
-            out.extend(slot_text(s) for s in v.get("elems", []))
+            for e in v.get("elems", []):
+                op(e)
+            for f in v.get("fields", []):
+                op(f["value"])
         elif kind == "species":
             out.append(slot_text(v["of"]))
             for a in v.get("args", []):
@@ -271,6 +277,7 @@ const elems: any[] = [value("elems(this)#0", ordinary), value("elems(this)#1", o
 const target: any = elems.slice();
 let recv: any = target;
 ids.set(target, "this");
+__RECEIVER__
 if ("__SCENARIO__" === "proxy") recv = probe("this", target);
 if ("__SCENARIO__" === "species") {
   const ctorT: any = {};
@@ -286,7 +293,7 @@ if ("__SCENARIO__" === "species") {
     get() { out("trap this get constructor"); return ctor; },
   });
 }
-let F: any = globalThis;
+let F: any = __ROOT__;
 for (const k of __PATH__) F = F[k];
 const before = contents(target);
 const weak: any[] = [];
@@ -340,13 +347,15 @@ out("end");
 """
 
 
-def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None = None) -> str:
+def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None = None,
+             receiver: str | None = None) -> str:
     """The probe program for one declaration, receiver scenario and call form:
     `apply` calls the native value reflectively (`F.apply(recv, args)`),
     `method` as a program writes it with argument expressions
     (`recv.name(args[0])`), `local` with argument variables
     (`recv.name(a0)`): the compiler and the runtime's method dispatch route
-    these to different bodies. `npass`
+    these to different bodies. `receiver`, a TypeScript expression, is
+    the receiver instead of the scenario's array (`--receiver`). `npass`
     positional arguments are passed (default all), including up to two
     probes from a declared rest index."""
     effects = decl["effects"]
@@ -355,6 +364,11 @@ def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None =
         f'  if (p === {p}) return "{p}";' for p in shape["protos"]
     )
     path = decl["name"].split(".")
+    # A node module member (`node:fs.existsSync`) hangs from the module value.
+    root = "globalThis"
+    if path[0].startswith("node:"):
+        root = f'require({json.dumps(path[0][len("node:"):])})'
+        path = path[1:]
     lines = []
     npass = shape["nargs"] if npass is None else npass
     for i in range(npass):
@@ -376,6 +390,8 @@ def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None =
     return (
         PRELUDE.replace("__PROTOS__", protos)
         + SCENARIO.replace("__SCENARIO__", scenario)
+        .replace("__RECEIVER__", f"recv = ({receiver}); ids.set(recv, \"this\");" if receiver else "")
+        .replace("__ROOT__", root)
         .replace("__PATH__", json.dumps(path))
         .replace("__ARGS__", "\n".join(lines + [f'  out("args {npass}");']))
         .replace("__RETURN__", call if form == "local" else f"return {call}")
@@ -390,14 +406,18 @@ def shape_of(decl: dict) -> dict:
     return call_shape(decl["effects"], int(decl.get("length", 0)), is_method(decl))
 
 
-def scenarios(decl: dict) -> list[tuple[str, str, int]]:
+def scenarios(decl: dict, receiver: str | None = None) -> list[tuple[str, str, int]]:
     """(receiver scenario, call form, positional arguments passed): the
     receiver kinds only when the declaration speaks about `this`, the
     method-call form only for a prototype method, and every argument count
     from zero up to every argument passed (an omitted optional argument
-    can select another body; a missing mandatory callback may throw)."""
+    can select another body; a missing mandatory callback may throw). A
+    given `receiver` is the one receiver kind."""
     shape = shape_of(decl)
     counts = range(shape["nargs"] + 1)
+    if receiver:
+        forms = ("apply", "method", "local") if is_method(decl) else ("apply",)
+        return [("plain", f, n) for f in forms for n in counts]
     if not shape["receiver"]:
         return [("plain", "apply", n) for n in counts]
     forms = ("apply", "method", "local") if is_method(decl) else ("apply",)
@@ -511,7 +531,8 @@ def needs(event: list[str], effects, events) -> str | None:
                     return None
             return f"returns(species({of}, elems = [{slot_of(val) if val else ''}]))"
         if op in ("get", "has", "ownKeys", "getOwnPropertyDescriptor", "getPrototypeOf"):
-            if slot in reads:
+            # `reads(s)`: any key of s; `reads(field(s, k))`: the key k of s.
+            if slot in reads or (op in ("get", "has") and f"field({slot},{key})" in reads):
                 return None
             if key in ("@@toPrimitive", "valueOf", "toString") and (slot, "to_primitive") in coerces:
                 return None
@@ -561,7 +582,9 @@ def needs(event: list[str], effects, events) -> str | None:
             if not covers(o, rid):
                 continue
             ((k, v),) = o.items()
-            if k in ("fresh", "species") and el in {slot_text(s) for s in v.get("elems", [])}:
+            if k == "fresh" and any(covers(e, event[2], absent) for e in v.get("elems", [])):
+                return None
+            if k == "species" and el in {slot_text(s) for s in v.get("elems", [])}:
                 return None
         return f"returns(.. elems = [{el}])"
     if kind == "alive":
@@ -625,6 +648,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--only", action="append", default=[])
     ap.add_argument("--weaken", action="append", default=[], help="NAME=verb: drop that verb (sabotage)")
+    ap.add_argument("--receiver", help="TypeScript expression: the receiver of every probe "
+                    "(a prototype method of a host kind, `Buffer.from(\"ab\")`); default the scenario arrays")
     ap.add_argument("--node", help="also run each program under node and report differing event logs (info)")
     a = ap.parse_args(argv)
     weak = dict(w.split("=", 1) for w in a.weaken)
@@ -641,11 +666,11 @@ def main(argv=None) -> int:
         # Sabotage only the claimed effects. Keep the probes and call forms
         # identical so removing calls cannot remove the callback being tested.
         claim = dict(d, effects=weaken(d["effects"], weak[d["name"]])) if d["name"] in weak else d
-        for scenario, form, npass in scenarios(d):
+        for scenario, form, npass in scenarios(d, a.receiver):
             base = a.out / f"{d['name']}.{scenario}.{form}{npass}"
             sc = f"{scenario}/{form}/{npass}"
             src = Path(str(base) + ".ts")
-            src.write_text(generate(d, scenario, form, npass))
+            src.write_text(generate(d, scenario, form, npass, a.receiver))
             text, err = compile_run(a.perry, src, env)
             Path(str(base) + ".log").write_text(text)
             reds, n = check(claim, text)

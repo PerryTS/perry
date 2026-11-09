@@ -68,10 +68,16 @@ pub(super) fn tower_pshape_route(
     } else {
         (pshape_fn, fname.to_string())
     };
+    let number_index = (!index_proven)
+        .then(|| {
+            crate::lower_call::index_split::number_index_positions(ctx, owner, property, args, 0)
+        })
+        .flatten();
     Some(TowerPshapeRoute {
         clone_fn,
         generic_fn,
         keys_global,
+        number_index,
     })
 }
 
@@ -158,6 +164,15 @@ pub(super) fn emit_tower_pshape_call(
         crate::verify_facts::tick(ctx);
     }
     if layout_proven && !verify {
+        if let Some((positions, params)) = &route.number_index {
+            return crate::lower_call::index_split::emit_number_index_split(
+                ctx,
+                &route.clone_fn,
+                positions,
+                params,
+                case_arg_slices,
+            );
+        }
         return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
     }
     // The global is read ONCE per function (entry-hoisted); the case block only

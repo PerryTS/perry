@@ -38,7 +38,8 @@ impl<'a> Gen<'a> {
             for e in self.exports_of(mi) {
                 match e {
                     // An erased type export binds nothing and shadows nothing.
-                    Export::Named { local, .. } if modules[mi].1.is_type_only_export_binding(local) => {}
+                    Export::Named { local, .. }
+                        if modules[mi].1.is_type_only_export_binding(local) => {}
                     Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
                         names.push(exported)
                     }
@@ -445,6 +446,10 @@ impl<'a> Gen<'a> {
         // through the cell's contract, what the others throw is seeded into
         // what its `catch` reads (beside the runtime's errors, ⊤).
         let thrown = self.thrown;
+        // Another unit is unknown compiled code: it may throw anything.
+        self.m
+            .add_top(thrown, |_| "thrown value (runtime errors)".into());
+        self.m.add_prim(thrown, prim::ALL);
         if cells {
             self.seed_cell("thrown", thrown);
             self.cells.push(("thrown".to_string(), thrown));

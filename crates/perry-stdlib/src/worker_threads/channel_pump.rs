@@ -1,27 +1,18 @@
 //! Event-loop pump for `MessageChannel` / `BroadcastChannel` inboxes.
 //!
-//! Split out of `worker_threads.rs` to keep that file under the 2000-line lint
-//! cap. These two `#[no_mangle]` entry points are called from the async bridge
-//! pump (`common::async_bridge`) and are re-exported from the parent module so
-//! `crate::worker_threads::js_worker_threads_channels_*` keeps resolving.
-
 use super::{
     call_callback1, call_message_callback1, deserialize_nanbox_on_current_thread, event_object,
     object_event_handler, EventListener, SerializedValue, BROADCAST_CHANNELS, MESSAGE_PORTS,
 };
 
-/// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
-/// firing `close` events for closed ports. Called from the event-loop pump.
-/// Returns the number of messages/events dispatched (#3157).
-#[no_mangle]
-pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
-    super::message_port::observe_closed_ports();
+fn process_message_ports(active: &mut Option<(u64, super::port_transport::DispatchGuard)>) -> i32 {
     let mut dispatched = 0;
-
     // Snapshot deliverable (port_id, callback, message) tuples, then invoke the
     // callbacks OUTSIDE the MESSAGE_PORTS borrow — a listener may re-enter
     // postMessage / close, which needs to borrow MESSAGE_PORTS again.
     struct MessageDispatch {
+        port_id: u64,
+        lease: super::Lease,
         target_bits: u64,
         raw_cbs: Vec<EventListener>,
         event_cbs: Vec<EventListener>,
@@ -37,7 +28,14 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 .borrow()
                 .iter()
                 .filter_map(|(port_id, state)| {
-                    (!state.closed() && state.pending()).then_some((*port_id, state.object_bits))
+                    let selected = active.as_ref().is_some_and(|(id, _)| id == port_id);
+                    (state.pending()
+                        && if active.is_some() {
+                            selected
+                        } else {
+                            !state.closed()
+                        })
+                    .then_some((*port_id, state.object_bits))
                 })
                 .collect()
         });
@@ -52,7 +50,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let state = ports.get_mut(&port_id)?;
                 let has_event_target = state.started
                     && (!state.message_cbs.is_empty() || !state.message_event_cbs.is_empty());
-                if state.closed()
+                if (state.closed() && !active.as_ref().is_some_and(|(id, _)| *id == port_id))
                     || (!has_event_target && handler_cb.is_none() && global_handler.is_none())
                 {
                     return None;
@@ -69,6 +67,8 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                         state.refed = false;
                     }
                     MessageDispatch {
+                        port_id,
+                        lease: state.lease,
                         target_bits: state.object_bits,
                         raw_cbs,
                         event_cbs,
@@ -85,6 +85,12 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         }
         match next {
             Some(dispatch) => {
+                if active.is_none() {
+                    let Some(guard) = super::port_transport::begin_dispatch(dispatch.lease) else {
+                        continue;
+                    };
+                    *active = Some((dispatch.port_id, guard));
+                }
                 // The listeners run inside the port's MESSAGEPORT resource.
                 let async_ids = dispatch.async_ids;
                 if let Some(ids) = async_ids {
@@ -174,9 +180,28 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 }
                 dispatched += 1;
             }
+            None if active.take().is_some() => continue,
             None => break,
         }
     }
+    dispatched
+}
+
+/// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
+/// firing `close` events for closed ports. Called from the event-loop pump.
+/// Returns the number of messages/events dispatched (#3157).
+#[no_mangle]
+pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
+    super::message_port::observe_closed_ports();
+    // Keep the lease outside the JS trap so a thrown callback also ends its drain.
+    let mut active = None;
+    let outcome = perry_runtime::exception::catch_thrown(|| process_message_ports(&mut active));
+    drop(active);
+    let mut dispatched = match outcome {
+        Ok(count) => count,
+        Err(caught) => perry_runtime::exception::rethrow_caught(caught),
+    };
+    super::message_port::observe_closed_ports();
 
     loop {
         let next = BROADCAST_CHANNELS.with(|channels| {

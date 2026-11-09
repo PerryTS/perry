@@ -7,6 +7,8 @@ use std::ptr;
 #[path = "push_pop/growth.rs"]
 mod growth;
 use growth::initialize_growth_slack;
+#[cfg(test)]
+pub(crate) use growth::GrowInPlaceTestGuard;
 pub(super) use growth::install_array_growth_forwarding_with;
 
 #[path = "push_pop/guards.rs"]
@@ -60,10 +62,94 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
-    if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
-        if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN) != 0 {
+    // SAFETY: `clean_arr_ptr_mut` returned a live, forwarding-resolved head.
+    unsafe { grow_backing::<true>(arr, min_capacity) }
+}
+
+/// Room for one more element in a plain array whose push admission generated
+/// code has just proved, without collecting.
+///
+/// The inline push tier (`expr/array_push.rs`) reaches here only from its
+/// `apush.nofwd` block, after it read a live, non-forwarded `GC_TYPE_ARRAY`
+/// header with no integrity bits, a null named layout and a pristine prototype
+/// chain, and the only test that failed was `length < capacity`. It then stores
+/// the element inline into the returned head, exactly as it does when there is
+/// room, so a regrowth no longer pays the generic push (`push_spec_if_plain`,
+/// the descriptor guard, a handle scope, the classifying slot store).
+///
+/// The head returned has `capacity > length`, and is either `arr` itself
+/// (extended in place, see [`growth::try_extend_in_place`]) or a young
+/// replacement with a forwarding stub left at `arr`. Null means "declined,
+/// nothing changed": anything this would have to collect for, a receiver the
+/// cheap header re-check does not admit, an old or large source. The caller
+/// then takes its complete push.
+///
+/// Never collects, never runs JavaScript, never throws: the caller's value and
+/// receiver registers stay valid across the call.
+#[no_mangle]
+pub extern "C" fn js_array_grow_for_push(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    let Some(header) = (unsafe { value::addr_class::try_read_gc_header(arr as usize) }) else {
+        return ptr::null_mut();
+    };
+    if header.obj_type != gc::GC_TYPE_ARRAY
+        || header.gc_flags & (gc::GC_FLAG_FORWARDED | gc::GC_FLAG_TENURED) != 0
+        || header._reserved & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN)
+            != 0
+    {
+        return ptr::null_mut();
+    }
+    unsafe {
+        let length = (*arr).length;
+        // `%Array.prototype%` (which must refuse) owns a named layout, so it
+        // is declined here with every other receiver that has one.
+        if length != (*arr).capacity || length >= 100_000_000 || !(*arr).named.is_null() {
+            return ptr::null_mut();
+        }
+        // The in-place arm first, on the header just read: it needs none of
+        // `grow_backing`'s re-classification.
+        let header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+        if growth::try_extend_in_place(arr, header, grown_capacity(length, length + 1)) {
             return arr;
         }
+        grow_backing::<false>(arr, length + 1)
+    }
+}
+
+/// The capacity a grow from `old_capacity` asks for: at least 16 more slots,
+/// doubling once that is more, clamped to the allocation ceiling, and never
+/// below `min_capacity` (which the caller validates against the ceiling).
+#[inline]
+fn grown_capacity(old_capacity: u32, min_capacity: u32) -> u32 {
+    let grown = std::cmp::max(
+        old_capacity.saturating_mul(2),
+        old_capacity.saturating_add(16),
+    );
+    let doubled = std::cmp::min(grown, super::alloc::ARRAY_MAX_CAPACITY);
+    std::cmp::max(doubled, min_capacity)
+}
+
+/// [`js_array_grow`] on a resolved head. With `MAY_COLLECT == false` a grow
+/// the open nursery block cannot serve returns null with nothing changed,
+/// instead of allocating where a collection could run, and so does a request
+/// the collecting form would answer by throwing (an `%Array.prototype%`
+/// receiver, a capacity past the allocation ceiling): that instantiation
+/// neither collects nor throws, and its caller retries through the complete
+/// form.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+pub(super) unsafe fn grow_backing<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+) -> *mut ArrayHeader {
+    if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
+        if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN) != 0 {
+            // The collecting form answers "no room" with the unchanged head;
+            // the no-collect form promises room on every non-null return.
+            return if MAY_COLLECT { arr } else { ptr::null_mut() };
+        }
+    } else if !MAY_COLLECT {
+        return ptr::null_mut();
     } else if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
@@ -79,6 +165,9 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // index store refuses in `note_array_index_write`. Cold: only a real
         // reallocation asks.
         if arr as usize == super::array_prototype_addr_if_resolved() {
+            if !MAY_COLLECT {
+                return ptr::null_mut();
+            }
             crate::object::builtin_proto::refuse_index_add(
                 crate::object::builtin_proto::BuiltinProto::Array,
             );
@@ -89,13 +178,33 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // capacity word (which shares the shape-id band) representable.
         // Clamp doubling before validating min_capacity so only a request
         // beyond the ceiling throws, rather than an oversized growth factor.
-        let doubled = std::cmp::min(old_capacity * 2, super::alloc::ARRAY_MAX_CAPACITY);
-        let new_capacity =
-            super::alloc::array_capacity_or_throw(std::cmp::max(doubled, min_capacity));
+        //
+        // A small array grows by at least 16 slots: a fresh `[]` (four slots)
+        // filled by a loop otherwise reallocates at 4, 8, 16 and 32 elements,
+        // and each reallocation (allocate, copy, forwarding stub) costs about
+        // 800 instructions, against about 55 for an in-capacity push. Sixteen
+        // pushes into `[]` paid two of them, 64% of the loop (the chess
+        // engine's per-node move lists); now one. Large arrays still double.
+        let wanted = grown_capacity(old_capacity, min_capacity);
+        if !MAY_COLLECT
+            && wanted as usize + crate::array::key_attrs_reserve(arr)
+                > super::alloc::ARRAY_MAX_CAPACITY as usize
+        {
+            return ptr::null_mut();
+        }
+        let new_capacity = super::alloc::array_capacity_or_throw(wanted);
         // A named-property reserve (`named_props.rs`) travels with the array:
         // the replacement allocation keeps the same number of physical slots
         // in front of logical element 0, so `capacity` excludes them on both
         // sides and the element copy below is verbatim at the same byte offset.
+        let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+        // The common case of a loop filling a fresh array: nothing was
+        // allocated after it, so the open nursery block can lengthen it where
+        // it stands. No copy, no forwarding stub, no new address for an alias
+        // to chase (see `try_extend_in_place`).
+        if growth::try_extend_in_place(arr, old_header, new_capacity) {
+            return arr;
+        }
         let reserve = crate::array::key_attrs_reserve(arr);
         let old_size = array_byte_size(old_capacity as usize + reserve);
         let new_size = array_byte_size(new_capacity as usize + reserve);
@@ -117,10 +226,16 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // its handle is reloaded; birth the target old instead so the
         // post-collection source cannot acquire the same old->young
         // forwarding edge.
-        let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
         let source_generation = crate::arena::classify_heap_generation(arr as usize);
         let source_requires_old_target = (*old_header).gc_flags & gc::GC_FLAG_TENURED != 0
             || !matches!(source_generation, crate::arena::HeapGeneration::Nursery);
+        if !MAY_COLLECT
+            && (source_requires_old_target
+                || (*old_header).obj_type != gc::GC_TYPE_ARRAY
+                || (*old_header).gc_flags & gc::GC_FLAG_ARENA == 0)
+        {
+            return ptr::null_mut();
+        }
         let young = if source_requires_old_target {
             ptr::null_mut()
         } else {
@@ -135,6 +250,9 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             // No collection, so the source address remains valid without a
             // transient root. Only the old/refill branch needs a handle.
             (young as *mut ArrayHeader, arr)
+        } else if !MAY_COLLECT {
+            // Declined before anything was written: the source is untouched.
+            return ptr::null_mut();
         } else {
             let scope = gc::RuntimeHandleScope::new();
             let source = scope.root_raw_mut_ptr(arr);
@@ -240,11 +358,17 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
                     std::ptr::NonNull::new(old_header)
                 }
             });
-        assert!(
-            installed,
-            "array growth could not install a forwarding stub for the tracked source at {:#x}",
-            arr as usize
-        );
+        if MAY_COLLECT {
+            assert!(
+                installed,
+                "array growth could not install a forwarding stub for the tracked source at {:#x}",
+                arr as usize
+            );
+        } else {
+            // Admitted below only for an arena-owned GC_TYPE_ARRAY nursery
+            // source, which is exactly what the installer accepts.
+            debug_assert!(installed);
+        }
 
         // A retained stub needs its GC header and first forwarding word, not
         // the old elements/named slots. Keep its address, extent and allocator
@@ -829,7 +953,12 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     if flags & gc::OBJ_FLAG_FROZEN != 0 {
         push_guard(arr, 1);
     }
-    guard_writable_length(arr);
+    // A non-writable `length` is a descriptor in the named layout; the resolved
+    // probe answers "none" without re-classifying the head, and only a
+    // receiver that has some pays for the complete check.
+    if super::header::array_has_element_descriptors_resolved(arr) {
+        guard_writable_length(arr);
+    }
     if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
         return arr;
     }

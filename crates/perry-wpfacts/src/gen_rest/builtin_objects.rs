@@ -99,13 +99,10 @@ impl<'a> Gen<'a> {
                 // (`Cons::DefineAll`); any other map's own values are these
                 // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                let va = self.m.atom("value");
-                let value = self.load(descs, Key::Named(va));
+                let [value, dget, dset] = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
                 let star = self.m.atom(crate::STAR_KEY);
-                for (name, setter) in [("get", false), ("set", true)] {
-                    let a = self.m.atom(name);
-                    let f = self.load(descs, Key::Named(a));
+                for (f, setter) in [(dget, false), (dset, true)] {
                     self.m.cons(
                         f,
                         Cons::Accessor {
@@ -130,7 +127,8 @@ impl<'a> Gen<'a> {
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
             | Expr::ReflectGetOwnPropertyDescriptor { target: o, key: k } => {
                 let on = self.expr(fx, o);
-                let _ = self.expr(fx, k);
+                let kn = self.expr(fx, k);
+                self.to_property_key(kn);
                 self.descriptor_of(mi, on)
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
@@ -348,7 +346,13 @@ impl<'a> Gen<'a> {
                 // Typed arrays / buffers hold numbers; an array argument is
                 // read, a buffer/view argument is shared (B1, flow only).
                 let ks = kids(e);
-                let (t, n) = self.bobj(mi, "TypedArray");
+                // The host's file contents are a Buffer: its own methods
+                // are `Buffer.prototype`'s, the rest its typed array chain.
+                let what = match e {
+                    Expr::FsReadFileBinary(..) => "Buffer",
+                    _ => "TypedArray",
+                };
+                let (t, n) = self.bobj(mi, what);
                 let owner = self.begin_indexed_owner(mi, t, e);
                 for k in ks {
                     let v = self.expr(fx, k);
@@ -391,14 +395,15 @@ impl<'a> Gen<'a> {
             }
             Expr::StructuredClone { value, options } => {
                 // E17: the clone does not keep identity (⊤-origin result);
-                // reading the source runs getters.
+                // serializing the source reads its values recursively (own
+                // getters run) and calls nothing.
                 let v = self.expr(fx, value);
                 let r = self.m.reason("structuredClone source");
                 self.m.cons(
                     v,
                     Cons::Implicit {
                         reason: r,
-                        proto: Protocol::Any,
+                        proto: Protocol::Clone,
                     },
                 );
                 let o = self.expr(fx, options);
@@ -456,35 +461,41 @@ impl<'a> Gen<'a> {
                 // function is never constructed (`new g()` throws), so the
                 // instance template's birth keys are never read. Every token
                 // of the step function (one per closure context) has it.
-                let g = fx.f;
-                let tm = self.m.fn_inst_template(g);
-                let p = self.m.tok(TokKind::Proto(tm));
-                let gt = self.m.funcs[g as usize].token;
-                let pa = self.m.atom("prototype");
-                let gf = self.m.field(gt, pa);
-                self.m.add_tok(gf, p);
-                // Every token of `g` (one per closure context, made later by
-                // `closure_tok`) feeds its own `prototype` field here.
-                let gp = match self.m.funcs[g as usize].gen_fn_protos {
-                    Some(n) => n,
-                    None => {
-                        let n = self.m.node_l("gen-fn-protos");
-                        self.m.funcs[g as usize].gen_fn_protos = Some(n);
-                        n
-                    }
-                };
-                self.m.edge(gf, gp);
-                for t in self.m.nodes[o as usize].pts.to_sorted() {
-                    if let TokKind::Func(f, _) = self.m.toks[t as usize] {
-                        self.m.funcs[f as usize].gen_proto = Some(gp);
-                        self.m.funcs[f as usize].gen_async = *is_async;
-                        // A chain made before this link (`proto_node` seeds
-                        // later ones from `gen_proto`).
-                        if let Some(&pn) = self.m.proto_node.get(&t) {
-                            self.m.edge(gp, pn);
+                let publish = |gen: &mut Self| {
+                    let g = fx.f;
+                    let tm = gen.m.fn_inst_template(g);
+                    let p = gen.m.tok(TokKind::Proto(tm));
+                    let gt = gen.m.funcs[g as usize].token;
+                    let pa = gen.m.atom("prototype");
+                    let gf = gen.m.field(gt, pa);
+                    gen.m.add_tok(gf, p);
+                    // Every token of `g` (one per closure context, made later by
+                    // `closure_tok`) feeds its own `prototype` field here.
+                    let gp = match gen.m.funcs[g as usize].gen_fn_protos {
+                        Some(n) => n,
+                        None => {
+                            let n = gen.m.node_l("gen-fn-protos");
+                            gen.m.funcs[g as usize].gen_fn_protos = Some(n);
+                            n
+                        }
+                    };
+                    gen.m.edge(gf, gp);
+                    for t in gen.m.nodes[o as usize].pts.to_sorted() {
+                        if let TokKind::Func(f, _) = gen.m.toks[t as usize] {
+                            gen.m.funcs[f as usize].gen_proto = Some(gp);
+                            gen.m.funcs[f as usize].gen_async = *is_async;
+                            // A chain made before this link (`proto_node` seeds
+                            // later ones from `gen_proto`).
+                            if let Some(&pn) = gen.m.proto_node.get(&t) {
+                                gen.m.edge(gp, pn);
+                            }
                         }
                     }
-                }
+                };
+                #[cfg(test)]
+                self.packet_generator_effect(fx.f, o, *is_async, publish);
+                #[cfg(not(test))]
+                publish(self);
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
                     let l = self.local(mi, *id);
                     self.m.add_prim(l, prim::NUM | prim::BOOL);
@@ -509,7 +520,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(aw, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
-                self.callback(s, vec![arg, b])
+                self.async_callback(s, vec![arg, b])
             }
             Expr::AsyncStepResumeNow {
                 value,
@@ -542,7 +553,7 @@ impl<'a> Gen<'a> {
                 let s = self.expr(fx, step_closure);
                 let u = self.prim_node(prim::UNDEF);
                 let b = self.prim_node(prim::BOOL);
-                let r = self.callback(s, vec![u, b]);
+                let r = self.async_callback(s, vec![u, b]);
                 self.promise_of(mi, r)
             }
             Expr::AsyncGenResume {
@@ -556,7 +567,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
-                let r = self.callback(s, vec![arg, b]);
+                let r = self.async_callback(s, vec![arg, b]);
                 let p = self.promise_of(mi, r);
                 self.m.add_tok(p, TOP);
                 p

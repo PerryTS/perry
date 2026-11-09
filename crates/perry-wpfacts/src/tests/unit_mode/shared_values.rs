@@ -766,8 +766,29 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // its named keys: each `z{i} = [y]` no longer copies `y` (n + 5 tokens)
         // into its named-key node, n * (n + 5) entries fewer.
         // CHESS4-A: the runtime-made `process.argv` array is one more entry
-        // at every n (the growth stays n^2): (956, 2604, 8204) -> the pin.
-        (957, 2605, 8205),
+        // at every n (the growth stays n^2): (956, 2604, 8204) -> (957, 2605, 8205).
+        // The escaped class objects are one node (ESCCLASSES) that holds the
+        // escaped class token: one entry more at every n -> (958, 2606, 8206).
+        // The `{ v }` literals share one literal-shape class, a layout no
+        // unknown code constructs: its escape no longer builds the unknown
+        // `new` (result, arguments, instance), 16 entries fewer at every n.
+        // HOST-P: the runtime-made `process.execArgv` array, like `argv`, is one
+        // more entry at every n -> (943, 2591, 8191).
+        // SEEDE: the runtime error object and the throw regions are eight
+        // entries more at every n (951, 2599, 8199; the `Raise` constraints
+        // are summary constraints, `summary::map::gen_kind`). Unknown code
+        // holding a value holds its accessor functions (descriptor reads,
+        // ESCACCESSORS): each escaped `{ v }` gets a getter and a setter
+        // descriptor walk (`walk-getter`/`walk-setter` nodes), two entries
+        // per literal, plus eight once (measured at n = 8, 16, 32):
+        // 2n + 8 more -> (975, 2639, 8271). The n^2 growth is unchanged.
+        // SEEDAB: an Annex B lookup under an unknown key hands out the
+        // realm's accessor functions (one token): two entries more at every n.
+        // Guard presence (`gen::narrow`): each `if (c)` narrows the
+        // parameter `c` by presence, a start and an end node holding its
+        // marker and primitives: three entries per `if`, 3(n - 1) more
+        // (linear; the n^2 growth is unchanged) -> the pin.
+        (998, 2686, 8366),
         "entries {e8} {e16} {e32}"
     );
 }

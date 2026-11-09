@@ -127,13 +127,13 @@ fn brotli_dictionary_wire(quality: i32) {
     let input = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
     let compressed = brotli_codec::compress(input, Some(dictionary), quality).unwrap();
     assert_eq!(
-        brotli_codec::decompress(&compressed, Some(dictionary.to_vec()), usize::MAX).unwrap(),
+        brotli_codec::decompress(&compressed, Some(dictionary.to_vec()), usize::MAX, false).unwrap(),
         input,
         "quality {quality}: {}-byte dictionary wire must restore the original input",
         compressed.len(),
     );
     assert!(
-        brotli_codec::decompress(&compressed, None, usize::MAX).is_err(),
+        brotli_codec::decompress(&compressed, None, usize::MAX, false).is_err(),
         "quality {quality}: this Node-qualified input must reference its dictionary (wire: {} bytes)",
         compressed.len(),
     );
@@ -142,4 +142,81 @@ fn brotli_dictionary_wire(quality: i32) {
 #[test]
 fn brotli_dictionary_quality_nine_wire_interoperates() {
     brotli_dictionary_wire(9);
+}
+
+/// Node's `brotliCompressSync(text, { params: { LARGE_WINDOW: 1, LGWIN: 30, QUALITY: 5 } })`.
+const LARGE_WINDOW_BROTLI: &[u8] = &[
+    0x11, 0x5e, 0xb4, 0x00, 0x00, 0x10, 0xb7, 0xb1, 0x75, 0x1d, 0xa7, 0x7b, 0x6c, 0x09, 0x91,
+    0x60, 0x81, 0x43, 0x4e, 0x0f, 0xea, 0x5f, 0x20, 0x61, 0x82, 0x54, 0x5b, 0x74, 0x80, 0xa4,
+    0x10, 0x4f, 0xa5, 0x0e, 0x30, 0xfe, 0x11, 0x74, 0x58, 0xff, 0x4d, 0x8c, 0x6a, 0x5b, 0xd2,
+    0xc0, 0x00,
+];
+const LARGE_WINDOW_TEXT: &[u8] = b"large window brotli is not content-encoding br";
+
+/// Writes `input` then finishes; the error is the Node error code.
+fn step_all(payload: &mut driver::Payload, input: &[u8]) -> Result<Vec<u8>, String> {
+    let mut result = Vec::new();
+    let mut offset = 0;
+    let mut final_phase = false;
+    for _ in 0..1_000_000 {
+        let op = ns::StepIn {
+            op: if final_phase { ns::StreamOp::FINAL } else { ns::StreamOp::WRITE },
+            flush_kind: 0,
+            input: if final_phase { std::ptr::null() } else { unsafe { input.as_ptr().add(offset) } },
+            len: if final_phase { 0 } else { input.len() - offset },
+        };
+        let mut out = ns::StepOut {
+            consumed: 0,
+            out: std::ptr::null(),
+            out_len: 0,
+            status: ns::StepStatus::NEED_INPUT,
+            code: 0,
+            external_bytes: 0,
+        };
+        payload.step(&op, &mut out);
+        if out.status == ns::StepStatus::ERROR {
+            return Err(payload.error_details(out.code).1);
+        }
+        if out.out_len > 0 {
+            result.extend_from_slice(unsafe { std::slice::from_raw_parts(out.out, out.out_len) });
+        }
+        offset += out.consumed;
+        if out.status == ns::StepStatus::NEED_INPUT {
+            if final_phase {
+                return Ok(result);
+            }
+            final_phase = true;
+        } else if final_phase && out.status == ns::StepStatus::ENDED {
+            return Ok(result);
+        }
+    }
+    panic!("codec did not settle");
+}
+
+/// RFC 7932 caps the window at 16 MiB; a large-window stream decodes only
+/// after the BROTLI_DECODER_PARAM_LARGE_WINDOW opt-in, which `reset` keeps.
+#[test]
+fn brotli_large_window_requires_opt_in() {
+    let rejected = brotli_codec::decompress(LARGE_WINDOW_BROTLI, None, usize::MAX, false);
+    assert!(
+        matches!(&rejected, Err(brotli_codec::DecodeError::Decode(code)) if code == "ERR__ERROR_FORMAT_WINDOW_BITS"),
+        "{rejected:?}"
+    );
+    assert_eq!(
+        brotli_codec::decompress(LARGE_WINDOW_BROTLI, None, usize::MAX, true).unwrap(),
+        LARGE_WINDOW_TEXT
+    );
+
+    let mut strict =
+        driver::Payload::new(Codec::BrotliDecompress, Compression::default(), 4096).unwrap();
+    assert_eq!(
+        step_all(&mut strict, LARGE_WINDOW_BROTLI).unwrap_err(),
+        "ERR__ERROR_FORMAT_WINDOW_BITS"
+    );
+    let mut large =
+        driver::Payload::new(Codec::BrotliDecompress, Compression::default(), 4096).unwrap();
+    large.allow_brotli_large_window();
+    assert_eq!(step_all(&mut large, LARGE_WINDOW_BROTLI).unwrap(), LARGE_WINDOW_TEXT);
+    large.reset().unwrap();
+    assert_eq!(step_all(&mut large, LARGE_WINDOW_BROTLI).unwrap(), LARGE_WINDOW_TEXT);
 }

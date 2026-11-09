@@ -55,7 +55,7 @@ pub(crate) fn entry_opts() -> CompileOptions {
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
-        program_facts: Default::default(),
+        program_facts: proven_console_facts(),
         program_layouts: Default::default(),
         gc_effects: Default::default(),
         target: None,
@@ -189,7 +189,24 @@ pub(crate) fn under_both_lowerings(mut body: impl FnMut(&str)) {
     }
 }
 
-/// `console.log(a, b, …)` — the shape in the #6951 repro.
+/// The callee offset of the fixtures' console calls ([`console_log`]).
+pub(crate) const PROVEN_CONSOLE_SITE: u32 = 7;
+
+/// Facts that prove the console call at [`PROVEN_CONSOLE_SITE`] reads the
+/// native member, so it binds the runtime's console intrinsic (an unproven
+/// site reads `console.<m>` and calls it instead).
+pub(crate) fn proven_console_facts() -> crate::ProgramFactsView {
+    crate::ProgramFactsView {
+        elision: std::sync::Arc::new(crate::ElisionFacts {
+            native_member_calls: [PROVEN_CONSOLE_SITE].into_iter().collect(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// `console.log(a, b, …)` — the shape in the #6951 repro, at a site the
+/// facts prove native ([`proven_console_facts`]).
 pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
         byte_end: 0,
@@ -197,11 +214,11 @@ pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
             byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "log".to_string(),
-            byte_offset: 0,
+            byte_offset: PROVEN_CONSOLE_SITE,
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: PROVEN_CONSOLE_SITE,
     })
 }
 
@@ -334,6 +351,82 @@ fn an_array_literal_roots_elements_before_an_allocating_element() {
             !crate::testing::temp_slots::temp_root_slots(&ir).is_empty(),
             "{lowering}: an array literal with an allocating later element must \
              root the heap elements already evaluated (#6951):\n{ir}"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The unproven console call (#GCWMC)
+// ---------------------------------------------------------------------------
+
+/// A console call the facts do NOT prove native: same callee shape as
+/// [`console_log`], at an offset `proven_console_facts` does not list, so it
+/// lowers through `builtin_proto::emit_namespace_generic_call` (read
+/// `globalThis.console`, read its member, call it).
+fn unproven_console_log(args: Vec<Expr>) -> Stmt {
+    const UNPROVEN_CONSOLE_SITE: u32 = PROVEN_CONSOLE_SITE + 2;
+    Stmt::Expr(Expr::Call {
+        byte_end: 0,
+        callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(Expr::GlobalGet(0)),
+            property: "log".to_string(),
+            byte_offset: UNPROVEN_CONSOLE_SITE,
+        }),
+        args,
+        type_args: Vec::new(),
+        byte_offset: UNPROVEN_CONSOLE_SITE,
+    })
+}
+
+/// The namespace value and the member read from it are live across every
+/// argument of an unproven console call: both must sit in rooted slots, and
+/// `js_method_call_value` must read its callee and `this` back out of them.
+///
+/// Pre-fix both were `double` SSA registers (not statepoint roots) from the
+/// member read to the call, so a moving minor inside an allocating argument
+/// left the call naming the from-space `console.log` closure: SIGSEGV in
+/// `js_method_call_value` (test_gap_gc_worker_message_clone_rooting on the
+/// loop_polls arm). Sabotage: lowering the arguments with the SSA callee and
+/// namespace fails both `assert_rooted_across` clauses below.
+#[test]
+fn an_unproven_console_call_roots_its_namespace_and_callee_across_the_arguments() {
+    under_both_lowerings(|lowering| {
+        let ir = main_ir_for(
+            "console_unproven.ts",
+            vec![unproven_console_log(vec![
+                Expr::String("label".to_string()),
+                allocating(),
+            ])],
+        );
+        let ns = first_call_result(&ir, "js_builtin_namespace_value")
+            .unwrap_or_else(|| panic!("{lowering}: the site did not read the namespace:\n{ir}"));
+        let callee = first_call_result(&ir, "js_builtin_namespace_member")
+            .unwrap_or_else(|| panic!("{lowering}: the site did not read the member:\n{ir}"));
+        assert_rooted_across(&ir, &ns, "js_builtin_namespace_member", lowering);
+        assert_rooted_across(&ir, &callee, "js_method_call_value", lowering);
+        assert_rooted_across(&ir, &ns, "js_method_call_value", lowering);
+    });
+}
+
+/// …and the callee pays for no slot when no argument can collect: the
+/// differential twin of the test above (only the arguments' kind differs).
+#[test]
+fn an_unproven_console_call_with_inert_arguments_roots_no_callee() {
+    under_both_lowerings(|lowering| {
+        let ir = main_ir_for(
+            "console_unproven_inert.ts",
+            vec![unproven_console_log(vec![
+                Expr::String("label".to_string()),
+                Expr::Number(1.0),
+            ])],
+        );
+        let callee = first_call_result(&ir, "js_builtin_namespace_member")
+            .unwrap_or_else(|| panic!("{lowering}: the site did not read the member:\n{ir}"));
+        assert!(
+            slot_holding(&ir, &callee).is_none(),
+            "{lowering}: no argument can collect, so the callee {callee} needs no \
+             rooted slot:\n{ir}"
         );
     });
 }

@@ -280,6 +280,24 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
     }) {
         return line.to_string();
     }
+    // A `linkonce` definition coalesces ACROSS modules: fn_record's image
+    // descriptor and sentinel are one per program, and every module emits
+    // them. The owner keeps it weak, as `weak_odr` (`weak`): non-discardable
+    // like a strong definition, yet still folded with the other modules'
+    // copies. A strong owner put a GLOBAL symbol into a COMDAT group the other
+    // objects define WEAK; GNU ld and ld64 let it win, but lld (Android's
+    // linker) rejects the program: "relocation refers to a symbol in a
+    // discarded section ... Mixing groups with STB_WEAK and STB_GLOBAL
+    // binding signature is not supported".
+    if let Some((lhs, rhs)) = line.split_once(" = ") {
+        let rhs = rhs.trim_start();
+        if let Some(rest) = rhs.strip_prefix("linkonce_odr ") {
+            return format!("{lhs} = weak_odr {rest}");
+        }
+        if let Some(rest) = rhs.strip_prefix("linkonce ") {
+            return format!("{lhs} = weak {rest}");
+        }
+    }
     match line.split_once(" = ") {
         Some((lhs, rhs)) => {
             let definition = format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start()));

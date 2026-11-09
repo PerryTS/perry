@@ -192,6 +192,22 @@ const ANNEX_B_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// [`OBJECT_PROTO_METHODS`] for `builtin_name`'s prototype: all of them on
 /// `Object.prototype`, and on any other prototype only the members that are
 /// not `Object.prototype`'s alone.
+/// An accessor on a buffer kind's prototype (`ArrayBuffer.prototype.byteLength`
+/// and friends): a getter closure, no setter.
+fn install_buffer_proto_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    thunk: *const crate::closure::JsFunctionInfo,
+) {
+    unsafe {
+        let getter = crate::closure::js_closure_alloc(thunk, 0);
+        if !getter.is_null() {
+            let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+            install_builtin_getter(proto_obj, name, getter_bits);
+        }
+    }
+}
+
 fn install_object_proto_copies(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if builtin_name == "Object" {
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -726,12 +742,19 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_object_proto_copies(builtin_name, proto_obj);
         }
         "ArrayBuffer" => {
+            // node's own-key order: constructor byteLength slice maxByteLength
+            // resizable resize transfer transferToFixedLength detached
+            // @@toStringTag. `valueOf` / `toLocaleString` are Object.prototype's
+            // (the chain), not own copies.
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(ArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_declared(0)));
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
@@ -739,8 +762,8 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 crate::fn_info!(#[realm(ArrayBuffer.prototype.resize)] export crate::object::global_this::typed_array::array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            // The thunks take the optional `newLength` (call arity 1); the
-            // spec `.length` of both is 0.
+            // The transfer thunks take the optional `newLength` (call arity 1);
+            // the spec `.length` of both is 0.
             let transfers: [(&str, *const crate::closure::JsFunctionInfo); 2] = [
                 (
                     "transfer",
@@ -758,59 +781,30 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                     super::super::native_module::set_builtin_closure_length(closure, realm_arraybuffer_transfer_public!(length));
                 }
             }
-            let getters: [(&str, *const crate::closure::JsFunctionInfo); 4] = [
-                (
-                    "byteLength",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "resizable",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "maxByteLength",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "detached",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_declared(0)),
-                ),
-            ];
-            for (name, thunk) in getters {
-                unsafe {
-                    let getter = crate::closure::js_closure_alloc(thunk, 0);
-                    if !getter.is_null() {
-                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                        install_builtin_getter(proto_obj, name, getter_bits);
-                    }
-                }
-            }
+            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_declared(0)));
             set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "SharedArrayBuffer" => {
-            // Mirror the ArrayBuffer.prototype shape: a brand-checking `slice`
-            // (instances dispatch through buffer_dispatch; `.call(notSab)`
-            // throws here), a `byteLength` accessor whose getter brand-checks
-            // the shared registry, and the `Symbol.toStringTag`.
+            // node's own-key order: constructor byteLength slice maxByteLength
+            // growable grow @@toStringTag. The brand-checking `slice` / `grow`
+            // and getters serve `.call(notSab)`; instances dispatch through
+            // buffer_dispatch.
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(SharedArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            unsafe {
-                let getter = crate::closure::js_closure_alloc(
-                    crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
-                    0,
-                );
-                if !getter.is_null() {
-                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
-                }
-            }
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_declared(0)));
+            install_proto_method(
+                proto_obj,
+                "grow",
+                crate::fn_info!(#[realm(SharedArrayBuffer.prototype.grow)] export crate::object::global_this::typed_array::shared_array_buffer_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
             set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "DataView" => {
             // Install the reflectable `byteLength`/`byteOffset`/`buffer`
@@ -820,7 +814,6 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // `DataView.prototype.getInt32.call(dv, …)` cascade.
             super::super::dataview_proto_thunks::install_dataview_proto_methods(proto_obj);
             set_intrinsic_to_string_tag(proto_obj, "DataView");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "Object" => {
             install_proto_method(

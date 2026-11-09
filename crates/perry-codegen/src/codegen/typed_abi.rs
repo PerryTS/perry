@@ -75,39 +75,37 @@ impl TypedParamRep {
 /// nonnegative test and specialized call.  The safe-value select is
 /// load-bearing: `fptosi` is poison for tagged NaNs, infinities, and
 /// out-of-range doubles even when a later select would choose the tagged arm.
+/// The plain-double half of [`emit_typed_i32_guard_and_raw`], for a call site
+/// that already proves its value a canonical double: the value admits when it
+/// round-trips the SATURATING conversion exactly. Every NaN, and so every
+/// NaN-boxed tag pattern, converts to 0 and compares unequal, and an
+/// out-of-range value saturates and compares unequal, so no separate tag or
+/// range test is needed. `-0` round-trips as `+0` and is excluded by its
+/// bits: the i32 lane cannot carry it.
+pub(crate) fn emit_typed_i32_plain_guard_and_raw(
+    blk: &mut crate::block::LlBlock,
+    value: &str,
+    bits: &str,
+) -> (String, String) {
+    use crate::types::{DOUBLE, I1, I32, I64};
+
+    let raw = blk.call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, value)]);
+    let roundtrip = blk.sitofp(I32, &raw, DOUBLE);
+    let integral = blk.fcmp("oeq", &roundtrip, value);
+    let not_negative_zero = blk.icmp_ne(I64, bits, "-9223372036854775808");
+    (blk.and(I1, &integral, &not_negative_zero), raw)
+}
+
 pub(crate) fn emit_typed_i32_guard_and_raw(
     blk: &mut crate::block::LlBlock,
     value: &str,
 ) -> (String, String) {
-    use crate::types::{DOUBLE, I1, I32, I64};
+    use crate::types::{I1, I32, I64};
 
     let bits = blk.bitcast_double_to_i64(value);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_tagged = super::emit_int32_bits_test(blk, &bits);
 
-    // Sign-closed numeric proof, shared with boxed numeric-loop admission.
-    // Numeric ingress canonicalizes payload NaNs; mirroring the tag band
-    // excludes HANDLE_TAG while preserving finite values and default NaNs.
-    let magnitude = blk.and(I64, &bits, "9223372036854775807");
-    let is_plain_number = blk.icmp_ult(
-        I64,
-        &magnitude,
-        &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-    );
-    let above_min = blk.fcmp("oge", value, "-2147483648.0");
-    let below_max = blk.fcmp("ole", value, "2147483647.0");
-    let in_range = blk.and(I1, &above_min, &below_max);
-    let plain_candidate = blk.and(I1, &is_plain_number, &in_range);
-
-    // Never feed a rejected/tagged bit pattern to fptosi.
-    let safe_plain = blk.select(I1, &plain_candidate, DOUBLE, value, "0.0");
-    let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
-    let roundtrip = blk.sitofp(I32, &plain_raw, DOUBLE);
-    let integral = blk.fcmp("oeq", &roundtrip, value);
-    let not_negative_zero = blk.icmp_ne(I64, &bits, "-9223372036854775808");
-    let plain_ok = blk.and(I1, &plain_candidate, &integral);
-    let plain_ok = blk.and(I1, &plain_ok, &not_negative_zero);
+    let (plain_ok, plain_raw) = emit_typed_i32_plain_guard_and_raw(blk, value, &bits);
     let admitted = blk.or(I1, &is_tagged, &plain_ok);
 
     let tagged_raw = blk.trunc(I64, &bits, I32);
@@ -125,9 +123,7 @@ pub(crate) fn emit_typed_i32_raw_assuming_guarded(
     use crate::types::{DOUBLE, I1, I32, I64};
 
     let bits = blk.bitcast_double_to_i64(value);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_tagged = super::emit_int32_bits_test(blk, &bits);
     let safe_plain = blk.select(I1, &is_tagged, DOUBLE, "0.0", value);
     let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
     let tagged_raw = blk.trunc(I64, &bits, I32);
@@ -292,9 +288,7 @@ pub(crate) fn emit_typed_f64_guard(blk: &mut crate::block::LlBlock, arg: &str) -
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
     );
     // JSValue::is_int32: the INT32 tag with any payload.
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_int32 = super::emit_int32_bits_test(blk, &bits);
     blk.or(I1, &is_plain_number, &is_int32)
 }
 
@@ -305,9 +299,7 @@ pub(crate) fn emit_typed_f64_guard(blk: &mut crate::block::LlBlock, arg: &str) -
 pub(crate) fn emit_typed_f64_to_raw_guarded(blk: &mut crate::block::LlBlock, arg: &str) -> String {
     use crate::types::{DOUBLE, I1, I32, I64};
     let bits = blk.bitcast_double_to_i64(arg);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_int32 = super::emit_int32_bits_test(blk, &bits);
     let low = blk.trunc(I64, &bits, I32);
     let converted = blk.sitofp(I32, &low, DOUBLE);
     blk.select(I1, &is_int32, DOUBLE, &converted, arg)

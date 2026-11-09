@@ -428,7 +428,16 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        // A self-call keeps the body's entry stack check (a leaf body that
+        // cannot recurse drops it, `expr::stack_guard::finish_stack_guard`),
+        // and with it the hot-cache read this test inspects.
+        body: vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::FuncRef(WALK_ID)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
         is_async: false,
         is_generator: false,
         is_strict: true,

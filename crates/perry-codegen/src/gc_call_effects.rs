@@ -109,6 +109,8 @@ pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
     ("perry_birth_empty_array", GcCallEffect::AllocNoReentry,
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
+    ("perry_birth_empty_array_16", GcCallEffect::AllocNoReentry,
+     "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
 ];
 
 /// The runtime call-effect facts one compilation reads.
@@ -512,20 +514,43 @@ fn note_text_effects(
     }
 }
 
+fn is_shadow_call_text(line: &str) -> bool {
+    line.contains("@js_shadow_slot_bind(") || line.contains("@js_shadow_slot_set(")
+}
+
 fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
     let mut effects = FunctionEffects::default();
+    // A body whose roots lower to native stack maps loses its shadow-slot
+    // bookkeeping calls in that lowering (`lower_roots_for_rs4gc` drops every
+    // `js_shadow_slot_bind`/`_set`): they are never executed, so they are no
+    // edge at all. Counting them as unknown externals made every rooted body
+    // "collecting". `PERRY_UNBOXED_CLASS_FIELDS=0` restores that.
+    let shadow_calls_vanish =
+        function.precise_roots_lowered() && !crate::stmt::this_field_fast_off();
     function
         .for_each_final_item::<std::convert::Infallible>(&mut |item| {
             match item {
+                FinalItem::Inst(LlInst::Call { callee, .. })
+                    if shadow_calls_vanish
+                        && matches!(
+                            callee.as_str(),
+                            "js_shadow_slot_bind" | "js_shadow_slot_set"
+                        ) => {}
                 FinalItem::Inst(LlInst::Call { callee, .. }) => {
                     note_direct_callee(gc, &mut effects, callee, defined)
                 }
                 FinalItem::Inst(LlInst::CallIndirect { .. }) => effects.has_collecting_edge = true,
                 FinalItem::Inst(LlInst::AsmBarrier) => {}
                 FinalItem::Inst(LlInst::Raw(line)) => {
-                    note_text_effects(gc, line, &mut effects, defined)
+                    if !(shadow_calls_vanish && is_shadow_call_text(line)) {
+                        note_text_effects(gc, line, &mut effects, defined)
+                    }
                 }
-                FinalItem::Text(line) => note_text_effects(gc, line, &mut effects, defined),
+                FinalItem::Text(line) => {
+                    if !(shadow_calls_vanish && is_shadow_call_text(line)) {
+                        note_text_effects(gc, line, &mut effects, defined)
+                    }
+                }
                 FinalItem::Label(_) | FinalItem::Blank | FinalItem::Inst(_) => {}
             }
             Ok(())

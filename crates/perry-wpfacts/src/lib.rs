@@ -18,12 +18,15 @@
 
 pub mod bindings;
 mod builtins;
+pub mod canonical_numbers;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
+mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
+pub mod field_read_calls;
 mod gen;
 mod gen_call;
 mod gen_cjs;
@@ -41,7 +44,8 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
+pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -64,6 +68,19 @@ pub struct FactsConfig {
     pub diagnostics: bool,
     /// Record the constraint relations for the independent recomputation.
     pub relations: bool,
+    /// No integer intervals (`model::range`): every Number is ⊤
+    /// (`PERRY_FACTS_INT_RANGES=0`).
+    pub no_int_ranges: bool,
+    /// No array length intervals: every Array `length` is ⊤
+    /// (`PERRY_FACTS_ARRAY_LENGTHS=0`).
+    pub no_array_lengths: bool,
+    /// No guard narrowing, predicate summaries or String code intervals
+    /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
+    pub no_guard_ranges: bool,
+    /// No presence narrowing: a truthy or non-nullish guard leaves the
+    /// local's `null`/`undefined` (`gen::narrow` guards;
+    /// `PERRY_FACTS_GUARD_PRESENCE=0`).
+    pub no_guard_presence: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -429,6 +446,13 @@ fn generate<'a>(
     g.export_sources = cfg.export_sources.clone();
     g.roots = cfg.roots.clone();
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
+    g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
+    g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
+    g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
+    g.int_ranges = !cfg.no_int_ranges;
+    g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
+    g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
+    g.guard_presence = !cfg.no_guard_presence;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -790,6 +814,8 @@ fn compute_act<'a>(
     g.m.dump_meta();
     #[cfg(test)]
     tests::delivery_boundaries::record(&g.m);
+    #[cfg(test)]
+    tests::computed_key_members::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
@@ -836,7 +862,22 @@ fn compute_act<'a>(
     } else {
         derive::element_facts(&g)
     };
+    if !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
     let mut bindings = bindings::collect(&g);
+    if !g.m.aborted && field_read_calls::enabled() {
+        field_read_calls::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref() == Some("fieldreadcall"),
+        );
+    }
+    if canonical_numbers::enabled() {
+        canonical_numbers::collect(&g, &mut bindings);
+    }
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.
         templates.clear();

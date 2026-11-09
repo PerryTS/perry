@@ -122,6 +122,10 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_delete(target, key);
     }
+    // A native namespace target: its members live in its module tables.
+    if let Some(deleted) = unsafe { crate::object::nm_delete_member(target, key) } {
+        return nanbox_bool(deleted != 0);
+    }
     reflect_ordinary_delete(target, key)
 }
 

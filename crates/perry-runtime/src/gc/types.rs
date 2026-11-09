@@ -61,6 +61,7 @@ fn gc_header_size_overflow(total: usize) -> ! {
 
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
+const _: () = assert!(GC_TYPE_ARRAY == perry_abi::GC_TYPE_ARRAY);
 pub const GC_TYPE_OBJECT: u8 = perry_abi::GC_TYPE_OBJECT;
 // The object-type predicates (`gc_type_is_object!`, `object_has_meta_word!`,
 // `gc_type_is_not_object!`, `object_lacks_meta_word!`, `gc_object_type_pat!`)
@@ -1681,6 +1682,7 @@ pub use perry_abi::OBJ_FLAG_TYPED_ARRAY_PROTO;
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.
 pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+const _: () = assert!(GC_ARRAY_RAW_F64_LAYOUT == perry_abi::GC_ARRAY_RAW_F64_LAYOUT);
 /// #10593: a per-array flag, read as "THIS array's
 /// `[[Prototype]]` was retargeted". Arrays are never meta-capable, so every
 /// `Object.setPrototypeOf(arr, p)` records in its property bag and sets
@@ -1698,6 +1700,7 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// JSON array (whose materialized storage is a separate allocation that does
 /// not carry this bit).
 pub(crate) const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+const _: () = assert!(GC_ARRAY_CUSTOM_PROTO == perry_abi::GC_ARRAY_CUSTOM_PROTO);
 /// The `_reserved` bits a lazy JSON array keeps when it becomes the ordinary
 /// array in place (`json_tape::flip_to_array`): the copy age every kind
 /// carries, the integrity level, and `GC_ARRAY_CUSTOM_PROTO`. Everything else

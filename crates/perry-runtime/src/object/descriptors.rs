@@ -219,11 +219,35 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
     }
 }
 
+// A keyed descriptor reads only that native-backed property. Refreshing the
+// entire mirror here would rebuild every environment string once per key when
+// Object.assign inspects the source's descriptors.
+#[optimize(size)]
+unsafe fn process_env_own_property(key_value: f64) -> Option<OwnProperty> {
+    let key = crate::builtins::js_string_coerce(key_value);
+    let value = crate::process::js_getenv(key);
+    if value.is_null() {
+        None
+    } else {
+        OwnProperty::data(
+            crate::value::js_nanbox_string(value as i64),
+            true,
+            true,
+            true,
+        )
+    }
+}
+
 /// The descriptor authority returns property facts before reflection chooses
 /// to materialize a JavaScript descriptor. Snapshot consumers read these same
 /// facts directly; ordinary data/accessor resolution does not allocate.
 #[optimize(size)]
 pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnProperty> {
+    if crate::process::is_process_env_object(obj_value)
+        && crate::symbol::js_is_symbol(key_value) == 0
+    {
+        return process_env_own_property(key_value);
+    }
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
@@ -524,6 +548,19 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     attrs.enumerable(),
                     attrs.configurable(),
                 );
+            }
+            if kind == ExoticKind::Error && name == "cause" {
+                let err = addr as *const crate::error::ErrorHeader;
+                if (*err).flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0 {
+                    let attrs = super::get_property_attrs(addr, &name)
+                        .unwrap_or(PropertyAttrs::new(true, false, true));
+                    return OwnProperty::data(
+                        (*err).cause,
+                        attrs.writable(),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
+                }
             }
             // Builtin own slots: RegExp `lastIndex` (writable, non-enum,
             // non-config) and Error `message`/`stack` (writable, non-enum,
@@ -1108,6 +1145,7 @@ pub(crate) use builders::{
 /// Takes a NaN-boxed f64 object pointer, returns a NaN-boxed f64 array pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
+    let obj_value = crate::process::refresh_process_env(obj_value);
     // A class object stores everything it owns except `prototype`
     // (`class_object_has_prototype_property`), which was created with it,
     // right after `length` and `name`.
@@ -1273,14 +1311,16 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             use super::exotic_expando::ExoticKind;
             let mut names = match kind {
                 ExoticKind::Error => {
-                    // V8 creates the lazy own `stack` before Error's optional
-                    // `message`. The header keeps both payload slots, but only
-                    // `message` values supplied to the constructor are own
-                    // properties; `name` is always inherited until assigned.
+                    // Constructor diagnostics precede later expando keys;
+                    // assigned causes must keep their own insertion position.
                     let mut builtin = vec!["stack".to_string()];
                     let error = addr as *mut crate::error::ErrorHeader;
+                    let has_cause = (*error).flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0;
                     if crate::error::js_error_has_own_property(error, "message") {
                         builtin.push("message".to_string());
+                    }
+                    if has_cause {
+                        builtin.push("cause".to_string());
                     }
                     builtin
                 }
@@ -1885,79 +1925,111 @@ pub(crate) unsafe fn nm_get_own_descriptor(
     key_str: *const crate::string::StringHeader,
     key_name: Option<&str>,
 ) -> Option<f64> {
+    use super::NmMember;
     let module_name = read_native_module_name(obj)?;
     let key_name = key_name?;
-    if let Some(enumerable) =
-        super::native_module::zlib_readonly_property_enumerability(&module_name, key_name)
-    {
-        let value = js_object_get_field_by_name(obj, key_str);
-        return Some(build_data_descriptor(
-            f64::from_bits(value.bits()),
-            false,
-            enumerable,
-            false,
-        ));
-    }
-    if !native_module_has_enumerable_key(&module_name, key_name) {
-        return None;
-    }
-    if module_name == "fs" {
-        match key_name {
-            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" | "Utf8Stream" => {
-                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
-                let set = if key_name == "Utf8Stream" {
-                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                } else {
-                    super::native_module::fs_namespace_descriptor_setter_value(key_name)
-                };
-                return Some(build_accessor_descriptor(get, set, true, true));
-            }
-            "promises" => {
-                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
-                return Some(build_accessor_descriptor(
-                    get,
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                    true,
-                    true,
-                ));
-            }
-            "constants" => {
-                let value = js_object_get_field_by_name(obj, key_str);
-                return Some(build_data_descriptor(
-                    f64::from_bits(value.bits()),
-                    false,
-                    true,
-                    false,
-                ));
-            }
-            _ => {}
+    let member = nm_member(&module_name, key_name)?;
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    Some(match member {
+        NmMember::FsAccessor => {
+            let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
+            let set = if matches!(key_name, "Utf8Stream" | "promises") {
+                undefined
+            } else {
+                super::native_module::fs_namespace_descriptor_setter_value(key_name)
+            };
+            build_accessor_descriptor(get, set, true, true)
         }
-    }
-    let value = js_object_get_field_by_name(obj, key_str);
-    if matches!(
-        module_name.as_str(),
-        "process" | "process.namespace" | "process.default"
-    ) && key_name == "permission"
-    {
         // Through the `process` constant registry: a descriptor read needs the
         // `process` value, whose every source installs that registry row.
-        let value = super::native_module_registry::nm_const_lookup("process")
-            .and_then(|f| unsafe { f("process", "permission", 0.0, false) })
-            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-        return Some(build_data_descriptor(value, false, true, false));
+        NmMember::ReadonlyData if key_name == "permission" => {
+            let value = super::native_module_registry::nm_const_lookup("process")
+                .and_then(|f| unsafe { f("process", "permission", 0.0, false) })
+                .unwrap_or(undefined);
+            build_data_descriptor(value, false, true, false)
+        }
+        _ => {
+            let value = f64::from_bits(js_object_get_field_by_name(obj, key_str).bits());
+            match member {
+                NmMember::ZlibReadonly { enumerable } => {
+                    build_data_descriptor(value, false, enumerable, false)
+                }
+                NmMember::Data { configurable } => {
+                    build_data_descriptor(value, true, true, configurable)
+                }
+                _ => build_data_descriptor(value, false, true, false),
+            }
+        }
+    })
+}
+
+/// What the module's tables say about own member `key` of namespace `module`
+/// (`None`: no such member, or deleted, or hidden). Reached through
+/// `NmNamespaceOps::member` and from the descriptor above.
+#[inline(never)]
+pub(crate) fn nm_member(module: &str, key: &str) -> Option<super::NmMember> {
+    use super::NmMember;
+    if let Some(enumerable) =
+        super::native_module::zlib_readonly_property_enumerability(module, key)
+    {
+        return Some(NmMember::ZlibReadonly { enumerable });
     }
-    if matches!(module_name.as_str(), "module" | "async_hooks") {
-        return Some(build_data_descriptor(
-            f64::from_bits(value.bits()),
-            true,
-            true,
-            false,
-        ));
+    if !native_module_has_enumerable_key(module, key) {
+        return None;
     }
-    Some(build_data_descriptor(
-        f64::from_bits(value.bits()),
-        true,
-        true,
-        module_name != "vm",
-    ))
+    Some(match (module, key) {
+        (
+            "fs",
+            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" | "Utf8Stream"
+            | "promises",
+        ) => NmMember::FsAccessor,
+        ("fs", "constants")
+        | ("process" | "process.namespace" | "process.default", "permission") => {
+            NmMember::ReadonlyData
+        }
+        ("module" | "async_hooks" | "vm", _) => NmMember::Data {
+            configurable: false,
+        },
+        _ => NmMember::Data { configurable: true },
+    })
+}
+
+#[cfg(test)]
+mod error_name_tests {
+    use super::*;
+
+    #[test]
+    fn constructor_cause_names_precede_later_error_properties() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let message = crate::string::js_string_from_bytes(b"payload".as_ptr(), 7);
+        let error = crate::error::js_error_new_with_cause_from_value(
+            crate::js_nanbox_string(message as i64),
+            23.0,
+        );
+        let error = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+        let code = crate::string::js_string_from_bytes(b"code".as_ptr(), 4);
+        js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(error.get_nanbox_f64()) as *mut _,
+            code,
+            17.0,
+        );
+        let names = scope.root_nanbox_f64(js_object_get_own_property_names(error.get_nanbox_f64()));
+        let array = crate::value::js_nanbox_get_pointer(names.get_nanbox_f64())
+            as *const crate::ArrayHeader;
+        let keys: Vec<String> = (0..crate::array::js_array_length(array))
+            .map(|index| unsafe {
+                let key = crate::JSValue::from_bits(
+                    crate::array::js_array_get_f64(array, index).to_bits(),
+                );
+                let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
+                String::from_utf8(
+                    crate::string::js_string_key_bytes(key, &mut sso)
+                        .unwrap()
+                        .to_vec(),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(keys, ["stack", "message", "cause", "code"]);
+    }
 }

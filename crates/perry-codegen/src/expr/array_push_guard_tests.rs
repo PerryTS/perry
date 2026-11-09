@@ -205,6 +205,10 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
                     field_writeback: None,
                 })],
             },
+            // A bare mention hands `keep` out, so its pushes take the full
+            // receiver admission these tests measure, not the owned one
+            // (`collectors::loop_pushed_arrays`).
+            Stmt::Expr(Expr::LocalGet(ARRAY_ID)),
         ],
         is_async: false,
         is_generator: false,
@@ -268,14 +272,16 @@ fn function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
     &ir[start..end]
 }
 
-/// A canonical numeric `+` whose operands have runtime-derived evidence. The
-/// live-bits guard remains useful because NaN payloads still require GC-layout
-/// bookkeeping even though neither operand rests on source metadata.
+/// A canonical numeric `+` whose operands have runtime-derived evidence but
+/// one of which is not numeric *by construction* (a `Math.floor` result), so
+/// the store keeps its live-bits guard. An add of two by-construction
+/// numbers (`j + j`) is proven non-pointer and takes no guard at all
+/// (`expr::helpers::expr_produces_numeric_bits_by_construction`).
 fn numeric_add_push() -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
-        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::MathFloor(Box::new(Expr::LocalGet(COUNTER_ID)))),
     }
 }
 
@@ -638,11 +644,27 @@ fn the_field_write_back_compares_a_rooted_pre_append_head() {
         .and_then(|(_, r)| r.split_once(','))
         .map(|(a, _)| a.trim())
         .expect("operand");
-    // "does the field still hold the old head?": the branch into the store.
+    // "does the field still hold the old head?": the branch into the store
+    // (through the stack check moved in front of the store's calling block;
+    // the check's own branch, inside a `stack_guard.*` block, is not it).
+    let mut label = "entry";
     let br = body
         .lines()
+        .filter(|l| {
+            if !l.starts_with(' ') && l.ends_with(':') {
+                label = l.trim_end_matches(':');
+            }
+            !label.starts_with("stack_guard.")
+        })
         .map(str::trim)
-        .find(|l| l.starts_with("br i1 ") && l.contains("label %apush.field.writeback"))
+        .find(|l| {
+            l.starts_with("br i1 ")
+                && l.split("label %").skip(1).any(|part| {
+                    let target = part.split([',', ' ']).next().unwrap();
+                    super::class_field_barrier_tests::through_stack_check(body, target)
+                        .starts_with("apush.field.writeback")
+                })
+        })
         .unwrap_or_else(|| panic!("the field-still-held branch must exist:\n{body}"));
     let held = br["br i1 ".len()..]
         .split(',')
@@ -860,4 +882,18 @@ fn the_elements_probe_loads_only_behind_the_branch_that_proves_the_address() {
             "no select-guarded probe load:\n{body}"
         );
     }
+}
+
+#[test]
+fn an_add_of_two_counters_is_proven_and_takes_no_guard() {
+    let counters = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+    };
+    let ir = ir_for(push_module(Type::Number, counters, Vec::new()));
+    assert!(
+        !ir.contains("apush.gc_bookkeeping"),
+        "an fadd of two canonical counters needs no live pointer test:\n{ir}"
+    );
 }

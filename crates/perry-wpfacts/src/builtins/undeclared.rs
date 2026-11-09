@@ -23,6 +23,15 @@ fn field_key(m: &Model, a: Atom) -> bool {
         || crate::solve::numeric_key(name))
 }
 
+/// The global object: `globalThis`, and the HIR global sentinel (`Other`,
+/// the receiver a bare global name is read off), which is the same object.
+pub fn global_object(m: &Model, t: Tok) -> bool {
+    matches!(
+        m.toks[t as usize],
+        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
+    )
+}
+
 /// Native function-value tokens, including the Object.prototype method
 /// identities represented as namespaces.
 pub fn builtin_function(m: &Model, t: Tok) -> bool {
@@ -32,6 +41,21 @@ pub fn builtin_function(m: &Model, t: Tok) -> bool {
         TokKind::Builtin(ns) => !m.unit_mode && members::ns_chain(ns) == Family::Function,
         _ => false,
     }
+}
+
+/// May a store under `key` on built-in constructor or namespace `t` write a
+/// static the realm itself reads (`members::realm_read_statics`)? A
+/// namespace whose statics are undescribed may have any. Any other key is
+/// an own property of `t` (OrdinarySet) that only reads of `t` see: program
+/// code and the protocols the model runs on `t`, all through `t`'s fields.
+pub fn realm_reads_store(m: &Model, t: Tok, key: Key) -> bool {
+    let TokKind::Builtin(ns) = m.toks[t as usize] else {
+        return true;
+    };
+    members::ns_statics(ns).members.is_none()
+        || members::realm_read_statics(ns)
+            .iter()
+            .any(|n| m.key_may_name_str(key, n))
 }
 
 /// A described built-in object and its chain declare no such program key.
@@ -45,7 +69,7 @@ pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
                 .is_some_and(|p| p.own_namespace)
                 && members::member(Family::Function, &m.atoms[a as usize]).is_none()
         }
-        TokKind::Builtin(BuiltinNs::GlobalThis) => false,
+        _ if global_object(m, t) => false,
         TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),
         _ => false,
     }

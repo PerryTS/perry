@@ -131,12 +131,23 @@ fn read_after_store_target_bindings_is_guarded() {
 
 // ---- twins: the read stays ordinary ----
 
-/// `o.hasOwnProperty` of a dictionary written under computed keys may be
-/// the dictionary's own value: the test is not the builtin's.
+/// `o.hasOwnProperty` of a dictionary written under a key no constant
+/// names may be the dictionary's own value: the test is not the builtin's.
 #[test]
 fn has_own_property_member_of_a_dictionary_stays() {
-    let pf = dict("total += dict.hasOwnProperty(k) ? dict[k].size() : 0;");
+    let pf = dict(
+        "dict[process.argv[2]] = new Sym(); \
+         total += dict.hasOwnProperty(k) ? dict[k].size() : 0;",
+    );
     assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// Written under the constants `"a"` and `"b"` only (`Node::strs`), the
+/// dictionary owns no `hasOwnProperty`: the member is the builtin's.
+#[test]
+fn has_own_property_of_a_dictionary_of_constant_keys_is_the_builtin() {
+    let pf = dict("total += dict.hasOwnProperty(k) ? dict[k].size() : 0;");
+    assert!(proven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
 /// The read is not the first thing the branch runs (`values.push` is read
@@ -262,9 +273,12 @@ fn written_computed_call_of_the_builtin_stays() {
     assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
-/// The program replaces `Object.prototype.hasOwnProperty` before reading it.
+/// The program tries to replace `Object.prototype.hasOwnProperty` before
+/// reading it: DEC 250 refuses the store (an image member of the locked
+/// `Object.prototype`; the runtime throws a TypeError there), so the read
+/// after it, if any runs, is the builtin.
 #[test]
-fn written_object_prototype_has_own_property_stays() {
+fn refused_object_prototype_has_own_property_store_leaves_the_builtin() {
     let pf = facts(
         r#"
         (Object.prototype as any).hasOwnProperty = function (key: string) { return true; };
@@ -281,7 +295,7 @@ fn written_object_prototype_has_own_property_stays() {
         console.log(total);
         "#,
     );
-    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+    assert!(!unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
 /// The program replaces `Object.hasOwn` (a static member of a builtin

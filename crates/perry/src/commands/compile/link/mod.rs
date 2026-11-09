@@ -101,6 +101,8 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     // Runtime allocation / value primitives
     "js_array_alloc",
     "js_array_from_f64",
+    // The inline push tier's no-collect growth (`expr/array_push.rs`).
+    "js_array_grow_for_push",
     "js_array_push_f64",
     "js_bigint_is_zero",
     "js_closure_alloc",

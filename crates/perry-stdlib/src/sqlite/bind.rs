@@ -655,6 +655,11 @@ mod tests {
         for n in [0i64, 5, -1, i32::MAX as i64, i32::MIN as i64, 1 << 40] {
             let v = unsafe { super::sqlite_value_to_jsvalue(&super::SqliteValue::Integer(n)) };
             assert_eq!(v.bits(), (n as f64).to_bits(), "INTEGER {n}");
+            // node:sqlite's column reader (`sqlite3_column_int64` ->
+            // `node_sqlite_integer_value`): the same raw double (P3 B1 audit,
+            // NUM_SEEDS.md "int32-box producers").
+            let v = unsafe { super::node_sqlite_integer_value(n, false) };
+            assert_eq!(v.bits(), (n as f64).to_bits(), "node:sqlite INTEGER {n}");
         }
     }
 

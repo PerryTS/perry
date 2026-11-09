@@ -1290,6 +1290,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// Bindings whose object no code writes for their whole life
     /// (`collectors::contents_stable_bindings`), module-wide.
     pub contents_stable_bindings: std::collections::HashSet<u32>,
+    /// Empty-literal bindings a later loop pushes into
+    /// (`collectors::loop_pushed_arrays`), module-wide.
+    pub loop_pushed_arrays: crate::collectors::PushedArrays,
     /// Bindings assigned before any reader can run
     /// (`collectors::definite_init`), module-wide.
     pub definite_init: crate::collectors::DefiniteInit,

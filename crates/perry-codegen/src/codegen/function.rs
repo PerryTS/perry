@@ -518,11 +518,37 @@ fn emit_public_spec_function_trampoline(
         .collect();
     let arg_names: Vec<String> = f.params.iter().map(|p| format!("%arg{}", p.id)).collect();
     let spec_name = spec_function_name(public_name, &plan.reps);
+    // A small specialized clone flattens into its callers before statepoint
+    // rewriting, guard included, the way a method's guarded trampoline does
+    // (`method_trampolines.rs`): the clone's real IR size decides. Before,
+    // only method trampolines were admitted, so a one-line function such as
+    // the chess engine's `onBoard(sq)`, called with an unproven argument,
+    // stayed an out-of-line call to this trampoline, a tag test, a second
+    // call and a boxed-boolean return: 7.8% of its search.
+    // `PERRY_SPEC_INLINE=0` keeps every function trampoline out of line.
+    let statements = f.body.len();
+    let admit = std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let callable_worker = llmod.callable_worker;
+    let preinline = admit
+        && !callable_worker
+        && llmod
+            .function_estimated_ir_bytes(&spec_name)
+            .is_some_and(|ir_bytes| {
+                super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
+            });
     let wf = llmod.define_function(public_name, DOUBLE, params);
     // This is deliberately an optimization boundary. Inlining a routing
     // diamond into generic callers duplicates both the specialized and
     // fallback call graphs and recreates the issue's performance cliff.
+    // An admitted small clone is the exception above.
     wf.no_inline = true;
+    wf.pre_statepoint_inline = preinline;
+    if admit && callable_worker {
+        wf.defer_body_preinline(statements, spec_name.clone());
+    }
     let _ = wf.create_block("entry");
 
     let guards: Vec<EntryArgGuard> = {
@@ -860,6 +886,14 @@ pub(super) fn compile_function(
     } else {
         HashSet::new()
     };
+    // Parameters the whole-program facts prove Number on every entry take the
+    // same once-at-entry conversion as a region's Number parameters.
+    let facts_number_params = super::facts_number_locals::facts_number_params(
+        &cross_module.wpfacts,
+        &f.params,
+        &f.body,
+        &boxed_vars,
+    );
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let mut bound_param_slots: HashSet<u32> = HashSet::new();
     // Each parameter's alloca, bound as a root below once the Number-local
@@ -906,18 +940,15 @@ pub(super) fn compile_function(
                 }
                 _ => {}
             }
-            // A split region's Number parameter: its only caller proved a
-            // Number, which may arrive as an int32 box; the body's Number
-            // proof means a plain double, so convert once here.
-            let arg_name = if region_number_params.contains(&p.id) {
-                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
-                let bits = blk.bitcast_double_to_i64(&arg_name);
-                let low = blk.trunc(I64, &bits, I32);
-                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
-                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
-            } else {
-                arg_name
-            };
+            // A split region's Number parameter (its only caller proved a
+            // Number) and a facts-proven one may arrive as an int32 box; the
+            // body's Number proof means a plain double, so convert once here.
+            let arg_name =
+                if region_number_params.contains(&p.id) || facts_number_params.contains(&p.id) {
+                    super::facts_number_locals::emit_entry_number(blk, &arg_name)
+                } else {
+                    arg_name
+                };
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             param_roots.push((p.id, slot.clone()));
             map.insert(p.id, slot);
@@ -1142,6 +1173,13 @@ pub(super) fn compile_function(
             .return_shape_class(f.id)
             .is_some(),
     );
+    // Lets the whole-program interval proof shows hold only int32 values.
+    let facts_int32_lets = super::facts_int32_locals::lets(
+        &cross_module.wpfacts,
+        &f.body,
+        &boxed_vars,
+        module_globals,
+    );
     let mut native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_params(
         &f.body,
         &f.params,
@@ -1164,6 +1202,7 @@ pub(super) fn compile_function(
         // proves a numeric typed-array/Uint8Array kind, so `g[i]` off one is
         // Number-or-`undefined` exactly as a body-local `const` view is.
         &cross_module.module_global_proven_types,
+        &facts_int32_lets,
     );
 
     // Closed World 5d: the body's typed locals under this variant's entry
@@ -1188,6 +1227,13 @@ pub(super) fn compile_function(
             }
         }
     }
+    // Admission already excluded rebound and mutated parameters. A spec
+    // clone's own proof (an `Int32` lane) is the stronger fact and stays.
+    for id in &facts_number_params {
+        body_entry_proofs
+            .entry(*id)
+            .or_insert(perry_hir::types::Type::Number);
+    }
     let typed_locals = crate::collectors::typed_locals::apply(
         &f.body,
         &body_entry_proofs,
@@ -1196,6 +1242,12 @@ pub(super) fn compile_function(
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
         &mut code_unit_locals,
+    );
+    let facts_number_lets = super::facts_number_locals::facts_number_lets(
+        &cross_module.wpfacts,
+        &f.body,
+        &boxed_vars,
+        module_globals,
     );
     // A Number-by-construction local cannot ever hold a GC pointer, so it
     // must not pay the root-slot protocol on every assignment.  The shadow
@@ -1211,6 +1263,8 @@ pub(super) fn compile_function(
     shadow_slot_map.retain(|id, _| {
         boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
     });
+    // A facts-proven Number `let` never holds a pointer either.
+    shadow_slot_map.retain(|id, _| !facts_number_lets.contains(id));
     // A parameter the entry contract proved Number holds a plain double for
     // the whole body when the body never rebinds or mutates it, exactly as in
     // a typed closure body (`codegen/closure.rs`, Closed World 5d): it owns no
@@ -1417,6 +1471,8 @@ pub(super) fn compile_function(
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: false,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1474,6 +1530,8 @@ pub(super) fn compile_function(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: &facts_number_lets,
+        facts_int32_locals: &facts_int32_lets,
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
@@ -1820,7 +1878,9 @@ pub(super) fn compile_function(
 
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
+    super::facts_rep::bind_params(&mut ctx, &facts_number_params);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;
@@ -1848,6 +1908,7 @@ pub(super) fn compile_function(
         }
     }
     let site_hash = spec_site_hash(ctx.strings.module_prefix());
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
@@ -1871,6 +1932,34 @@ pub(super) fn compile_function(
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
     }
+    // A specialized clone whose lowered body is small flattens into its
+    // direct callers (and its guarded trampoline) before statepoint
+    // rewriting, as an exact-receiver method clone does (`method.rs`). The
+    // budget is the clone's real IR size. `PERRY_SPEC_INLINE=0` keeps the
+    // clone out of line.
+    if spec_entry.is_some()
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async
+        && std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+    {
+        let callable_worker = llmod.callable_worker;
+        if let Some(lowered) = llmod.function_named_mut(&llvm_name) {
+            if !lowered.is_preserve_none() {
+                if callable_worker {
+                    lowered.defer_self_preinline(f.body.len());
+                } else if super::helpers::guarded_specialization_admits_preinline(
+                    lowered.estimated_ir_bytes(),
+                    f.body.len(),
+                ) {
+                    lowered.pre_statepoint_inline = true;
+                    // Under the physical-site growth bound with the other
+                    // guarded bodies (`preinline_growth`).
+                    lowered.guarded_preinline = true;
+                }
+            }
+        }
+    }
     if let Some(kind) = typed_public_trampoline {
         emit_public_typed_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, kind);
     } else if let Some(plan) = guarded_public_plan.as_ref() {
@@ -1878,6 +1967,32 @@ pub(super) fn compile_function(
             // The guard would decide between two identical bodies: take the
             // generic body unconditionally and skip the per-call validation.
             emit_public_forwarder(llmod, f, &public_llvm_name, &llvm_name);
+            // The forwarder and the generic body it reaches flatten into
+            // their callers on the same budget a specialized clone gets: this
+            // is the same small leaf, it only proved nothing worth a clone
+            // (`sign(c: Color)` on a string-literal union).
+            if !crate::stmt::this_field_fast_off()
+                && !f.is_async
+                && !f.is_generator
+                && !f.was_plain_async
+                && std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+                && !llmod.callable_worker
+            {
+                let admits = llmod
+                    .function_estimated_ir_bytes(&llvm_name)
+                    .is_some_and(|bytes| {
+                        super::helpers::guarded_specialization_admits_preinline(bytes, f.body.len())
+                    });
+                if admits {
+                    for name in [&llvm_name, &public_llvm_name] {
+                        if let Some(lowered) = llmod.function_named_mut(name) {
+                            if !lowered.is_preserve_none() {
+                                lowered.pre_statepoint_inline = true;
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
         }

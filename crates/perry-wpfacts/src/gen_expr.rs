@@ -52,8 +52,31 @@ impl<'a> Gen<'a> {
             spread,
             ret,
             site: id,
+            region: self.region(),
         });
         (id, ret)
+    }
+
+    /// A call of the module member `member` (`node:fs.existsSync`) the HIR
+    /// names directly (`FsExistsSync`): when the runtime declares the
+    /// member's effects at its body, a call of its function value
+    /// (`Native::Member`) with `args`, whose declaration the solver runs;
+    /// `None` (nothing evaluated): undeclared.
+    pub(crate) fn declared_member_call(
+        &mut self,
+        fx: &Fx,
+        member: &str,
+        args: &[&Expr],
+    ) -> Option<NodeId> {
+        let e = crate::builtins::declared_member(member)?;
+        let args = args.iter().map(|a| self.expr(fx, a)).collect();
+        let t = self
+            .m
+            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name }));
+        let callee = self.tok_node(t);
+        let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
+        self.m.cons(callee, Cons::Call { call });
+        Some(ret)
     }
 
     /// Operands only ever read as primitives by the runtime: objects get the
@@ -150,16 +173,17 @@ impl<'a> Gen<'a> {
             match arg {
                 CallArg::Expr(e) => a.push(self.expr(fx, e)),
                 CallArg::Spread(e) => {
+                    // The argument list of a spread (CreateListFromIterable,
+                    // ECMA-262 13.3.8.1): what iterating `v` yields, as the
+                    // elements of a list. A call site's spread entry is read
+                    // at its elements, whatever made it.
                     let v = self.expr(fx, e);
-                    let r = self.m.reason("spread argument iteration");
-                    self.m.cons(
-                        v,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::Iterate,
-                        },
-                    );
-                    s.push(v);
+                    let tm = self.new_arr_birth(fx.module, "spread-args", true);
+                    let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                    let fa = self.m.field_any(t);
+                    let it = self.iterate(v);
+                    self.m.edge(it, fa);
+                    s.push(self.tok_node(t));
                 }
             }
         }
@@ -293,20 +317,38 @@ impl<'a> Gen<'a> {
             | Expr::PutValueSet { element_offset, .. } => *element_offset,
             _ => 0,
         };
-        self.element_sites.push(crate::gen::ElementSite {
+        let site = crate::gen::ElementSite {
             module: fx.module,
             byte_offset,
             op,
             recv,
             idx,
             key,
-        });
+        };
+        #[cfg(test)]
+        self.m.packet_observe(
+            site.byte_offset,
+            format!("element {:?}", site.op),
+            self.m.key_name(site.key),
+            site.recv,
+            Some(site.idx),
+        );
+        self.element_sites.push(site);
     }
 
     /// The key a computed access names: a string literal, or a binding that
     /// always holds one (`const k = "name"; o[k]`: `Gen::const_key`, the
     /// resolver constant stores and definitions use). A binding read before
     /// its initialization throws (TDZ) and names no key at all.
+    /// The key of `super[key]` (a read, store or call): the key expression
+    /// runs, then ToPropertyKey, whose `@@toPrimitive`, `toString` or
+    /// `valueOf` of an object key is program code.
+    pub(crate) fn super_key(&mut self, fx: &Fx, key: &Expr) -> Key {
+        let kn = self.expr(fx, key);
+        self.to_property_key(kn);
+        self.key_of(fx.module, key)
+    }
+
     pub(crate) fn key_of(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
             Expr::String(s) => Key::Named(self.m.atom(s)),
@@ -384,6 +426,54 @@ impl<'a> Gen<'a> {
         let dst = self.tmp("load");
         self.m.cons(recv, Cons::Load { key, dst });
         dst
+    }
+
+    /// The values `Object.values` / `Object.entries` read from `recv`:
+    /// EnumerableOwnProperties takes the keys of `[[OwnPropertyKeys]]` and
+    /// `[[Get]]`s each one, so an inherited member (Object.prototype's
+    /// `constructor` and methods) is never among them (`Cons::OwnValues`).
+    pub(crate) fn own_values(&mut self, recv: NodeId) -> NodeId {
+        let dst = self.tmp("ownvalues");
+        self.m.cons(recv, Cons::OwnValues { dst });
+        dst
+    }
+
+    /// The static blocks of class expression `template` that one
+    /// evaluation runs (`ClassFreshStaticInit::Block`, an index into the
+    /// template's `__perry_static_init_N` functions in source order): a
+    /// call of each with `this` the evaluated class object `cv`.
+    fn fresh_static_blocks(
+        &mut self,
+        fx: &Fx,
+        template: &str,
+        order: &[perry_hir::ClassFreshStaticInit],
+        cv: NodeId,
+    ) {
+        let mi = fx.module;
+        let module = self.modules[mi as usize].1;
+        let Some(c) = module.classes.iter().find(|c| c.name == template) else {
+            return;
+        };
+        let blocks: Vec<u32> = c
+            .static_methods
+            .iter()
+            .filter(|m| m.name.starts_with("__perry_static_init_"))
+            .map(|m| m.id)
+            .collect();
+        for step in order {
+            let perry_hir::ClassFreshStaticInit::Block(i) = step else {
+                continue;
+            };
+            let Some(&f) = blocks
+                .get(*i as usize)
+                .and_then(|id| self.mods[mi as usize].funcs.get(id))
+            else {
+                continue;
+            };
+            let t = self.m.funcs[f as usize].token;
+            let callee = self.tok_node(t);
+            let _ = self.call_value(callee, ThisArg::Node(cv), vec![], vec![]);
+        }
     }
 
     pub(crate) fn mcall(
@@ -532,7 +622,13 @@ impl<'a> Gen<'a> {
         // `builtins::iterate`.
         let (sc, r2) = self.new_call(ThisArg::Node(v), vec![], vec![]);
         self.m.protocol_calls.insert(sc);
-        self.m.cons(v, Cons::MCall { key: Key::Named(na), call: sc });
+        self.m.cons(
+            v,
+            Cons::MCall {
+                key: Key::Named(na),
+                call: sc,
+            },
+        );
         // Only results seen not done: `Model::yield_key`.
         let va = self.m.yield_key();
         self.m.cons(r1, Cons::Load { key: va, dst: out });
@@ -555,6 +651,11 @@ impl<'a> Gen<'a> {
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let n = self.expr_inner(fx, e);
+        if let Expr::IndexGet { element_offset, .. } = e {
+            if *element_offset != 0 {
+                self.element_values.push((fx.module, *element_offset, n));
+            }
+        }
         if self.diagnostic.is_some() {
             self.diagnostic_expr(fx, e, n);
         }
@@ -568,16 +669,21 @@ impl<'a> Gen<'a> {
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
             Expr::Bool(_) => self.prim_node(prim::BOOL),
-            Expr::Number(_) | Expr::Integer(_) => self.prim_node(prim::NUM),
+            Expr::Number(v) => self.num_literal(*v),
+            Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
-            Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
+            Expr::String(s) => self.str_literal(s),
+            Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
-                _ => self.local(mi, *id),
+                _ => match self.narrowed_read(mi, *id) {
+                    Some(n) => n,
+                    None => self.local(mi, *id),
+                },
             },
             // Program code never writes a `const` (lowering throws
             // `Assignment to constant variable`): `undefined` written into
@@ -604,6 +710,7 @@ impl<'a> Gen<'a> {
                     ),
                     None => self.m.edge(vn, l),
                 }
+                self.narrowed_write(mi, *id, vn);
                 vn
             }
             Expr::ScopedTemp { id, value, body } => {
@@ -689,8 +796,11 @@ impl<'a> Gen<'a> {
                 }
                 v
             }
-            Expr::Update { id, .. } => {
-                let l = self.local(mi, *id);
+            Expr::Update { id, op, .. } => {
+                let l = match self.narrowed_read(mi, *id) {
+                    Some(n) => n,
+                    None => self.local(mi, *id),
+                };
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
                     l,
@@ -700,9 +810,15 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let out = self.tmp("update");
+                let step = match op {
+                    perry_hir::UpdateOp::Increment => 1,
+                    perry_hir::UpdateOp::Decrement => -1,
+                };
+                self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
                 self.m.cons(l, Cons::Arith { dst: out });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
+                self.narrowed_write(mi, *id, out);
                 out
             }
             Expr::Binary { op, left, right } => {
@@ -711,6 +827,28 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason("ToPrimitive operand");
                 let l = self.expr(fx, left);
                 let rv = self.expr(fx, right);
+                {
+                    use crate::model::RangeOp as R;
+                    use perry_hir::BinaryOp as B;
+                    let rop = match op {
+                        B::Add => Some(R::Add),
+                        B::Sub => Some(R::Sub),
+                        B::Mul => Some(R::Mul),
+                        B::Mod => Some(R::Mod),
+                        B::BitAnd => Some(R::BitAnd),
+                        B::BitOr => Some(R::BitOr),
+                        B::BitXor => Some(R::BitXor),
+                        B::Shl => Some(R::Shl),
+                        B::Shr => Some(R::Shr),
+                        B::UShr => Some(R::UShr),
+                        B::Div | B::Pow => None,
+                    };
+                    // Every Number `out` holds is the operator's: without a
+                    // rule (`/`, `**`) it is ⊤ by the fail-closed default.
+                    if let Some(rop) = rop {
+                        self.range_rule(rop, l, Some(rv), out);
+                    }
+                }
                 for v in [l, rv] {
                     self.m.cons(
                         v,
@@ -776,14 +914,22 @@ impl<'a> Gen<'a> {
                         },
                     );
                     let out = self.tmp("unary");
+                    let rop = match op {
+                        UnaryOp::Neg => crate::model::RangeOp::Neg,
+                        _ => crate::model::RangeOp::BitNot,
+                    };
+                    self.range_rule(rop, v, None, out);
                     self.m.cons(v, Cons::Arith { dst: out });
                     out
                 }
             },
             Expr::Compare { op, left, right } => match op {
                 CompareOp::Eq | CompareOp::Ne => {
-                    let _ = self.expr(fx, left);
-                    let _ = self.expr(fx, right);
+                    // IsLooselyEqual runs ToPrimitive on an object operand.
+                    let l = self.expr(fx, left);
+                    let r = self.expr(fx, right);
+                    self.raise_on(l);
+                    self.raise_on(r);
                     self.prim_node(prim::BOOL)
                 }
                 _ => self.prim_op(
@@ -808,7 +954,13 @@ impl<'a> Gen<'a> {
                 };
                 let l = self.expr(fx, left);
                 let own = self.own_guard_arm(plan, l);
+                let k = match op {
+                    LogicalOp::And => self.narrow_guard(fx, left, true),
+                    LogicalOp::Or => self.narrow_guard(fx, left, false),
+                    LogicalOp::Coalesce => 0,
+                };
                 let r = self.expr(fx, right);
+                self.narrow_pop(k);
                 self.own_guard_done(own);
                 let out = self.tmp("logical");
                 // `l ?? r` is `l` when it is not nullish; `l && r` is `l`
@@ -843,9 +995,13 @@ impl<'a> Gen<'a> {
                 let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
                 let own = self.own_guard_arm(plan, t);
+                let k = self.narrow_guard(fx, condition, true);
                 let a = self.expr(fx, then_expr);
+                self.narrow_pop(k);
                 self.own_guard_done(own);
+                let k = self.narrow_guard(fx, condition, false);
                 let b = self.expr(fx, else_expr);
+                self.narrow_pop(k);
                 let out = self.tmp("cond");
                 self.m.cons(
                     t,
@@ -880,17 +1036,26 @@ impl<'a> Gen<'a> {
                 }
                 last
             }
-            Expr::InstanceOf { expr, ty_expr, .. } => {
-                let _ = self.expr(fx, expr);
-                if let Some(t) = ty_expr {
-                    let tv = self.expr(fx, t);
-                    // Symbol.hasInstance is a protocol method.
+            Expr::InstanceOf { expr, ty, ty_expr } => {
+                let lhs = self.expr(fx, expr);
+                // The right-hand side is a value: the dynamic type
+                // expression, or the user class `ty` names (codegen
+                // `class_ids`: a local or imported user class, called with
+                // its class value). InstanceofOperator runs its
+                // `@@hasInstance` (GetMethod) either way.
+                let rhs = match ty_expr {
+                    Some(t) => Some(self.expr(fx, t)),
+                    None => self.instanceof_class(mi, ty),
+                };
+                if let Some(tv) = rhs {
+                    // Symbol.hasInstance is a protocol method, called with
+                    // the left-hand side.
                     let r = self.m.reason("Symbol.hasInstance");
                     self.m.cons(
                         tv,
-                        Cons::Implicit {
+                        Cons::HasInstance {
                             reason: r,
-                            proto: Protocol::HasInstance,
+                            arg: lhs,
                         },
                     );
                 }
@@ -906,7 +1071,9 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let _ = self.expr(fx, object);
+                // HasProperty on a Proxy runs its `has` trap.
+                let o = self.expr(fx, object);
+                self.raise_on(o);
                 self.prim_node(prim::BOOL)
             }
             Expr::Await(x) => {
@@ -962,6 +1129,12 @@ impl<'a> Gen<'a> {
                         value_call: false,
                         func: fx.f,
                     });
+                }
+                // A guarded private method read (`this.#m`) is the declaring
+                // brand's member, as its call is: the runtime takes it from
+                // the class registry, never from the receiver's chain.
+                if let Some(callee) = self.private_method_callee(mi, object) {
+                    return callee;
                 }
                 self.load(o, Key::Named(a))
             }
@@ -1037,7 +1210,7 @@ impl<'a> Gen<'a> {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
                     let key = match self.key_of(fx.module, key) {
-                        Key::Any(_) => Key::Any(self.m.key_shape(key)),
+                        Key::Any(_) => Key::Any(self.key_shape(fx.module, key)),
                         k => k,
                     };
                     // A receiver other than the target gets the own data store.
@@ -1123,6 +1296,7 @@ impl<'a> Gen<'a> {
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
+                self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
                     i,
@@ -1134,13 +1308,27 @@ impl<'a> Gen<'a> {
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                // A for-of walk's element (`Gen::for_of_walks`): the counter
+                // is below the length, so the read is what the iteration of
+                // the array yields (a hole's `undefined` included), as the
+                // IteratorRecord loop's element is, and never the past-the-end
+                // `undefined` of an arbitrary index.
+                let walk = match (object.as_ref(), index.as_ref()) {
+                    (Expr::LocalGet(a), Expr::LocalGet(k)) => {
+                        self.for_of_walks.contains(&(fx.module, *a, *k))
+                    }
+                    _ => false,
+                };
+                if walk {
+                    return self.iterate(o);
+                }
                 match key {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any(_) => {
                         let dst = self.tmp("idxload");
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
-                        let shape = self.m.key_shape(index);
+                        let shape = self.key_shape(fx.module, index);
                         match self.own_reads.remove(&(e as *const Expr as usize)) {
                             // Behind an own-property test (`gen/own_guard.rs`).
                             Some(bad) => {
@@ -1154,6 +1342,11 @@ impl<'a> Gen<'a> {
                                         shape,
                                     },
                                 );
+                            }
+                            // After a store of the same object and key
+                            // (`gen/own_store.rs`).
+                            None if self.own_store_reads.contains(&(e as *const Expr as usize)) => {
+                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape })
                             }
                             None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
                         }
@@ -1179,6 +1372,7 @@ impl<'a> Gen<'a> {
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
+                self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
                     i,
@@ -1204,7 +1398,7 @@ impl<'a> Gen<'a> {
                     // A key built from literal parts writes only names
                     // matching them (`Model::key_shape`).
                     let key = match self.key_of(fx.module, index) {
-                        Key::Any(_) => Key::Any(self.m.key_shape(index)),
+                        Key::Any(_) => Key::Any(self.key_shape(fx.module, index)),
                         k => k,
                     };
                     self.store_elem(fx, e, o, key, i, v, "[]=");
@@ -1220,6 +1414,7 @@ impl<'a> Gen<'a> {
             Expr::IndexUpdate { object, index, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
+                self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
                     i,
@@ -1410,6 +1605,9 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_birth(mi, "lit", true);
+                if self.arr_lengths {
+                    self.m.arr_birth_len.insert(tm, elems.len() as i64);
+                }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
@@ -1549,7 +1747,13 @@ impl<'a> Gen<'a> {
             }
             Expr::NewTarget => self.m.top_val("new.target"),
             Expr::ClassRef(name) => self.class_value(mi, name),
-            Expr::EnumMember { .. } => self.prim_node(prim::NUM | prim::STR),
+            Expr::EnumMember {
+                enum_name,
+                member_name,
+            } => {
+                let p = self.enum_member_prim(mi, enum_name, member_name);
+                self.prim_node(p)
+            }
             Expr::StaticFieldGet {
                 class_name,
                 field_name,
@@ -1598,10 +1802,21 @@ impl<'a> Gen<'a> {
                 parent_expr,
             } => {
                 let p = self.expr(fx, parent_expr);
-                let tm = self.resolve_class_name(mi, class_name);
-                if !self.parent_to_cell(mi, class_name, tm, p) {
-                    self.feed_parent(p, tm, "E11 dynamic class parent");
-                }
+                let publish = |g: &mut Self| {
+                    let tm = g.resolve_class_name(mi, class_name);
+                    if !g.parent_to_cell(mi, class_name, tm, p) {
+                        g.feed_parent(p, tm, "E11 dynamic class parent");
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::DynamicParent(p),
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
@@ -1678,18 +1893,35 @@ impl<'a> Gen<'a> {
                 is_static,
                 ..
             } => {
-                let _ = self.expr(fx, key_expr);
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let holder = if *is_static {
-                        self.m.tok(TokKind::ClassObj(tm))
-                    } else {
-                        self.m.tok(TokKind::Proto(tm))
-                    };
-                    let a = self.m.atom(method_name);
-                    let src = self.m.field(holder, a);
-                    let fa = self.m.field_any(holder);
-                    self.m.edge(src, fa);
-                }
+                let key_value = self.expr(fx, key_expr);
+                #[cfg(not(test))]
+                let _ = key_value;
+                let publish = |g: &mut Self| {
+                    if let Some(tm) = g.resolve_class_name(mi, class_name) {
+                        let holder = if *is_static {
+                            g.m.tok(TokKind::ClassObj(tm))
+                        } else {
+                            g.m.tok(TokKind::Proto(tm))
+                        };
+                        let a = g.m.atom(method_name);
+                        let src = g.m.field(holder, a);
+                        let fa = g.m.field_any(holder);
+                        g.m.edge(src, fa);
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::ComputedMethod {
+                        key: key_value,
+                        method: method_name.clone(),
+                        is_static: *is_static,
+                    },
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassComputedAccessor {
@@ -1700,13 +1932,32 @@ impl<'a> Gen<'a> {
                 is_static,
                 ..
             } => {
-                let _ = self.expr(fx, key_expr);
+                let key_value = self.expr(fx, key_expr);
+                #[cfg(not(test))]
+                let _ = key_value;
                 // Under a constant key it is that key's accessor, installed
                 // with the class (`Gen::named_computed`).
                 let named = !*is_static && self.const_key(mi, key_expr).is_some();
-                if let (false, Some(tm)) = (named, self.resolve_class_name(mi, class_name)) {
-                    self.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
-                }
+                let publish = |g: &mut Self| {
+                    if let (false, Some(tm)) = (named, g.resolve_class_name(mi, class_name)) {
+                        g.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::ComputedAccessor {
+                        key: key_value,
+                        getter: getter_name.clone(),
+                        setter: setter_name.clone(),
+                        is_static: *is_static,
+                        named,
+                    },
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 self.prim_node(prim::UNDEF)
             }
             Expr::ClassExprFresh {
@@ -1715,6 +1966,7 @@ impl<'a> Gen<'a> {
                 named_statics,
                 computed_keys,
                 computed_statics,
+                static_init_order,
                 captured_args,
                 shared_first_evaluation,
                 evaluated_parent,
@@ -1724,9 +1976,20 @@ impl<'a> Gen<'a> {
                 let cv = self.class_value(mi, template);
                 // Rule C (DECISIONS 251): one template, one class object per
                 // evaluation.
-                if let Some(tm) = self.resolve_class_name(mi, template) {
-                    self.m.tmpls[tm as usize].per_evaluation = true;
-                }
+                let publish = |g: &mut Self| {
+                    if let Some(tm) = g.resolve_class_name(mi, template) {
+                        g.m.tmpls[tm as usize].per_evaluation = true;
+                    }
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    template,
+                    crate::summary::packet::ClassAction::PerEvaluation,
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 if let Some(id) = evaluation_owner {
                     // The class's self binding gets the class before its
                     // statics run. A binding the HIR made a cell (codegen's
@@ -1759,6 +2022,10 @@ impl<'a> Gen<'a> {
                     let vn = self.expr(fx, v);
                     self.store(fx, cv, Key::any(), vn, "static[k]".into(), None, false);
                 }
+                // Each static block runs at this evaluation with `this` the
+                // evaluated class object: codegen calls the template's block
+                // function directly (`js_static_this_arm_value`), no lookup.
+                self.fresh_static_blocks(fx, template, static_init_order, cv);
                 for (i, a) in captured_args.iter().enumerate() {
                     let v = self.snapshot_read(fx, a);
                     let env = self.class_env(mi, template, i);
@@ -1769,10 +2036,21 @@ impl<'a> Gen<'a> {
                 }
                 if let Some(p) = evaluated_parent {
                     let v = self.expr(fx, p);
-                    let tm = self.resolve_class_name(mi, template);
-                    if !self.parent_to_cell(mi, template, tm, v) {
-                        self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
-                    }
+                    let publish = |g: &mut Self| {
+                        let tm = g.resolve_class_name(mi, template);
+                        if !g.parent_to_cell(mi, template, tm, v) {
+                            g.feed_parent(v, tm, "E11 class expression with an evaluated parent");
+                        }
+                    };
+                    #[cfg(test)]
+                    self.packet_class_effect(
+                        mi,
+                        template,
+                        crate::summary::packet::ClassAction::EvaluatedParent(v),
+                        publish,
+                    );
+                    #[cfg(not(test))]
+                    publish(self);
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);
@@ -1796,15 +2074,27 @@ impl<'a> Gen<'a> {
                 value,
             } => {
                 let v = self.expr(fx, value);
-                match self.resolve_class_name(mi, class_name) {
+                let publish = |g: &mut Self| match g.resolve_class_name(mi, class_name) {
                     Some(tm) => {
-                        let p = self.m.tok(TokKind::Proto(tm));
-                        let a = self.m.atom(method_name);
-                        let f = self.m.field(p, a);
-                        self.m.edge(v, f);
+                        let p = g.m.tok(TokKind::Proto(tm));
+                        let a = g.m.atom(method_name);
+                        let f = g.m.field(p, a);
+                        g.m.edge(v, f);
                     }
-                    None => self.to_sink(v, "method registered on an unresolved class"),
-                }
+                    None => g.to_sink(v, "method registered on an unresolved class"),
+                };
+                #[cfg(test)]
+                self.packet_class_effect(
+                    mi,
+                    class_name,
+                    crate::summary::packet::ClassAction::PrototypeMethod {
+                        key: method_name.clone(),
+                        value: v,
+                    },
+                    publish,
+                );
+                #[cfg(not(test))]
+                publish(self);
                 v
             }
             Expr::RegisterFunctionPrototypeMethod {
@@ -1866,38 +2156,34 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertyGet { property } => {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: Key::Named(a),
-                            act: ChainAct::Load(dst),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, Key::Named(a), ChainAct::Load(dst));
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
-                let _ = self.expr(fx, key);
+                let k = self.super_key(fx, key);
                 let v = self.expr(fx, value);
-                let k = self.key_of(fx.module, key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: k,
-                            act: ChainAct::Store(v),
-                        },
-                    );
-                }
+                let homes = self.super_homes(fx);
+                self.super_access(homes, fx.this, k, ChainAct::Store(v));
                 v
             }
 
             // ----------------------------------------------- the rest
             _ => self.expr_rest(fx, e),
         }
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// The shape of computed key `e` of module `mi`: its literal parts
+    /// (`KeyShape::of`), for a call of one of the module's functions
+    /// (HIR `FuncRef`: a declaration the program reassigns is a local, so
+    /// the call runs this body) what that body returns
+    /// (`KeyShape::of_returns`), for a parameter what its calls pass
+    /// (`Gen::key_shape_of`).
+    pub(crate) fn key_shape(&mut self, mi: u32, e: &Expr) -> KeyShapeId {
+        let s = self.key_shape_of(mi, e, &mut Vec::new());
+        self.m.key_shape(s.filter(|s| !s.globs.is_empty()))
     }
 }

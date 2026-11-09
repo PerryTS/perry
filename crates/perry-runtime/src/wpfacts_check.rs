@@ -60,7 +60,9 @@ fn kind_of(bits: u64) -> u32 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG => K_NUM,
+        INT32_TAG if crate::value::is_int32_bits(bits) => K_NUM,
+        // A `C.prototype` ref or another non-Number `0x7FFE` word.
+        INT32_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -437,6 +439,18 @@ mod tests {
             assert!(!is_plain_f64(tag | 0x1234), "{tag:#018x}");
             assert!(!is_plain_f64(tag | POINTER_MASK), "{tag:#018x}");
         }
+    }
+    /// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+    /// 5, and a `0x7FFE` word with high payload bits: neither is an int32
+    /// Number, and a top-16-only test reads both as one.
+    const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+    const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_k_num() {
+        assert_eq!(kind_of(0x7FFE_0000_0000_0003), K_NUM);
+        assert_eq!(kind_of(PROTO_REF_5), K_OBJ);
+        assert_eq!(kind_of(HIGH_BITS), K_OBJ);
     }
 }
 

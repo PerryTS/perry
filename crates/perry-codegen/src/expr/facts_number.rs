@@ -174,6 +174,9 @@ pub(crate) fn closed_number_call(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     if ctx.wpfacts_off {
         return false;
     }
+    if crate::codegen::facts_rep::number_call(ctx, callee) {
+        return true;
+    }
     let Some((cids, _nullable)) = wpfacts_access::proven_receiver_classes(ctx, object) else {
         return false;
     };

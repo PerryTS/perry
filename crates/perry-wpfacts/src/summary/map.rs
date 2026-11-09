@@ -34,6 +34,7 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
+        LenIndex { lo, hi } => LenIndex { lo, hi },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,
@@ -67,6 +68,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        Raise { region } => Raise { region: n(region) },
         RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
@@ -149,6 +151,10 @@ pub fn map_cons(
             reason,
         },
         Implicit { reason, proto } => Implicit { reason, proto },
+        HasInstance { reason, arg } => HasInstance {
+            reason,
+            arg: n(arg),
+        },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion {
             key,
@@ -173,6 +179,7 @@ pub fn map_cons(
             origin,
             act: act_map(act, &mut n, &mut k),
         },
+        UnnamedSet { target } => UnnamedSet { target },
         PlainKey { origin, act } => PlainKey {
             origin,
             act: act_map(act, &mut n, &mut k),
@@ -183,6 +190,11 @@ pub fn map_cons(
         },
         Super { start, key, act } => Super {
             start,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+        SuperFrom { recv, key, act } => SuperFrom {
+            recv: n(recv),
             key,
             act: act_map(act, &mut n, &mut k),
         },
@@ -317,6 +329,17 @@ pub fn map_cons(
             setter,
         },
         Arith { dst } => Arith { dst: n(dst) },
+        Range {
+            op,
+            other,
+            dst,
+            right,
+        } => Range {
+            op,
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+            dst: n(dst),
+            right,
+        },
         Plus { str, num } => Plus {
             str: n(str),
             num: n(num),
@@ -335,7 +358,11 @@ pub fn map_cons(
             into: n(into),
             site,
         },
-        SpreadFrom { src, site } => SpreadFrom { src, site },
+        SpreadFrom { src, site, from } => SpreadFrom {
+            src,
+            site,
+            from: if from == NO_NODE { NO_NODE } else { n(from) },
+        },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
@@ -368,6 +395,7 @@ pub fn map_call(c: &CallSite, mut n: impl FnMut(NodeId) -> NodeId) -> CallSite {
         spread: c.spread.iter().map(|&x| n(x)).collect(),
         ret: n(c.ret),
         site: c.site,
+        region: n(c.region),
     }
 }
 
@@ -418,6 +446,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
+            | Raise { .. }
             | RuntimeStore { .. }
             | HandOver { .. }
             | ContractThis { .. }
@@ -434,6 +463,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | DefineAll { .. }
             | AddsKeys
             | Implicit { .. }
+            | HasInstance { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }
@@ -448,6 +478,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | StoreIndexed { .. }
             | AccessorKeyed { .. }
             | Arith { .. }
+            | Range { .. }
+            | LenIndex { .. }
             | Plus { .. }
             | ArrayLenArg { .. }
             | IterNext { .. }
@@ -481,6 +513,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }
         | Arith { dst }
+        | Range { dst, .. }
         | ArrayLenArg { dst }
         | IterNext { dst }
         | FromArrayLike { dst }

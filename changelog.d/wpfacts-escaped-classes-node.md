@@ -1,0 +1,1 @@
+wpfacts: an escaped class reaches `Reflect.construct` calls with an unknown target through one points-to node (ESCCLASSES) instead of a scan of every constraint in the model per escape; Supabase whole-program solve no longer spends its time in that scan.

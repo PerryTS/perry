@@ -150,7 +150,6 @@ fn a_define_property_through_top_after_the_call_revokes_the_shadow() {
         vec![true, true]
     );
     // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: `createIdentifier` is no key of it.
-
 }
 
 /// A key added after birth is no definite own key: the call still finds
@@ -221,8 +220,14 @@ const UNKNOWN_MEMBER: &str = "escape: receiver of a call of an unknown function 
 #[test]
 fn a_delete_on_the_literal_after_the_call_revokes_the_shadow() {
     let more = "leak: () => factory";
-    assert_eq!(revoked_calls(more, "console.log(r.leak().flags);"), vec!["proven", "proven"]);
-    assert_eq!(revoked_calls(more, "delete r.leak()[name]; console.log(r.leak().flags);"), vec![UNKNOWN_MEMBER, UNKNOWN_MEMBER]);
+    assert_eq!(
+        revoked_calls(more, "console.log(r.leak().flags);"),
+        vec!["proven", "proven"]
+    );
+    assert_eq!(
+        revoked_calls(more, "delete r.leak()[name]; console.log(r.leak().flags);"),
+        vec![UNKNOWN_MEMBER, UNKNOWN_MEMBER]
+    );
 }
 
 /// A key event (`reshape`, `top_reshape`): a named `defineProperty`
@@ -232,7 +237,10 @@ fn a_delete_on_the_literal_after_the_call_revokes_the_shadow() {
 #[test]
 fn a_named_define_through_top_after_the_call_revokes_the_shadow() {
     let more = "host: (globalThis as any).hostGet()";
-    assert_eq!(revoked_calls(more, "console.log(r.host);"), vec!["proven", "proven"]);
+    assert_eq!(
+        revoked_calls(more, "console.log(r.host);"),
+        vec!["proven", "proven"]
+    );
     assert_eq!(
         revoked_calls(
             more,

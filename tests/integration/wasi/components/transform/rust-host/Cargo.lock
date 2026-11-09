@@ -28,15 +28,15 @@ dependencies = [
 
 [[package]]
 name = "alloc-no-stdlib"
-version = "2.0.4"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+checksum = "c2fb6cfd47bf496ff64095c20eaba0c201404ee38714d4142fcfa1dc334fcc7a"
 
 [[package]]
 name = "alloc-stdlib"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
+checksum = "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1"
 dependencies = [
  "alloc-no-stdlib",
 ]
@@ -104,21 +104,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "brotli"
-version = "8.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
-dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
- "brotli-decompressor",
-]
-
-[[package]]
 name = "brotli-decompressor"
-version = "5.0.1"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5962523e1b92ce1b5e793d9169b9943eece10d39f62550bc04bb605d75b94924"
+checksum = "34c6783f42c21c952ad7112b354f0ba2f10760e9decea5b1b60523d6e270faaf"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -1606,7 +1595,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop"
-version = "0.1.0-alpha.10"
+version = "0.1.0-beta.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49e2f1ca53e1247f717acf892f0f36d25b962f865e4e9d6b3c579ddc93d1b40f"
 dependencies = [
  "futures-io",
  "js-sys",
@@ -1620,10 +1611,12 @@ dependencies = [
 
 [[package]]
 name = "turnloop-http"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a57a11136eddf56f1d52ce07af559dfe1717497199abdce67364db4e69675da2"
 dependencies = [
  "base64",
- "brotli",
+ "brotli-decompressor",
  "bytes",
  "flate2",
  "http",
@@ -1637,9 +1630,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-io"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "381c4502cdcb2a813ae95948a5e06d7091d35298d7d1d73eb6e1f41e941d9056"
+checksum = "cb6044aef41d0fc2af39648c9d7ea3ab1abe57994c09f701804759f1654f3770"
 dependencies = [
  "futures-io",
  "turnloop",
@@ -1648,9 +1641,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-tls"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eaf0347a3e2f9bb6b41d279c81008c206c155bb28e489913f1e81c7d167a72f"
+checksum = "0c6308700a76da125d8b53576026c370ebe7a671dedbbfd946b8a8e45e517d5a"
 dependencies = [
  "ring",
  "rustls",
@@ -1661,9 +1654,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-zstd-decoder"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7e01a0da61b511c891847364765aa2fd9d4fe4b1ae3738d6c3afe3f1c0dce8c"
+checksum = "f57a70f62c361a4fc8bf539a90b0ab6dd7a2e9420411cf2c3f09af30d5ffdb19"
 dependencies = [
  "twox-hash",
 ]

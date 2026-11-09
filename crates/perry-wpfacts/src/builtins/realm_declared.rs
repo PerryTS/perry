@@ -135,7 +135,7 @@ fn missing(list: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let row: Vec<&str> = line.split('\t').collect();
-        if let ["getter-this", _, _, _] = row[..] {
+        if let ["getter-this" | "strings" | "object", _, _, _] = row[..] {
             continue;
         }
         if let ["native", owner, key, identity] = row[..] {
@@ -186,9 +186,11 @@ fn the_solver_knows_every_key_the_realm_declares() {
 
 #[test]
 fn twin_a_key_the_description_lacks_is_reported() {
-    let twin = "ns\tObject\tlineMap\nproto\tFunction.prototype\tlineMap\nns\tDate\tlineMap\n";
+    // Date is described from the realm (its key set is the realm's), so a twin
+    // key is reported; RegExp stays undescribed and keeps every key opaque.
+    let twin = "ns\tObject\tlineMap\nproto\tFunction.prototype\tlineMap\nns\tDate\tlineMap\nns\tRegExp\tlineMap\n";
     assert_eq!(
         missing(twin),
-        ["Object.lineMap", "Function.prototype.lineMap"]
+        ["Object.lineMap", "Function.prototype.lineMap", "Date.lineMap"]
     );
 }

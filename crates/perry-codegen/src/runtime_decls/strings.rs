@@ -158,6 +158,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
     // `error: use of undefined value '@llvm.assume'`.
     module.declare_function("llvm.assume", VOID, &[I1]);
+    // The out-of-range arm of a proven native buffer read
+    // (`expr/buffer_access.rs::OutOfBoundsArm::Abort`).
+    module.declare_function("js_native_access_bounds_failed", VOID, &[I32, I32]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
     // see the size-keyed lookup table at lower_call.rs:168). Same
@@ -498,7 +501,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_promises_rmdir", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdirSync(path) — returns i32 status (1=success).
     module.declare_function("js_fs_mkdir_sync", I32, &[DOUBLE]);
-    module.declare_function("js_fs_mkdir_sync_options", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_mkdir_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.unlinkSync(path) — returns i32 status.
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     // fs.readdirSync(path, options) — returns NaN-boxed array of

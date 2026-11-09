@@ -112,3 +112,48 @@ fn a_computed_require_keeps_the_registry() {
     assert_eq!(sites.len(), 1, "{}", pf.dump_text());
     assert_ne!(sites[0].verdict, Verdict::T0Mono, "{}", pf.dump_text());
 }
+
+/// A module whose body throws, required inside a try (DESIGN SEEDE section 8):
+/// its body runs in the require call, so what it throws reaches that catch,
+/// by a static edge (the target's init guard) and by a deferred require (the
+/// path registry runs the body).
+#[test]
+fn a_required_module_body_throw_reaches_the_catch() {
+    let boom = "class Boom { z = 1; }\nexport var __perry_cjs_record;\n(function () { __perry_cjs_record = { exports: {}, loaded: false }; throw new Boom(); })();\n";
+    let requirer = r#"
+        import { __perry_cjs_record as __perry_cjs_rec_0 } from "./boom";
+        function load() {
+            const record = __perry_cjs_init(__perry_cjs_rec_0);
+            return record.exports;
+        }
+        try { load(); } catch (e) { console.log((e as any).z); }
+    "#;
+    let h = hirs(&[("boom", boom), ("main", requirer)]);
+    let pf = run(&h, false);
+    let s = pf.sites.iter().find(|s| s.key == "z").expect("the z site");
+    assert!(
+        s.top || s.receivers.iter().any(|r| r.ends_with(":Boom")),
+        "{:?}\n{}",
+        s.receivers,
+        pf.dump_text()
+    );
+    // Deferred: the requirer names the target only by a lazy import and
+    // loads it through the path registry.
+    let lazy = r#"
+        import _lazyreq_0 from "./boom";
+        function load() { return __perry_require_path_module("/boom.js"); }
+        try { load(); } catch (e) { console.log((e as any).z); }
+    "#;
+    let mut h = hirs(&[("boom", boom), ("main", lazy)]);
+    for imp in &mut h[1].1.imports {
+        imp.is_deferred_require = true;
+    }
+    let pf = run(&h, false);
+    let s = pf.sites.iter().find(|s| s.key == "z").expect("the z site");
+    assert!(
+        s.top || s.receivers.iter().any(|r| r.ends_with(":Boom")),
+        "{:?}\n{}",
+        s.receivers,
+        pf.dump_text()
+    );
+}

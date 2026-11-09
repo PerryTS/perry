@@ -115,15 +115,15 @@ pub use codegen::{
     assign_static_shape_ids, compile_module, compile_module_owned, context_free_ctor_abi,
     context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
-    resolve_target_triple, take_module_static_seeds,
-    target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, CompileOptions,
-    ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
-    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsIndexedOwner,
-    FactsNumericExpr, FactsNumericFunction, FactsRecv, FpContractMode, ImportedClass,
+    resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
+    AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
+    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsBody,
+    FactsClass, FactsElementRead, FactsField, FactsFieldReadCall, FactsIndexedOwner,
+    FactsNumericExpr,
+    FactsNumericFunction, FactsRecv, FactsRep, FpContractMode, ImportedClass,
     ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
-    ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT,
-    TARGET_NAMES,
+    ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
 pub use codegen::{set_worker_entries, worker_entries};

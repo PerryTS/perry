@@ -927,6 +927,7 @@ pub(super) fn compile_closure(
         &cross_module.module_dispatch,
         // #9363: a closure body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     if !versioned_loop_callback {
         if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {
@@ -1263,6 +1264,8 @@ pub(super) fn compile_closure(
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: false,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1320,6 +1323,8 @@ pub(super) fn compile_closure(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -1553,7 +1558,7 @@ pub(super) fn compile_closure(
 
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     crate::expr::resume_locals::enter(&mut ctx, params, body)?;
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
@@ -1589,6 +1594,7 @@ pub(super) fn compile_closure(
         && !is_generator)
         .then(|| returned_capture(&ctx, body))
         .flatten();
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;

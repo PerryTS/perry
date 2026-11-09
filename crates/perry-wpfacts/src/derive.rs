@@ -177,6 +177,9 @@ pub struct SiteFacts {
     /// A call site: the bodies its callee set holds (every body, sorted;
     /// empty when the set holds anything that is not a body).
     pub targets: Vec<String>,
+    /// The HIR identity `(module, function id)` of each body in `targets`,
+    /// sorted (`field_read_calls`).
+    pub(crate) target_fns: Vec<(u32, u32)>,
     /// Per-unit run: the receiver is a parameter whose TS object type
     /// names these keys; its verdict is decided after the census
     /// (`units::typed_param_verdicts`).
@@ -644,7 +647,15 @@ fn template_facts(
     let hard = ts
         .iter()
         .find_map(|t| m.hard.get(t))
-        .map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize]));
+        .map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize]))
+        .or_else(|| {
+            ts.iter().find_map(|&t| layout_exit(m, tm, t)).map(|a| {
+                format!(
+                    "accessor defined on the layout key {} (layout exit)",
+                    m.atoms[a as usize]
+                )
+            })
+        });
     // The prototype chain must be stable: no HARD op or escape on any
     // prototype object, no accessor named after a birth key, no computed
     // accessor anywhere.
@@ -944,10 +955,22 @@ fn template_facts(
     }
 }
 
-/// The field holds only typed-array objects, none exposed, transferred,
-/// resized or escaped.
-/// The compiled bodies field `a` holds over every token of a layout, when
-/// it holds nothing else (`bindings::bodies_of`); empty otherwise.
+/// An accessor defined on a key the object's layout holds leaves the layout.
+/// A literal's layout holds its birth keys and every key a program store
+/// writes (an optional slot, the hole until the store runs); the runtime
+/// gives an object that is defined an accessor under such a key its
+/// overflow, and it leaves its layout for good (class id 0:
+/// `layout_desc::prepare_hole_define`, `object_ops::define_property`), so no
+/// layout claim of the template survives it. (An accessor on a birth key is
+/// E5 HARD at the definition already: `Cons::DefineKey`.)
+fn layout_exit(m: &Model, tm: TmplId, t: Tok) -> Option<Atom> {
+    m.accessor_keys.get(&t)?.iter().copied().find(|&a| {
+        m.writers
+            .get(&(tm, a))
+            .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty())
+    })
+}
+
 fn field_bodies(m: &Model, ts: &[Tok], a: Atom) -> Vec<crate::bindings::BodyRef> {
     let mut out = Vec::new();
     for &t in ts {
@@ -986,7 +1009,7 @@ fn ta_only_sealed(m: &Model, ts: &[Tok], a: Atom) -> bool {
 
 fn ta_sealed_tok(m: &Model, x: Tok) -> bool {
     matches!(m.toks[x as usize], TokKind::Obj(tm, _)
-        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }))
+        if m.tmpls[tm as usize].kind.typed_storage())
         && !m.hard.contains_key(&x)
         && !m.escaped.contains_key(&x)
 }
@@ -1065,6 +1088,7 @@ fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -
     if m.foreign.contains_key(&tf.id)
         || m.is_escaped(t)
         || m.hard.contains_key(&t)
+        || layout_exit(m, tf.id, t).is_some()
         || m.objproto_accessor
         || tf.sabotaged
     {
@@ -1122,10 +1146,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     // twice) unite their receivers.
     let mut first: FxHashMap<(u32, u32, u32, bool, bool), usize> = FxHashMap::default();
     let mut groups: Vec<(usize, Vec<u32>, Vec<FnIdx>)> = Vec::new();
-    // The functions only the runtime has (a promise's resolvers). Every
-    // other function token is a body: compiled here, or another unit's,
-    // held by its contract (a stand-in, a foreign class's method).
-    let runtime: FxHashSet<FnIdx> = m.resolvers.values().map(|&t| m.tok_fn(t)).collect();
+    // The functions only the runtime has (a promise's resolvers, a promise
+    // capability's executor). Every other function token is a body:
+    // compiled here, or another unit's, held by its contract (a stand-in, a
+    // foreign class's method).
+    let runtime: FxHashSet<FnIdx> = m
+        .resolvers
+        .values()
+        .chain(m.executors.values())
+        .map(|&t| m.tok_fn(t))
+        .collect();
     for (i, s) in g.read_sites.iter().enumerate() {
         let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call);
         match first.get(&k) {
@@ -1238,6 +1268,12 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 })
                 .collect::<Vec<_>>()
         });
+        let mut target_fns: Vec<(u32, u32)> = targets
+            .keys()
+            .map(|&f| (m.funcs[f as usize].module, m.funcs[f as usize].func_id))
+            .collect();
+        target_fns.sort_unstable();
+        target_fns.dedup();
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
         t.dedup();
@@ -1268,6 +1304,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             verdict,
             fixed_shape,
             targets: t,
+            target_fns,
             guard_keys,
         });
     }

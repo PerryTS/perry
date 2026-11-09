@@ -10,6 +10,12 @@ pub(crate) struct Property {
     pub native: Option<&'static str>,
     pub getter_this: bool,
     pub own_namespace: bool,
+    /// The realm declares the key's value a host array of strings
+    /// (`value = dynamic, elements = string`): the declaration's name.
+    pub strings: Option<&'static str>,
+    /// The realm declares the key's value another node module object
+    /// (`node:inspector` `default`: `node:inspector.default`): its name.
+    pub object: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +125,8 @@ impl Default for Declarations {
                 }
                 "getter-this" => property.getter_this = true,
                 "ns" => property.own_namespace = true,
+                "strings" => property.strings = value,
+                "object" => property.object = value,
                 _ => {}
             }
             if let Some(ns) = ns_by_name(owner) {
@@ -136,6 +144,12 @@ impl Default for Declarations {
                 }
                 if kind == "ns" {
                     p.own_namespace = true;
+                }
+                if kind == "strings" {
+                    p.strings = value;
+                }
+                if kind == "object" {
+                    p.object = value;
                 }
             }
         }
@@ -200,7 +214,9 @@ impl Default for Declarations {
                 },
             });
         }
-        shapes[named..].sort_by_key(|s| s.name);
+        // The node module objects last: the linear namespace and family
+        // searches (charged per step) of every other object never walk them.
+        shapes[named..].sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
         Self { shapes, named }
     }
 }

@@ -403,25 +403,35 @@ pub(crate) fn inline_alloc_gc_packed(
 /// append reserve (`js_array_alloc(0)`).
 pub(crate) const INLINE_EMPTY_ARRAY_SLOTS: u64 = 4;
 
-/// Total bytes of an inline empty array birth: GcHeader + ArrayHeader +
-/// the append reserve.
-pub(crate) const INLINE_EMPTY_ARRAY_TOTAL_BYTES: u64 = GC_HEADER_SIZE_BYTES
-    + ARRAY_HEADER_SIZE_BYTES
-    + INLINE_EMPTY_ARRAY_SLOTS * FIELD_SLOT_SIZE_BYTES;
+/// Slots an empty literal reserves when a later loop pushes into its binding
+/// (`collectors::loop_pushed_arrays`): sixteen pushes need no regrowth.
+pub(crate) const INLINE_PUSHED_ARRAY_SLOTS: u64 = 16;
 
-/// The packed `GcHeader` word an inline empty array birth stores: an arena
-/// array whose layout state is pointer-free (every slot is a hole). The
-/// runtime admits an arena-page address only when the header carries
-/// `GC_FLAG_ARENA` (`tracked_gc_header_admitting`), so the word is derived
-/// here from the named constants, never hand-typed.
+/// Total bytes of an inline empty array birth reserving `slots` slots:
+/// GcHeader + ArrayHeader + the append reserve.
+pub(crate) const fn inline_array_birth_total_bytes(slots: u64) -> u64 {
+    GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES + slots * FIELD_SLOT_SIZE_BYTES
+}
+
+/// The four-slot empty birth's header word.
+#[cfg(test)]
 pub(crate) const fn inline_empty_array_gc_packed() -> u64 {
+    inline_array_birth_gc_packed(INLINE_EMPTY_ARRAY_SLOTS)
+}
+
+/// The packed `GcHeader` word an inline empty array birth reserving `slots`
+/// slots stores: an arena array whose layout state is pointer-free (every
+/// slot is a hole). The runtime admits an arena-page address only when the
+/// header carries `GC_FLAG_ARENA` (`tracked_gc_header_admitting`), so the
+/// word is derived here from the named constants, never hand-typed.
+pub(crate) const fn inline_array_birth_gc_packed(slots: u64) -> u64 {
     const GC_TYPE_ARRAY: u64 = 1;
     const GC_FLAG_ARENA: u64 = 0x02;
     const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
     GC_TYPE_ARRAY
         | (GC_FLAG_ARENA << 8)
         | (GC_LAYOUT_POINTER_FREE << 16)
-        | (INLINE_EMPTY_ARRAY_TOTAL_BYTES << 32)
+        | (inline_array_birth_total_bytes(slots) << 32)
 }
 
 #[cfg(test)]
@@ -439,6 +449,15 @@ mod tests {
         assert_ne!((word >> 8) & 0x02, 0, "GC_FLAG_ARENA");
         assert_eq!((word >> 16) & 0xffff, 0x4000, "pointer-free layout state");
         assert_eq!(word >> 32, 8 + ARRAY_HEADER_SIZE_BYTES + 4 * 8);
+    }
+
+    /// The pushed-binding birth differs from the empty one only in its size.
+    #[test]
+    fn pushed_array_word_differs_only_in_size() {
+        let word = inline_array_birth_gc_packed(INLINE_PUSHED_ARRAY_SLOTS);
+        let empty = inline_empty_array_gc_packed();
+        assert_eq!(word & 0xffff_ffff, empty & 0xffff_ffff);
+        assert_eq!(word >> 32, 8 + ARRAY_HEADER_SIZE_BYTES + 16 * 8);
     }
 
     /// Paired with `inline_slot_floor_matches_codegen` in

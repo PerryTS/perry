@@ -84,12 +84,32 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn expr_rest(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
+        // A folded builtin-method node is the call it folds: the compiled
+        // code runs an own or inherited user method of that name, and the
+        // builtin's own effects are its declaration (perry_hir::folded_call).
+        if let Some(call) = perry_hir::folded_call::folded_call(e) {
+            return self.folded_call(fx, &call);
+        }
         match e {
             Expr::NativeModuleRef(m) => {
+                let name = m.strip_prefix("node:").unwrap_or(m);
+                // The `process` module is the global process object (node:
+                // `require("process") === globalThis.process`); HIR names
+                // the value of `require("process")` and of a namespace
+                // import `process.namespace`.
+                if matches!(name, "process" | "process.namespace") {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
+                    return self.tok_node(t);
+                }
                 // node:module as a value hands out `Module._cache`.
-                if m.strip_prefix("node:").unwrap_or(m) == "module" {
+                if name == "module" {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
+                }
+                // A module the realm declares is its namespace object.
+                if let Some(ns) = crate::builtins::node_module_ns(m) {
+                    let t = self.m.tok(TokKind::Builtin(ns));
+                    return self.tok_node(t);
                 }
                 self.m.top_val(&format!("native module ref {m}"))
             }
@@ -136,6 +156,46 @@ impl<'a> Gen<'a> {
                         }
                     }
                     self.prim_node(prim::NUM)
+                } else if let Some(recv) =
+                    o.filter(|_| perry_hir::folded_call::fs_receiver_dispatch(module, method))
+                {
+                    // A folded fs receiver's method no stream arm lowers is
+                    // the runtime dispatch on the receiver value: the method
+                    // call `recv.method(..args)`. The dispatch returns 0 for
+                    // a nullish receiver (no TypeError), reads a member of a
+                    // string or host handle for a call without arguments,
+                    // and gives undefined where it resolves no callee.
+                    let key = Key::Named(self.m.atom(method));
+                    let ret = self.mcall(recv, key, a, vec![]);
+                    let num = self.prim_node(prim::NUM);
+                    self.m.cons(
+                        recv,
+                        Cons::Guard {
+                            test: guard::NULLISH,
+                            from: num,
+                            dst: ret,
+                        },
+                    );
+                    if args.is_empty() {
+                        let member = self.load(recv, key);
+                        self.m.edge(member, ret);
+                    }
+                    self.m.add_prim(ret, prim::UNDEF);
+                    ret
+                } else if let Some(ctor) = object
+                    .is_none()
+                    .then(|| self.native_construct_fold(module, method))
+                    .flatten()
+                {
+                    // The HIR's fold of `new <module>.<method>(..args)`:
+                    // `new` of the realm constructor itself, whatever the
+                    // program stored under the name (codegen calls its
+                    // runtime function directly). The construct runs what
+                    // the constructor's declaration says (`construct`).
+                    let callee = self.tok_node(ctor);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::New { call });
+                    ret
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -152,6 +212,7 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF | prim::BOOL)
             }
             Expr::PrivateLexicalBrandPop => self.prim_node(prim::UNDEF),
+            Expr::ThisProvenClass(_) => self.prim_node(prim::BOOL),
             Expr::PrivateBrandCheck { object, .. } => {
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)
@@ -181,21 +242,12 @@ impl<'a> Gen<'a> {
                 key,
                 receiver,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Load(dst),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Load(dst));
                     dst
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -206,22 +258,13 @@ impl<'a> Gen<'a> {
                 value,
                 receiver,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Store(v),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Store(v));
                     v
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -232,23 +275,14 @@ impl<'a> Gen<'a> {
                 receiver,
                 args,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(fx.module, key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
                     let (call, ret) = self.new_call(ThisArg::Node(r), a, sp);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Call(call),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Call(call));
                     ret
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -263,8 +297,14 @@ impl<'a> Gen<'a> {
             Expr::ProcessArgv => {
                 let n = self.m.node_l("process.argv");
                 self.m.own(n);
-                let a = self.m.process_argv;
-                self.m.edge(a, n);
+                let argv = self.m.atom("argv");
+                match self.m.process_arrays.iter().find(|a| a.0 == argv) {
+                    Some(&(_, a, _)) => self.m.edge(a, n),
+                    None => {
+                        self.m.add_top(n, |_| "process.argv".into());
+                        self.m.add_prim(n, prim::ALL);
+                    }
+                }
                 n
             }
             Expr::ProcessEnv
@@ -385,7 +425,6 @@ impl<'a> Gen<'a> {
             | Expr::TtyIsAtty(..)
             | Expr::FsReadFileSync(..)
             | Expr::FsWriteFileSync(..)
-            | Expr::FsExistsSync(..)
             | Expr::FsMkdirSync(..)
             | Expr::FsUnlinkSync(..)
             | Expr::FsAppendFileSync(..)
@@ -471,19 +510,13 @@ impl<'a> Gen<'a> {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
-            Expr::MapHas { map, key } | Expr::MapDelete { map, key } => {
-                // The native operation compares key identity without a JS
-                // operand protocol. A folded call can still find an own
-                // method or accessor, so use the ordinary method transfer.
-                let recv = self.expr(fx, map);
-                let arg = self.expr(fx, key);
-                let name = if matches!(e, Expr::MapHas { .. }) {
-                    "has"
-                } else {
-                    "delete"
-                };
-                let name = self.m.atom(name);
-                self.mcall(recv, Key::Named(name), vec![arg], Vec::new())
+            Expr::FsExistsSync(path) => {
+                match self.declared_member_call(fx, "node:fs.existsSync", &[path]) {
+                    Some(ret) => ret,
+                    None => {
+                        self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+                    }
+                }
             }
             Expr::MapClear(map) => {
                 let recv = self.expr(fx, map);
@@ -504,51 +537,9 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 )
             }
-            Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
-            Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),
-            Expr::DateGetMonth(..) => self.receiver_method(fx, e, "getMonth"),
-            Expr::DateGetDate(..) => self.receiver_method(fx, e, "getDate"),
-            Expr::DateGetDay(..) => self.receiver_method(fx, e, "getDay"),
-            Expr::DateGetHours(..) => self.receiver_method(fx, e, "getHours"),
-            Expr::DateGetMinutes(..) => self.receiver_method(fx, e, "getMinutes"),
-            Expr::DateGetSeconds(..) => self.receiver_method(fx, e, "getSeconds"),
-            Expr::DateGetMilliseconds(..) => self.receiver_method(fx, e, "getMilliseconds"),
-            Expr::DateGetUtcDay(..) => self.receiver_method(fx, e, "getUTCDay"),
-            Expr::DateGetUtcFullYear(..) => self.receiver_method(fx, e, "getUTCFullYear"),
-            Expr::DateGetUtcMonth(..) => self.receiver_method(fx, e, "getUTCMonth"),
-            Expr::DateGetUtcDate(..) => self.receiver_method(fx, e, "getUTCDate"),
-            Expr::DateGetUtcHours(..) => self.receiver_method(fx, e, "getUTCHours"),
-            Expr::DateGetUtcMinutes(..) => self.receiver_method(fx, e, "getUTCMinutes"),
-            Expr::DateGetUtcSeconds(..) => self.receiver_method(fx, e, "getUTCSeconds"),
-            Expr::DateGetUtcMilliseconds(..) => self.receiver_method(fx, e, "getUTCMilliseconds"),
             Expr::DateValueOf(..) => self.receiver_method(fx, e, "valueOf"),
-            Expr::DateGetTimezoneOffset(..) => self.receiver_method(fx, e, "getTimezoneOffset"),
-            Expr::DateToISOString(..) => self.receiver_method(fx, e, "toISOString"),
             Expr::DateToString(..) => self.receiver_method(fx, e, "toString"),
-            Expr::DateToDateString(..) => self.receiver_method(fx, e, "toDateString"),
-            Expr::DateToTimeString(..) => self.receiver_method(fx, e, "toTimeString"),
             Expr::DateToUTCString(..) => self.receiver_method(fx, e, "toUTCString"),
-            Expr::DateToLocaleDateString(..) => self.receiver_method(fx, e, "toLocaleDateString"),
-            Expr::DateToLocaleTimeString(..) => self.receiver_method(fx, e, "toLocaleTimeString"),
-            Expr::DateToLocaleString(..) => self.receiver_method(fx, e, "toLocaleString"),
-            Expr::DateToJSON(..) => self.receiver_method(fx, e, "toJSON"),
-            Expr::DateSetUtcFullYear { .. } => self.receiver_method(fx, e, "setUTCFullYear"),
-            Expr::DateSetUtcMonth { .. } => self.receiver_method(fx, e, "setUTCMonth"),
-            Expr::DateSetUtcDate { .. } => self.receiver_method(fx, e, "setUTCDate"),
-            Expr::DateSetUtcHours { .. } => self.receiver_method(fx, e, "setUTCHours"),
-            Expr::DateSetUtcMinutes { .. } => self.receiver_method(fx, e, "setUTCMinutes"),
-            Expr::DateSetUtcSeconds { .. } => self.receiver_method(fx, e, "setUTCSeconds"),
-            Expr::DateSetUtcMilliseconds { .. } => {
-                self.receiver_method(fx, e, "setUTCMilliseconds")
-            }
-            Expr::DateSetFullYear { .. } => self.receiver_method(fx, e, "setFullYear"),
-            Expr::DateSetMonth { .. } => self.receiver_method(fx, e, "setMonth"),
-            Expr::DateSetDate { .. } => self.receiver_method(fx, e, "setDate"),
-            Expr::DateSetHours { .. } => self.receiver_method(fx, e, "setHours"),
-            Expr::DateSetMinutes { .. } => self.receiver_method(fx, e, "setMinutes"),
-            Expr::DateSetSeconds { .. } => self.receiver_method(fx, e, "setSeconds"),
-            Expr::DateSetMilliseconds { .. } => self.receiver_method(fx, e, "setMilliseconds"),
-            Expr::DateSetTime { .. } => self.receiver_method(fx, e, "setTime"),
             // Static Date conversions do not read a receiver. parse
             // ToString's one operand; UTC ToNumber's at most 7 components.
             Expr::DateNow => self.prim_node(prim::NUM),
@@ -566,31 +557,40 @@ impl<'a> Gen<'a> {
                 "ToNumber of Date.UTC component",
                 Protocol::ToPrimitive,
             ),
-            // Set queries compare keys by SameValueZero; size reads an
-            // internal slot and clear retains/calls no operand.
-            Expr::SetHas { .. } => self.receiver_method(fx, e, "has"),
-            Expr::SetDelete { .. } => self.receiver_method(fx, e, "delete"),
+            // Set clear retains/calls no operand; size reads an internal slot.
             Expr::SetClear(..) => self.receiver_method(fx, e, "clear"),
             Expr::SetSize(x) => {
                 let recv = self.expr(fx, x);
                 let a = self.m.atom("size");
                 self.load(recv, Key::Named(a))
             }
+            // A Math function with an integer rule: the Number result's
+            // interval (`model::range`).
+            Expr::MathAbs(x) => self.math_range(fx, crate::model::RangeOp::Abs, &[x.as_ref()]),
+            Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathRound(x) | Expr::MathTrunc(x) => {
+                self.math_range(fx, crate::model::RangeOp::Integral, &[x.as_ref()])
+            }
+            Expr::MathSign(x) => self.math_range(fx, crate::model::RangeOp::Sign, &[x.as_ref()]),
+            Expr::MathClz32(x) => self.math_range(fx, crate::model::RangeOp::Clz32, &[x.as_ref()]),
+            Expr::MathImul(a, b) => {
+                self.math_range(fx, crate::model::RangeOp::Imul, &[a.as_ref(), b.as_ref()])
+            }
+            Expr::MathMin(xs) if !xs.is_empty() => {
+                let xs: Vec<&Expr> = xs.iter().collect();
+                self.math_range(fx, crate::model::RangeOp::Min, &xs)
+            }
+            Expr::MathMax(xs) if !xs.is_empty() => {
+                let xs: Vec<&Expr> = xs.iter().collect();
+                self.math_range(fx, crate::model::RangeOp::Max, &xs)
+            }
             // Every Math function returns a Number (ECMA-262 Math).
-            Expr::MathFloor(..)
-            | Expr::MathCeil(..)
-            | Expr::MathRound(..)
-            | Expr::MathTrunc(..)
-            | Expr::MathSign(..)
-            | Expr::MathAbs(..)
-            | Expr::MathSqrt(..)
+            Expr::MathSqrt(..)
             | Expr::MathLog(..)
             | Expr::MathLog2(..)
             | Expr::MathLog10(..)
             | Expr::MathPow(..)
             | Expr::MathMin(..)
             | Expr::MathMax(..)
-            | Expr::MathImul(..)
             | Expr::MathRandom
             | Expr::MathSin(..)
             | Expr::MathCos(..)
@@ -603,7 +603,6 @@ impl<'a> Gen<'a> {
             | Expr::MathHypot(..)
             | Expr::MathFround(..)
             | Expr::MathF16round(..)
-            | Expr::MathClz32(..)
             | Expr::MathExpm1(..)
             | Expr::MathLog1p(..)
             | Expr::MathSinh(..)
@@ -621,6 +620,23 @@ impl<'a> Gen<'a> {
             ),
             // The global conversions and predicates: the operation fixes the
             // kind of its result (ECMA-262; the HIR operation's contract).
+            // `Number(x)`: its interval follows the operand's Numbers and
+            // one-unit Strings (`RangeOp::ToNumber`).
+            Expr::NumberCoerce(x) if self.guard_ranges => {
+                let r = self.m.reason("ToNumber of a Number() operand");
+                let v = self.expr(fx, x);
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                let out = self.tmp("primop");
+                self.range_rule(crate::model::RangeOp::ToNumber, v, None, out);
+                self.m.add_prim(out, prim::NUM);
+                out
+            }
             Expr::ParseInt { .. } | Expr::ParseFloat(..) | Expr::NumberCoerce(..) => self
                 .prim_kids(
                     fx,
@@ -643,44 +659,6 @@ impl<'a> Gen<'a> {
                 );
                 self.prim_node(prim::NUM)
             }
-            // ECMA-262 23.1.3.16 / .17 / .20: the receiver's `length` and
-            // elements are read (an index accessor runs), the search value
-            // is compared (IsStrictlyEqual, SameValueZero: no lookup on it),
-            // and `fromIndex` is ToIntegerOrInfinity'd (ToPrimitive).
-            Expr::ArrayIndexOf {
-                array,
-                value,
-                from_index,
-            }
-            | Expr::ArrayLastIndexOf {
-                array,
-                value,
-                from_index,
-            }
-            | Expr::ArrayIncludes {
-                array,
-                value,
-                from_index,
-            } => {
-                let a = self.expr(fx, array);
-                let _ = self.expr(fx, value);
-                let _ = self.elem_load(a);
-                if let Some(fi) = from_index {
-                    let _ = self.prim_op(
-                        fx,
-                        &[fi.as_ref()],
-                        prim::NUM,
-                        "fromIndex",
-                        Protocol::ToPrimitive,
-                    );
-                }
-                let p = if matches!(e, Expr::ArrayIncludes { .. }) {
-                    prim::BOOL
-                } else {
-                    prim::NUM
-                };
-                self.prim_node(p)
-            }
             Expr::BigIntCoerce(..) => self.prim_kids(
                 fx,
                 e,
@@ -695,31 +673,6 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            // The elements are read and each is ToString'd.
-            // ECMA-262 23.1.3.18: ToString(separator), then `length` and each
-            // element, ToString'd unless undefined or null.
-            Expr::ArrayJoin { array, separator } => {
-                let a = self.expr(fx, array);
-                if let Some(sep) = separator {
-                    let _ = self.prim_op(
-                        fx,
-                        &[sep.as_ref()],
-                        prim::STR,
-                        "array join operand",
-                        Protocol::ToPrimitive,
-                    );
-                }
-                let el = self.elem_load(a);
-                let r = self.m.reason("array join operand");
-                self.m.cons(
-                    el,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-                self.prim_node(prim::STR)
-            }
             Expr::ObjectIs(..)
             | Expr::ObjectHasOwn(..)
             | Expr::ArrayIsArray(..)
@@ -921,46 +874,99 @@ impl<'a> Gen<'a> {
             | Expr::StringSplit { .. }
             | Expr::StringMatch { .. }
             | Expr::StringMatchAll { .. } => self.expr_rest_builtin_objects(fx, e),
-            Expr::ArrayPush { .. }
-            | Expr::ArrayUnshift { .. }
-            | Expr::ArrayPushSpread { .. }
-            | Expr::ArrayPop { .. }
-            | Expr::ArrayShift { .. }
-            | Expr::ArraySlice { .. }
-            | Expr::ArraySplice { .. }
-            | Expr::ArrayForEach { .. }
-            | Expr::ArrayMap { .. }
-            | Expr::ArrayFlatMap { .. }
+            // Handled before the match: a folded call is its method call.
+            Expr::ArrayAt { .. }
+            | Expr::ArrayCopyWithin { .. }
+            | Expr::ArrayEntries { .. }
+            | Expr::ArrayEvery { .. }
             | Expr::ArrayFilter { .. }
             | Expr::ArrayFind { .. }
-            | Expr::ArrayFindLast { .. }
             | Expr::ArrayFindIndex { .. }
+            | Expr::ArrayFindLast { .. }
             | Expr::ArrayFindLastIndex { .. }
-            | Expr::ArraySome { .. }
-            | Expr::ArrayEvery { .. }
-            | Expr::ArraySort { .. }
-            | Expr::ArrayToSorted { .. }
+            | Expr::ArrayFlat { .. }
+            | Expr::ArrayFlatMap { .. }
+            | Expr::ArrayForEach { .. }
+            | Expr::ArrayIncludes { .. }
+            | Expr::ArrayIndexOf { .. }
+            | Expr::ArrayJoin { .. }
+            | Expr::ArrayKeys { .. }
+            | Expr::ArrayLastIndexOf { .. }
+            | Expr::ArrayMap { .. }
+            | Expr::ArrayPush { .. }
             | Expr::ArrayReduce { .. }
             | Expr::ArrayReduceRight { .. }
-            | Expr::ArrayFlat { .. }
+            | Expr::ArrayShift { .. }
+            | Expr::ArraySlice { .. }
+            | Expr::ArraySome { .. }
+            | Expr::ArraySort { .. }
+            | Expr::ArraySplice { .. }
             | Expr::ArrayToReversed { .. }
-            | Expr::ArrayValues { .. }
+            | Expr::ArrayToSorted { .. }
             | Expr::ArrayToSpliced { .. }
+            | Expr::ArrayUnshift { .. }
+            | Expr::ArrayValues { .. }
             | Expr::ArrayWith { .. }
-            | Expr::ArrayAt { .. }
+            | Expr::DateGetDate { .. }
+            | Expr::DateGetDay { .. }
+            | Expr::DateGetFullYear { .. }
+            | Expr::DateGetHours { .. }
+            | Expr::DateGetMilliseconds { .. }
+            | Expr::DateGetMinutes { .. }
+            | Expr::DateGetMonth { .. }
+            | Expr::DateGetSeconds { .. }
+            | Expr::DateGetTime { .. }
+            | Expr::DateGetTimezoneOffset { .. }
+            | Expr::DateGetUtcDate { .. }
+            | Expr::DateGetUtcDay { .. }
+            | Expr::DateGetUtcFullYear { .. }
+            | Expr::DateGetUtcHours { .. }
+            | Expr::DateGetUtcMilliseconds { .. }
+            | Expr::DateGetUtcMinutes { .. }
+            | Expr::DateGetUtcMonth { .. }
+            | Expr::DateGetUtcSeconds { .. }
+            | Expr::DateSetDate { .. }
+            | Expr::DateSetFullYear { .. }
+            | Expr::DateSetHours { .. }
+            | Expr::DateSetMilliseconds { .. }
+            | Expr::DateSetMinutes { .. }
+            | Expr::DateSetMonth { .. }
+            | Expr::DateSetSeconds { .. }
+            | Expr::DateSetTime { .. }
+            | Expr::DateSetUtcDate { .. }
+            | Expr::DateSetUtcFullYear { .. }
+            | Expr::DateSetUtcHours { .. }
+            | Expr::DateSetUtcMilliseconds { .. }
+            | Expr::DateSetUtcMinutes { .. }
+            | Expr::DateSetUtcMonth { .. }
+            | Expr::DateSetUtcSeconds { .. }
+            | Expr::DateToDateString { .. }
+            | Expr::DateToISOString { .. }
+            | Expr::DateToJSON { .. }
+            | Expr::DateToLocaleDateString { .. }
+            | Expr::DateToLocaleString { .. }
+            | Expr::DateToLocaleTimeString { .. }
+            | Expr::DateToTimeString { .. }
+            | Expr::MapDelete { .. }
+            | Expr::MapGet { .. }
+            | Expr::MapHas { .. }
+            | Expr::MapSet { .. }
+            | Expr::SetAdd { .. }
+            | Expr::SetDelete { .. }
+            | Expr::SetHas { .. } => {
+                unreachable!(
+                    "internal compiler error: expr_rest: a folded call (perry_hir::folded_call)"
+                )
+            }
+            Expr::ArrayPushSpread { .. }
+            | Expr::ArrayPop { .. }
             | Expr::ArrayReverseValue { .. }
-            | Expr::ArrayCopyWithin { .. }
             | Expr::ArrayCopyWithinValue { .. }
-            | Expr::ArrayEntries { .. }
-            | Expr::ArrayKeys { .. }
             | Expr::ArrayLikeMethod { .. }
             | Expr::MapNew { .. }
             | Expr::SetNew { .. }
             | Expr::MapNewFromArray { .. }
             | Expr::SetNewFromArray { .. }
-            | Expr::MapSet { .. }
-            | Expr::SetAdd { .. }
-            | Expr::MapGet { .. }
             | Expr::MapEntryKeyAt { .. }
             | Expr::MapEntryValueAt { .. }
             | Expr::SetValueAt { .. }

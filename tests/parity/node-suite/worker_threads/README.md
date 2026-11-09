@@ -297,7 +297,9 @@ Worker environment option is also covered by
 `worker-lifecycle/process-env-option.ts`. Explicit-env `SHARE_ENV` founder
 preservation in `worker-lifecycle/share-env-founder.ts` passes too. Worker
 CPU-usage argument validation in `worker-lifecycle/cpu-usage-validation.ts` also
-matches Node. The diagnostic differences are:
+matches Node. Default/falsy names in `worker-lifecycle/thread-name-defaults.ts`
+also match Node: both the parent Worker and worker namespace expose
+`WorkerThread`. The diagnostic differences are:
 
 - All thirteen `structured-clone/` fixtures: Perry preserves some indexed values
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
@@ -317,8 +319,7 @@ matches Node. The diagnostic differences are:
   sharing, queued port receive, rollback, post-exit values, error routing,
   Worker asynchronous disposal, default environment isolation, process argv
   shape, constructor rollback, invalid filename types, and resource-limit reset
-  differ. FileHandle rollback/aliasing, default/falsy thread names, and the full
-  disabled process surface also differ, as does spawning-tree `SHARE_ENV`
+  differ. FileHandle rollback/aliasing and the full disabled process surface also differ, as does spawning-tree `SHARE_ENV`
   isolation. Basic eval with CJS require, explicit `process.env`, and preserving
   an explicit-env founder value all pass.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,

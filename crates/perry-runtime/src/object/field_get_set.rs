@@ -213,6 +213,7 @@ pub(crate) use accessors::scan_accessor_receiver_override_root_mut;
 /// `get_field_by_name_tail.rs` for the 2000-line cap.
 mod array_retargeted_proto;
 mod buffer_own_prop;
+pub(crate) use buffer_own_prop::{view_get, view_kind_name, view_prototype_bits};
 mod class_object_props;
 mod class_object_template;
 #[cfg(test)]

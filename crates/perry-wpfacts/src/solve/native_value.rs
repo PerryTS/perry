@@ -24,12 +24,32 @@ impl Model {
     /// call's own `this`). `false`: not a named native, or a receiver its
     /// model does not cover: the caller runs the unknown callee's arm.
     pub(super) fn native_call(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
-        let TokKind::BuiltinFn(Native::Member { .. }) = self.toks[t as usize] else {
+        let TokKind::BuiltinFn(Native::Member { identity }) = self.toks[t as usize] else {
             return false;
         };
+        // A module member whose effects the runtime declares at the body
+        // its dispatch arm calls: the declaration runs, whatever `this`.
+        if let Some(e) = builtins::declared_member(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_native(m, e, t, call));
+            }
+            return true;
+        }
         if builtins::native_namespace_call(self, t, call, this_tok) {
             return true;
         }
+        // A static of a realm constructor whose effects the runtime
+        // declares without naming `this` (`AbortSignal.any`): the
+        // declaration runs, whatever `this`.
+        if let Some(e) = builtins::declared_static(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_function(m, e, call));
+            }
+            return true;
+        }
+
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
             return false;
         };
@@ -112,7 +132,18 @@ impl Model {
     /// `Cons::NativeThis`: the receiver values of `call` into named native
     /// `f`. A primitive of the member's family runs the primitive's method;
     /// `undefined` / `null` throw (no intrinsic prototype method accepts
-    /// them as `this`); any other primitive is an unknown callee's call.
+    /// them as `this`).
+    ///
+    /// Another primitive on a primitive family's method runs no program
+    /// code: a `String.prototype` method starts with `ToString(this)` (ES
+    /// 22.1.3), which for a number, boolean or bigint is the realm's own
+    /// conversion, so the method runs on a string (`string_this` minus the
+    /// ToPrimitive; `toString` / `valueOf` throw instead: a superset); on a
+    /// symbol it throws. A `Number`, `Boolean`, `Symbol` or `BigInt` method
+    /// starts with `thisNumberValue(this)` (and the like), which throws on a
+    /// foreign primitive: no callee, nothing escapes. On any other family's
+    /// method (generic `ToObject(this)`) the primitive is an unknown
+    /// callee's call.
     pub(super) fn native_this(&mut self, call: CallId, f: Tok, toks: Tokens<'_>, prim: u16) {
         for &r in toks {
             self.call_tok(call, f, Some(r));
@@ -128,10 +159,20 @@ impl Model {
         if own != 0 {
             self.with_b(|m| builtins::prim_method(m, own, Key::Named(key), call));
         }
-        if prim & !own & !(prim::UNDEF | prim::NULL) != 0
-            && self.bind_done.insert((call, f, u32::MAX - 2))
+        let foreign = prim & !own & !(prim::UNDEF | prim::NULL);
+        if foreign == 0 {
+            return;
+        }
+        if builtins::native_prims(fam) == 0 {
+            if self.bind_done.insert((call, f, u32::MAX - 2)) {
+                self.unknown_callee_args(call, f, false);
+            }
+        } else if fam == Family::Str
+            && foreign & (prim::NUM | prim::BOOL | prim::BIGINT) != 0
+            && self.bind_done.insert((call, f, u32::MAX - 6))
         {
-            self.unknown_callee_args(call, f, false);
+            self.diagnostic_callee(call, f);
+            self.with_b(|m| builtins::prim_method(m, prim::STR, Key::Named(key), call));
         }
     }
 }

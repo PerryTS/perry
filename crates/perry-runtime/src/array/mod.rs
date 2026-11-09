@@ -57,6 +57,8 @@ mod iterator;
 mod iterator_brand;
 pub(crate) use iterator_brand::{has_materialized_iterator_brand, mark_materialized_iterator};
 mod join;
+#[cfg(test)]
+mod growth_in_place_tests;
 mod jsvalue_api;
 /// Own named (non-index) properties stored with the array (#10166 brief 4).
 pub(crate) mod named_props;
@@ -118,6 +120,8 @@ mod spread_dense_tests;
 mod strict_store_tests;
 #[cfg(test)]
 mod subclass_elements_tests;
+#[cfg(test)]
+mod subclass_stamp_tests;
 #[cfg(test)]
 mod subclass_tests;
 #[cfg(test)]
@@ -269,7 +273,7 @@ pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, intrinsic_constructor_addr, intrinsic_prototype_addr,
-    note_object_prototype_intrinsic, note_realm_intrinsic,
+    intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic, note_realm_intrinsic,
     object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
     object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
     RealmIntrinsics,
@@ -314,11 +318,14 @@ pub use self::jsvalue_api::{
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
 pub(crate) use self::push_pop::{guard_writable_length, push_guard};
+#[cfg(test)]
+pub(crate) use self::push_pop::GrowInPlaceTestGuard;
 pub use self::push_pop::{
-    js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
-    js_array_push_f64, js_array_push_f64_spec, js_array_push_hole, js_array_push_spread_f64,
-    js_array_push_u31_with_length, js_array_set_length, js_array_set_length_strict,
-    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_delete, js_array_grow, js_array_grow_for_push, js_array_numeric_push_f64_unboxed,
+    js_array_pop_f64, js_array_push_f64, js_array_push_f64_spec, js_array_push_hole,
+    js_array_push_spread_f64, js_array_push_u31_with_length, js_array_set_length,
+    js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_unshift_variadic,
 };
 pub(crate) use self::push_pop::{push_spec_declined, push_spec_if_plain};
 pub use self::reduce_right::js_array_reduce_right;

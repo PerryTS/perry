@@ -82,7 +82,7 @@ pub(crate) use message_port::register_codec as register_message_port_codec;
 use worker_pump::deliver_parent_port_message;
 use worker_pump::start_stdin_reader;
 
-use worker_options::{apply_worker_env, restore_worker_env, WorkerOptions, WorkerResourceLimits};
+use worker_options::{WorkerOptions, WorkerResourceLimits};
 use worker_surface::{
     empty_object, js_worker_threads_worker_off, js_worker_threads_worker_on,
     js_worker_threads_worker_once, js_worker_threads_worker_post_message,
@@ -198,8 +198,6 @@ struct BroadcastChannelState {
     object_bits: u64,
     /// Queue of delivered structured clones (oldest first).
     inbox: VecDeque<SerializedValue>,
-    /// Whether `close()` has detached this BroadcastChannel.
-    closed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -606,8 +604,15 @@ fn object_value(obj: *mut perry_runtime::object::ObjectHeader) -> f64 {
 }
 
 fn set_object_field(obj: *mut perry_runtime::object::ObjectHeader, name: &str, value: f64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let value = scope.root_nanbox_f64(value);
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    perry_runtime::object::js_object_set_field_by_name(obj, key, value);
+    perry_runtime::object::js_object_set_field_by_name(
+        obj.get_raw_mut_ptr(),
+        key,
+        value.get_nanbox_f64(),
+    );
 }
 
 fn get_object_field(obj: *const perry_runtime::object::ObjectHeader, name: &str) -> f64 {
@@ -671,13 +676,14 @@ fn captured_worker_id(closure: *const ClosureHeader) -> u64 {
 }
 
 fn get_object_field_from_value(obj_value: f64, name: &str) -> f64 {
-    let ptr = perry_runtime::value::js_nanbox_get_pointer(obj_value);
-    if ptr == 0 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(obj_value);
+    if perry_runtime::value::js_nanbox_get_pointer(value.get_nanbox_f64()) == 0 {
         return js_undefined();
     }
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     perry_runtime::object::js_object_get_field_by_name_f64(
-        ptr as *mut perry_runtime::object::ObjectHeader,
+        perry_runtime::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *const _,
         key,
     )
 }
@@ -1003,11 +1009,20 @@ extern "C" fn worker_add_event_listener(
 /// `worker.removeEventListener(type, listener)`.
 extern "C" fn worker_remove_event_listener(
     closure: *const ClosureHeader,
-    this: perry_runtime::closure::JsThis,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    worker_off(closure, this, event, callback)
+    worker_remove_listener(captured_worker_id(closure), event, callback, true)
+}
+
+fn worker_listener_bits(callback: f64, web_event: bool) -> Option<u64> {
+    if web_event {
+        callback_bits_from_value(callback)
+    } else {
+        perry_runtime::validators::validate_function(callback, "listener");
+        Some(closure_arg_bits(callback))
+    }
 }
 
 fn worker_add_listener(
@@ -1017,6 +1032,9 @@ fn worker_add_listener(
     once: bool,
     web_event: bool,
 ) -> f64 {
+    let Some(callback_bits) = worker_listener_bits(callback, web_event) else {
+        return js_undefined();
+    };
     ensure_worker_gc_scanner();
     let Some(event) = event_name(event) else {
         return js_undefined();
@@ -1028,7 +1046,7 @@ fn worker_add_listener(
             .entry(event)
             .or_default()
             .push(WorkerListener {
-                callback_bits: closure_arg_bits(callback),
+                callback_bits,
                 once,
                 web_event,
             });
@@ -1042,11 +1060,16 @@ extern "C" fn worker_off(
     event: f64,
     callback: f64,
 ) -> f64 {
-    let worker_id = captured_worker_id(closure);
+    worker_remove_listener(captured_worker_id(closure), event, callback, false)
+}
+
+fn worker_remove_listener(worker_id: u64, event: f64, callback: f64, web_event: bool) -> f64 {
+    let Some(callback_bits) = worker_listener_bits(callback, web_event) else {
+        return js_undefined();
+    };
     let Some(event) = event_name(event) else {
         return js_undefined();
     };
-    let callback_bits = closure_arg_bits(callback);
     let mut workers = WORKERS.lock().unwrap();
     if let Some(worker) = workers.get_mut(&worker_id) {
         if let Some(listeners) = worker.listeners.get_mut(&event) {
@@ -1377,7 +1400,7 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> f64 {
     let options_state = WorkerOptions::from_value(options);
-    worker_new_prepared(entry_ptr, options, options_state, None)
+    worker_new_prepared(entry_ptr, options, options_state, None, false)
 }
 
 fn worker_new_prepared(
@@ -1385,9 +1408,10 @@ fn worker_new_prepared(
     options: f64,
     options_state: WorkerOptions,
     source: Option<String>,
+    is_eval: bool,
 ) -> f64 {
     // Scheduling calls user code; finish owned preparation before entering it.
-    let worker = worker_new_started(entry_ptr, options, options_state, source);
+    let worker = worker_new_started(entry_ptr, options, options_state, source, is_eval);
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let worker = scope.root_nanbox_f64(worker);
     worker_surface::queue_process_worker_event(worker.get_nanbox_f64());
@@ -1399,15 +1423,18 @@ fn worker_new_started(
     options: f64,
     mut options_state: WorkerOptions,
     source: Option<String>,
+    is_eval: bool,
 ) -> f64 {
     ensure_worker_gc_scanner();
     ensure_worker_thread_exit_hook_registered();
     worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 
-    let process_state =
-        perry_runtime::process::WorkerProcessState::capture(options_state.env.as_deref())
-            .with_worker_argv(source, options_state.argv.take());
+    let process_state = options_state
+        .process_state
+        .take()
+        .expect("prepared Worker process state")
+        .with_worker_argv(source, options_state.argv.take());
     let payload =
         match perry_runtime::exception::catch_thrown(|| environment_data::prepare(options)) {
             Ok(payload) => payload,
@@ -1520,7 +1547,6 @@ fn worker_new_started(
             perry_runtime::event_pump::claim_agent_loop_route();
             published_agent.store(worker_agent, Ordering::SeqCst);
             perry_runtime::loop_interrupt::install_current(termination);
-            let previous_env = apply_worker_env(&thread_options.env);
             parent_port::install(&worker_ticket);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
@@ -1538,87 +1564,103 @@ fn worker_new_started(
             let mut exit_code = 0;
             // An exception the worker leaves unhandled ends the worker, not
             // the process: it lands in `run_worker_body`.
+            let controlled_exit = Cell::new(false);
             let result = catch_unwind(AssertUnwindSafe(|| {
                 perry_runtime::exception::run_worker_body(|| {
-                    'reload: loop {
-                        entry();
-                        // Let module-level continuations run, and report a
-                        // module-level rejection nothing handled.
-                        pump_worker_microtasks();
-                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                            break 'reload;
-                        }
-                        loop {
-                            // Re-evaluate after every callback/checkpoint. A consumed
-                            // once listener no longer references its MessagePort;
-                            // timers and native completions still keep this agent alive.
-                            if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get)
-                                || perry_runtime::event_pump::perry_has_work() == 0
-                            {
+                    let body = perry_runtime::exception::run_worker_body_caught(|| {
+                        'reload: loop {
+                            worker_error::run_entry(entry, is_eval);
+                            // Let module-level continuations run, and report a
+                            // module-level rejection nothing handled.
+                            pump_worker_microtasks();
+                            if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
                                 break 'reload;
                             }
-                            let received = match inbox::try_recv() {
-                                Ok(command) => Ok(command),
-                                Err(mpsc::TryRecvError::Empty) => {
-                                    // The agent's normal park observes its timers,
-                                    // native work and notifications from the parent.
-                                    perry_runtime::event_pump::js_wait_for_event();
-                                    pump_worker_microtasks();
-                                    continue;
-                                }
-                                Err(mpsc::TryRecvError::Disconnected) => {
-                                    Err(std::sync::mpsc::RecvError)
-                                }
-                            };
-                            match received {
-                                Ok(WorkerCommand::Reload) => {
-                                    MESSAGE_PORTS.with(|ports| {
-                                        ports.borrow_mut().remove(&(parent_port::id()));
-                                    });
-                                    CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
-                                    worker_surface::install_web_worker_globals();
-                                    continue 'reload;
-                                }
-                                Ok(WorkerCommand::DirectMessage {
-                                    message,
-                                    source_thread_id,
-                                    ack,
-                                }) => {
-                                    let result = direct_message::deliver_worker_message(
-                                        &message,
-                                        source_thread_id,
-                                    );
-                                    pump_worker_microtasks();
-                                    let _ = ack.send(result);
-                                }
-                                Ok(WorkerCommand::Terminate) => {
-                                    exit_code = 1;
+                            loop {
+                                // Re-evaluate after every callback/checkpoint. A consumed
+                                // once listener no longer references its MessagePort;
+                                // timers and native completions still keep this agent alive.
+                                if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get)
+                                    || perry_runtime::event_pump::perry_has_work() == 0
+                                {
                                     break 'reload;
                                 }
-                                Err(_) => break 'reload,
+                                let received = match inbox::try_recv() {
+                                    Ok(command) => Ok(command),
+                                    Err(mpsc::TryRecvError::Empty) => {
+                                        // The agent's normal park observes its timers,
+                                        // native work and notifications from the parent.
+                                        perry_runtime::event_pump::js_wait_for_event();
+                                        pump_worker_microtasks();
+                                        continue;
+                                    }
+                                    Err(mpsc::TryRecvError::Disconnected) => {
+                                        Err(std::sync::mpsc::RecvError)
+                                    }
+                                };
+                                match received {
+                                    Ok(WorkerCommand::Reload) => {
+                                        MESSAGE_PORTS.with(|ports| {
+                                            ports.borrow_mut().remove(&(parent_port::id()));
+                                        });
+                                        CURRENT_WORKER_CLOSE_REQUESTED
+                                            .with(|closed| closed.set(false));
+                                        worker_surface::install_web_worker_globals();
+                                        continue 'reload;
+                                    }
+                                    Ok(WorkerCommand::DirectMessage {
+                                        message,
+                                        source_thread_id,
+                                        ack,
+                                    }) => {
+                                        let result = direct_message::deliver_worker_message(
+                                            &message,
+                                            source_thread_id,
+                                        );
+                                        pump_worker_microtasks();
+                                        let _ = ack.send(result);
+                                    }
+                                    Ok(WorkerCommand::Terminate) => {
+                                        exit_code = 1;
+                                        break 'reload;
+                                    }
+                                    Err(_) => break 'reload,
+                                }
                             }
                         }
-                    }
-                    if exit_code == 0 {
-                        perry_runtime::process::js_process_run_exit_sequence();
-                        exit_code = perry_runtime::process::js_process_pending_exit_code();
+                        if exit_code == 0 {
+                            perry_runtime::process::js_process_run_exit_sequence();
+                            exit_code = perry_runtime::process::js_process_pending_exit_code();
+                        }
+                    });
+                    match body {
+                        Ok(()) => None,
+                        Err(_) if perry_runtime::loop_interrupt::take_terminated() => {
+                            controlled_exit.set(true);
+                            None
+                        }
+                        Err(caught) => Some(worker_error_message(caught.value())),
                     }
                 })
             }));
-            // Retire the termination request before anything else: from here
-            // on no JS of this worker runs, so no poll may answer it.
-            let terminated = perry_runtime::loop_interrupt::take_terminated();
+            // Keep diagnostic getters under the worker base and cooperative
+            // interruption until capture has completed.
+            let terminated =
+                perry_runtime::loop_interrupt::take_terminated() || controlled_exit.get();
             let controlled_exit_code = perry_runtime::process::js_process_pending_exit_code();
             perry_runtime::loop_interrupt::clear_current();
-            restore_worker_env(previous_env);
             // This arena is about to go away; purge any queue entry still tagged
             // with this agent rather than leave it for a drain that can never
             // legally run it.
             perry_runtime::agent::retire_agent(worker_agent);
 
             let exit_code = match result {
-                Ok(Ok(())) => exit_code,
-                Ok(Err(_)) if terminated => controlled_exit_code,
+                Ok(_) if terminated => controlled_exit_code,
+                Ok(Ok(None)) => exit_code,
+                Ok(Ok(Some(error))) => {
+                    push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));
+                    1
+                }
                 Ok(Err(thrown)) => {
                     let error = worker_error_message(thrown);
                     push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));

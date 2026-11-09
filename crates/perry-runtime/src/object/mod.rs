@@ -371,7 +371,8 @@ pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
 pub(crate) use nm_namespace_hooks::{
-    arm_nm_ee_ops, arm_nm_namespace_ops, nm_ee_ops, nm_namespace_ops, NmEeOps, NmNamespaceOps,
+    arm_nm_ee_ops, arm_nm_namespace_ops, nm_delete_member, nm_ee_ops, nm_namespace_ops, NmEeOps,
+    NmMember, NmNamespaceOps,
 };
 pub use object_literal_ops::*;
 pub use object_ops::*;
@@ -447,9 +448,9 @@ pub use this_binding::{
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
     js_static_this_resolve_class, js_this_coerce_sloppy,
 };
-pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
+pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every

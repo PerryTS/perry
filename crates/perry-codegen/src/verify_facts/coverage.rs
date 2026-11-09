@@ -28,11 +28,17 @@ pub(crate) enum Fact {
     MinimumExtent,
     Separation,
     NumberInput,
+    Int32Input,
+    ConstLength,
+    IndexArgument,
     IndexedMetadata,
     NumericBody,
     NumericResult,
     ProtoHolder,
     ProtoAdd,
+    ElementRead,
+    FieldReadCall,
+    CanonicalNumber,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -60,11 +66,17 @@ impl Fact {
             Self::MinimumExtent => "indexed minimum extent",
             Self::Separation => "indexed separation",
             Self::NumberInput => "number input",
+            Self::Int32Input => "int32 input",
+            Self::ConstLength => "array constant length",
+            Self::IndexArgument => "index argument",
             Self::IndexedMetadata => "indexed metadata",
             Self::NumericBody => "numeric body",
             Self::NumericResult => "numeric result",
             Self::ProtoHolder => "prototype holder",
             Self::ProtoAdd => "prototype add",
+            Self::ElementRead => "proven element read",
+            Self::FieldReadCall => "field read call",
+            Self::CanonicalNumber => "canonical number",
         }
     }
 }
@@ -87,7 +99,10 @@ pub(crate) fn consumed(fact: Fact, operands: impl FnOnce() -> Value) {
 
 pub(crate) fn checked(fact: Fact, operands: Value) {
     let identity = record(fact.name(), operands, true);
-    if matches!(fact, Fact::Bodies | Fact::StaticGuard | Fact::NumberInput) {
+    if matches!(
+        fact,
+        Fact::Bodies | Fact::StaticGuard | Fact::NumberInput | Fact::Int32Input | Fact::ConstLength
+    ) {
         let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
         unit_report_validation(inventory.claims.get_mut(&identity).unwrap());
     }
@@ -234,6 +249,14 @@ pub(crate) fn emitted(module: &str, emission: u64, copy: Value) {
 
 pub(crate) fn number(id: u32) {
     checked(Fact::NumberInput, json!({"local":id}));
+}
+
+pub(crate) fn int32(id: u32) {
+    checked(Fact::Int32Input, json!({"local":id}));
+}
+
+pub(crate) fn const_length(id: u32) {
+    checked(Fact::ConstLength, json!({"local":id}));
 }
 
 pub(crate) fn normal_call_miss(class: &str, key: &str) {

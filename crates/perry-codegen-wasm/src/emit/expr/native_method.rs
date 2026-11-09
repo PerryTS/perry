@@ -685,7 +685,7 @@ impl<'a> FuncEmitCtx<'a> {
                                         },
                                     ));
                                     self.emit_store_arg(func, 1, &args[0]);
-                                    self.emit_memcall_void(func, "array_for_each", 2);
+                                    self.emit_memcall_void(func, "array_forEach", 2);
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                                 }
                                 "find" if !args.is_empty() => {

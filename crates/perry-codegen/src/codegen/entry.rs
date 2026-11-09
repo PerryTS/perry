@@ -794,6 +794,7 @@ pub(super) fn compile_module_entry(
             // too — passing an empty map kept top-level accumulator loops on
             // the rooted/guarded path while in-function ones were clean.
             &cross_module.module_global_proven_types,
+            crate::codegen::facts_int32_locals::none(),
         );
         // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
         // does, which module init never got. The shadow map is built above
@@ -951,6 +952,8 @@ pub(super) fn compile_module_entry(
             scope_map: &cross_module.scope_map,
             string_accumulator_locals: &cross_module.string_accumulator_locals,
             contents_stable_bindings: &cross_module.contents_stable_bindings,
+            loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+            pushed_array_birth: false,
             string_length_read_of: None,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
@@ -1006,6 +1009,8 @@ pub(super) fn compile_module_entry(
             int_valued_i64_locals: main_native_facts.int_valued_i64_locals(),
             not_bigint_locals: main_native_facts.not_bigint_locals(),
             number_by_construction_locals: main_native_facts.number_by_construction_locals(),
+            facts_number_locals: crate::codegen::facts_number_locals::none(),
+            facts_int32_locals: crate::codegen::facts_int32_locals::none(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: main_shadow_slot_map.values().copied().collect(),
             temp_roots: crate::rooting::TempRootPool::default(),

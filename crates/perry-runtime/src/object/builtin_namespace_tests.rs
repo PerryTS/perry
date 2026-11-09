@@ -122,3 +122,29 @@ fn assign_and_define_onto_the_global_withdraw_the_named_namespace() {
         assert!(pristine(ns("JSON")) && pristine(ns("Reflect")));
     }
 }
+
+/// `console` is a native namespace object: a member store through a value
+/// (what interpreted code and a store through a parameter both reach) lands
+/// in the namespace override table, not in the holder. It must still set the
+/// holder's bit, or a guarded `console.log(...)` keeps binding the intrinsic.
+#[test]
+fn a_console_member_store_through_a_value_withdraws_console() {
+    let _g = global();
+    assert!(pristine(ns("console")));
+    // The realm's console object, written through PutValue.
+    let console = crate::object::js_object_get_field_by_name_f64(global(), key("console"));
+    let name = crate::value::js_nanbox_string(key("log") as i64);
+    crate::proxy::js_put_value_set(console, name, 1.0, console, 0);
+    assert!(!pristine(ns("console")));
+    assert!(pristine(ns("Math")) && pristine(ns("JSON")));
+}
+
+/// An override stored before the realm is sealed has already replaced a
+/// member: sealing publishes `console` withdrawn.
+#[test]
+fn a_console_override_stored_before_the_seal_withdraws_console() {
+    crate::object::native_module::native_namespace_prop_override_store("console", "info", 1.0);
+    let _g = global();
+    assert!(!pristine(ns("console")));
+    assert!(pristine(ns("Math")));
+}

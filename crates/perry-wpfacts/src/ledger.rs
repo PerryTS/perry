@@ -219,6 +219,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("argument of a primitive method")
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
+            || (starts("argument of host ") && w.ends_with(" (kept by the stream)"))
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("Array.prototype method on an array-like")
@@ -398,6 +399,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("iteratorRestAppend")
             || starts("cjsRequireEdge")
             || starts("unknown result alternative")
+            || starts("value a finally capability is resolved with")
         {
             UnmodeledConstruct
         } else {

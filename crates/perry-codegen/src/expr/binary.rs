@@ -149,12 +149,18 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     }
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
+    let facts: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| facts_number_leaf(ctx, leaf))
+        .collect();
     let needs_test: Vec<bool> = leaves
         .iter()
-        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .zip(&facts)
+        .map(|(leaf, f)| !f && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
         .collect();
 
     with_operands_rooted(ctx, &leaves, |ctx, values| {
+        witness_facts_leaves(ctx, values, &facts)?;
         let mut cond: Option<String> = None;
         for (value, is_tested) in values.iter().zip(needs_test.iter()) {
             if !is_tested {
@@ -235,6 +241,36 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     })
 }
 
+/// P3 B1, C2 (`facts_canonical`): a guarded arithmetic leaf the facts prove a
+/// plain Number needs no "is a Number" test.
+fn facts_number_leaf(ctx: &FnCtx<'_>, leaf: &Expr) -> bool {
+    let proven = crate::expr::facts_canonical::of(ctx, leaf)
+        == Some(crate::expr::facts_canonical::Num::Number);
+    if proven {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::CanonicalNumber,
+            || serde_json::json!({ "arith": "leaf" }),
+        );
+        crate::facts_consumed::used();
+    }
+    proven
+}
+
+/// Check mode: each fact-trusted leaf is a plain double.
+fn witness_facts_leaves(ctx: &mut FnCtx<'_>, values: &[String], facts: &[bool]) -> Result<()> {
+    for (value, f) in values.iter().zip(facts) {
+        if *f {
+            crate::expr::facts_canonical::witness(
+                ctx,
+                value,
+                crate::expr::facts_canonical::Num::Number,
+                "arithmetic leaf",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// The `+`-shaped guard for the arithmetic operators that cannot concatenate.
 ///
 /// `-`, `*` and `/` apply ToNumeric to both operands, so unlike `+` there is
@@ -262,13 +298,19 @@ fn lower_guarded_numeric_arith(
     fname: &str,
 ) -> Result<String> {
     let leaves = [left, right];
+    let facts: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| facts_number_leaf(ctx, leaf))
+        .collect();
     let needs_test: Vec<bool> = leaves
         .iter()
-        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .zip(&facts)
+        .map(|(leaf, f)| !f && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
         .collect();
     let range_guard = is_bitwise_op(op) && needs_test.contains(&true);
 
     with_operands_rooted(ctx, &leaves, |ctx, values| {
+        witness_facts_leaves(ctx, values, &facts)?;
         let mut cond: Option<String> = None;
         for (value, is_tested) in values.iter().zip(needs_test.iter()) {
             let is_num = if range_guard {
@@ -980,6 +1022,17 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
+        // is `l` and `r` is never evaluated. (An in-window read under a
+        // packed-loop index fact, a proven raw-f64 field, a numeric local.)
+        if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
+            && !matches!(
+                std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+        {
+            return lower_expr(ctx, left);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();

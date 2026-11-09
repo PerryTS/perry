@@ -449,6 +449,12 @@ impl Model {
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::LoadFrom(
+            origin, t, key, dst,
+        )) {
+            return;
+        }
         self.mark_use(t, crate::model::MARK_READ);
         // A class private field on an object this unit does not own: what
         // the class's code stored (`private_field`).
@@ -548,7 +554,7 @@ impl Model {
         }
         self.builtin_field_use(t, key, ChainAct::Load(dst));
         if self.is_array_length(t, key) {
-            self.add_prim(dst, prim::NUM);
+            self.arr_len_into(t, dst);
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
@@ -658,7 +664,17 @@ impl Model {
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`. An
         // `arguments` object's chain is an ordinary one (`Object.prototype`).
+        // Its own properties are ordinary ones, though: an accessor the
+        // program defines on it after its birth (`defineProperty` on a
+        // `JSON.parse` record) runs with the receiver as `this`, now or
+        // when it is defined later in the solve (as in `own_values_of`).
         if key == Key::any() && self.is_array_like(t) && !self.is_args(t) {
+            let act = ChainAct::Load(dst);
+            self.any_walk_holders
+                .entry(t)
+                .or_default()
+                .push((origin, act));
+            self.accessor_hit(origin, t, Key::any(), act);
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -680,11 +696,24 @@ impl Model {
         self.atoms[a as usize] == crate::STAR_KEY || self.atoms[a as usize].parse::<f64>().is_ok()
     }
 
-    /// A key generation names an accessor under. Numeric reads registered
-    /// before the first numeric accessor must start their deferred walks too:
-    /// installing a descriptor does not activate its body on their behalf.
+    /// A key becomes an accessor key: generation names an accessor under it,
+    /// or the solve installs one. The first time, the reads and writes that
+    /// arrived before it start the walks they deferred, whichever side named
+    /// the key first: in the activation pass generation and the solve
+    /// interleave, so a read of an inherited literal getter (`Object.create`,
+    /// `setPrototypeOf`) can be solved before generation walks the literal.
     pub(crate) fn add_accessor_atom(&mut self, a: Atom) {
-        self.accessor_atoms.insert(a);
+        if !self.accessor_atoms.insert(a) {
+            return;
+        }
+        self.numeric_index_walks(a);
+        self.deferred_walks(a);
+    }
+
+    /// Numeric reads registered before the first numeric accessor start
+    /// their deferred walks: installing a descriptor does not activate its
+    /// body on their behalf.
+    fn numeric_index_walks(&mut self, a: Atom) {
         if self.numeric_accessor || !self.numeric_accessor_key(a) {
             return;
         }
@@ -732,6 +761,19 @@ impl Model {
             self.builtin_field_use(t, key, ChainAct::Load(dst));
         }
         self.proto_value_at(t, dst);
+        // A program function born with another intrinsic prototype
+        // (`%AsyncGeneratorFunction.prototype%`, a generator object's
+        // `%GeneratorPrototype%` chain) has one the model does not
+        // describe: not `Function.prototype`, whose reads differ.
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            if !builtins::born_with_function_proto(self, f) {
+                self.add_tok(dst, TOP);
+                return;
+            }
+        }
+        if let Some(ns) = builtins::chain_ns(self, t) {
+            self.with_b(|m| builtins::builtin_proto_value(m, Some(ns), dst));
+        }
     }
 
     pub(super) fn proto_value_at(&mut self, t: Tok, dst: NodeId) {
@@ -1184,6 +1226,9 @@ impl Model {
             }
             return;
         }
+        for x in self.class_id_holders(origin, p) {
+            self.accessor_hit(origin, x, key, act);
+        }
         // A class prototype defines its declared members at class creation:
         // the lookup ends there (resumed if the prototype is later mutated).
         if self.stops_at(p, key) {
@@ -1192,6 +1237,45 @@ impl Model {
             return;
         }
         self.chain_from(origin, p, key, act);
+    }
+
+    /// The class-id holders of a lookup on `q` for `of` (the receiver, or
+    /// the prototype the lookup came from): a specialization's instances
+    /// have its origin's prototype object `q` as [[Prototype]], one object
+    /// (`js_register_class_generic_origin`), and a call or accessor access
+    /// there for an instance of the specialization (or of a class derived
+    /// from one) runs the specialization's member by class id (codegen
+    /// `static_prototype::chain`): `Proto` of each such specialization,
+    /// which holds its declared members and is no object's prototype.
+    pub(crate) fn class_id_holders(&mut self, of: Tok, q: Tok) -> Vec<Tok> {
+        let mut out = Vec::new();
+        if self.constructor_origins.is_empty() {
+            return out;
+        }
+        let TokKind::Proto(o) = self.toks[q as usize] else {
+            return out;
+        };
+        let starts: Vec<TmplId> = match self.toks[of as usize] {
+            TokKind::Obj(c, _) if matches!(self.tmpls[c as usize].kind, TmplKind::Class { .. }) => {
+                vec![c]
+            }
+            TokKind::Proto(c) => vec![c],
+            _ => self.virt_protos.get(&of).cloned().unwrap_or_default(),
+        };
+        for c in starts {
+            let mut cur = Some(c);
+            for _ in 0..self.tmpls.len() {
+                let Some(x) = cur else { break };
+                if x != o && self.constructor_origin(x) == o {
+                    let t = self.tok(TokKind::Proto(x));
+                    if !out.contains(&t) {
+                        out.push(t);
+                    }
+                }
+                cur = self.tmpls[x as usize].parent;
+            }
+        }
+        out
     }
 
     /// `super.key` from receiver `origin`: the lookup starts at `start`.
@@ -1448,6 +1532,12 @@ impl Model {
         if self.diagnostic.is_some() {
             self.diagnostic_reach(f, "accessor", u32::MAX);
         }
+        // An accessor run is a call made outside generation: what it throws
+        // reaches its region, the shared cell every catch reads (DESIGN
+        // SEEDE section 8).
+        let raise = self.raise_of(f);
+        let thrown = self.thrown;
+        self.edge(raise, thrown);
         if !self.sum.ready {
             self.sum
                 .deferred
@@ -1634,7 +1724,7 @@ impl Model {
             }
         }
         self.leave_key(holder, key);
-        self.activate_accessor_key(key);
+        self.add_accessor_atom(key);
         if replay && !self.acc_groups.contains_key(&(holder, Key::any())) {
             let walks = self
                 .any_walk_holders
@@ -1650,14 +1740,9 @@ impl Model {
         }
     }
 
-    /// An installed callable first makes this key an accessor key. Reuse
-    /// recorded visits and leave nodes to start the walks that were not
-    /// needed when those reads/stores first arrived.
-    fn activate_accessor_key(&mut self, key: Atom) {
-        if self.accessor_atoms.contains(&key) {
-            return;
-        }
-        self.add_accessor_atom(key);
+    /// Reuse recorded visits and leave nodes to start the walks that were
+    /// not needed when those reads/stores first arrived (`add_accessor_atom`).
+    fn deferred_walks(&mut self, key: Atom) {
         let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
         let numeric = self.numeric_accessor_key(key);
         let num = self.atom(NUM_KEY);

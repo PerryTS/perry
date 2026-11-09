@@ -18,6 +18,13 @@ pub fn private_value_key(class_id: u32, name: &str) -> String {
     format!("#<perry:private-value:{class_id}:{name}>")
 }
 
+/// The dispatch key of private method or accessor `name` (`#x`) of the class
+/// whose private elements carry `class_id`: the key lowering gives a guarded
+/// access to it (`lower::expr_member::private_storage_property`).
+pub fn private_member_key(class_id: u32, name: &str) -> String {
+    format!("#<perry:private-member:{class_id}:{name}>")
+}
+
 /// The chain of `class`, root first, when every link is a local ordinary
 /// class.
 fn local_chain<'c>(

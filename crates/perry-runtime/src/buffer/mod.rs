@@ -99,9 +99,12 @@ pub use header::resizable_max_byte_length;
 pub(crate) use header::{resizable_info, set_resizable, ResizableInfo};
 #[cfg(test)]
 pub(crate) use resizable::alloc_resizable_array_buffer;
-pub(crate) use resizable::array_buffer_resize;
+pub(crate) use resizable::{
+    array_buffer_resize, buffer_new_with_options, shared_array_buffer_grow,
+};
 pub use resizable::{
     is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
+    js_shared_array_buffer_new_with_options,
 };
 
 // ---- Re-exports: #8149 integer-indexed-exotic discrimination ----
@@ -692,3 +695,19 @@ pub(crate) use header::{enqueue_all_foreign_finalizers, set_foreign_finalizer};
 
 #[cfg(test)]
 mod adopted_backing_tests;
+
+/// The out-of-range arm of a PROVEN native buffer or typed-array read
+/// (`perry-codegen`, `expr/buffer_access.rs::OutOfBoundsArm::Abort`). The
+/// compiler proved this index inside the receiver, and the lowered index
+/// failed the bounds check anyway, so the proof is wrong: a compiler bug.
+/// Name the access and stop rather than read outside the backing store or
+/// fabricate an element value.
+#[no_mangle]
+pub extern "C" fn js_native_access_bounds_failed(index: i32, length: i32) -> ! {
+    eprintln!(
+        "Perry internal error: a proven native typed-array/buffer read at index {} \
+         failed its bounds check against length {}",
+        index, length as u32
+    );
+    std::process::abort()
+}

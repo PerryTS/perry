@@ -57,21 +57,98 @@ pub(super) fn buffer_own_prop_or_method(
     None
 }
 
-/// Resolve a DataView constructor after the caller has checked own properties.
-/// An explicit prototype (even null or one without a constructor) replaces the
-/// intrinsic chain. The shared walker preserves the view as an accessor receiver.
-pub(super) fn data_view_constructor(
-    obj: *const ObjectHeader,
-    key: *const crate::StringHeader,
-) -> JSValue {
+/// The intrinsic constructor name of an ArrayBuffer / SharedArrayBuffer /
+/// DataView cell (the kinds `buffer::is_non_indexed_buffer_view` admits).
+pub(crate) fn view_kind_name(addr: usize) -> &'static str {
+    if crate::buffer::is_data_view(addr) {
+        "DataView"
+    } else if crate::buffer::is_shared_array_buffer(addr) {
+        "SharedArrayBuffer"
+    } else {
+        "ArrayBuffer"
+    }
+}
+
+/// [[Prototype]] of an ArrayBuffer / SharedArrayBuffer / DataView: the recorded
+/// one (`Object.setPrototypeOf`, a subclass), else its kind's intrinsic.
+pub(crate) fn view_prototype_bits(addr: usize) -> u64 {
+    super::super::prototype_chain::object_static_prototype(addr)
+        .unwrap_or_else(|| crate::object::builtin_prototype_value(view_kind_name(addr)).to_bits())
+}
+
+/// A getter of the view kind's own prototype, answered from the cell. Only the
+/// accessors node puts on that kind's prototype: `ArrayBuffer.prototype`
+/// {resizable, maxByteLength, detached}, `SharedArrayBuffer.prototype`
+/// {growable, maxByteLength}, `DataView.prototype` {buffer, byteOffset}
+/// (`byteLength` is answered before this for every byte cell).
+fn view_kind_getter(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
+    let len = || crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader);
+    if crate::buffer::is_data_view(addr) {
+        return match key_bytes {
+            b"buffer" => Some(JSValue::from_bits(
+                crate::value::js_nanbox_pointer(
+                    crate::buffer::buffer_backing_array_buffer(addr) as i64
+                )
+                .to_bits(),
+            )),
+            b"byteOffset" => Some(JSValue::number(crate::buffer::buffer_byte_offset(addr) as f64)),
+            _ => None,
+        };
+    }
+    if crate::buffer::is_shared_array_buffer(addr) {
+        return match key_bytes {
+            b"growable" => Some(JSValue::bool(crate::buffer::is_resizable_buffer(addr))),
+            b"maxByteLength" => Some(JSValue::number(
+                crate::buffer::resizable_max_byte_length(addr).unwrap_or_else(|| len() as u32)
+                    as f64,
+            )),
+            _ => None,
+        };
+    }
+    match key_bytes {
+        b"resizable" => Some(JSValue::bool(crate::buffer::is_resizable_buffer(addr))),
+        b"detached" => Some(JSValue::bool(crate::buffer::is_detached_buffer(addr))),
+        b"maxByteLength" => {
+            if crate::buffer::is_detached_buffer(addr) {
+                return Some(JSValue::number(0.0));
+            }
+            Some(JSValue::number(
+                crate::buffer::resizable_max_byte_length(addr).unwrap_or_else(|| len() as u32)
+                    as f64,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// [[Get]] of a named key on an ArrayBuffer / SharedArrayBuffer / DataView.
+/// They are ordinary objects: an own property, else the receiver's
+/// [[Prototype]] chain, whose intrinsic holds exactly node's members. The
+/// kind's own accessors are answered from the cell (the values the prototype
+/// getters compute). Never the Node `Buffer` member table.
+pub(crate) fn view_get(obj: *const ObjectHeader, key: *const crate::StringHeader) -> JSValue {
+    let addr = obj as usize;
+    if !key.is_null() {
+        let key_bytes = unsafe {
+            std::slice::from_raw_parts(
+                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                (*key).byte_len as usize,
+            )
+        };
+        if let Ok(name) = std::str::from_utf8(key_bytes) {
+            if let Some(v) = crate::buffer::buffer_read_own_prop(addr, name) {
+                return JSValue::from_bits(v.to_bits());
+            }
+        }
+        if let Some(v) = view_kind_getter(addr, key_bytes) {
+            return v;
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_h = scope.root_raw_const_ptr(obj);
     let key_h = scope.root_raw_const_ptr(key);
     let proto_bits = receiver_h
-        .with_const_ptr(|receiver: *const ObjectHeader| {
-            super::super::prototype_chain::object_static_prototype(receiver as usize)
-        })
-        .unwrap_or_else(|| crate::object::builtin_prototype_value("DataView").to_bits());
+        .with_const_ptr(|receiver: *const ObjectHeader| view_prototype_bits(receiver as usize));
     // Re-read both pointers after materializing the intrinsic prototype, which
     // can allocate. Neither raw pointer is retained across that operation.
     receiver_h.with_const_ptr(|receiver: *const ObjectHeader| {

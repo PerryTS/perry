@@ -314,7 +314,7 @@ pub(crate) fn cancel_source(ctx: usize) {
             .map(|(id, _)| *id)
     });
     if let Some(id) = id {
-        exchange::abort(id);
+        exchange::abort(id, 0);
     }
     drain_pending();
 }
@@ -810,12 +810,13 @@ fn start_here(spec: RequestSpec, sink: Sink, prepared: Prepared) -> Result<(), D
 
 /// Cancel every request bound to `signal_ptr`. Called from the abort bridge on
 /// the main thread when `controller.abort()` or an `AbortSignal.timeout`
-/// deadline fires. A miss is a no-op.
+/// deadline fires. A miss is a no-op. Each request is delivered as aborted
+/// with `abort_reason`, the abort bridge's handle of the signal's reason.
 ///
 /// A thread that posted its requests to the agent's owner holds none of them in
 /// its own engine, so the abort is posted too — otherwise `controller.abort()`
 /// would be silently inert for exactly the requests P10 moved.
-pub(crate) fn abort_signal(signal_ptr: usize) -> usize {
+pub(crate) fn abort_signal(signal_ptr: usize, abort_reason: usize) -> usize {
     let ids = ENGINE.with(|e| {
         e.borrow_mut()
             .aborts
@@ -824,7 +825,7 @@ pub(crate) fn abort_signal(signal_ptr: usize) -> usize {
     });
     let n = ids.len();
     for id in ids {
-        exchange::abort(id);
+        exchange::abort(id, abort_reason);
     }
     drain_pending();
     if !tl::available() {
@@ -843,7 +844,7 @@ fn abort_signal_here(signal_ptr: usize) {
             .unwrap_or_default()
     });
     for id in ids {
-        exchange::abort(id);
+        exchange::abort(id, 0);
     }
     drain_pending();
 }

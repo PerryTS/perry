@@ -614,8 +614,17 @@ fn append_quoted(out: &mut Vec<u16>, value: &OsStr) -> io::Result<()> {
 pub(crate) fn environment_block(command: &Command, clear: bool) -> io::Result<Vec<u16>> {
     let mut values: BTreeMap<String, (OsString, OsString)> = BTreeMap::new();
     if !clear {
-        for (key, value) in std::env::vars_os() {
+        let mut inherit = |key: OsString, value: OsString| {
             values.insert(key.to_string_lossy().to_uppercase(), (key, value));
+        };
+        if let Some(entries) = crate::process::private_environment_snapshot() {
+            for (key, value) in entries {
+                inherit(key.into(), value.into());
+            }
+        } else {
+            for (key, value) in std::env::vars_os() {
+                inherit(key, value);
+            }
         }
     }
     for (key, value) in command.get_envs() {

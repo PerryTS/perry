@@ -1,6 +1,7 @@
 //! Method calls on primitives, own objects and prototypes: the summaries a call through a key runs.
 
 use super::*;
+use crate::summary::{Deferred, NativeRecv};
 
 /// An intrinsic prototype on `origin`'s chain read or called under a key
 /// that names none of its members (a number, DECISIONS 217): only a number
@@ -39,7 +40,7 @@ pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
     }
     let num = m.atom(NUM_KEY);
     if !intrinsic_miss(m, num, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(m, call, "argument of a written primitive method");
+        unknown_prim_method(m, call, "argument of a written primitive method");
     }
 }
 
@@ -64,9 +65,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            let retained = if !m.unit_mode
-                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
-            {
+            let retained = if !m.unit_mode && super::global_object(m, t) {
                 match _key {
                     Key::Named(a) => m
                         .native_property(t, &m.atoms[a as usize])
@@ -101,14 +100,16 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 m.sink_node(src, r);
             }
             // `process.argv = v`: later reads of the property see `v`.
-            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
-                && match _key {
-                    Key::Named(a) => m.atoms[a as usize] == "argv",
-                    Key::Any(_) => true,
+            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process)) {
+                for i in 0..m.process_arrays.len() {
+                    let (k, a, _) = m.process_arrays[i];
+                    if match _key {
+                        Key::Named(n) => n == k,
+                        Key::Any(_) => true,
+                    } {
+                        m.edge(src, a);
+                    }
                 }
-            {
-                let a = m.process_argv;
-                m.edge(src, a);
             }
         }
         _ => {}
@@ -117,7 +118,28 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
 
 // ------------------------------------------------------------- methods
 
+/// Before summaries exist, a native method run waits (`Deferred::Native`).
+fn native_waits(m: &mut Model, r: NativeRecv, key: Key, call: CallId) -> bool {
+    if m.sum.ready {
+        return false;
+    }
+    m.sum.deferred.push(Deferred::Native(r, key, call));
+    true
+}
+
+/// The native method run a `Deferred::Native` names.
+pub(crate) fn native_method_at(m: &mut Model, r: NativeRecv, key: Key, call: CallId) {
+    match r {
+        NativeRecv::Own(t) => own_method(m, t, key, call),
+        NativeRecv::Proto(p, origin) => proto_method(m, p, origin, key, call),
+        NativeRecv::Prim(prim) => prim_method(m, prim, key, call),
+    }
+}
+
 pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
+    if native_waits(m, NativeRecv::Prim(prim), key, call) {
+        return;
+    }
     if let Key::Named(a) = key {
         if matches!(
             members::prim_member(prim, &m.atoms[a as usize]),
@@ -142,7 +164,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     // read is final on every kind of the mask (DEC 250).
     let locked = members::prim_families(prim).all(|f| members::locked_read(f, None, &name));
     if !locked && !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(
+        unknown_prim_method(
             m,
             call,
             &format!("argument of a written primitive method {name}"),
@@ -220,6 +242,9 @@ pub(super) fn undescribed_method(
 
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
+    if native_waits(m, NativeRecv::Own(t), key, call) {
+        return;
+    }
     let prev = m.cur_this.replace(t);
     own_method_inner(m, t, key, call);
     m.cur_this = prev;
@@ -240,17 +265,30 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // A well-known-symbol method is a named member of the intrinsic chain
     // where the chain is described (a function value, an array, a described
     // builtin object: absent unless the description names it, as the
-    // iteration protocol of the builtin iterables is); on anything else it
-    // is a computed-key method.
+    // iteration protocol of the builtin iterables is; a builtin namespace
+    // whose own keys and chain are described, `Object[Symbol.iterator]`
+    // included); on anything else it is a computed-key method.
     let described = match &m.toks[t as usize] {
-        TokKind::Func(..) | TokKind::Bound(_) => true,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
+        TokKind::Builtin(ns) => name
+            .as_deref()
+            .is_some_and(|n| n.starts_with(WK_PREFIX) && members::ns_member(*ns, n).is_some()),
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {
                 members::bobj_family(what) != Family::Opaque
                     || matches!(
                         *what,
-                        "Date" | "TypedArray" | "URL" | "URLSearchParams" | "TextCodec" | "Timer"
+                        "Date"
+                            | "TypedArray"
+                            | "DataView"
+                            | "ArrayBuffer"
+                            | "SharedArrayBuffer"
+                            | "Buffer"
+                            | "URL"
+                            | "URLSearchParams"
+                            | "TextCodec"
+                            | "Timer"
                     )
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {
@@ -295,7 +333,13 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             function_method(m, t, name.as_deref(), call)
         }
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
-        TokKind::Func(_, _) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
+        // A class object is a function value: its chain ends at
+        // `%Function.prototype%`, whose `bind` makes a bound function of
+        // the class (`new` of it constructs the class) and whose
+        // `call`/`apply` call it (a class called without `new` throws).
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::ClassObj(_) => {
+            function_method(m, t, name.as_deref(), call)
+        }
         // A builtin function value's methods are `Function.prototype`'s
         // (and `Object.prototype`'s): what one does with its arguments is
         // unknown (`push.call(o, v)` stores). Any other name is absent.
@@ -345,6 +389,9 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// Builtin methods found on the prototype chain (`Object.prototype` and
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
+    if native_waits(m, NativeRecv::Proto(p, origin), key, call) {
+        return;
+    }
     if matches!(m.toks[p as usize], TokKind::ObjectProto) {
         if let Key::Named(a) = key {
             if matches!(
@@ -508,7 +555,8 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     // Object.prototype is a modeled holder: the define records the accessor
     // there as defineProperty does (an accessor on it is E23), under a
     // computed key too (the AccessorInstall any-key branch).
-    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto) {
+    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto)
+    {
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
         // Spread positions are not retained in CallSite: any direct or

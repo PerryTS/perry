@@ -98,10 +98,7 @@ fn a_preallocated_binding_is_the_bodys_own_and_not_captured() {
     let step = closure(
         31,
         Vec::new(),
-        vec![
-            let_(2, Expr::LocalGet(1)),
-            Stmt::Return(Some(add(2, 1))),
-        ],
+        vec![let_(2, Expr::LocalGet(1)), Stmt::Return(Some(add(2, 1)))],
         vec![1, 2],
     );
     let body = vec![

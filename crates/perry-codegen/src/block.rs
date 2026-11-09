@@ -1678,6 +1678,21 @@ impl LlBlock {
         r
     }
 
+    /// Add one incoming `(value, label)` edge to the phi defining `dst` in
+    /// this block, for an edge whose block is emitted after the phi (a back
+    /// edge into an earlier block). False when no such phi exists.
+    pub fn add_phi_incoming(&mut self, dst: &str, value: &str, label: &str) -> bool {
+        for inst in &mut self.instructions {
+            if let crate::inst::LlInst::Phi { dst: d, pairs, .. } = inst {
+                if d == dst {
+                    pairs.push((value.to_string(), label.to_string()));
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn phi(&mut self, ty: LlvmType, incoming: &[(&str, &str)]) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Phi {

@@ -32,7 +32,19 @@ pub extern "C" fn js_math_trunc(value: f64) -> f64 {
 /// `js_math_round_value` (test262 Math/round/S15.8.2.15_A7).
 #[no_mangle]
 pub extern "C" fn js_math_round(value: f64) -> f64 {
-    crate::object::js_math_round_value(js_math_to_number(value))
+    let rounded = crate::object::js_math_round_value(js_math_to_number(value));
+    // P3 B1 negative control (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): a runtime
+    // built with `PERRY_FACTS_SABOTAGE=canonnum` returns an INT32-boxed word
+    // from this declared-NUM builtin, so a consumer that trusts the NUM fact
+    // must be caught by its check-mode witness (rc 86). Build-time, so an
+    // ordinary build compiles the branch away.
+    if matches!(option_env!("PERRY_FACTS_SABOTAGE"), Some("canonnum"))
+        && rounded.fract() == 0.0
+        && rounded.abs() < 2_147_483_648.0
+    {
+        return f64::from_bits(crate::value::INT32_TAG | (rounded as i32 as u32 as u64));
+    }
+    rounded
 }
 
 /// Math.sign(x) -> number
@@ -160,58 +172,63 @@ pub extern "C" fn js_math_fround(x: f64) -> f64 {
     x as f32 as f64
 }
 
-fn round_ties_to_even(value: f64) -> u64 {
-    let floor = value.floor();
-    let floor_int = floor as u64;
-    let frac = value - floor;
-    if frac < 0.5 {
-        floor_int
-    } else if frac > 0.5 {
-        floor_int + 1
-    } else if floor_int & 1 == 0 {
-        floor_int
-    } else {
-        floor_int + 1
+/// IEEE-754 binary16 bits of `x`: round to nearest, ties to even, on the bits
+/// (exact, no float arithmetic). NaN packs as the quiet NaN 0x7E00, like V8.
+pub(crate) fn f64_to_binary16(x: f64) -> u16 {
+    let bits = x.to_bits();
+    let sign = ((bits >> 48) & 0x8000) as u16;
+    let exp = ((bits >> 52) & 0x7ff) as i32;
+    let mant = bits & 0x000f_ffff_ffff_ffff;
+    if exp == 0x7ff {
+        return sign | if mant != 0 { 0x7e00 } else { 0x7c00 };
     }
+    // The binary16 biased exponent of `x`, before rounding.
+    let e = exp - 1023 + 15;
+    if e >= 31 {
+        return sign | 0x7c00;
+    }
+    // Keep the top bits of the significand that binary16 holds (10 for a
+    // normal, fewer for a subnormal) and round the dropped ones; a carry out
+    // of the significand moves into the exponent, up to infinity.
+    let (kept, shift) = if e > 0 {
+        (((e as u64) << 52) | mant, 42u32)
+    } else if e >= -10 {
+        (mant | (1u64 << 52), (43 - e) as u32)
+    } else {
+        return sign; // below half the smallest subnormal: +-0
+    };
+    let mut half = kept >> shift;
+    let rest = kept & ((1u64 << shift) - 1);
+    let tie = 1u64 << (shift - 1);
+    if rest > tie || (rest == tie && half & 1 == 1) {
+        half += 1;
+    }
+    sign | half as u16
+}
+
+/// The number an IEEE-754 binary16 bit pattern denotes.
+pub(crate) fn binary16_to_f64(bits: u16) -> f64 {
+    let sign = ((bits & 0x8000) as u64) << 48;
+    let exp = ((bits >> 10) & 0x1f) as u64;
+    let mant = (bits & 0x3ff) as u64;
+    let magnitude = match exp {
+        // m * 2^-24, exact
+        0 => mant as f64 * (1.0 / 16_777_216.0),
+        31 if mant == 0 => f64::INFINITY,
+        31 => return f64::NAN,
+        e => f64::from_bits(((e + 1023 - 15) << 52) | (mant << 42)),
+    };
+    f64::from_bits(magnitude.to_bits() | sign)
 }
 
 /// Math.f16round(x) -> number — nearest IEEE-754 binary16 value
 #[no_mangle]
 pub extern "C" fn js_math_f16round(value: f64) -> f64 {
     let x = js_math_to_number(value);
-    if x == 0.0 || !x.is_finite() {
+    if x.is_nan() {
         return x;
     }
-
-    const MIN_HALF_SUBNORMAL: f64 = 5.960464477539063e-8; // 2^-24
-    const MIN_HALF_NORMAL: f64 = 0.00006103515625; // 2^-14
-    const MAX_HALF_FINITE: f64 = 65504.0;
-    const OVERFLOW_THRESHOLD: f64 = 65520.0;
-
-    let negative = x.is_sign_negative();
-    let abs = x.abs();
-    let rounded = if abs >= OVERFLOW_THRESHOLD {
-        f64::INFINITY
-    } else if abs < MIN_HALF_NORMAL {
-        let mantissa = round_ties_to_even(abs / MIN_HALF_SUBNORMAL);
-        mantissa as f64 * MIN_HALF_SUBNORMAL
-    } else {
-        let exponent = (((abs.to_bits() >> 52) & 0x7ff) as i32) - 1023;
-        let step = 2.0f64.powi(exponent - 10);
-        let significand = round_ties_to_even(abs / step);
-        let rounded = significand as f64 * step;
-        if rounded > MAX_HALF_FINITE {
-            f64::INFINITY
-        } else {
-            rounded
-        }
-    };
-
-    if negative {
-        -rounded
-    } else {
-        rounded
-    }
+    binary16_to_f64(f64_to_binary16(x))
 }
 
 /// Math.clz32(x) -> number — count leading zeros of 32-bit integer

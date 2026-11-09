@@ -15,6 +15,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8};
 #[path = "generic_overhead_tests.rs"]
 mod generic_overhead_tests;
 
+#[cfg(test)]
+#[path = "static_store_barrier_tests.rs"]
+mod static_store_barrier_tests;
+
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
 /// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
 /// disables emission. Sites with a precise field/element address use
@@ -22,6 +26,9 @@ mod generic_overhead_tests;
 /// compatibility wrapper, which conservatively marks the parent span.
 /// The env gate is read once and OnceLock-cached at codegen time.
 pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_bits: &str) {
+    if static_child() {
+        return;
+    }
     // Expression lowering can complete abruptly (for example, an unsupported
     // dynamic `new Worker(path)` lowers to a throwing call + `unreachable`)
     // before an enclosing captured-local assignment reaches its post-store
@@ -77,12 +84,150 @@ pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_b
     ctx.current_block = done_idx;
 }
 
+thread_local! {
+    /// The store being lowered writes a value that is no GC-heap object
+    /// (`with_static_child`).
+    static STATIC_CHILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn static_child() -> bool {
+    STATIC_CHILD.with(std::cell::Cell::get)
+}
+
+/// A value whose every result is a String literal (an image literal in the
+/// binary's data, never a GC-heap object) or a non-pointer literal, and
+/// whose lowering here performs no store: a literal, a selection of
+/// literals under a store-free test, or a call of a module function that
+/// returns only such selections (`opposite(c)`) with store-free arguments.
+fn static_value(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::String(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => store_free(condition) && static_value(ctx, then_expr) && static_value(ctx, else_expr),
+        Expr::Call { callee, args, .. } => {
+            let Expr::FuncRef(id) = callee.as_ref() else {
+                return false;
+            };
+            args.iter().all(store_free) && function_returns_static(ctx, *id)
+        }
+        _ => false,
+    }
+}
+
+/// Module function `id` completes only with `return <literal selection>`
+/// (or by falling off its end: `undefined`).
+fn function_returns_static(ctx: &FnCtx<'_>, id: u32) -> bool {
+    use perry_hir::Stmt;
+    let Some(f) = ctx.numeric_order_functions.iter().find(|f| f.id == id) else {
+        return false;
+    };
+    if f.is_async || f.is_generator || f.was_plain_async {
+        return false;
+    }
+    fn literal(e: &Expr) -> bool {
+        match e {
+            Expr::String(_)
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Undefined => true,
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => literal(then_expr) && literal(else_expr),
+            _ => false,
+        }
+    }
+    fn returns_ok(stmts: &[Stmt]) -> bool {
+        stmts.iter().all(|s| match s {
+            Stmt::Return(Some(e)) => literal(e),
+            Stmt::Return(None) => true,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => returns_ok(then_branch) && else_branch.as_deref().is_none_or(returns_ok),
+            Stmt::Expr(_) | Stmt::Let { .. } | Stmt::Throw(_) => true,
+            _ => false,
+        })
+    }
+    returns_ok(&f.body)
+}
+
+/// An expression whose lowering performs no store: no assignment, update,
+/// store or call anywhere in it.
+fn store_free(e: &Expr) -> bool {
+    let bad = matches!(
+        e,
+        Expr::LocalSet(..)
+            | Expr::Update { .. }
+            | Expr::PropertySet { .. }
+            | Expr::IndexSet { .. }
+            | Expr::Call { .. }
+            | Expr::New { .. }
+            | Expr::Closure { .. }
+    );
+    if bad {
+        return false;
+    }
+    let mut ok = true;
+    perry_hir::walker::walk_expr_children(e, &mut |c| {
+        if ok && !store_free(c) {
+            ok = false;
+        }
+    });
+    ok
+}
+
+/// Lower the store `receiver.k = value` with `f`; when the receiver is a
+/// local or `this` and `value` is `static_value`, its write barrier is
+/// skipped: a generational barrier remembers old-to-young edges and an
+/// incremental one greys a heap child, and a binary-image String is neither
+/// young nor in the heap. Layout notes and the store itself are unchanged.
+/// `PERRY_STATIC_STORE_BARRIERS=1` keeps every barrier.
+pub(crate) fn with_static_child<R>(
+    ctx: &mut FnCtx<'_>,
+    receiver: &Expr,
+    value: &Expr,
+    f: impl FnOnce(&mut FnCtx<'_>) -> R,
+) -> R {
+    static KEEP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let keep = *KEEP.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_STATIC_STORE_BARRIERS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    });
+    let on =
+        !keep && matches!(receiver, Expr::This | Expr::LocalGet(_)) && static_value(ctx, value);
+    if !on {
+        return f(ctx);
+    }
+    let saved = STATIC_CHILD.with(|c| c.replace(true));
+    let out = f(ctx);
+    STATIC_CHILD.with(|c| c.set(saved));
+    out
+}
+
 pub(crate) fn emit_write_barrier_slot_on_block(
     blk: &mut LlBlock,
     parent_bits: &str,
     slot_addr: &str,
     child_bits: &str,
 ) {
+    if static_child() {
+        return;
+    }
     if !crate::codegen::write_barriers_enabled() {
         return;
     }
@@ -210,6 +355,9 @@ pub(crate) fn emit_write_barrier_slot_generation_tested(
     child_bits: &str,
     stem: &str,
 ) {
+    if static_child() {
+        return;
+    }
     if !crate::codegen::write_barriers_enabled() {
         return;
     }
@@ -295,6 +443,9 @@ pub(crate) fn emit_write_barrier_slot_value_and_generation_tested(
     child_bits: &str,
     stem: &str,
 ) {
+    if static_child() {
+        return;
+    }
     if !crate::codegen::write_barriers_enabled() {
         return;
     }
@@ -827,6 +978,38 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     write_barrier_needed: bool,
     stem: &str,
 ) -> Option<String> {
+    emit_jsvalue_slot_store_pointer_tested_known(
+        ctx,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        string_addref_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        stem,
+        false,
+    )
+}
+
+/// [`emit_jsvalue_slot_store_pointer_tested`] for a caller that knows whether
+/// the stored value is a heap pointer: with `value_is_heap_pointer` (a pool
+/// atom literal, always a `STRING_TAG` heap string) the live "may carry a
+/// heap pointer" test is omitted, since it would always pass. The parent's
+/// remembering check and the barrier itself are unchanged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_jsvalue_slot_store_pointer_tested_known(
+    ctx: &mut FnCtx<'_>,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    string_addref_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+    stem: &str,
+    value_is_heap_pointer: bool,
+) -> Option<String> {
     {
         let blk = ctx.block();
         // GC_STORE_AUDIT(BARRIERED): the slot write itself is unconditional;
@@ -851,8 +1034,12 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     let done_label = ctx.block_label(done_idx);
     {
         let blk = ctx.block();
-        let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
-        blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+        if value_is_heap_pointer {
+            blk.br(&bookkeeping_label);
+        } else {
+            let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
+            blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+        }
     }
     ctx.current_block = bookkeeping_idx;
     {

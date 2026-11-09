@@ -107,6 +107,10 @@ pub struct CompileArgs {
     #[arg(long, value_name = "PATH")]
     pub source_root_target: Option<String>,
 
+    /// Compiler-owned ancestry for recursive build-time macro expansion.
+    #[arg(long, hide = true)]
+    pub macro_import_stack: Vec<PathBuf>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
@@ -681,6 +685,10 @@ pub struct GeneratedAssetModule {
 
 /// Compilation context tracking all modules
 pub struct CompilationContext {
+    /// This compilation executed build-time code with external inputs.
+    pub(crate) has_build_time_execution: bool,
+    /// Active importing modules, forwarded to native macro compiler children.
+    pub(crate) macro_import_stack: Vec<PathBuf>,
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
@@ -1425,6 +1433,8 @@ impl CompilationContext {
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
+            has_build_time_execution: false,
+            macro_import_stack: Vec::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
             uses_thread_codec: false,

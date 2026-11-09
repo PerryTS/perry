@@ -9,15 +9,19 @@
 //!
 //! A shape that may spell a Number key (`numeric_key`) is no shape: such a
 //! key may be an index, and keeps the any-key path.
+//!
+//! A call of a module function is the String its body returns: when every
+//! `return` of that body has a shape, the key is one of them, or
+//! `"undefined"` (a bare `return` or the end of the body); a union of globs.
 
 use super::*;
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{BinaryOp, Expr, Stmt};
 
-/// Glob pieces: `p0*p1*...*pn` (`""` where a substitution stands first or
-/// last); one piece is an exact name.
+/// A union of globs, each glob's pieces `p0*p1*...*pn` (`""` where a
+/// substitution stands first or last); one piece is an exact name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyShape {
-    pub pieces: Vec<String>,
+    pub globs: Vec<Vec<String>>,
 }
 
 enum Part {
@@ -66,8 +70,19 @@ fn str_parts(e: &Expr, out: &mut Vec<Part>) -> bool {
 
 impl KeyShape {
     /// The shape of key expression `e`: `None` unless it is a String built
-    /// with at least one non-empty string-literal part.
+    /// with at least one non-empty string-literal part, or a well-known
+    /// symbol. `Symbol.iterator` & co. are HIR's `@@__perry_wk_<name>`
+    /// sentinel (`read_key`), one symbol per name: no String, so the key
+    /// names that sentinel only (never `__proto__`, never a string member).
     pub fn of(e: &Expr) -> Option<KeyShape> {
+        if let Expr::SymbolFor(name) = e {
+            return match name.as_ref() {
+                Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => Some(KeyShape {
+                    globs: vec![vec![s.clone()]],
+                }),
+                _ => None,
+            };
+        }
         let mut parts = Vec::new();
         if !str_parts(e, &mut parts) {
             return None;
@@ -90,51 +105,88 @@ impl KeyShape {
                 }
             }
         }
-        lit.then_some(KeyShape { pieces })
-    }
-
-    /// Exact glob match: prefix, suffix, then each middle piece in order
-    /// (the leftmost occurrence is complete for `*`-only globs).
-    pub fn admits(&self, name: &str) -> bool {
-        let p = &self.pieces;
-        if p.len() == 1 {
-            return name == p[0];
-        }
-        let (first, last) = (&p[0], &p[p.len() - 1]);
-        if name.len() < first.len() + last.len()
-            || !name.starts_with(first.as_str())
-            || !name.ends_with(last.as_str())
-        {
-            return false;
-        }
-        let mut mid = &name[first.len()..name.len() - last.len()];
-        for piece in &p[1..p.len() - 1] {
-            match mid.find(piece.as_str()) {
-                Some(i) => mid = &mid[i + piece.len()..],
-                None => return false,
-            }
-        }
-        true
-    }
-
-    /// May a string of this shape be a Number key (`numeric_key`: Rust's
-    /// f64 syntax, any case of `inf`/`infinity`/`nan`)?
-    fn may_be_numeric(&self) -> bool {
-        if self.pieces.len() == 1 {
-            return crate::solve::numeric_key(&self.pieces[0]);
-        }
-        self.pieces.iter().all(|s| {
-            s.chars()
-                .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+        lit.then_some(KeyShape {
+            globs: vec![pieces],
         })
+    }
+
+    /// The String a call of `f` returns, when `f` is neither async nor a
+    /// generator (its call returns a promise or an iterator, an object) and
+    /// every `return` of its own body (`for_each_stmt_shallow`: nested
+    /// functions return to their own callers) has a shape: one of those
+    /// shapes, or `"undefined"` (a bare `return`, or the end of the body;
+    /// `undefined` converts to that key). A throw returns no key.
+    pub fn of_returns(f: &perry_hir::Function) -> Option<KeyShape> {
+        if f.is_async || f.is_generator {
+            return None;
+        }
+        let mut globs = vec![vec!["undefined".to_string()]];
+        let mut ok = true;
+        perry_hir::tdz_check::for_each_stmt_shallow(&f.body, &mut |s| {
+            if let Stmt::Return(r) = s {
+                match r.as_ref().map(KeyShape::of) {
+                    None => {}
+                    Some(Some(k)) => globs.extend(k.globs),
+                    Some(None) => ok = false,
+                }
+            }
+        });
+        globs.sort();
+        globs.dedup();
+        ok.then_some(KeyShape { globs })
+    }
+
+    /// Does a glob of the union match `name`?
+    pub fn admits(&self, name: &str) -> bool {
+        self.globs.iter().any(|g| glob_admits(g, name))
+    }
+
+    /// May a string of this shape be a Number key (`numeric_key`)?
+    fn may_be_numeric(&self) -> bool {
+        self.globs.iter().any(|g| glob_may_be_numeric(g))
     }
 }
 
+/// Exact glob match: prefix, suffix, then each middle piece in order
+/// (the leftmost occurrence is complete for `*`-only globs).
+fn glob_admits(p: &[String], name: &str) -> bool {
+    if p.len() == 1 {
+        return name == p[0];
+    }
+    let (first, last) = (&p[0], &p[p.len() - 1]);
+    if name.len() < first.len() + last.len()
+        || !name.starts_with(first.as_str())
+        || !name.ends_with(last.as_str())
+    {
+        return false;
+    }
+    let mut mid = &name[first.len()..name.len() - last.len()];
+    for piece in &p[1..p.len() - 1] {
+        match mid.find(piece.as_str()) {
+            Some(i) => mid = &mid[i + piece.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// May a string of glob `p` be a Number key (`numeric_key`: Rust's f64
+/// syntax, any case of `inf`/`infinity`/`nan`)?
+fn glob_may_be_numeric(p: &[String]) -> bool {
+    if p.len() == 1 {
+        return crate::solve::numeric_key(&p[0]);
+    }
+    p.iter().all(|s| {
+        s.chars()
+            .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+    })
+}
+
 impl Model {
-    /// The shape id of key expression `e` (0: none, any key).
-    pub fn key_shape(&mut self, e: &Expr) -> KeyShapeId {
+    /// The shape id of a computed key of shape `s` (0: none, any key).
+    pub fn key_shape(&mut self, s: Option<KeyShape>) -> KeyShapeId {
         self.key_shape_census[0] += 1;
-        let Some(s) = KeyShape::of(e).filter(|s| !s.may_be_numeric()) else {
+        let Some(s) = s.filter(|s| !s.may_be_numeric()) else {
             return 0;
         };
         self.key_shape_census[1] += 1;
@@ -142,7 +194,7 @@ impl Model {
             self.key_shape_census[2] += 1;
         }
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { pieces: Vec::new() });
+            self.key_shapes.push(KeyShape { globs: Vec::new() });
         }
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;

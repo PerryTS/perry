@@ -39,6 +39,7 @@ mod import_helpers;
 mod import_meta_require;
 mod import_meta_resolve;
 mod json_module;
+mod macros;
 mod native_addon;
 mod native_esm_namespace;
 mod parse_error;
@@ -499,6 +500,7 @@ fn collect_module_one(
         class_family_syntax,
         source,
         was_cjs_wrapped,
+        cjs_worker_filenames,
         messages,
         computed_require_warnings,
         wrap_dump,
@@ -589,36 +591,57 @@ fn collect_module_one(
         parse_filename,
     )
     .unwrap_or(source);
-    let ast_module_owned: swc_ecma_ast::Module;
-    let ast_module: &swc_ecma_ast::Module = match parse_cache {
-        Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(annotate_parse_error(
-                    e,
-                    &canonical,
-                    &source,
-                    was_cjs_wrapped,
-                ))
-            }
-        },
-        None => match perry_parser::parse_typescript(&source, parse_filename) {
-            Ok(m) => {
-                ast_module_owned = m;
-                &ast_module_owned
-            }
-            Err(e) => {
-                return Err(annotate_parse_error(
-                    anyhow!("Failed to parse {}: {}", canonical.display(), e),
-                    &canonical,
-                    &source,
-                    was_cjs_wrapped,
-                ));
-            }
-        },
+    let normalized_module = match sources {
+        source_prep::WalkSources::Reuse(earlier) => earlier.take_normalized(&canonical, &source)?,
+        source_prep::WalkSources::Keep(_) => None,
     };
-    let defined_module = ctx.parsed_defines.apply(ast_module);
+    let ast_module_owned: swc_ecma_ast::Module;
+    let ast_module: &swc_ecma_ast::Module = if let Some(module) = normalized_module.as_deref() {
+        module
+    } else {
+        match parse_cache {
+            Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Err(annotate_parse_error(
+                        e,
+                        &canonical,
+                        &source,
+                        was_cjs_wrapped,
+                    ))
+                }
+            },
+            None => match perry_parser::parse_typescript(&source, parse_filename) {
+                Ok(m) => {
+                    ast_module_owned = m;
+                    &ast_module_owned
+                }
+                Err(e) => {
+                    return Err(annotate_parse_error(
+                        anyhow!("Failed to parse {}: {}", canonical.display(), e),
+                        &canonical,
+                        &source,
+                        was_cjs_wrapped,
+                    ));
+                }
+            },
+        }
+    };
+    let defined_module = if normalized_module.is_none() {
+        ctx.parsed_defines.apply(ast_module)
+    } else {
+        None
+    };
     let ast_module = defined_module.as_ref().unwrap_or(ast_module);
+    let expanded_module = if normalized_module.is_none() {
+        macros::expand(ast_module, &canonical, ctx)?.map(std::sync::Arc::new)
+    } else {
+        None
+    };
+    if let (source_prep::WalkSources::Keep(kept), Some(module)) = (sources, &expanded_module) {
+        kept.keep_normalized(&canonical, &source, std::sync::Arc::clone(module));
+    }
+    let ast_module = expanded_module.as_deref().unwrap_or(ast_module);
     let resolved_module = import_meta_resolve::resolve_static(ast_module, &canonical, ctx)?;
     let ast_module = resolved_module.as_ref().unwrap_or(ast_module);
     let forwarding_module =
@@ -1280,7 +1303,13 @@ fn collect_module_one(
         ctx.native_module_imports
             .insert("worker_threads".to_string());
     }
-    worker_url::record(&hir_module, entry_path, &canonical, ctx);
+    worker_url::record(
+        &hir_module,
+        &cjs_worker_filenames,
+        entry_path,
+        &canonical,
+        ctx,
+    );
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {
