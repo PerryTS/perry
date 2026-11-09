@@ -36,7 +36,7 @@ fn controller_calls_dispatch_on_the_controller_handle() {
     // family. Nothing lowers a controller member statically.
     assert!(!dbg.contains("readable_stream_controller"), "{dbg}");
     for m in ["enqueue", "error"] {
-        assert!(!dbg.contains(&format!("method: "{m}"")), "{m}: {dbg}");
+        assert!(!dbg.contains(&format!("method: \"{m}\"")), "{m}: {dbg}");
     }
 }
 

@@ -68,11 +68,10 @@ fn realm_population_does_not_birth_lazy_families() {
 }
 
 /// Fixture 5: every `lazy` declaration can be born late. Its constructor
-/// owns `length`, `name` and `prototype` only (statics wait for declared
-/// static slots), the realm seal does not name it (the seal would read its
+/// owns `length`, `name` and `prototype` first, the realm seal does not name it (the seal would read its
 /// prototype at setup), and no setup step reached its prototype (the
-/// population test above). Listing a bagless constructor's keys births
-/// nothing.
+/// population test above). Listing a bagless
+/// constructor's keys births its family.
 #[test]
 fn lazy_declarations_are_bornable_late() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -95,18 +94,20 @@ fn lazy_declarations_are_bornable_late() {
             declaration.name
         );
         let before = own_names(constructor(declaration));
-        assert_eq!(
+        // Listing a constructor's keys is an observation of it: its statics
+        // (ReadableStream.from) belong to the birth, so the listing births.
+        assert_ne!(
             crate::array::intrinsic_prototype_addr_if_bound(declaration.identity),
             0,
-            "{}: listing its constructor's keys birthed it",
+            "{}: listing its constructor's keys must birth it",
             declaration.name
         );
-        assert_eq!(before, ["length", "name", "prototype"], "{}", declaration.name);
+        assert_eq!(before[..3], ["length", "name", "prototype"], "{}", declaration.name);
         builtin_prototype_value(declaration.name);
         assert_eq!(
             own_names(constructor(declaration)),
-            ["length", "name", "prototype"],
-            "{}: a lazy constructor declares no statics",
+            before,
+            "{}: the birth gave the constructor its keys once",
             declaration.name
         );
     }

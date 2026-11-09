@@ -3,10 +3,6 @@
 //! Extracted from `expr_call/mod.rs` in #1104 as a pure mechanical move;
 //! the only consumers are inside `lower_call_inner` in this module.
 
-use swc_ecma_ast as ast;
-
-use super::super::LoweringContext;
-
 /// Issue #562 — does `method` name a stream-API method on the given
 /// stream module? Used to gate the native-instance method rerouting so
 /// user-declared subclass methods fall through to regular class method
