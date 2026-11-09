@@ -1001,11 +1001,11 @@ impl Model {
             // lookup on it reaches what the program gave or stored up the
             // chain (`Object.setPrototypeOf(EventEmitter, p)` then
             // `Readable.apply`).
-            TokKind::BuiltinFn(Native::Member { identity })
+            TokKind::BuiltinFn(Native::Member { identity, holder: None })
                 if crate::builtins::realm_parent_constructor(identity).is_some() =>
             {
                 let parent = crate::builtins::realm_parent_constructor(identity).unwrap();
-                let p = self.tok(TokKind::BuiltinFn(Native::Member { identity: parent }));
+                let p = self.tok(TokKind::BuiltinFn(Native::Member { identity: parent, holder: None }));
                 self.add_tok(n, p);
             }
             TokKind::Func(_, _)

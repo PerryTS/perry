@@ -97,10 +97,10 @@ pub fn native_may_be(m: &Model, a: Tok, b: Tok) -> bool {
             ) => true,
             (
                 TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
-                TokKind::BuiltinFn(Native::Member { identity }),
+                TokKind::BuiltinFn(Native::Member { identity, .. }),
             )
             | (
-                TokKind::BuiltinFn(Native::Member { identity }),
+                TokKind::BuiltinFn(Native::Member { identity, .. }),
                 TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
             ) => identity.starts_with("Object.prototype."),
             _ => false,

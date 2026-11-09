@@ -664,15 +664,13 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
         }
-        // A class reference (INT32-tagged registered class id) is a function
+        // A class constructor (a class function object) is a function
         // value; #9413 retains its source text at compile time, so answer with
         // that and keep the NativeFunction form only for classes with none.
-        if super::super::class_prototype_ref_id(this_val).is_none() {
-            if let Some(cid) = super::super::native_module::class_ref_id(this_val) {
-                let s = super::super::class_registry::class_ref_to_string(cid);
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            }
+        if let Some(cid) = super::super::native_module::class_ref_id(this_val) {
+            let s = super::super::class_registry::class_ref_to_string(cid);
+            let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
         }
         // A per-evaluation class object (`ClassExprFresh`) is a function too.
         if let Some(source) = super::super::field_get_set::class_object_source_text(this_val) {

@@ -1521,6 +1521,13 @@ pub(crate) struct FnCtx<'a> {
     /// is never written, its truthiness is tag identity. Empty in the generic
     /// body, in module init, in methods and in every closure.
     pub spec_bool_params: std::collections::HashSet<u32>,
+    /// P2: the signature's `ret` when this body is a typed entry (`F$sig`):
+    /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
+    /// mode witnesses every returned value against it (§5).
+    pub sig_return: Option<crate::codegen::FactsRep>,
+    /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).
+    pub typed_methods:
+        &'a std::collections::HashMap<u32, crate::codegen::signature_entry::TypedMethod>,
     /// Bindings initialized from a declared typed-array element read
     /// (`typed_element::yields_element`). A selection hint for the relational
     /// lowering, which is exact for any value.

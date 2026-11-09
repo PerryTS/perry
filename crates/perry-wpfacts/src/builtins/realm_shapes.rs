@@ -304,7 +304,7 @@ impl Declarations {
                     self.namespace(*ns, m)
                 }
             }
-            TokKind::BuiltinFn(Native::Member { identity }) => self.named(identity, m),
+            TokKind::BuiltinFn(Native::Member { identity, .. }) => self.named(identity, m),
             _ => None,
         }
     }

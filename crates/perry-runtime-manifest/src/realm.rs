@@ -243,15 +243,15 @@ pub struct RealmEntry {
     pub kind: RealmKind,
     pub births: &'static [&'static str],
     pub module: Option<&'static str>,
-    /// The declared [[Prototype]] (`RealmDeclaration::prototype`): another
-    /// declaration's name (`node:stream.Readable`'s is `node:stream.Stream`).
-    pub prototype: Option<&'static str>,
     pub facts: &'static str,
     /// The declared effects of the body (empty: undeclared, unknown code).
     pub effects: &'static [RealmEffect],
     /// Its own properties (`RealmDeclaration::properties`), key and value
     /// kind, so a reader of the table needs no JSON.
     pub own: &'static [RealmOwn],
+    /// Its [[Prototype]] (`RealmDeclaration::prototype`): the declaration a
+    /// lookup past `own` continues on; `None` ends the chain (`null`).
+    pub proto: Option<&'static str>,
 }
 
 /// An own property of a declaration in the generated compiler table.
@@ -293,11 +293,14 @@ impl RealmProperty {
                 RealmValue::Undefined => "Undefined".into(),
                 RealmValue::Null => "Null".into(),
                 RealmValue::Boolean(_) => "Boolean".into(),
-                RealmValue::NumberBits(_) | RealmValue::Int32(_) => "Number".into(),
+                RealmValue::NumberBits(_) => "Number".into(),
                 RealmValue::String(_) => "String".into(),
                 RealmValue::Symbol(_) => "Symbol".into(),
                 RealmValue::Reference(r) => format!("Reference({r:?})"),
-                RealmValue::RawReference(_)
+                // A constructor identity capture (`realm_facts.rs`): a
+                // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
+                RealmValue::Int32(_)
+                | RealmValue::RawReference(_)
                 | RealmValue::Bytes(_)
                 | RealmValue::RawWord(_)
                 | RealmValue::Dynamic(_) => "Other".into(),

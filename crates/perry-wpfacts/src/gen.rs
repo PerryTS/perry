@@ -286,6 +286,10 @@ pub struct Gen<'a> {
     /// `(module, byte offset, result node)` of each method call site
     /// (`bindings::ModuleBindings::number_calls`).
     pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
+    /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
+    /// identity (the callee expression's address), whether it spreads, and
+    /// for a direct call its callee node (`signatures::typed_calls`).
+    pub(crate) call_sites_at: Vec<crate::signatures::CallSiteRec>,
     /// One-unit String literal nodes by code (`Gen::str_literal`).
     pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
@@ -652,6 +656,7 @@ impl<'a> Gen<'a> {
             narrow_consts: Default::default(),
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
+            call_sites_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),

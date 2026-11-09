@@ -735,8 +735,57 @@ pub(crate) fn realm_parent_constructor(identity: &str) -> Option<&'static str> {
     if entry.kind != RealmKind::Constructor {
         return None;
     }
-    let parent = realm_entry(entry.prototype?)?;
+    let parent = realm_entry(entry.proto?)?;
     (parent.kind == RealmKind::Constructor).then_some(parent.name)
+}
+
+
+/// What a method lookup of a named key finds on the [[Prototype]] chain of
+/// an object a realm declaration made (`fresh(P)`, builtin object kind `P`):
+/// the own property of the first declaration on `P`'s declared chain that
+/// has the key, or that no declaration on it does.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RealmFind {
+    Own(&'static RealmOwn),
+    Absent,
+}
+
+/// The realm declaration `P` of a builtin object of kind `what` that a
+/// declaration's `fresh(P)` made (`effects::Run::fresh` keeps the name):
+/// a prototype declaration of a family this description does not model
+/// otherwise, every link of whose [[Prototype]] chain the realm declares.
+/// `None`: not such an object, or a link the realm does not declare (the
+/// lookup stays undescribed).
+pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
+    if bobj_family(what) != Family::Opaque {
+        return None;
+    }
+    let born = realm_entry(what).filter(|e| e.kind == RealmKind::Prototype)?;
+    let mut at = born;
+    // The realm's chains are short; a cycle is no chain.
+    for _ in 0..32 {
+        match at.proto {
+            None => return Some(born),
+            Some(p) => at = realm_entry(p)?,
+        }
+    }
+    None
+}
+
+/// The lookup of `name` (spelled as atoms are) on the chain of `born`
+/// (`realm_born`): its realm-declared own properties, then those of its
+/// declared [[Prototype]]s, to `null`.
+pub(super) fn realm_chain_find(born: &'static perry_hir::realm_manifest::RealmEntry, name: &str) -> RealmFind {
+    let mut at = born;
+    loop {
+        if let Some(p) = at.own.iter().find(|p| realm_key_is(p, name)) {
+            return RealmFind::Own(p);
+        }
+        match at.proto.and_then(realm_entry) {
+            Some(next) => at = next,
+            None => return RealmFind::Absent,
+        }
+    }
 }
 
 pub(crate) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
@@ -1398,4 +1447,70 @@ fn realm_described_statics_are_the_realm_declaration() {
     // node's RegExp owns legacy accessors the realm does not declare.
     assert!(ns_statics(BuiltinNs::RegExp).members.is_none());
     assert_eq!(ns_member(BuiltinNs::RegExp, "replace"), None);
+}
+
+#[test]
+fn a_realm_born_object_reads_exactly_its_declared_chain() {
+    // W2a: an object `fresh(P)` makes has `P` as its [[Prototype]]. The keys
+    // the lookup finds are the realm's own keys of `P` and of every
+    // declaration on its declared chain, to `null`; no other key is found.
+    let atom = |p: &RealmOwn| match p.key.strip_prefix("@@") {
+        Some(wk) if p.symbol => format!("{}{wk}", super::WK_PREFIX),
+        _ => p.key.to_string(),
+    };
+    for (what, chain) in [
+        ("Response.prototype", &["Response.prototype", "Object.prototype"][..]),
+        (
+            "TypeError.prototype",
+            &["TypeError.prototype", "Error.prototype", "Object.prototype"][..],
+        ),
+        (
+            "DOMException.prototype",
+            &["DOMException.prototype", "Error.prototype", "Object.prototype"][..],
+        ),
+        (
+            "AbortSignal.prototype",
+            &["AbortSignal.prototype", "EventTarget.prototype", "Object.prototype"][..],
+        ),
+    ] {
+        let born = realm_born(what).unwrap_or_else(|| panic!("{what} is realm-born"));
+        let mut declared = std::collections::BTreeSet::new();
+        let mut at = Some(born);
+        let mut walked = Vec::new();
+        while let Some(e) = at {
+            walked.push(e.name);
+            declared.extend(e.own.iter().map(atom));
+            at = e.proto.map(|p| realm_entry(p).expect("declared link"));
+        }
+        assert_eq!(walked, chain, "{what}");
+        for key in &declared {
+            assert!(
+                matches!(realm_chain_find(born, key), RealmFind::Own(_)),
+                "{what}.{key} is found"
+            );
+        }
+        for key in ["then", "zzNoSuchMember", "@@__perry_wk_iterator", "0"] {
+            assert!(!declared.contains(key), "{what}.{key} is not declared");
+            assert!(
+                matches!(realm_chain_find(born, key), RealmFind::Absent),
+                "{what}.{key} is absent"
+            );
+        }
+    }
+    // The first declaration on the chain that has the key decides:
+    // `Object.prototype.hasOwnProperty` under `Response.prototype`.
+    let found = |what: &str, key: &str| match realm_chain_find(realm_born(what).unwrap(), key) {
+        RealmFind::Own(p) => p.value,
+        RealmFind::Absent => panic!("{what}.{key} absent"),
+    };
+    assert_eq!(
+        found("Response.prototype", "hasOwnProperty"),
+        RealmOwnValue::Reference("Object.prototype.hasOwnProperty")
+    );
+    assert_eq!(found("Response.prototype", "@@__perry_wk_toStringTag"), RealmOwnValue::String);
+    // A described family is not realm-born (its own description decides),
+    // nor is a kind no declaration names.
+    for what in ["Promise", "Error", "Map", "hostrecord", "Response", "builtin"] {
+        assert!(realm_born(what).is_none(), "{what}");
+    }
 }

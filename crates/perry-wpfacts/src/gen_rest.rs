@@ -196,6 +196,19 @@ impl<'a> Gen<'a> {
                     let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
                     self.m.cons(callee, Cons::New { call });
                     ret
+                } else if let Some(t) = object
+                    .is_none()
+                    .then(|| self.namespace_member_callee(m0, method))
+                    .flatten()
+                {
+                    // A member the HIR calls directly (`import { createHook }
+                    // from "async_hooks"`) whose call the solver models by
+                    // its token: the call of that native value, as a call
+                    // through the namespace member runs.
+                    let callee = self.tok_node(t);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::Call { call });
+                    ret
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");

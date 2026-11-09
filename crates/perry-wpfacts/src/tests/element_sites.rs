@@ -252,7 +252,8 @@ fn builtin_alias_receivers_reuse_canonical_identity_and_shape() {
         matches!(
             value.kind,
             TokKind::BuiltinFn(crate::model::Native::Member {
-                identity: "parseInt"
+                identity: "parseInt",
+                ..
             })
         ),
         "{value:?}"

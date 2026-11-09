@@ -1172,7 +1172,7 @@ mod tests {
         }
     }
     fn int32(n: i32) -> f64 {
-        f64::from_bits(JSValue::int32(n).bits())
+        f64::from(n)
     }
 
     // An int32-tagged operand (e.g. a better-sqlite3 integer column) must be

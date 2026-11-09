@@ -451,8 +451,8 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    // Check the class's static symbols first when receiver is a class ref
-    // (top16 == 0x7FFE, INT32_TAG).
+    // Check the class's static symbols first when receiver is a class
+    // constructor.
     let bits = obj_f64.to_bits();
     if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         // A legacy class word names the same function object as its minted
@@ -469,24 +469,16 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 return value;
             }
         }
-        let static_lookup = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
-            class_static_symbol_lookup(class_id, sym_f64)
-        } else {
-            super::class_static_symbol_lookup_in_chain(class_id, sym_f64)
-        };
-        if let Some(vb) = static_lookup {
+        if let Some(vb) = super::class_static_symbol_lookup_in_chain(class_id, sym_f64) {
             return f64::from_bits(vb);
         }
-        let is_proto_ref_receiver = crate::object::class_prototype_ref_id(obj_f64).is_some();
         // A constructor whose heritage was a runtime value inherits from that
         // exact value, the same edge `Object.getPrototypeOf(C)` reports. A
         // fresh class evaluation is not reachable through the template-id
         // tables below, so continue the ordinary [[Get]] on the actual parent.
-        if !is_proto_ref_receiver {
-            let parent = crate::object::js_get_dynamic_parent_value(class_id);
-            if crate::object::is_class_object_value(parent) {
-                return js_object_get_symbol_property_with_receiver(parent, sym_f64, receiver_f64);
-            }
+        let parent = crate::object::js_get_dynamic_parent_value(class_id);
+        if crate::object::is_class_object_value(parent) {
+            return js_object_get_symbol_property_with_receiver(parent, sym_f64, receiver_f64);
         }
         // #1758: a class ref whose own static symbols miss may inherit the
         // symbol from a class-expression parent (`class Sub extends make(...) {}`
@@ -519,16 +511,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // `get [Symbol.species]` accessor — live on its constructor closure,
         // which the chain edge (a reserved class id) does not reach. Read it
         // there with the original receiver, so the inherited species getter
-        // answers `X`, not `Array`. Statics only: a prototype ref shares this
-        // tag, and `X.prototype` must not see the constructor's symbols.
-        if !is_proto_ref_receiver {
-            if let Some(parent_ctor) = crate::object::builtin_parent_ctor_in_chain(class_id) {
-                return js_object_get_symbol_property_with_receiver(
-                    parent_ctor,
-                    sym_f64,
-                    receiver_f64,
-                );
-            }
+        // answers `X`, not `Array`.
+        if let Some(parent_ctor) = crate::object::builtin_parent_ctor_in_chain(class_id) {
+            return js_object_get_symbol_property_with_receiver(parent_ctor, sym_f64, receiver_f64);
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
