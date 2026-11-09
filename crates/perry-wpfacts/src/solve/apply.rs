@@ -845,7 +845,7 @@ impl Model {
             } => {
                 for &t in toks {
                     if matches!(self.toks[t as usize], TokKind::Func(..))
-                        || builtins::unknown_accessor_callable(self, t)
+                        || builtins::accessor_callable(self, t)
                     {
                         self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                     }
@@ -867,10 +867,14 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
-                    if builtins::unknown_accessor_callable(self, f) {
-                        // Opaque callbacks share the holder/key's existing
-                        // accessor result. Repeated installs do not allocate
-                        // another unknown value for the same accessor group.
+                    if f == TOP {
+                        // An unknown function value is an opaque accessor:
+                        // it shares the holder/key's existing accessor
+                        // result. Repeated installs do not allocate another
+                        // unknown value for the same accessor group. A known
+                        // class, builtin or bound function is installed as a
+                        // program function is, and runs as a call of that
+                        // value (`group_call`).
                         let group = Key::Named(key);
                         self.acc_group(t, group);
                         let fa = self.acc_groups[&(t, group)].ar;

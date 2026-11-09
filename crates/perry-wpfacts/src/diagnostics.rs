@@ -1330,7 +1330,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             } else {
                 String::from("null")
             };
-            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"origin\":{origin},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
+            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"origin\":{origin},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),crate::builtins::global_object(m,*t)));
         }
     }
     let roots: Vec<_> = nodes.iter().map(|&n| m.diagnostic_root(n).0).collect();
