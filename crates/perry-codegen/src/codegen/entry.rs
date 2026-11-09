@@ -1061,6 +1061,8 @@ pub(super) fn compile_module_entry(
             spec_ta_ready: std::collections::HashSet::new(),
             spec_i32_params: std::collections::HashSet::new(),
             spec_bool_params: std::collections::HashSet::new(),
+            sig_return: None,
+            typed_methods: &cross_module.typed_methods,
             typed_element_locals: std::collections::HashSet::new(),
             create_families: Default::default(),
             class_guard_window: None,

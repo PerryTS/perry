@@ -65,6 +65,21 @@ pub const ARRAY_HEADER_SIZE: usize = 24;
 /// (`bindings::element_read`).
 pub const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
 
+/// The packed `ArrayHeader` length/capacity word (length in the low 32 bits,
+/// capacity in the high 32) that generated code stores at an inline array
+/// birth (`perry-codegen` `expr/array_literal.rs`). A birth's capacity is at
+/// least its length: wpfacts records an array literal's birth length as a
+/// length floor that the element storage holds (`solve::arr_len`), and the
+/// runtime's own allocations keep the same bound
+/// (`perry-runtime/src/array/capacity_writes_tests.rs`).
+pub const fn array_birth_header(length: u32, capacity: u32) -> u64 {
+    assert!(
+        capacity >= length,
+        "an array birth's capacity is below its length"
+    );
+    length as u64 | (capacity as u64) << 32
+}
+
 /// `PerryLayoutKey.attrs` bit (the runtime's key entry byte, `ENTRY_OPTIONAL`):
 /// the key is a layout's optional or late member. Its slot may hold the hole
 /// marker, and while it does the key is absent (OBJECT_MODEL_2026-10-13.md

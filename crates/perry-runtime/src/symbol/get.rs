@@ -710,6 +710,27 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64) {
         return v;
     }
+    // An `ArrayBuffer` / `SharedArrayBuffer` / `DataView` has no symbol
+    // members of its own beyond the ones read above, and none of the
+    // built-in arms below describe it: the read continues on its
+    // [[Prototype]] (the intrinsic buffer prototype, or the newTarget
+    // prototype it was constructed with), so a member the program wrote
+    // there (`ArrayBuffer.prototype[Symbol.iterator] = function* () {}`)
+    // is found, with the original receiver.
+    let raw_view = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize;
+    if raw_view >= 0x10000 && crate::buffer::is_non_indexed_buffer_view(raw_view) {
+        // Materializing the intrinsic prototype can allocate; `obj_h`,
+        // `sym_h` and `receiver_h` keep the operands rooted across it.
+        let proto = crate::object::js_object_get_prototype_of(obj_h.get_nanbox_f64());
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return js_object_get_symbol_property_with_receiver(
+            proto,
+            sym_h.get_nanbox_f64(),
+            receiver_h.get_nanbox_f64(),
+        );
+    }
     // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
     // is inherited from Map/Set.prototype, so it is NOT an own symbol prop.
     // Reading the property (e.g. `typeof obj[Symbol.iterator] === 'function'`,

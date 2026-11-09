@@ -990,8 +990,12 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 | "with"
         )
     );
-    if !keeps_length {
+    if name == Some("push") {
+        m.arr_len_append(t);
+    } else if !keeps_length {
         m.arr_len_top(t);
+    } else if matches!(name, Some("reverse" | "copyWithin")) {
+        m.arr_len_permuted(t);
     }
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
@@ -1272,11 +1276,19 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 }
 
 pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: CallId) {
+    let born = members::realm_born(what);
     if let Some(name) = name {
-        if matches!(
-            members::member(members::bobj_family(what), name),
-            Some(Mem::Fn)
-        ) {
+        let callable = match born {
+            Some(b) => matches!(
+                members::realm_chain_find(b, name),
+                members::RealmFind::Own(p) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
+            ),
+            None => matches!(
+                members::member(members::bobj_family(what), name),
+                Some(Mem::Fn)
+            ),
+        };
+        if callable {
             m.diagnostic_builtin(call, |_| format!("{what}.prototype.{name}"));
         }
     }
@@ -1300,6 +1312,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         _ => what,
     };
     match (what, name) {
+        // An object a realm declaration made (`fresh(P)`) has `P` as its
+        // [[Prototype]]: the method is the member of `P`'s declared chain,
+        // or absent (`realm_born_method`).
+        (_, Some(n)) if born.is_some() => {
+            let why = format!("argument of {kind}.{n}");
+            realm_born_method(m, t, born.expect("born"), n, call, &why)
+        }
         // A method the realm declares on the prototype of an object a
         // declaration made (`AbortController.prototype.abort`): its
         // declaration runs.
