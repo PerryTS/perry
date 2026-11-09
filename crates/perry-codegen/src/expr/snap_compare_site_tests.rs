@@ -104,7 +104,7 @@ fn compare_literal_hook_never_crosses_compares() {
     assert_eq!(hooks(&ir_c), 1, "{ir_c}");
     let call = ir_c
         .lines()
-        .find(|l| l.contains("@js_snap_compare_literal("))
+        .find(|l| l.contains("call void @js_snap_compare_literal("))
         .unwrap();
     assert!(call.contains("(i32 1, double "), "op !== : {call}");
     assert!(
