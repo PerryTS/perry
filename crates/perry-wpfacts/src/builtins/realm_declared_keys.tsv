@@ -8562,22 +8562,16 @@ native	node:zlib.default	zstdCompress	node:zlib.zstdCompress
 native	node:zlib.default	zstdCompressSync	node:zlib.zstdCompressSync
 native	node:zlib.default	zstdDecompress	node:zlib.zstdDecompress
 native	node:zlib.default	zstdDecompressSync	node:zlib.zstdDecompressSync
-native	performance	Performance	Performance
-native	performance	PerformanceEntry	PerformanceEntry
-native	performance	PerformanceMark	PerformanceMark
-native	performance	PerformanceMeasure	PerformanceMeasure
-native	performance	PerformanceObserver	PerformanceObserver
-native	performance	PerformanceObserverEntryList	PerformanceObserverEntryList
-native	performance	PerformanceResourceTiming	PerformanceResourceTiming
 native	performance	__defineGetter__	Object.prototype.__defineGetter__
 native	performance	__defineSetter__	Object.prototype.__defineSetter__
 native	performance	__lookupGetter__	Object.prototype.__lookupGetter__
 native	performance	__lookupSetter__	Object.prototype.__lookupSetter__
+native	performance	addEventListener	EventTarget.prototype.addEventListener
 native	performance	clearMarks	Performance.prototype.clearMarks
 native	performance	clearMeasures	Performance.prototype.clearMeasures
 native	performance	clearResourceTimings	Performance.prototype.clearResourceTimings
 native	performance	constructor	Performance
-native	performance	createHistogram	performance.createHistogram
+native	performance	dispatchEvent	EventTarget.prototype.dispatchEvent
 native	performance	eventLoopUtilization	performance.eventLoopUtilization
 native	performance	getEntries	Performance.prototype.getEntries
 native	performance	getEntriesByName	Performance.prototype.getEntriesByName
@@ -8587,9 +8581,9 @@ native	performance	isPrototypeOf	Object.prototype.isPrototypeOf
 native	performance	mark	Performance.prototype.mark
 native	performance	markResourceTiming	Performance.prototype.markResourceTiming
 native	performance	measure	Performance.prototype.measure
-native	performance	monitorEventLoopDelay	performance.monitorEventLoopDelay
 native	performance	now	Performance.prototype.now
 native	performance	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	performance	removeEventListener	EventTarget.prototype.removeEventListener
 native	performance	setResourceTimingBufferSize	Performance.prototype.setResourceTimingBufferSize
 native	performance	timerify	performance.timerify
 native	performance	toJSON	Performance.prototype.toJSON
@@ -11073,20 +11067,6 @@ ns	node:zlib.zstdDecompress	length
 ns	node:zlib.zstdDecompress	name
 ns	node:zlib.zstdDecompressSync	length
 ns	node:zlib.zstdDecompressSync	name
-ns	performance	Performance
-ns	performance	PerformanceEntry
-ns	performance	PerformanceMark
-ns	performance	PerformanceMeasure
-ns	performance	PerformanceObserver
-ns	performance	PerformanceObserverEntryList
-ns	performance	PerformanceResourceTiming
-ns	performance	constants
-ns	performance	createHistogram
-ns	performance	default
-ns	performance	eventLoopUtilization
-ns	performance	monitorEventLoopDelay
-ns	performance	performance
-ns	performance	timerify
 ns	performance.createHistogram	length
 ns	performance.createHistogram	name
 ns	performance.eventLoopUtilization	length

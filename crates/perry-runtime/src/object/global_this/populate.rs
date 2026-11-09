@@ -583,6 +583,43 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton(), key, value);
     }
+    // node: `class Performance extends EventTarget`. The singleton's chain is
+    // Performance.prototype -> EventTarget.prototype -> Object.prototype, and
+    // `Performance` inherits EventTarget's statics, among them the
+    // `Symbol.for("nodejs.event_target")` brand the listener methods check.
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let perf_ctor = scope.root_nanbox_f64(
+            super::super::native_module::bound_native_callable_export_value(
+                "perf_hooks",
+                "Performance",
+            ),
+        );
+        let target_ctor = scope.root_nanbox_f64(js_get_global_this_builtin_value(
+            b"EventTarget".as_ptr(),
+            11,
+        ));
+        let target_proto = scope.root_nanbox_f64(builtin_prototype_value("EventTarget"));
+        let is_ptr = |v: f64| JSValue::from_bits(v.to_bits()).is_pointer();
+        if is_ptr(perf_ctor.get_nanbox_f64()) && is_ptr(target_ctor.get_nanbox_f64()) {
+            let perf_addr =
+                crate::value::js_nanbox_get_pointer(perf_ctor.get_nanbox_f64()) as usize;
+            let perf_proto = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
+                perf_addr,
+                "prototype",
+            ));
+            crate::closure::closure_set_static_prototype(
+                perf_addr,
+                target_ctor.get_nanbox_f64().to_bits(),
+            );
+            if is_ptr(perf_proto.get_nanbox_f64()) && is_ptr(target_proto.get_nanbox_f64()) {
+                super::super::prototype_chain::object_set_static_prototype(
+                    crate::value::js_nanbox_get_pointer(perf_proto.get_nanbox_f64()) as usize,
+                    target_proto.get_nanbox_f64().to_bits(),
+                );
+            }
+        }
+    }
     let getter = crate::closure::js_closure_alloc(
         crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
         0,

@@ -469,12 +469,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         let bits = obj.to_bits();
         if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
             // Symbol key path.
-            let found = if crate::object::class_prototype_ref_id(obj).is_some() {
-                crate::symbol::class_static_symbol_lookup(class_id, key)
-            } else {
-                crate::symbol::class_static_symbol_lookup_in_chain(class_id, key)
-            };
-            if found.is_some() {
+            if crate::symbol::class_static_symbol_lookup_in_chain(class_id, key).is_some() {
                 return nanbox_true;
             }
             // #6149: string key on a class ref (`"prototype" in C`,
@@ -520,15 +515,12 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     }
                     // #11492: a constructor's chain ends at %Function.prototype%;
                     // a user member installed there is `in` every class, as
-                    // `C.myHelper` reads it. A prototype ref is excluded — its
-                    // chain is `Object.prototype`, not `Function.prototype`.
-                    if crate::object::class_prototype_ref_id(obj).is_none() {
-                        if let Some(proto_ptr) =
-                            crate::closure::function_prototype_fallback_target(0, name)
-                        {
-                            let proto = crate::value::js_nanbox_pointer(proto_ptr as i64);
-                            return js_object_has_property(f64::from_bits(proto.to_bits()), key);
-                        }
+                    // `C.myHelper` reads it.
+                    if let Some(proto_ptr) =
+                        crate::closure::function_prototype_fallback_target(0, name)
+                    {
+                        let proto = crate::value::js_nanbox_pointer(proto_ptr as i64);
+                        return js_object_has_property(f64::from_bits(proto.to_bits()), key);
                     }
                 }
             }

@@ -118,7 +118,15 @@ impl Model {
                         let holder = self.node_l("shared-accessor-holder");
                         self.add_tok(holder, t);
                         for setter in [false, true] {
-                            self.cons(holder, Cons::AccessorInstall { key, f, setter });
+                            self.cons(
+                                holder,
+                                Cons::AccessorInstall {
+                                    key,
+                                    f,
+                                    setter,
+                                    from: NO_NODE,
+                                },
+                            );
                         }
                     }
                 }

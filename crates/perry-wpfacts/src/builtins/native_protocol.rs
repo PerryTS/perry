@@ -34,7 +34,7 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
 pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
     let (_, name) = m.tmpls[tm as usize].native_parent.clone()?;
     let identity = m.namespace_property(BuiltinNs::GlobalThis, &name)?.native?;
-    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity })))
+    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
 }
 
 /// `super(...)` into a native parent.

@@ -28,18 +28,26 @@ unsafe fn call_detached(method: f64, args: &[f64]) -> f64 {
     )
 }
 
+/// Read `performance[name]` through ordinary [[Get]]: `performance` has no own
+/// keys, so the value comes from `Performance.prototype`.
+fn performance_member(performance: f64, name: &str, what: &str) -> f64 {
+    let value = unsafe {
+        crate::value::js_get_property(performance, name.as_ptr() as i64, name.len() as i64)
+    };
+    assert!(
+        value.to_bits() != crate::value::TAG_UNDEFINED,
+        "{what}: performance.{name} must resolve through Performance.prototype"
+    );
+    value
+}
+
 #[test]
 fn timerify_and_event_loop_utilization_share_the_native_export_identity() {
     let _scope = TestScope::new();
     let performance = crate::perf_hooks::performance_namespace();
 
     for name in ["timerify", "eventLoopUtilization"] {
-        let prototype_value = crate::object::native_module::performance_namespace_method(
-            "perf_hooks",
-            name,
-            performance,
-        )
-        .expect("Performance prototype method");
+        let prototype_value = performance_member(performance, name, "Performance prototype method");
         let export_value = crate::object::bound_native_callable_export_value("perf_hooks", name);
         assert_eq!(
             prototype_value.to_bits(),
@@ -50,12 +58,7 @@ fn timerify_and_event_loop_utilization_share_the_native_export_identity() {
 
     // `now` intentionally remains its receiver-checking prototype method,
     // rather than being replaced with the module-bound callable alias.
-    let now = crate::object::native_module::performance_namespace_method(
-        "perf_hooks",
-        "now",
-        performance,
-    )
-    .expect("Performance.prototype.now");
+    let now = performance_member(performance, "now", "Performance.prototype.now");
     let now_export = crate::object::bound_native_callable_export_value("perf_hooks", "now");
     assert_ne!(now.to_bits(), now_export.to_bits());
 }
@@ -83,24 +86,14 @@ fn timerify_and_event_loop_utilization_work_when_detached() {
     let _scope = TestScope::new();
     let performance = crate::perf_hooks::performance_namespace();
 
-    let event_loop_utilization = crate::object::native_module::performance_namespace_method(
-        "perf_hooks",
-        "eventLoopUtilization",
-        performance,
-    )
-    .expect("Performance.prototype.eventLoopUtilization");
+    let event_loop_utilization = performance_member(performance, "eventLoopUtilization", "Performance.prototype.eventLoopUtilization");
     let elu_result = unsafe { call_detached(event_loop_utilization, &[]) };
     assert!(
         crate::value::JSValue::from_bits(elu_result.to_bits()).is_pointer(),
         "detached eventLoopUtilization must return its result object"
     );
 
-    let timerify = crate::object::native_module::performance_namespace_method(
-        "perf_hooks",
-        "timerify",
-        performance,
-    )
-    .expect("Performance.prototype.timerify");
+    let timerify = performance_member(performance, "timerify", "Performance.prototype.timerify");
     let target = crate::closure::js_closure_alloc(
         crate::fn_info!(timerify_target_9202, 0; with_declared(0)),
         0,
@@ -134,12 +127,7 @@ fn resource_entry_count() -> usize {
 fn mark_resource_timing_ignores_its_receiver() {
     let _scope = TestScope::new();
     let performance = crate::perf_hooks::performance_namespace();
-    let mark_resource_timing = crate::object::native_module::performance_namespace_method(
-        "perf_hooks",
-        "markResourceTiming",
-        performance,
-    )
-    .expect("Performance.prototype.markResourceTiming");
+    let mark_resource_timing = performance_member(performance, "markResourceTiming", "Performance.prototype.markResourceTiming");
 
     crate::perf_hooks::js_perf_clear_resource_timings();
     let timing = crate::object::js_object_alloc(0, 2);
