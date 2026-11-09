@@ -1354,7 +1354,10 @@ fn a_cold_arm_descriptor_is_refused_across_other_user_code() {
 
 #[test]
 fn scalar_and_non_moving_claims_deny_a_cold_arm() {
-    for claim in [ReceiverClaim::ScalarRelation, ReceiverClaim::NonMovingAddress] {
+    for claim in [
+        ReceiverClaim::ScalarRelation,
+        ReceiverClaim::NonMovingAddress,
+    ] {
         let d = ReceiverDescriptor {
             table: "t",
             receiver: OBJ,
@@ -1385,7 +1388,11 @@ fn a_cold_arm_read_is_allocating_in_loop_purity_terms() {
         matches!(e, Expr::IndexGet { .. }).then_some(Some(RegionEnder::ColdArmCall))
     });
     assert_eq!(classified, vec![RegionEnder::ColdArmCall]);
-    assert!(crate::loop_purity::loop_may_allocate(&body, &[], &stub_inert));
+    assert!(crate::loop_purity::loop_may_allocate(
+        &body,
+        &[],
+        &stub_inert
+    ));
 
     let effectful = vec![Stmt::Expr(Expr::IndexGet {
         element_offset: 0,
