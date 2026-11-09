@@ -35,7 +35,7 @@ fn record(
 fn a_table_bears_each_record_into_its_scope_slot() {
     let scope = crate::r#box::scope::js_scope_alloc(4, crate::value::TAG_UNDEFINED as i64) as u64;
     let scope_word = scope | crate::value::POINTER_TAG;
-    let value = crate::value::JSValue::int32(7).bits();
+    let value = f64::from(7).to_bits();
     // Source 0 is the scope object itself, source 1 a plain value.
     let words = [scope_word, value];
     let indices = [0u32, 1, 1];

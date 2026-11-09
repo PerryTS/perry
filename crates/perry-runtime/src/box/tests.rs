@@ -52,7 +52,7 @@ fn box_set_get_roundtrips_for_real_box() {
 #[test]
 fn box_bits_roundtrips_non_number_tags_exactly() {
     let cases = [
-        crate::value::JSValue::int32(-17).bits(),
+        f64::from(-17).to_bits(),
         crate::value::JSValue::try_short_string(b"ok")
             .unwrap()
             .bits(),
@@ -76,7 +76,7 @@ fn box_bits_roundtrips_non_number_tags_exactly() {
 
 #[test]
 fn trusted_box_access_matches_valid_public_access_and_tdz_suppression() {
-    let initial = crate::value::JSValue::int32(17).bits();
+    let initial = f64::from(17).to_bits();
     let replacement = crate::value::JSValue::try_short_string(b"next")
         .unwrap()
         .bits();

@@ -36,7 +36,7 @@ fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     crate::closure::js_closure_set_capture_bits(
         closure_ptr,
         0,
-        JSValue::int32(identity as i32 + 1).bits(),
+        crate::object::builtin_constructor_identity_word(identity as u32 + 1),
     );
     super::native_module::set_bound_native_closure_name(closure_ptr, name);
     if let Some(len) = crate::object::builtin_constructor_spec_length(name) {

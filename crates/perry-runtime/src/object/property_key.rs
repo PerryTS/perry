@@ -521,7 +521,7 @@ mod property_key_tests {
             assert_eq!(js_to_property_key(sym).to_bits(), sym.to_bits());
 
             assert_eq!(string_value_to_rust(js_to_property_key(42.0)), "42");
-            let int_key = f64::from_bits(crate::value::JSValue::int32(7).bits());
+            let int_key = f64::from(7);
             assert_eq!(string_value_to_rust(js_to_property_key(int_key)), "7");
             assert_eq!(
                 string_value_to_rust(js_to_property_key(f64::from_bits(crate::value::TAG_TRUE))),

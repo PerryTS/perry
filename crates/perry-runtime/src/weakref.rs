@@ -1680,7 +1680,7 @@ mod tests {
         // exact value bits it was given.
         let wm = js_weakmap_new();
         let wm_val = f64::from_bits(JSValue::pointer(wm as *const u8).bits());
-        let v = f64::from_bits(JSValue::int32(42).bits());
+        let v = f64::from(42);
         js_weakmap_set(wm_val, fresh_sym, v);
         let got = js_weakmap_get(wm_val, fresh_sym);
         assert_eq!(

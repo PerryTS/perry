@@ -55,7 +55,7 @@ fn assert_numeric_raw_values(arr: *mut ArrayHeader, expected: &[f64]) {
 }
 
 fn int32_jsvalue_bits(value: i32) -> u64 {
-    crate::value::JSValue::int32(value).bits()
+    f64::from(value).to_bits()
 }
 
 fn assert_canonical_raw_slot(arr: *mut ArrayHeader, index: u32, expected: f64) {
