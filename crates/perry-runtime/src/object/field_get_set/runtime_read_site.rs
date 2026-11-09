@@ -235,7 +235,7 @@ pub(crate) unsafe fn get_atom(obj: *mut ObjectHeader, atom: *const crate::String
 #[inline]
 pub(crate) fn integer_key(key: f64) -> Option<i64> {
     let bits = key.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         return Some(i64::from(crate::value::JSValue::from_bits(bits).as_int32()));
     }
     (key.is_finite() && key.fract() == 0.0 && key.abs() <= 9_007_199_254_740_992.0)

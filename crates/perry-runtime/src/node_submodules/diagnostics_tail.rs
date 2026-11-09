@@ -74,7 +74,7 @@ fn store_handle(store: f64) -> Option<i64> {
         return Some(token);
     }
     let bits = store.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         return Some((bits & crate::value::INT32_MASK) as i32 as i64);
     }
     if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {

@@ -312,8 +312,8 @@ mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
     ElisionFacts, FactsBody, FactsClass, FactsElementRead, FactsField, FactsFieldReadCall,
-    FactsIndexedOwner,
-    FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep, ProgramFactsView,
+    FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep,
+    ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -360,8 +360,8 @@ mod typed_abi;
 mod typed_abi_opt_report;
 mod typed_entry;
 pub(crate) use typed_entry::{
-    emit_int32_box_test, emit_ordered_number_test, emit_plain_number_bits_test,
-    emit_plain_number_test, typed_entry_arg_guard,
+    emit_int32_bits_test, emit_int32_box_test, emit_ordered_number_test,
+    emit_plain_number_bits_test, emit_plain_number_test, typed_entry_arg_guard,
 };
 #[cfg(test)]
 mod unknown_func_tests;

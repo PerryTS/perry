@@ -411,8 +411,7 @@ unsafe fn call_array_this(
     // perry-wpfacts/NUM_SEEDS.md). Deleted with the other INT32 consumers in
     // P3 B4b. Only a slice containing a numeric INT32 needs scratch storage.
     let is_int = |raw: f64| {
-        raw.to_bits() & 0xFFFF_0000_0000_0000 == crate::value::INT32_TAG
-            && crate::object::class_ref_id(raw).is_none()
+        crate::value::is_int32_bits(raw.to_bits()) && crate::object::class_ref_id(raw).is_none()
     };
     if !args.iter().copied().any(is_int) {
         return dispatch_body_args(closure, info, this, args);

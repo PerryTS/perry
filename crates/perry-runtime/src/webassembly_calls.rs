@@ -365,12 +365,15 @@ pub(super) fn wasm_i64_to_js(bits: u64) -> f64 {
     f64::from_bits(JSValue::bigint_ptr(bigint).bits())
 }
 
+/// Wasm results, globals and import arguments enter JS here. A wasm float may
+/// carry any NaN payload; it becomes the canonical NaN so it cannot spell a
+/// NaN-box tag.
 pub(super) fn decode_wasm_value(kind: u8, bits: u64) -> f64 {
     match kind {
         WASM_VAL_KIND_I32 => (bits as u32 as i32) as f64,
         WASM_VAL_KIND_I64 => wasm_i64_to_js(bits),
-        WASM_VAL_KIND_F32 => f32::from_bits(bits as u32) as f64,
-        WASM_VAL_KIND_F64 => f64::from_bits(bits),
+        WASM_VAL_KIND_F32 => crate::array::canonical_raw_f64(f32::from_bits(bits as u32) as f64),
+        WASM_VAL_KIND_F64 => crate::array::canonical_raw_f64(f64::from_bits(bits)),
         _ => nanbox_undefined(),
     }
 }
