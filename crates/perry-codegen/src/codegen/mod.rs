@@ -311,7 +311,7 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsElementRead, FactsField, FactsFieldReadCall,
+    ElisionFacts, FactsBody, FactsClass, FactsElementRead, FactsField, FactsFieldReadCall, FactsSignature,
     FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep,
     ProgramFactsView,
 };
