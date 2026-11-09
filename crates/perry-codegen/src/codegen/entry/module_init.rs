@@ -682,7 +682,9 @@ pub(super) fn compile_module_init(
     }
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
-    init_static_fields_late(&mut ctx, hir)?;
+    if hir.async_init_function.is_none() {
+        init_static_fields_late(&mut ctx, hir)?;
+    }
 
     // Issue #100: populate `@__perry_ns_<module_prefix>` from the
     // namespace_entries list at the tail of the non-entry __init.

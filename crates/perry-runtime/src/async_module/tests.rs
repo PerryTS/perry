@@ -6,6 +6,7 @@ static TRACE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 struct Fixture {
     record: AsyncModule,
     deps: Vec<*mut AsyncModule>,
+    expected_error: f64,
 }
 extern "C" fn visit(w: i64, parent: i64) {
     unsafe {
@@ -22,6 +23,7 @@ unsafe fn module(
     let fixture = Box::leak(Box::new(Fixture {
         record: std::mem::zeroed(),
         deps,
+        expected_error: UNDEFINED,
     }));
     let record = &mut fixture.record as *mut AsyncModule;
     js_async_module_configure(
@@ -30,6 +32,7 @@ unsafe fn module(
         visit as *const () as usize as i64,
         0,
         flags,
+        0,
     );
     record
 }
@@ -213,5 +216,69 @@ fn rejection_settles_independent_parent_capabilities_in_evaluation_order() {
         assert_eq!(trace(), [1, 4, 5]);
         assert_eq!((*first).status, FAILED);
         assert_eq!((*second).status, FAILED);
+    }
+}
+
+static FINISH_FIXTURE: std::sync::atomic::AtomicPtr<Fixture> =
+    std::sync::atomic::AtomicPtr::new(ptr::null_mut());
+static REJECTED_IDENTITIES: Mutex<Vec<(u8, bool)>> = Mutex::new(Vec::new());
+extern "C" fn fail_finish() -> f64 {
+    TRACE.lock().unwrap().push(6);
+    let fixture = FINISH_FIXTURE.load(Ordering::Relaxed);
+    unsafe { crate::exception::throw_program_value((*fixture).expected_error) }
+}
+extern "C" fn observe_finish_error(c: *const ClosureHeader, _this: JsThis, error: f64) -> f64 {
+    let id = js_closure_get_capture_f64(c, 1) as u8;
+    let fixture = FINISH_FIXTURE.load(Ordering::Relaxed);
+    let same = unsafe { error.to_bits() == (*fixture).expected_error.to_bits() };
+    REJECTED_IDENTITIES.lock().unwrap().push((id, same));
+    TRACE.lock().unwrap().push(id);
+    UNDEFINED
+}
+callback_info!(OBSERVE_FINISH_ERROR, observe_finish_error);
+
+#[test]
+fn a_failed_native_finish_preserves_error_identity_and_parent_rejection_order() {
+    reset();
+    REJECTED_IDENTITIES.lock().unwrap().clear();
+    assert_eq!(std::mem::size_of::<AsyncModule>(), 16 * 8);
+    unsafe {
+        let m = module(suspended, 3, vec![]);
+        let fixture = m as *mut Fixture;
+        (*fixture).expected_error = js_nanbox_pointer(crate::error::js_error_new() as i64);
+        crate::gc::js_gc_register_global_root(ptr::addr_of_mut!((*fixture).expected_error) as i64);
+        FINISH_FIXTURE.store(fixture, Ordering::Relaxed);
+        (*m).finish = fail_finish as *const () as usize;
+        let n = module(sibling, 0, vec![]);
+        let first = module(left, 2, vec![m, n]);
+        let second = module(right, 2, vec![m]);
+        evaluate(first);
+        let one = handler(&OBSERVE_FINISH_ERROR, ptr::null_mut(), 4.0);
+        promise::then::js_promise_attach_handlers(
+            promise_ptr((*first).capability),
+            ptr::null(),
+            one,
+        );
+        evaluate(second);
+        let two = handler(&OBSERVE_FINISH_ERROR, ptr::null_mut(), 5.0);
+        promise::then::js_promise_attach_handlers(
+            promise_ptr((*second).capability),
+            ptr::null(),
+            two,
+        );
+        assert_eq!(trace(), [1, 2]);
+        promise::js_promise_run_microtasks();
+        assert_eq!(trace(), [1, 2, 3, 6, 4, 5]);
+        assert_eq!(*REJECTED_IDENTITIES.lock().unwrap(), [(4, true), (5, true)]);
+        assert_eq!((*first).status, FAILED);
+        assert_eq!((*second).status, FAILED);
+        assert_eq!(
+            (*first).error.to_bits(),
+            (*fixture).expected_error.to_bits()
+        );
+        assert_eq!(
+            (*second).error.to_bits(),
+            (*fixture).expected_error.to_bits()
+        );
     }
 }

@@ -2952,7 +2952,7 @@ fn lower_module(
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
     if opts.program_has_tla {
-        llmod.declare_function("js_async_module_configure", crate::types::VOID, &[I64, I64, I64, I64, I64]);
+        llmod.declare_function("js_async_module_configure", crate::types::VOID, &[I64, I64, I64, I64, I64, I64]);
         llmod.declare_function("js_async_module_visit", crate::types::VOID, &[I64, I64, I64]);
         llmod.declare_function("js_async_module_import", DOUBLE, &[I64]);
         llmod.declare_function("js_async_module_require", crate::types::VOID, &[I64]);
@@ -4097,6 +4097,7 @@ fn lower_module(
             &cross_module,
             None,
             Some(&plan),
+            None,
         )
         .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
     }
@@ -4147,6 +4148,7 @@ fn lower_module(
                 &cross_module,
                 typed_public_trampoline,
                 None,
+                None,
             )
             .with_context(|| format!("lowering function '{}'", f.name))?;
             Ok(())
@@ -4162,6 +4164,28 @@ fn lower_module(
             }
         },
     )?;
+
+    // A native module phase must not be represented by an empty HIR function:
+    // the inliner would erase its call before the backend emits the real work.
+    if hir.async_init_function.is_some() {
+        let id = entry_outline::max_func_id(hir) + 1;
+        let finish = perry_hir::Function {
+            id, name: "async module completion".into(), type_params: Vec::new(),
+            params: Vec::new(), return_type: perry_hir::types::Type::Any,
+            body: Vec::new(), is_async: false, is_generator: false,
+            is_strict: hir.init_is_strict, is_exported: false, captures: Vec::new(),
+            decorators: Vec::new(), was_plain_async: false, was_unrolled: false,
+        };
+        let mut finish_names = func_names.clone();
+        finish_names.insert(id, format!("{module_prefix}__async_finish"));
+        compile_function(
+            &mut llmod, &finish, &finish_names, &mut strings, &class_table, &method_names,
+            &module_globals, &module_global_types, &opts.import_function_prefixes,
+            &enum_table, &static_field_globals, &class_ids, &func_signatures,
+            &func_synthetic_arguments, &module_boxed_vars, &closure_rest_params,
+            &cross_module, None, None, Some(hir),
+        )?;
+    }
 
     // Closes #460: emit forwarding wrappers for `export { local as exported }`
     // renames where the exported name differs from the function's local HIR

@@ -1,5 +1,5 @@
 try {
-  require("./fixtures/tla_order/require-caught/bad.cts");
+  require("./fixtures/tla_order/require-caught/bad.cjs");
 } catch (error) {
   console.log("caught", error.message);
 }

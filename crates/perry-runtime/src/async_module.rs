@@ -1,5 +1,6 @@
 //! ES cyclic module evaluation. Records live beside the compiled module's
 //! globals; dependency visitors name records directly, without a registry.
+use crate::closure::body_call::js_bare_body_fn;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
     js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader, JsFunctionInfo, JsThis,
@@ -36,7 +37,8 @@ struct AsyncModule {
     capability: f64,
     error: f64,
     body_promise: f64,
-    reserved: [u64; 2],
+    finish: usize,
+    reserved: u64,
 }
 struct Parent {
     module: *mut AsyncModule,
@@ -67,6 +69,7 @@ pub unsafe extern "C" fn js_async_module_configure(
     visit: i64,
     namespace: i64,
     flags: u64,
+    finish: i64,
 ) {
     let m = addr as *mut AsyncModule;
     if (*m).body != 0 {
@@ -76,6 +79,7 @@ pub unsafe extern "C" fn js_async_module_configure(
     (*m).visit = visit as usize;
     (*m).namespace = namespace as *mut f64;
     (*m).flags = flags;
+    (*m).finish = finish as usize;
     (*m).capability = UNDEFINED;
     (*m).error = UNDEFINED;
     (*m).body_promise = UNDEFINED;
@@ -107,7 +111,7 @@ unsafe fn fail(m: *mut AsyncModule, error: f64) {
 }
 
 unsafe fn run_body(m: *mut AsyncModule) -> Result<f64, crate::exception::Caught> {
-    let body: extern "C" fn() -> f64 = std::mem::transmute((*m).body);
+    let body = js_bare_body_fn!((*m).body as *const u8;);
     crate::exception::catch_thrown(|| body())
 }
 
@@ -297,6 +301,13 @@ extern "C" fn fulfilled(c: *const ClosureHeader, _this: JsThis, _value: f64) -> 
         let m = js_closure_get_capture_ptr(c, 0) as *mut AsyncModule;
         if (*m).status == FAILED {
             return UNDEFINED;
+        }
+        if (*m).finish != 0 {
+            let finish = js_bare_body_fn!((*m).finish as *const u8;);
+            if let Err(error) = crate::exception::catch_thrown(|| finish()) {
+                fail(m, error.value());
+                return UNDEFINED;
+            }
         }
         complete(m);
         let mut available = Vec::new();

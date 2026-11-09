@@ -22,6 +22,13 @@ pub(super) fn emit_record(
     } else {
         "0".to_string()
     };
+    let finish = if hir.async_init_function.is_some() {
+        let name = format!("{prefix}__async_finish");
+        llmod.declare_function(&name, DOUBLE, &[]);
+        format!("ptrtoint (ptr @{name} to i64)")
+    } else {
+        "0".to_string()
+    };
     let flags = u64::from(hir.has_top_level_await) | (u64::from(cross.module_graph_has_tla) << 1);
     let accessor = llmod.define_function(&format!("{prefix}__async_record"), I64, vec![]);
     let blk = accessor.create_block("entry");
@@ -37,6 +44,7 @@ pub(super) fn emit_record(
             (I64, &format!("ptrtoint (ptr @{visit} to i64)")),
             (I64, &namespace),
             (I64, &flags.to_string()),
+            (I64, &finish),
         ],
     );
     blk.ret(I64, &addr);
