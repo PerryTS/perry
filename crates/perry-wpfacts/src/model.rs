@@ -283,7 +283,15 @@ pub use crate::builtins::Family;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Native {
     Any,
-    Member { identity: &'static str },
+    /// `holder`: for a closure native whose declaration reads its own
+    /// internal slots (`islot(callee, self)`), the object whose
+    /// declaration installed this value (one value per holder, as the
+    /// runtime makes one closure per object); `None`: the identity's one
+    /// value.
+    Member {
+        identity: &'static str,
+        holder: Option<Tok>,
+    },
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects
@@ -1540,6 +1548,13 @@ pub struct Model {
     pub escaped_classes: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// An async_hooks hook may be enabled (why): its `init` is unknown code
+    /// (`createHook` is undeclared) that gets every resource the runtime
+    /// makes, as the declarations say (`async_resource`).
+    pub async_hooks: Option<String>,
+    /// The values declared `async_resource` while no hook may be enabled:
+    /// they escape once one may.
+    pub async_resources: Vec<(NodeId, &'static str)>,
     /// The dyn-eval interpreter is linked (the driver's link decision): a
     /// solved call or construct that may be the Function constructor then
     /// runs interpreted code (DECISIONS 235).

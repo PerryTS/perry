@@ -102,21 +102,3 @@ fn stat_options_getter_still_runs() {
     let x = field(tmpl(&pf, "P"), "x");
     assert!(!x.readonly, "{}", pf.dump_text());
 }
-
-/// Named control: `watchFile` declares nothing yet: its listener is handed
-/// to an opaque native and called with unknown values.
-#[test]
-fn watch_file_listener_params_stay_unknown() {
-    let pf = facts(
-        r#"
-        function sys() {
-            const _fs: typeof import("fs") = require("fs");
-            _fs.watchFile("/t", { persistent: true, interval: 250 } as any, (curr: any, prev: any) => {
-                console.log(curr.zz);
-            });
-        }
-        sys();
-    "#,
-    );
-    assert!(site(&pf, "zz").top, "{}", pf.dump_text());
-}

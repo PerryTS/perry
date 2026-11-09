@@ -40,6 +40,15 @@
 //!
 //! A constructor declared this way (`new Name(...)`, `declared_ctor`) runs
 //! its declaration with no receiver: `result` is the object it returns.
+//!
+//! `callee` is the function value the call runs (`run_member`): a closure
+//! native's captures are internal slots of that value. A closure native
+//! whose declaration names `callee` is one value per object that holds it
+//! (`Native::Member::holder`): a fresh object's own field of it gets its own
+//! token, whose `islot(callee, self)` is that object, as the runtime
+//! makes one closure per object capturing it (`fs.watch`'s `on`). Such a
+//! declaration runs only on a call of the value (never by name, never as a
+//! construct), and such a native is a value only as a fresh object's field.
 
 use super::collections::cb_call;
 use super::*;
@@ -121,7 +130,7 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
 /// body (`declared_member`): what `new` of it does, in forms `run_construct`
 /// runs.
 pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
-    declared_member(name).filter(|e| e.kind == RealmKind::Constructor)
+    declared_member(name).filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
 }
 
 fn by_proto() -> &'static ByProto {
@@ -133,14 +142,26 @@ fn by_proto() -> &'static ByProto {
 /// runs (no receiver: a construct has none).
 pub(crate) fn declared_ctor(name: &str) -> Option<&'static RealmEntry> {
     let e = *index().1.get(name)?;
-    (interpretable(e.effects) && !names_this(e.effects)).then_some(e)
+    (interpretable(e.effects) && !names_this(e.effects) && !names_callee(e.effects)).then_some(e)
 }
 
 fn names_this(effects: &[RealmEffect]) -> bool {
-    fn slot(s: &RealmSlot) -> bool {
-        s.root == RealmSlotRoot::This
-    }
-    fn operand(o: &RealmOperand) -> bool {
+    names_root(effects, RealmSlotRoot::This)
+}
+
+/// The one internal slot of a closure native's value (`islot(callee, self)`):
+/// the object whose declaration installed it (`Native::Member::holder`).
+const CALLEE_SELF: &str = "self";
+
+/// Whether the declaration reads the function value it runs as (`callee`):
+/// it runs only on a call of that value (`run_member`).
+pub(crate) fn names_callee(effects: &[RealmEffect]) -> bool {
+    names_root(effects, RealmSlotRoot::Callee)
+}
+
+fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
+    let slot = |s: &RealmSlot| s.root == root;
+    fn operand(o: &RealmOperand, slot: &dyn Fn(&RealmSlot) -> bool, root: RealmSlotRoot) -> bool {
         match o {
             RealmOperand::Prim(_) => false,
             RealmOperand::Slot(s) => slot(s),
@@ -150,21 +171,26 @@ fn names_this(effects: &[RealmEffect]) -> bool {
                 slots,
                 ..
             } => {
-                elems.iter().any(operand)
-                    || fields.iter().chain(slots.iter()).any(|f| operand(&f.value))
+                elems.iter().any(|e| operand(e, slot, root))
+                    || fields
+                        .iter()
+                        .chain(slots.iter())
+                        .any(|f| operand(&f.value, slot, root))
             }
-            RealmOperand::Promise { value, reject } => {
-                value.iter().chain(reject.iter()).any(operand)
-            }
+            RealmOperand::Promise { value, reject } => value
+                .iter()
+                .chain(reject.iter())
+                .any(|v| operand(v, slot, root)),
             RealmOperand::Native(_) => false,
             RealmOperand::Species { of, args, elems } => {
-                slot(of) || args.iter().any(operand) || elems.iter().any(slot)
+                slot(of) || args.iter().any(|a| operand(a, slot, root)) || elems.iter().any(slot)
             }
-            RealmOperand::Union(us) => us.iter().any(operand),
+            RealmOperand::Union(us) => us.iter().any(|u| operand(u, slot, root)),
             // BoundFunctionCreate binds the receiver.
-            RealmOperand::Bound => true,
+            RealmOperand::Bound => root == RealmSlotRoot::This,
         }
     }
+    let operand = |o: &RealmOperand| operand(o, &slot, root);
     effects.iter().any(|e| match e {
         RealmEffect::Reads(ss) => ss.iter().any(slot),
         RealmEffect::Coerce { slot: s, .. } => slot(s),
@@ -172,7 +198,7 @@ fn names_this(effects: &[RealmEffect]) -> bool {
             slot(callee) || operand(this) || args.iter().any(operand)
         }
         RealmEffect::Stores { src, dst } => slot(src) || slot(dst),
-        RealmEffect::Escapes(s) => slot(s),
+        RealmEffect::Escapes(s) | RealmEffect::AsyncResource(s) => slot(s),
         RealmEffect::Returns(o) => operand(o),
         RealmEffect::StoresFresh | RealmEffect::Open => false,
     })
@@ -183,7 +209,7 @@ fn names_this(effects: &[RealmEffect]) -> bool {
 /// (no receiver: a global function ignores `this`).
 pub(crate) fn declared_function(name: &str) -> Option<&'static RealmEntry> {
     let e = *index().3.get(name)?;
-    (interpretable(e.effects) && !names_this(e.effects)).then_some(e)
+    (interpretable(e.effects) && !names_this(e.effects) && !names_callee(e.effects)).then_some(e)
 }
 
 /// The declaration of the constructor static `identity`
@@ -194,7 +220,7 @@ pub(crate) fn declared_static(identity: &str) -> Option<&'static RealmEntry> {
     if owner.ends_with(".prototype") || key.starts_with('<') {
         return None;
     }
-    declared_at(owner, key).filter(|e| !names_this(e.effects))
+    declared_at(owner, key).filter(|e| !names_this(e.effects) && !names_callee(e.effects))
 }
 
 /// The declaration of getter `key` of `proto` (`AbortController.prototype`,
@@ -304,7 +330,7 @@ pub(super) fn declared(fam: Family, name: &str) -> Option<&'static RealmEntry> {
 /// when the runtime declares its effects in forms `run_native` runs.
 pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry> {
     let e = *by_proto().get(owner)?.get(name)?;
-    interpretable(e.effects).then_some(e)
+    (interpretable(e.effects) && !names_callee(e.effects)).then_some(e)
 }
 
 /// Every effect is one `run_native` runs: not `open`, fresh objects only
@@ -318,7 +344,10 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
         matches!(
             (s.root, &s.steps[..]),
             (_, [])
-                | (RealmSlotRoot::This | RealmSlotRoot::Arg(_), [_, ..])
+                | (
+                    RealmSlotRoot::This | RealmSlotRoot::Arg(_) | RealmSlotRoot::Callee,
+                    [_, ..]
+                )
                 | (
                     RealmSlotRoot::Result,
                     [RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)]
@@ -326,6 +355,11 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
         )
     }
     fn operand(o: &RealmOperand) -> bool {
+        operand_in(o, false)
+    }
+    // `field`: the value of a fresh object's own data field, where a
+    // closure native that reads its captures (`callee`) is installed.
+    fn operand_in(o: &RealmOperand, field: bool) -> bool {
         match o {
             RealmOperand::Prim(_) => true,
             RealmOperand::Slot(s) => slot(s),
@@ -341,7 +375,9 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
                 (match (&proto[..], elems.is_empty(), fields.is_empty()) {
                     (_, true, true) => true,
                     ("Array.prototype", _, true) => elems.iter().all(operand),
-                    ("Object.prototype", true, _) => fields.iter().all(|f| operand(&f.value)),
+                    ("Object.prototype", true, _) => {
+                        fields.iter().all(|f| operand_in(&f.value, true))
+                    }
                     _ => false,
                 }) && slots.iter().all(|f| operand(&f.value))
             }
@@ -349,9 +385,11 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
                 value.iter().chain(reject.iter()).all(operand)
             }
             // A host function value whose own declaration runs.
-            RealmOperand::Native(path) => declared_member(path).is_some(),
+            RealmOperand::Native(path) => {
+                declared_member(path).is_some_and(|e| field || !names_callee(e.effects))
+            }
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
-            RealmOperand::Union(us) => us.iter().all(operand),
+            RealmOperand::Union(us) => us.iter().all(|u| operand_in(u, field)),
         }
     }
     !effects.is_empty()
@@ -364,6 +402,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
             RealmEffect::Escapes(s) => slot(s),
+            RealmEffect::AsyncResource(s) => slot(s),
             RealmEffect::Returns(RealmOperand::Bound) => true,
             RealmEffect::Returns(RealmOperand::Species { of, args, elems }) => {
                 of.root == RealmSlotRoot::This
@@ -415,6 +454,8 @@ struct Vals {
 /// (`None`: a construct, which has no receiver).
 struct Run {
     t: Option<Tok>,
+    /// The function value called (`callee`): set by `run_member` only.
+    callee: Option<Tok>,
     call: CallId,
     c: CallSite,
     recv: Option<NodeId>,
@@ -457,12 +498,31 @@ impl Run {
             }
             RealmSlotRoot::Result => v.nodes.push(self.c.ret),
             RealmSlotRoot::Returned(n) => v.nodes.extend(self.returned.get(n as usize)),
+            RealmSlotRoot::Callee => {
+                let f = self
+                    .callee
+                    .expect("a declaration naming `callee` runs on a call of its value");
+                let n = m.node_l("native-callee");
+                m.add_tok(n, f);
+                v.nodes.push(n);
+            }
         }
         v
     }
 
     fn slot(&mut self, m: &mut Model, s: &RealmSlot) -> Vals {
         match (s.root, &s.steps[..]) {
+            // An internal slot of the called value: its holder (`self`), or
+            // what the declaration stored there (one known token: its field
+            // node itself, no [[Get]]).
+            (RealmSlotRoot::Callee, [RealmSlotStep::Internal(k), rest @ ..]) => {
+                let n = if k == CALLEE_SELF {
+                    self.callee_self(m)
+                } else {
+                    self.callee_slot(m, k)
+                };
+                self.walk(m, n, rest)
+            }
             (r, []) => self.root(m, r),
             // The receiver's elements: its element node.
             (RealmSlotRoot::This, [RealmSlotStep::Elems]) => Vals {
@@ -521,6 +581,68 @@ impl Run {
         }
     }
 
+    /// `islot(callee, self)`: the object the called closure native was
+    /// made for (its token's holder). A value of the native with no holder
+    /// (none is made: `interpretable` takes such a native as a fresh
+    /// object's field only) would be any object: ⊤.
+    fn callee_self(&mut self, m: &mut Model) -> NodeId {
+        let f = self
+            .callee
+            .expect("a declaration naming `callee` runs on a call of its value");
+        let n = m.node_l("native-callee-self");
+        match m.toks[f as usize] {
+            TokKind::BuiltinFn(crate::model::Native::Member {
+                holder: Some(h), ..
+            }) => m.add_tok(n, h),
+            _ => m.add_top(n, |_| "a closure native's captures without a holder".into()),
+        }
+        n
+    }
+
+    /// Internal slot `k` of the called value: the field the declaration
+    /// stores into (`stores(result -> islot(callee, watchers))`) and reads.
+    fn callee_slot(&mut self, m: &mut Model, k: &str) -> NodeId {
+        let f = self
+            .callee
+            .expect("a declaration naming `callee` runs on a call of its value");
+        let key = internal_atom(m, k);
+        m.field(f, key)
+    }
+
+    /// The steps `steps` taken from the values of node `n`, outermost last.
+    fn walk(&mut self, m: &mut Model, n: NodeId, steps: &[RealmSlotStep]) -> Vals {
+        let mut cur = Vals {
+            nodes: vec![n],
+            spread: vec![],
+        };
+        for st in steps {
+            let base = match (&cur.nodes[..], &cur.spread[..]) {
+                (&[b], []) => b,
+                _ => {
+                    let out = m.node_l("native-slot");
+                    flow(m, &cur, out);
+                    out
+                }
+            };
+            cur = match st {
+                RealmSlotStep::Elems => Vals {
+                    nodes: vec![],
+                    spread: vec![base],
+                },
+                st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
+                    let key = step_key(m, st);
+                    let dst = m.node_l("native-get");
+                    m.cons(base, Cons::Load { key, dst });
+                    Vals {
+                        nodes: vec![dst],
+                        spread: vec![],
+                    }
+                }
+            };
+        }
+        cur
+    }
+
     /// The slot's values as one node (`None`: the slot holds nothing, an
     /// argument the call does not pass).
     fn node(&mut self, m: &mut Model, s: &RealmSlot) -> Option<NodeId> {
@@ -575,6 +697,7 @@ impl Run {
                     .name;
                 let f = m.tok(TokKind::BuiltinFn(crate::model::Native::Member {
                     identity,
+                    holder: None,
                 }));
                 let n = m.node_l("native-fn");
                 m.add_tok(n, f);
@@ -626,10 +749,41 @@ impl Run {
         for f in fields {
             let key = m.atom(&f.key);
             let at = m.field(out, key);
-            let v = self.operand(m, &f.value);
+            let v = self.held(m, &f.value, out);
             m.edge(v, at);
         }
         out
+    }
+
+    /// The value of an own field of fresh object `holder`: a closure native
+    /// whose declaration reads its captures (`names_callee`) is the value
+    /// made for this holder, with `islot(callee, self)` = `holder`; any
+    /// other value as `operand` makes it.
+    fn held(&mut self, m: &mut Model, o: &RealmOperand, holder: Tok) -> NodeId {
+        match o {
+            RealmOperand::Native(path) => {
+                let e = declared_member(path).expect("interpretable() takes a declared native only");
+                if !names_callee(e.effects) {
+                    return self.operand(m, o);
+                }
+                let f = m.tok(TokKind::BuiltinFn(crate::model::Native::Member {
+                    identity: e.name,
+                    holder: Some(holder),
+                }));
+                let n = m.node_l("native-fn");
+                m.add_tok(n, f);
+                n
+            }
+            RealmOperand::Union(us) => {
+                let out = m.node_l("native-union");
+                for u in us.iter() {
+                    let n = self.held(m, u, holder);
+                    m.edge(n, out);
+                }
+                out
+            }
+            _ => self.operand(m, o),
+        }
     }
 
     /// The internal slots of fresh object `out`: one field each, under a
@@ -784,22 +938,34 @@ fn flow(m: &mut Model, v: &Vals, dst: NodeId) {
 /// `call` into declared native `entry` with receiver token `t`: each
 /// declared effect, in declaration order.
 pub(crate) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call: CallId) {
-    run(m, entry, Some(t), call)
+    run(m, entry, Some(t), None, call)
+}
+
+/// `call` of declared native function value `f` (`declared_member`):
+/// each declared effect, with `f` as the receiver token and as `callee`.
+pub(crate) fn run_member(m: &mut Model, entry: &'static RealmEntry, f: Tok, call: CallId) {
+    run(m, entry, Some(f), Some(f), call)
 }
 
 /// `new Name(...)` at `call` of a declared global constructor
 /// (`declared_ctor`): each declared effect, with no receiver.
 pub(crate) fn run_construct(m: &mut Model, entry: &'static RealmEntry, call: CallId) {
-    run(m, entry, None, call)
+    run(m, entry, None, None, call)
 }
 
 /// `call` of a declared global function (`declared_function`): each
 /// declared effect, with no receiver.
 pub(crate) fn run_function(m: &mut Model, entry: &'static RealmEntry, call: CallId) {
-    run(m, entry, None, call)
+    run(m, entry, None, None, call)
 }
 
-fn run(m: &mut Model, entry: &'static RealmEntry, t: Option<Tok>, call: CallId) {
+fn run(
+    m: &mut Model,
+    entry: &'static RealmEntry,
+    t: Option<Tok>,
+    callee: Option<Tok>,
+    call: CallId,
+) {
     if let Some(p) = m.prof.as_mut() {
         let site = m.calls[call as usize].site;
         let (runs, sites) = p.natives.entry(entry.name).or_default();
@@ -808,6 +974,7 @@ fn run(m: &mut Model, entry: &'static RealmEntry, t: Option<Tok>, call: CallId) 
     }
     let mut run = Run {
         t,
+        callee,
         call,
         c: m.calls[call as usize].clone(),
         recv: None,
@@ -840,6 +1007,11 @@ fn run(m: &mut Model, entry: &'static RealmEntry, t: Option<Tok>, call: CallId) 
                 }
             }
             RealmEffect::StoresFresh => {}
+            RealmEffect::AsyncResource(s) => {
+                if let Some(n) = run.node(m, s) {
+                    super::async_resource(m, n, entry.name);
+                }
+            }
             RealmEffect::Escapes(s) => {
                 if let Some(n) = run.node(m, s) {
                     let reason = m.reason(&format!(
@@ -896,6 +1068,13 @@ fn run(m: &mut Model, entry: &'static RealmEntry, t: Option<Tok>, call: CallId) 
                 let Some(value) = run.node(m, src) else {
                     continue;
                 };
+                if let (RealmSlotRoot::Callee, [], RealmSlotStep::Internal(k)) = (dst.root, inner, st) {
+                    if k != CALLEE_SELF {
+                        let at = run.callee_slot(m, k);
+                        m.edge(value, at);
+                        continue;
+                    }
+                }
                 let base = if inner.is_empty() {
                     run.root(m, dst.root).nodes
                 } else {
@@ -937,6 +1116,7 @@ fn slot_text(s: &RealmSlot) -> String {
         RealmSlotRoot::Rest(i) => format!("rest({i})"),
         RealmSlotRoot::Result => "result".to_string(),
         RealmSlotRoot::Returned(i) => format!("returned({i})"),
+        RealmSlotRoot::Callee => "callee".to_string(),
     };
     for st in s.steps.iter() {
         out = match st {

@@ -1763,6 +1763,9 @@ pub extern "C" fn js_fs_realpath_sync_options(path_value: f64, options_value: f6
     encoded_string_ptr(&bytes, &enc) as i64
 }
 
+// The path; the options (a string is the encoding) [[Get]] `encoding`; the
+// result is a string, or a Buffer for `encoding: "buffer"`.
+crate::realm_decl! { "node:fs.realpathSync", effects = { path(arg(0)); reads(field(arg(1), encoding)); stores(fresh); returns(prim(str) | fresh(Buffer.prototype)) } }
 #[no_mangle]
 pub extern "C" fn js_fs_realpath_dispatch(path_value: f64, options_value: f64) -> f64 {
     validate::validate_path("path", path_value);

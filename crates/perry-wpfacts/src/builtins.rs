@@ -33,7 +33,7 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_static, run_construct, run_function, run_native,
+    declared_construct, declared_member, declared_static, run_construct, run_function, run_member,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -179,6 +179,8 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
     interpreted_code_runs(m);
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
+        // Interpreted code may call async_hooks.createHook itself.
+        async_hook_may_run(m, why);
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
         if m.explain {
             eprintln!("perry: wpfacts explain: dynamic code reachable: {why}");
@@ -187,6 +189,33 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
         // interpreter, whose global reads and writes `compute` records up
         // front; without one the Function constructor throws.
     }
+}
+
+/// An async_hooks hook may be enabled: a reached call may be the native
+/// `createHook` (its token is a callee there), or interpreted code may run
+/// (DECISIONS 150). Each value declared `async_resource`, made before or
+/// after in the solve, goes to the hook's `init`.
+pub fn async_hook_may_run(m: &mut Model, why: &str) {
+    if m.async_hooks.is_some() {
+        return;
+    }
+    m.async_hooks = Some(why.to_string());
+    m.rel(|| format!("asynchook {}", why.replace(' ', "\\s")));
+    for (n, name) in std::mem::take(&mut m.async_resources) {
+        async_resource(m, n, name);
+    }
+}
+
+/// `async_resource(slot)` of native `name`: the runtime gives the slot's
+/// values to `init` of every enabled hook (unknown code), so they escape
+/// while a hook may be enabled; until then they wait for one.
+pub fn async_resource(m: &mut Model, n: NodeId, name: &'static str) {
+    let Some(why) = m.async_hooks.clone() else {
+        m.async_resources.push((n, name));
+        return;
+    };
+    let r = m.reason(&format!("{name} hands its resource to async_hooks init ({why})"));
+    m.sink_node(n, r);
 }
 
 /// DECISIONS 235: interpreted code may run, from a real eval-like source
@@ -886,7 +915,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named("Buffer.prototype", m)
             .and_then(|h| m.declarations.property(h, name, m))
         {
-            return p.native.map(|identity| Native::Member { identity });
+            return p.native.map(|identity| Native::Member { identity, holder: None });
         }
     }
     // The prototype of an object a declaration made
@@ -899,7 +928,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named(w, m)
             .and_then(|h| m.declarations.property(h, name, m))?
             .native?;
-        return Some(Native::Member { identity });
+        return Some(Native::Member { identity, holder: None });
     }
     let holder = match what {
         Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
@@ -921,7 +950,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             let object = m.declarations.family(Family::Object, m)?;
             m.declarations.property(object, name, m)?.native
         })?;
-    Some(Native::Member { identity })
+    Some(Native::Member { identity, holder: None })
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.
@@ -950,7 +979,7 @@ pub(crate) fn native_model(
 /// The three receiver-independent Object.prototype summaries already have
 /// namespace tokens. Intern every path to those objects under those tokens.
 pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
-    if let TokKind::BuiltinFn(Native::Member { identity }) = k {
+    if let TokKind::BuiltinFn(Native::Member { identity, .. }) = k {
         if whole {
             if let Some(ns) = ns_by_name(identity) {
                 if members::ns_chain(ns) == Family::Function {
@@ -1396,7 +1425,7 @@ pub(crate) fn native_own_load(
             } else {
                 m.native_missing.push((holder, a, NativeMiss::Load(dst)));
                 if let Some(identity) = value {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
                     m.add_tok(dst, value);
                 } else {
                     opaque_member(m, dst);
@@ -1418,7 +1447,7 @@ pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
 /// Read the function reference from this receiver's declared property shape.
 pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
     if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
-        return Some(Native::Member { identity });
+        return Some(Native::Member { identity, holder: None });
     }
     matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
         .then(|| member_native(m, members::ns_chain(ns), None, name))
@@ -2082,6 +2111,19 @@ fn ns_method_inner(
         // declares absent is no method (TypeError); one the program added
         // is the receiver's own field or chain value (`method_on`).
         (_, n) if members::ns_member(ns, n) == Some(None) => {}
+        // A reached call of the native `createHook`: the hook it makes may
+        // be enabled, and its `init` (unknown code: createHook is otherwise
+        // undeclared) gets every value declared `async_resource`.
+        (BuiltinNs::Module("node:async_hooks"), "createHook") => {
+            async_hook_may_run(m, "a reached call of async_hooks.createHook");
+            unknown_method_proto(
+                m,
+                call,
+                "argument of builtin node:async_hooks.createHook",
+                None,
+                true,
+            )
+        }
         (_, n) => unknown_method_proto(
             m,
             call,
@@ -2090,6 +2132,20 @@ fn ns_method_inner(
             true,
         ),
     }
+}
+
+/// The realm identity of module member `module.method` (`async_hooks`,
+/// `createHook`) whose call `ns_method_inner` models by name in the solve:
+/// a direct HIR call of it is a call of that token.
+pub(crate) fn solved_namespace_call(module: &str, method: &str) -> Option<&'static str> {
+    let bare = module.strip_prefix("node:").unwrap_or(module);
+    if (bare, method) != ("async_hooks", "createHook") {
+        return None;
+    }
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == "node:async_hooks.createHook")
+        .map(|e| e.name)
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
