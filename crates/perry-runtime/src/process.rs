@@ -871,7 +871,10 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "stdin" | "stdout" | "stderr" => process_stdio_property(property)?,
         "allowedNodeEnvironmentFlags" => report::process_allowed_flags_value(),
         "argv0" => module_string_value(&process_argv0_string()),
-        "execPath" => module_string_value(&process_exec_path_string()),
+        "execPath" => {
+            crate::snap_host_value!(2);
+            module_string_value(&process_exec_path_string())
+        }
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
         "execArgv" => process_exec_argv_value(),

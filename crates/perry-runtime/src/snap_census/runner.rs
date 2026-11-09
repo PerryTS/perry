@@ -483,6 +483,8 @@ struct Init {
     /// The entry module's own evaluation (a program with a worker evaluates
     /// its entry as a module): the entry body. The check run runs it.
     entry_module: bool,
+    /// SNAPK2a P-entry: this init's first (a)/(b) hit is logged.
+    p_entry_hit: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -503,6 +505,9 @@ struct Birth {
     addr: usize,
     size: u32,
     init: u32,
+    /// The ordered input record's seq when the birth happened (SNAPK2a scans
+    /// date a held pointer no earlier than its holder's and target's births).
+    seq: u64,
 }
 
 /// Page flags (one byte per page).
@@ -809,6 +814,29 @@ struct State {
     /// (`PERRY_SNAP_WD`, by logical name).
     wd_names: std::collections::HashSet<(u64, usize)>,
     entry_init: u32,
+    /// SNAPK2a (DESIGN27 §1.3, §2). Host values (`PERRY_SNAP_HOST=0` off):
+    /// a `process.argv`/`process.execPath` read is live in the entry and a
+    /// STOP anywhere else; a word outside entry state that holds a pointer
+    /// into a host value is a STOP.
+    host_rule: bool,
+    /// P-entry (`PERRY_SNAP_PENTRY=0` off): no imaged init reads a word an
+    /// entry wrote (a), writes a word an entry read (b), or holds a pointer
+    /// to an entry birth (c).
+    p_entry_rule: bool,
+    /// P-reach (`PERRY_SNAP_PREACH=0` off): an init an entry reaches by
+    /// `import()`/`require` names the entry's inputs read before it.
+    p_reach_rule: bool,
+    /// Words an entry read (P-entry (b)).
+    er: WordSet,
+    /// First (a)/(b) hit per init: (init, rule, word, pc, input seq).
+    /// Pushed in signal context: the capacity is reserved up front.
+    p_entry_log: Vec<(u32, u8, usize, usize, u64)>,
+    /// The open host-value scope (1 argv, 2 execPath; 0 none) and the births
+    /// made inside one: (start, end, what, input seq).
+    host_what: u8,
+    host_targets: Vec<(usize, usize, u8, u64)>,
+    /// The entry's input rows since the last reach point: (seq, op).
+    entry_rows: Vec<(u64, String)>,
     mark: bool,
     /// R5 (`PERRY_SNAP_RSET=1`): after the boundary, the imaged cells stay
     /// write-protected and their writes are counted until exit.
@@ -1047,6 +1075,14 @@ unsafe fn start_census(out: String) {
             })
             .unwrap_or_default(),
         entry_init: 0,
+        host_rule: !std::env::var("PERRY_SNAP_HOST").is_ok_and(|v| v == "0"),
+        p_entry_rule: !std::env::var("PERRY_SNAP_PENTRY").is_ok_and(|v| v == "0"),
+        p_reach_rule: !std::env::var("PERRY_SNAP_PREACH").is_ok_and(|v| v == "0"),
+        er: WordSet::new(24),
+        p_entry_log: Vec::with_capacity(CHECK_FAIL_MAX),
+        host_what: 0,
+        host_targets: Vec::new(),
+        entry_rows: Vec::new(),
         mark: std::env::var("PERRY_SNAP_MARK").is_ok_and(|v| v == "1"),
         rset: std::env::var("PERRY_SNAP_RSET").is_ok_and(|v| v == "1"),
         rset_active: false,
@@ -1077,6 +1113,7 @@ unsafe fn start_census(out: String) {
             addr: header as usize,
             size: size as u32,
             init: 0,
+            seq: 0,
         });
     });
     crate::arena::snap_reservation_regions(|base, end| st.regions.push((base, end)));
@@ -1203,6 +1240,7 @@ fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
         faults: 0,
         skipped: false,
         entry_module: false,
+        p_entry_hit: false,
     }
 }
 
@@ -1342,6 +1380,25 @@ pub(super) fn init_enter(addr: usize) {
     } else {
         Reach::DynImport
     };
+    if st.p_reach_rule
+        && !entry_module
+        && matches!(reach, Reach::DynImport | Reach::Require)
+        && is_entry(st, parent_id)
+    {
+        // P-reach (DESIGN27 §2): the entry reached this init by control flow;
+        // what the entry read before it are required guard members.
+        let members: Vec<String> = st
+            .entry_rows
+            .drain(..)
+            .map(|(s, op)| format!("{s}:{op}"))
+            .collect();
+        let id = st.inits.len();
+        input_record::event(
+            st,
+            "p_reach",
+            format!("reach_init={id};addr={addr:x};members={}", members.join(",")),
+        );
+    }
     st.seq += 1;
     let id = st.inits.len() as u32;
     assert!((id as usize) < MAX_INITS, "snap census: too many inits");
@@ -1780,6 +1837,7 @@ pub(super) fn birth(addr: usize, size: usize) {
         for w in (addr..addr + size).step_by(8) {
             st.w.remove(w as u64);
             st.r.remove(w as u64);
+            st.er.remove(w as u64);
         }
         if let (Some(a), Some(b)) = (start_bit(st, addr), start_bit(st, addr + size - 1)) {
             for i in a..=b {
@@ -1799,7 +1857,12 @@ pub(super) fn birth(addr: usize, size: usize) {
         addr,
         size: size as u32,
         init: top,
+        seq: st.inputs.seq,
     });
+    if st.host_what != 0 {
+        st.host_targets
+            .push((addr, addr + size, st.host_what, st.inputs.seq));
+    }
     let i = &mut st.inits[top as usize];
     i.births += 1;
     i.birth_bytes += size as u64;
@@ -2689,6 +2752,27 @@ fn note_loc(st: &mut State, top: usize, word: usize, w: u64, write: bool, pc: us
         unsafe { apply_protection(st) };
         return;
     }
+    if st.p_entry_rule && top != 0 {
+        if is_entry(st, top as u32) {
+            if !write {
+                st.er.insert(w);
+            }
+        } else if !st.inits[top].p_entry_hit {
+            let rule = if write {
+                st.er.contains(w).then_some(b'b')
+            } else {
+                (st.w.contains(w) && st.wby.get(w).is_some_and(|c| is_entry(st, c.0)))
+                    .then_some(b'a')
+            };
+            if let Some(rule) = rule {
+                if st.p_entry_log.len() < st.p_entry_log.capacity() {
+                    st.inits[top].p_entry_hit = true;
+                    let seq = st.inputs.seq;
+                    st.p_entry_log.push((top as u32, rule, word, pc, seq));
+                }
+            }
+        }
+    }
     if st.d_mode {
         // A member (seeded, or joined earlier in this run) still names the
         // first earlier member it conflicts with: the edge of the cascade
@@ -3034,6 +3118,9 @@ pub(super) fn after_boundary_collection() {
 }
 
 fn write_report(st: &mut State) {
+    if st.host_rule || st.p_entry_rule {
+        k2a_rows(st);
+    }
     st.env_reads =
         input_record::env_rows(st).expect("cannot read durable environment observations");
     use std::io::Write;
@@ -3995,6 +4082,167 @@ struct EnvObs {
     /// The imaged init that read a store-site string's body, and where.
     by: u32,
     by_pc: usize,
+}
+
+/// The entry's state (DESIGN27 §2): the entry pseudo-init or the entry
+/// module's own evaluation. It re-runs live; nothing it holds is imaged.
+fn is_entry(st: &State, id: u32) -> bool {
+    id != 0 && (id == st.entry_init || st.inits[id as usize].entry_module)
+}
+
+fn host_name(what: u8) -> &'static str {
+    match what {
+        1 => "argv",
+        2 => "exec_path",
+        _ => "entry_birth",
+    }
+}
+
+/// A host value is materialized next (`HostValueScope`): one `host_value`
+/// row; the births until `host_value_exit` are its targets.
+pub(super) fn host_value_enter(what: u8) -> bool {
+    if !(inputs_on() && on_main_thread()) {
+        return false;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.host_rule || st.host_what != 0 {
+        return false;
+    }
+    let top = top_init(st);
+    let by = if top == 0 {
+        "runtime"
+    } else if is_entry(st, top) {
+        "entry"
+    } else {
+        "imaged"
+    };
+    let policy = if by == "entry" { "live" } else { "STOP" };
+    input_record::event(
+        st,
+        "host_value",
+        format!("what={};by={by};policy={policy}", host_name(what)),
+    );
+    st.host_what = what;
+    true
+}
+
+pub(super) fn host_value_exit() {
+    state().host_what = 0;
+}
+
+/// SNAPK2a scan at the boundary (DESIGN27 §1.3 and P-entry (c)): every word
+/// outside entry state (births that are neither the entry's nor a host
+/// value's, module-global slots no entry owns) that holds a pointer into a
+/// host value or into an entry birth is a STOP. The store is no earlier than
+/// both births, so the row is dated at the later one (`at_seq`). Then the
+/// P-entry (a)/(b) hits logged during the run.
+fn k2a_rows(st: &mut State) {
+    let mut t: Vec<(usize, usize, u8, u64, u32)> = Vec::new();
+    if st.host_rule {
+        t.extend(st.host_targets.iter().map(|&(a, e, w, s)| (a, e, w, s, 0)));
+    }
+    if st.p_entry_rule {
+        for b in st.births.as_slice() {
+            if is_entry(st, b.init) {
+                t.push((b.addr, b.addr + b.size as usize, 255, b.seq, b.init));
+            }
+        }
+    }
+    t.sort_unstable();
+    let find = |v: u64| -> Option<usize> {
+        let hi = v >> 48;
+        if !(hi == 0 || (0x7FFC..=0x7FFF).contains(&hi)) {
+            return None;
+        }
+        let a = (v & 0xFFFF_FFFF_FFFF) as usize;
+        let i = t.partition_point(|x| x.0 <= a);
+        (a != 0 && i > 0 && a < t[i - 1].1).then(|| i - 1)
+    };
+    let is_target = |a: usize| {
+        let i = t.partition_point(|x| x.0 <= a);
+        i > 0 && t[i - 1].0 == a
+    };
+    let mut rows: Vec<(&'static str, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut held = 0u64;
+    let row = |rows: &mut Vec<(&'static str, String)>, k: usize, holder: String, at: u64| {
+        let (op, rule) = if t[k].2 == 255 {
+            ("p_entry", "rule=c;")
+        } else {
+            ("host_value.held", "")
+        };
+        rows.push((
+            op,
+            format!(
+                "{rule}what={};{holder};target_init={};target_seq={};at_seq={at};policy=STOP",
+                host_name(t[k].2),
+                t[k].4,
+                t[k].3
+            ),
+        ));
+    };
+    if !t.is_empty() {
+        for b in st.births.as_slice() {
+            if is_entry(st, b.init) || is_target(b.addr) {
+                continue;
+            }
+            for off in (8..b.size as usize).step_by(8) {
+                let v = unsafe { ((b.addr + off) as *const u64).read() };
+                if let Some(k) = find(v) {
+                    held += 1;
+                    if seen.insert((b.addr, k)) && rows.len() < CHECK_FAIL_MAX {
+                        row(
+                            &mut rows,
+                            k,
+                            format!(
+                                "holder=birth;holder_init={};holder_addr={:x};off={off}",
+                                b.init, b.addr
+                            ),
+                            b.seq.max(t[k].3),
+                        );
+                    }
+                }
+            }
+        }
+        for (n, &slot) in st.globals_log.iter().enumerate() {
+            let owner = st.slot_owner.get(n).copied().unwrap_or(0);
+            if is_entry(st, owner) {
+                continue;
+            }
+            let v = unsafe { (slot as *const u64).read() };
+            if let Some(k) = find(v) {
+                held += 1;
+                if seen.insert((slot, k)) && rows.len() < CHECK_FAIL_MAX {
+                    row(
+                        &mut rows,
+                        k,
+                        format!("holder=slot;holder_init={owner};slot={}", slot_name(slot)),
+                        t[k].3,
+                    );
+                }
+            }
+        }
+    }
+    for &(init, rule, word, pc, seq) in &st.p_entry_log {
+        rows.push((
+            "p_entry",
+            format!(
+                "rule={};init={init};word={word:x};pc={pc:x};at_seq={seq};policy=STOP",
+                rule as char
+            ),
+        ));
+    }
+    let summary = format!(
+        "host_targets={};entry_births={};held_words={held};p_entry_ab={}",
+        st.host_targets.len(),
+        t.iter().filter(|x| x.2 == 255).count(),
+        st.p_entry_log.len()
+    );
+    for (op, v) in rows {
+        input_record::event(st, op, v);
+    }
+    input_record::event(st, "k2a", summary);
 }
 
 fn top_init(st: &State) -> u32 {

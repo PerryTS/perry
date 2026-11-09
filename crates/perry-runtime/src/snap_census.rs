@@ -664,6 +664,39 @@ pub(crate) fn funnel_enter(f: Funnel) -> runner::FunnelScope {
     runner::FunnelScope::enter(f as u8)
 }
 
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+/// SNAPK2a: a host value (`process.argv`, `process.execPath`) is
+/// materialized inside this scope (DESIGN27 §1.3).
+pub(crate) struct HostValueScope(bool);
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+impl HostValueScope {
+    #[inline(always)]
+    pub(crate) fn enter(what: u8) -> Self {
+        Self(runner::on() && runner::host_value_enter(what))
+    }
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+impl Drop for HostValueScope {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.0 {
+            runner::host_value_exit();
+        }
+    }
+}
+
+/// Open a SNAPK2a host-value scope (1 argv, 2 execPath) for the rest of the
+/// enclosing block, in the instrumented Linux cohort only.
+#[macro_export]
+macro_rules! snap_host_value {
+    ($what:expr) => {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        let _snap_host_value = $crate::snap_census::HostValueScope::enter($what);
+    };
+}
+
 /// Open a SNAP25 funnel for the rest of the enclosing block, in the
 /// instrumented Linux cohort only; nothing in any other build.
 #[macro_export]

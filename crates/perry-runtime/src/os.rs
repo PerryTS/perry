@@ -634,6 +634,7 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     {
         return crate::snap_census::input_call("argv", &format!("{:?}", ()), || {
+            crate::snap_host_value!(1);
             crate::effect!(host_read, argv);
             use crate::array::js_array_push_f64;
             use crate::value::js_nanbox_string;

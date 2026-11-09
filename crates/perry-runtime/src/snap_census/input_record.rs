@@ -108,6 +108,26 @@ pub(super) fn event(st: &mut State, op: &str, value: String) -> u64 {
     for (to, from) in six.iter_mut().zip(pcs[..n].iter().skip(1)) {
         *to = *from;
     }
+    if st.p_reach_rule
+        && super::is_entry(st, init)
+        && !matches!(
+            op,
+            "init_enter"
+                | "init_exit"
+                | "entry_body"
+                | "result"
+                | "boundary"
+                | "job_enter"
+                | "job_exit"
+                | "census_start"
+                | "p_reach"
+                | "p_entry"
+                | "k2a"
+                | "host_value.held"
+        )
+    {
+        st.entry_rows.push((seq, op.to_owned()));
+    }
     let mut row = format!("{seq}\t{ir}\t{init}\t");
     for (i, f) in st.frames.iter().enumerate() {
         if i != 0 {
