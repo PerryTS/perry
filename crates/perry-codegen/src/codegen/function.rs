@@ -679,6 +679,11 @@ pub(super) fn compile_function(
             .filter(|plan| plan.signature.is_some())
         {
             super::signature_entry::emit_boxed_entry(llmod, f, &public_llvm_name, plan);
+            // CWN 11-09: the boxed entry is the public symbol, so it takes
+            // the public body's inline attributes.
+            if let Some(entry) = llmod.function_named_mut(&public_llvm_name) {
+                apply_public_inline_attrs(entry, f, cross_module);
+            }
             return Ok(());
         }
     }
@@ -810,6 +815,10 @@ pub(super) fn compile_function(
     // back into its parent would rebuild the giant function.
     let split_region = super::split_regions::is_region_function(f) && spec_entry.is_none();
     lf.no_inline = entry_outline_chunk || split_region;
+    let specialized_entry = spec_entry.is_some();
+    if !specialized_entry {
+        apply_public_inline_attrs(lf, f, cross_module);
+    }
     if typed_public_trampoline.is_some()
         || guarded_public_plan.is_some()
         || spec_entry.is_some()
@@ -843,33 +852,6 @@ pub(super) fn compile_function(
     } else {
         std::collections::HashMap::new()
     };
-    // Small leaf functions (≤ 8 statements) get alwaysinline so LLVM
-    // exposes their operations to the caller's optimizer context — critical
-    // for vectorizing clamp helpers and similar patterns. Excluded:
-    // async/generator functions, AND functions rewritten by the
-    // async-to-generator pre-pass (was_plain_async=true). Inlining the
-    // rewritten wrapper into its caller breaks GC-root coverage of the
-    // step closure's iter capture, hanging async chains (issue #447).
-    let specialized_entry = spec_entry.is_some();
-    if !entry_outline_chunk
-        && !split_region
-        && !specialized_entry
-        && f.body.len() <= 8
-        && !f.is_async
-        && !f.is_generator
-        && !f.was_plain_async
-    {
-        lf.force_inline = true;
-    }
-    // Inline-hot-small (PERRY_INLINE_HOT_SMALL, default ON): bias — do not
-    // force — LLVM toward inlining a *small* function that has a *hot* (in-loop)
-    // call site. `inlinehint` only raises LLVM's inline threshold for this
-    // callee; its `-O3` growth budget still refuses cold/oversized inlines, so
-    // cold utility functions never bloat the binary (that is the anti-bloat
-    // property, proved by the binary-size gate). We skip `alwaysinline`
-    // functions (the hint would be redundant) and async/generator forms.
-    // Try-containing functions are ordinary inline candidates since #7302
-    // (invoke-EH removed the setjmp-era noinline requirement).
     // #7834: record the raw admission, before the `inline_hint` window narrows
     // it. `lower_call/new_alloc.rs` uses this to decide the inline-bump
     // allocation, which wants "is this code hot" and not "may LLVM's inline
@@ -880,19 +862,6 @@ pub(super) fn compile_function(
     // as `hot_loop_callee` (before the entry block exists and before any
     // expression is lowered), for the same reason.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
-    if !entry_outline_chunk
-        && !split_region
-        && !specialized_entry
-        && !lf.force_inline
-        && inline_hot_small_enabled()
-        && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
-        && !f.is_async
-        && !f.is_generator
-        && !f.was_plain_async
-        && cross_module.hot_loop_callees.contains(&f.id)
-    {
-        lf.inline_hint = true;
-    }
     let _ = lf.create_block("entry");
     let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
@@ -2062,6 +2031,52 @@ pub(super) fn compile_function(
         emit_public_receiverless_forwarder(llmod, f, &public_llvm_name, &llvm_name);
     }
     Ok(())
+}
+
+/// The inline attributes of `f`'s public body. Backend-bounding chunks and
+/// split regions never inline (#8595). P2 (CWN 11-09): a typed function's
+/// boxed entry is that public symbol and takes the same attributes.
+///
+/// Small leaf functions (≤ 8 statements) get alwaysinline so LLVM
+/// exposes their operations to the caller's optimizer context — critical
+/// for vectorizing clamp helpers and similar patterns. Excluded:
+/// async/generator functions, AND functions rewritten by the
+/// async-to-generator pre-pass (was_plain_async=true). Inlining the
+/// rewritten wrapper into its caller breaks GC-root coverage of the
+/// step closure's iter capture, hanging async chains (issue #447).
+/// Inline-hot-small (PERRY_INLINE_HOT_SMALL, default ON): bias — do not
+/// force — LLVM toward inlining a *small* function that has a *hot* (in-loop)
+/// call site. `inlinehint` only raises LLVM's inline threshold for this
+/// callee; its `-O3` growth budget still refuses cold/oversized inlines, so
+/// cold utility functions never bloat the binary (that is the anti-bloat
+/// property, proved by the binary-size gate). We skip `alwaysinline`
+/// functions (the hint would be redundant) and async/generator forms.
+/// Try-containing functions are ordinary inline candidates since #7302
+/// (invoke-EH removed the setjmp-era noinline requirement).
+pub(super) fn apply_public_inline_attrs(
+    lf: &mut crate::function::LlFunction,
+    f: &Function,
+    cross_module: &CrossModuleCtx,
+) {
+    let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
+    let split_region = super::split_regions::is_region_function(f);
+    lf.no_inline = entry_outline_chunk || split_region;
+    let plain = !entry_outline_chunk
+        && !split_region
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    if plain && f.body.len() <= 8 {
+        lf.force_inline = true;
+    }
+    if plain
+        && !lf.force_inline
+        && inline_hot_small_enabled()
+        && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
+        && cross_module.hot_loop_callees.contains(&f.id)
+    {
+        lf.inline_hint = true;
+    }
 }
 
 /// The public `perry_fn_*` symbol of a this-reading function: every direct
