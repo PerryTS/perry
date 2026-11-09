@@ -7,18 +7,23 @@ Object.defineProperty(Array.prototype, "1.5", {
   configurable: true,
   get() { if (throws-- > 0) { a = [50, 60, 70, 80]; throw new Error("g" + throws); } return 1; },
 });
-for (let round = 0; round < 4; round++) {
+function inner(): number {
   let small = 0, big = 0;
+  for (let k = 0; k < 4; k++) {
+    if (a[k] === k + 5) small++;
+    if (a[k] === (k + 5) * 10) big++;
+    if (k === 2 && a[k - 0.5] === 1) small += 10;
+  }
+  return small * 100 + big;
+}
+for (let round = 0; round < 4; round++) {
+  let r = -1;
   try {
-    for (let k = 0; k < 4; k++) {
-      if (a[k] === k + 5) small++;
-      if (a[k] === (k + 5) * 10) big++;
-      if (k === 2 && a[k - 0.5] === 1) small += 10;
-    }
+    r = inner();
   } catch (e) {
     console.log("caught", (e as Error).message, a[0], a[3]);
   } finally {
-    console.log("finally", round, small, big, a[1]);
+    console.log("finally", round, r, a[1]);
   }
 }
 delete (Array.prototype as any)["1.5"];

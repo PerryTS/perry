@@ -7,11 +7,14 @@ Object.defineProperty(Array.prototype, "1.5", {
   configurable: true,
   get() { a = other; return -1; },
 });
-let old = 0, fresh = 0, seen = 0;
-for (let k = 0; k < 8; k++) {
-  if (a[k] === k + 1) old++;
-  if (a[k] === (k + 1) * 100) fresh++;
-  if (k === 3 && a[k / 2] === -1) seen++;
+function run(): string {
+  let old = 0, fresh = 0, seen = 0;
+  for (let k = 0; k < 8; k++) {
+    if (a[k] === k + 1) old++;
+    if (a[k] === (k + 1) * 100) fresh++;
+    if (k === 3 && a[k / 2] === -1) seen++;
+  }
+  return old + " " + fresh + " " + seen;
 }
-console.log(old, fresh, seen);
+console.log(run());
 delete (Array.prototype as any)["1.5"];
