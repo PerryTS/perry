@@ -358,7 +358,11 @@ pub fn map_cons(
             into: n(into),
             site,
         },
-        SpreadFrom { src, site } => SpreadFrom { src, site },
+        SpreadFrom { src, site, from } => SpreadFrom {
+            src,
+            site,
+            from: if from == NO_NODE { NO_NODE } else { n(from) },
+        },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
