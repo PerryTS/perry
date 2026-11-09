@@ -730,3 +730,49 @@ fn a_foreign_handle_cannot_be_declared_shared_key_metadata() {
         );
     });
 }
+
+extern "C" fn passive_observer(
+    _bits: u64,
+    _mark: extern "C" fn(u64, *mut c_void),
+    _ctx: *mut c_void,
+) -> bool {
+    false
+}
+
+/// A young large container is promoted in place by the sweep that follows the
+/// full mark, so the mark records its young children as an old parent's: as
+/// bare old pages. An active foreign observer moves the visit onto the
+/// observer path, which must keep that custody. Recorded as owner-qualified
+/// external entries instead, the edges are invisible to array growth, which
+/// inherits only old-page coverage, and the grown copy's young children go
+/// unremembered.
+#[test]
+fn an_active_observer_keeps_a_young_large_containers_edges_as_old_pages() {
+    isolated(|| unsafe {
+        let container = crate::array::js_array_alloc(20_000);
+        assert!(
+            crate::arena::is_young_large_owner(container as usize),
+            "fixture: the container must be a young large owner"
+        );
+        let child = crate::array::js_array_alloc(2);
+        crate::array::js_array_set_f64_extend(container, 3, f64::from_bits(ptr_bits(child as usize)));
+        let header = header_from_user_ptr(container.cast());
+        assert!(crate::gc::full_trace::object_words_may_name_handles(header));
+        crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(observer_phase, passive_observer);
+        let _scope = ObserverScope;
+        crate::gc::full_trace::begin_full_trace();
+        assert!(crate::gc::full_trace::handle_trace_active());
+        let sticky = fold(header, &valid_set(false));
+        let slot = crate::array::array_elements_ptr(container) as usize + 3 * 8;
+        let page = crate::arena::generation_page_for_addr(slot);
+        assert!(
+            sticky.external_pages.is_empty(),
+            "a young large container's edges are not owner-qualified: {:?}",
+            sticky.external_pages
+        );
+        assert!(
+            sticky.old_pages.contains(&page),
+            "the young child's slot page must be recorded as an old page"
+        );
+    });
+}
