@@ -159,6 +159,7 @@ mod member_heritage;
 mod super_heritage;
 mod super_home_proto;
 mod super_key;
+mod sync_require;
 mod tdz_seed;
 mod top_element_key;
 mod type_export;
