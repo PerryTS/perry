@@ -679,11 +679,7 @@ pub(super) fn compile_function(
             .filter(|plan| plan.signature.is_some())
         {
             super::signature_entry::emit_boxed_entry(llmod, f, &public_llvm_name, plan);
-            // CWN 11-09: the boxed entry is the public symbol, so it takes
-            // the public body's inline attributes.
-            if let Some(entry) = llmod.function_named_mut(&public_llvm_name) {
-                apply_public_inline_attrs(entry, f, cross_module);
-            }
+            apply_boxed_entry_inline_attrs(llmod, f, &public_llvm_name, plan, cross_module);
             return Ok(());
         }
     }
@@ -2031,6 +2027,50 @@ pub(super) fn compile_function(
         emit_public_receiverless_forwarder(llmod, f, &public_llvm_name, &llvm_name);
     }
     Ok(())
+}
+
+/// P2 (CWN 11-09): a typed function's boxed entry takes the attributes of
+/// the public symbol main emitted (`plan.sig_public`): the guarded
+/// trampoline's (`emit_public_spec_function_trampoline`: an optimization
+/// boundary, admitted to the early inliner by the size of the body it
+/// enters, here `F$sig`), the typed_abi trampoline's (none), or the public
+/// body's (`apply_public_inline_attrs`).
+fn apply_boxed_entry_inline_attrs(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    plan: &SpecFnPlan,
+    cross_module: &CrossModuleCtx,
+) {
+    use super::spec_abi::MainPublic;
+    let sig_name = super::spec_abi::spec_entry_name(public_name, plan);
+    let statements = f.body.len();
+    let admit = std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let callable_worker = llmod.callable_worker;
+    let preinline = admit
+        && !callable_worker
+        && llmod
+            .function_estimated_ir_bytes(&sig_name)
+            .is_some_and(|ir_bytes| {
+                super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
+            });
+    let Some(entry) = llmod.function_named_mut(public_name) else {
+        return;
+    };
+    match plan.sig_public {
+        MainPublic::GuardedSpec => {
+            entry.no_inline = true;
+            entry.pre_statepoint_inline = preinline;
+            if admit && callable_worker {
+                entry.defer_body_preinline(statements, sig_name);
+            }
+        }
+        MainPublic::TypedTrampoline => {}
+        MainPublic::Body => apply_public_inline_attrs(entry, f, cross_module),
+    }
 }
 
 /// The inline attributes of `f`'s public body. Backend-bounding chunks and
