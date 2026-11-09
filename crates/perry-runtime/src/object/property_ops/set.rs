@@ -611,6 +611,15 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
             // property. Preserve its attributes when the first operation is
             // an assignment, before any read materializes the default object.
             if key_name == "prototype" && crate::object::function_would_have_own_prototype(target) {
+                // An unborn lazy builtin family's constructor: its birth gives
+                // `prototype` the builtin's attributes.
+                if unsafe { crate::object::birth_unborn_family_of(obj_ptr) } {
+                    if let Some(attrs) = crate::object::get_property_attrs(obj_ptr, &key_name) {
+                        return Some(OwnSetDescriptor::Data {
+                            writable: attrs.writable(),
+                        });
+                    }
+                }
                 crate::object::set_builtin_property_attrs(
                     obj_ptr,
                     key_name.clone(),

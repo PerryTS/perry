@@ -156,6 +156,7 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
+pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -240,12 +241,12 @@ pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module.
+#[cfg(test)]
+pub(crate) use native_module_registry::js_nm_install_events;
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf,
+    js_install_global_value_surfaces, js_nm_install_fs, js_nm_install_module, js_nm_install_perf,
     js_nm_install_process, js_nm_install_tls, js_nm_install_util,
 };
-#[cfg(test)]
-pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;

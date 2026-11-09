@@ -1344,6 +1344,8 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             );
             web_method_enumerable(proto(), "toJSON");
         }
+        // Node's getters, installed only for a program that reaches navigator.
+        "Navigator" => crate::navigator::populate_prototype(proto_obj),
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
         | "DOMException" | "MessageEvent" => {
             let _gc = crate::gc::GcSuppressScope::new();
