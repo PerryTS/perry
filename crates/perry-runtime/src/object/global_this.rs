@@ -135,8 +135,7 @@ pub(crate) use generator::{
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub(crate) use generator_state::{
-    fixed_generator_state, install_class_symbol_method,
-    STEP_DONE, STEP_INNER_RESULT,
+    fixed_generator_state, install_class_symbol_method, STEP_DONE, STEP_INNER_RESULT,
 };
 pub(crate) use generator_state::{
     generator_observe_record_prototype, generator_original_prototype_key,
@@ -165,8 +164,8 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    default_prepare_stack_trace_func_ptr, populate_global_this_builtins,
-    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
+    populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
     install_error_prototype_data_properties, populate_builtin_prototype_methods,

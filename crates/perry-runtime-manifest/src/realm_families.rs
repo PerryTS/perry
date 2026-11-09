@@ -46,6 +46,9 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 "instance" => "instance_identity",
                 "prototype_callable" => "prototype_callable",
                 "length" => continue,
+                // When the runtime births the family (setup or first ask),
+                // not what it declares: no manifest fact.
+                "lazy" => continue,
                 other => return Err(format!("unknown constructor family field {other}")),
             };
             let value = if field == "prototype_callable" {

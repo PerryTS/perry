@@ -702,6 +702,9 @@ pub struct CompilationContext {
     pub(crate) uses_os: bool,
     pub(crate) uses_messaging: bool,
     pub(crate) uses_event_target: bool,
+    /// The program may read `navigator` / `Navigator` (named, or through an
+    /// escaped global object): `Navigator.prototype` gets its getters.
+    pub(crate) uses_navigator: bool,
     pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
@@ -1443,6 +1446,7 @@ impl CompilationContext {
             uses_os: false,
             uses_messaging: false,
             uses_event_target: false,
+            uses_navigator: false,
             uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),

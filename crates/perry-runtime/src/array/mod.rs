@@ -56,9 +56,9 @@ mod iter_object;
 mod iterator;
 mod iterator_brand;
 pub(crate) use iterator_brand::{has_materialized_iterator_brand, mark_materialized_iterator};
-mod join;
 #[cfg(test)]
 mod growth_in_place_tests;
+mod join;
 mod jsvalue_api;
 /// Own named (non-index) properties stored with the array (#10166 brief 4).
 pub(crate) mod named_props;
@@ -101,9 +101,9 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
-mod identity_growth_tests;
-#[cfg(test)]
 mod hole_tail_tests;
+#[cfg(test)]
+mod identity_growth_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
 #[cfg(test)]
@@ -174,6 +174,10 @@ pub use self::from_concat::{
     js_array_from_value,
 };
 pub use self::generic::array_proto_mutator;
+pub(crate) use self::generic::{
+    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
+    value_is_own_user_method,
+};
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,
     js_arraylike_find, js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
@@ -181,10 +185,6 @@ pub use self::generic::{
     js_arraylike_join, js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce,
     js_arraylike_reduceRight, js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
     try_object_arraylike_mutator,
-};
-pub(crate) use self::generic::{
-    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
-    value_is_own_user_method,
 };
 pub use self::generic_mutators::{
     js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
@@ -259,10 +259,10 @@ pub(crate) use self::iterator::{
     entries_array_for_small_handle_value, is_builtin_iterator_class_id, spread_values,
 };
 pub use self::iterator::{
-    js_array_spread_append, js_array_spread_append_iterator, js_for_of_to_array, js_get_async_iterator,
-    js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_kind,
-    js_iterator_delegate_return, js_iterator_delegate_step, js_iterator_delegate_throw,
-    js_iterator_to_array,
+    js_array_spread_append, js_array_spread_append_iterator, js_for_of_to_array,
+    js_get_async_iterator, js_iterator_close_if_not_done, js_iterator_close_on_throw,
+    js_iterator_delegate_kind, js_iterator_delegate_return, js_iterator_delegate_step,
+    js_iterator_delegate_throw, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
 /// The element kind a realm array birth declares.
@@ -274,11 +274,11 @@ pub use self::numeric_range::{
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, intrinsic_constructor_addr, intrinsic_prototype_addr,
-    intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic, note_realm_intrinsic,
-    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
-    object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
-    RealmIntrinsics,
+    function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
+    intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
+    note_realm_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
+    object_prototype_addr_matches, object_prototype_cell, prime_prototype_addr_cache,
+    primitive_wrapper_prototype_addr, RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -319,9 +319,9 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
-pub(crate) use self::push_pop::{guard_writable_length, push_guard};
 #[cfg(test)]
 pub(crate) use self::push_pop::GrowInPlaceTestGuard;
+pub(crate) use self::push_pop::{guard_writable_length, push_guard};
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_grow_for_push, js_array_numeric_push_f64_unboxed,
     js_array_pop_f64, js_array_push_f64, js_array_push_f64_spec, js_array_push_hole,
