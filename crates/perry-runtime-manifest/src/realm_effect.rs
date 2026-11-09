@@ -493,3 +493,23 @@ pub mod emit {
 fn no_slots(slots: &Cow<'static, [RealmField]>) -> bool {
     slots.is_empty()
 }
+
+#[cfg(test)]
+mod operand_tests {
+    use super::*;
+
+    #[test]
+    fn json_and_unknown_operands_parse_and_round_trip() {
+        for (text, want) in [("\"json\"", RealmOperand::Json), ("\"unknown\"", RealmOperand::Unknown)] {
+            let got: RealmOperand = serde_json::from_str(text).unwrap();
+            assert_eq!(got, want);
+            assert_eq!(serde_json::to_string(&got).unwrap(), text);
+        }
+        let union: RealmOperand = serde_json::from_str(r#"{"union":["json","unknown"]}"#).unwrap();
+        assert_eq!(
+            union,
+            RealmOperand::Union(vec![RealmOperand::Json, RealmOperand::Unknown].into())
+        );
+        assert!(serde_json::from_str::<RealmOperand>("\"jsonn\"").is_err());
+    }
+}
