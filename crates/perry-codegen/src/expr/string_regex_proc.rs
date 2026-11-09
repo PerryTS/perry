@@ -211,7 +211,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::MathExp(o) => {
             let v = lower_math_operand(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]))
+            // V8-exact exp (see `js_math_exp`), not `llvm.exp.f64`: that is the
+            // platform libm, which differs from V8 in the last bit for some inputs.
+            Ok(ctx.block().call(DOUBLE, "js_math_exp", &[(DOUBLE, &v)]))
         }
         Expr::DateSetUtcFullYear { date, args } => super::os_uri_dates::lower_date_setter(
             ctx,
