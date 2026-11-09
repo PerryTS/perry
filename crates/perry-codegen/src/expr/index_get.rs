@@ -42,6 +42,7 @@ use super::{
 
 mod foreign_counter;
 pub(crate) mod descriptor_read;
+pub(crate) mod elem_floor;
 pub(super) mod guarded_array;
 mod proven_array;
 #[cfg(test)]
@@ -411,6 +412,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     else {
         return Ok(None);
     };
+    elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
         return Ok(Some(v));
@@ -630,6 +632,7 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::LocalGet(id) = object.as_ref() else {
         return Ok(None);
     };
+    elem_floor::witness(ctx, expr)?;
     // #6750 follow-up: an active masked-window fact wins over the guarded
     // inline-TA probe — the fact's entry guard already proved storage + the
     // whole index window, so the read needs no per-access cache probe at all.
@@ -842,6 +845,7 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, false)? {
         return Ok(v);

@@ -26,6 +26,7 @@ mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
+mod element_floors;
 pub mod field_read_calls;
 mod gen;
 mod gen_call;
@@ -37,6 +38,7 @@ mod ledger;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+pub mod signatures;
 mod rooted;
 mod solve;
 mod summary;
@@ -46,6 +48,7 @@ mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
+pub use signatures::Signature;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -77,6 +80,9 @@ pub struct FactsConfig {
     /// No length floor: growth makes an Array's `length` ⊤ instead of
     /// raising its upper bound (`solve::arr_len`; `PERRY_FACTS_ARRAY_FLOOR=0`).
     pub no_array_floor: bool,
+    /// An element read's past-the-end `undefined` is unconditional again
+    /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
+    pub no_elem_undef: bool,
     /// No guard narrowing, predicate summaries or String code intervals
     /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
     pub no_guard_ranges: bool,
@@ -451,6 +457,8 @@ fn generate<'a>(
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
     g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
     g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
+    g.m.elem_undef = !cfg.no_elem_undef;
+    g.m.elem_undef_sabotage = cfg.sabotage.as_deref() == Some("arrundef");
     g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
     g.m.arr_cap_sabotage = matches!(cfg.sabotage.as_deref(), Some("arrcap" | "densebirth"));
     g.m.arr_floor_sabotage = cfg.sabotage.as_deref() == Some("arrfloor");
@@ -885,6 +893,18 @@ fn compute_act<'a>(
     }
     if canonical_numbers::enabled() {
         canonical_numbers::collect(&g, &mut bindings);
+    }
+    if cfg.verify_facts {
+        element_floors::collect(&g, &mut bindings);
+    }
+    if !g.m.aborted && signatures::enabled() {
+        signatures::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref(),
+        );
     }
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.

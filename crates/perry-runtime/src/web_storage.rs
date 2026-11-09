@@ -195,13 +195,37 @@ fn storage_key_impl(kind: StorageKind, index: f64) -> f64 {
     })
 }
 
+/// The `localStorage` / `sessionStorage` getter: Node builds the area on the
+/// first read. The instance is born here (its prototype is the family's, born
+/// by the same ask), not at realm setup, so a program that never reads either
+/// global never births `Storage`.
 fn storage_global_value(kind: StorageKind) -> f64 {
-    let obj = storage_object(kind);
+    let mut obj = storage_object(kind);
     if obj.is_null() {
-        f64::from_bits(TAG_UNDEFINED)
-    } else {
-        crate::value::js_nanbox_pointer(obj as i64)
+        let proto = crate::object::builtin_prototype_value("Storage");
+        let proto = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+        if proto.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        obj = storage_object(kind);
+        if obj.is_null() {
+            obj = make_storage_object(kind, proto);
+            let slot_ptr = match kind {
+                StorageKind::Local => &crate::object::LOCAL_STORAGE_PTR,
+                StorageKind::Session => &crate::object::SESSION_STORAGE_PTR,
+            };
+            slot_ptr.with_slot(|slot| {
+                crate::gc::runtime_store_root_atomic_raw_i64(slot, obj as i64, Ordering::Release);
+            });
+        }
     }
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_read_storage_globals() {
+    storage_global_value(StorageKind::Local);
+    storage_global_value(StorageKind::Session);
 }
 
 fn storage_clear_impl(kind: StorageKind) -> f64 {
@@ -216,20 +240,11 @@ fn storage_clear_impl(kind: StorageKind) -> f64 {
     })
 }
 
-pub(crate) fn install_storage_globals(
-    global: *mut ObjectHeader,
-    storage_ctor: *mut ClosureHeader,
-    storage_proto: *mut ObjectHeader,
-    ctor_value: f64,
-) {
-    if global.is_null() || storage_ctor.is_null() || storage_proto.is_null() {
+/// `Storage.prototype`'s members, part of the family's birth.
+pub(crate) fn install_storage_prototype(storage_proto: *mut ObjectHeader, ctor_value: f64) {
+    if storage_proto.is_null() {
         return;
     }
-    crate::object::set_builtin_property_attrs(
-        global as usize,
-        "Storage".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
     install_method(
         storage_proto,
         "clear",
@@ -265,18 +280,14 @@ pub(crate) fn install_storage_globals(
         "constructor".to_string(),
         PropertyAttrs::new(true, false, true),
     );
+}
 
-    let local = make_storage_object(StorageKind::Local, storage_proto);
-    let session = make_storage_object(StorageKind::Session, storage_proto);
-    crate::object::LOCAL_STORAGE_PTR.with_slot(|slot| {
-        crate::gc::runtime_store_root_atomic_raw_i64(slot, local as i64, Ordering::Release);
-    });
-    crate::object::SESSION_STORAGE_PTR.with_slot(|slot| {
-        crate::gc::runtime_store_root_atomic_raw_i64(slot, session as i64, Ordering::Release);
-    });
-
-    set_global_storage_property(global, realm_localStorage!(name), local);
-    set_global_storage_property(global, realm_sessionStorage!(name), session);
+/// `globalThis.localStorage` / `globalThis.sessionStorage` (Node: accessors,
+/// `sessionStorage` enumerable). Bound at realm setup, at the `Storage`
+/// binding's position; the getters make the area on first read.
+pub(crate) fn install_global_accessors(global: *mut ObjectHeader) {
+    set_global_storage_property(global, realm_localStorage!(name), std::ptr::null_mut());
+    set_global_storage_property(global, realm_sessionStorage!(name), std::ptr::null_mut());
 }
 
 /// `info` records the method's declared arity.

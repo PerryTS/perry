@@ -135,7 +135,7 @@ math_unary_thunk!(math_cbrt_thunk, |x: f64| crate::math::js_math_cbrt(x));
 math_unary_thunk!(math_ceil_thunk, |x: f64| x.ceil());
 math_unary_thunk!(math_cos_thunk, |x: f64| crate::math::js_math_cos(x));
 math_unary_thunk!(math_cosh_thunk, |x: f64| crate::math::js_math_cosh(x));
-math_unary_thunk!(math_exp_thunk, |x: f64| x.exp());
+math_unary_thunk!(math_exp_thunk, |x: f64| crate::math::js_math_exp(x));
 math_unary_thunk!(math_expm1_thunk, |x: f64| crate::math::js_math_expm1(x));
 math_unary_thunk!(math_floor_thunk, |x: f64| x.floor());
 math_unary_thunk!(math_fround_thunk, |x: f64| crate::math::js_math_fround(x));

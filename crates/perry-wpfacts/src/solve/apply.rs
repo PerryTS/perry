@@ -1130,6 +1130,7 @@ impl Model {
                     self.idx_load_tok(idx, t, dst, shape);
                 }
             }
+            Cons::ElemUndef { obj, key, dst } => self.elem_undef(obj, key, dst),
             Cons::IdxOwnLoad { idx, dst, shape } => {
                 for &t in toks {
                     self.idx_own_load_tok(idx, t, dst, shape);

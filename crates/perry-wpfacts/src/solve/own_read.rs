@@ -43,8 +43,26 @@ impl Model {
             let all = self.all_fields(t);
             self.edge(all, dst);
         }
-        self.add_prim(dst, prim::UNDEF);
+        // PR-C1: a program Array with a length interval reads `undefined`
+        // past its end only (`Cons::ElemUndef`, watching the key and the
+        // length); below it, an element or a hole (`hole`).
+        let watched = self.elem_undef_watched(t);
+        if !watched {
+            self.add_prim(dst, prim::UNDEF);
+        }
         if self.idx_done.insert((idx, t, dst, 0)) {
+            if watched {
+                let h = self.hole(t);
+                self.edge(h, dst);
+                let len = self.arr_len(t);
+                let c = Cons::ElemUndef {
+                    obj: t,
+                    key: idx,
+                    dst,
+                };
+                self.cons(idx, c);
+                self.cons(len, c);
+            }
             self.plain_key(t, ChainAct::Load(dst));
             self.cons(idx, Cons::IdxKey { obj: t, dst, shape });
         }

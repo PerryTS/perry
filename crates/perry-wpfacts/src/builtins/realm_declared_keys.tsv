@@ -403,11 +403,6 @@ native	AggregateError	toLocaleString	Object.prototype.toLocaleString
 native	AggregateError	toString	Function.prototype.toString
 native	AggregateError	valueOf	Object.prototype.valueOf
 native	AggregateError.prototype	constructor	AggregateError
-native	AggregateError.prototype	hasOwnProperty	AggregateError.prototype.hasOwnProperty
-native	AggregateError.prototype	isPrototypeOf	AggregateError.prototype.isPrototypeOf
-native	AggregateError.prototype	toLocaleString	AggregateError.prototype.toLocaleString
-native	AggregateError.prototype	toString	AggregateError.prototype.toString
-native	AggregateError.prototype	valueOf	AggregateError.prototype.valueOf
 native	Array	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Array	__defineGetter__	Object.prototype.__defineGetter__
 native	Array	__defineSetter__	Object.prototype.__defineSetter__
@@ -464,7 +459,6 @@ native	Array.prototype	toSorted	Array.prototype.toSorted
 native	Array.prototype	toSpliced	Array.prototype.toSpliced
 native	Array.prototype	toString	Array.prototype.toString
 native	Array.prototype	unshift	Array.prototype.unshift
-native	Array.prototype	valueOf	Array.prototype.valueOf
 native	Array.prototype	values	Array.prototype.values
 native	Array.prototype	with	Array.prototype.with
 native	ArrayBuffer	@@hasInstance	Function.prototype["@@hasInstance"]
@@ -509,9 +503,7 @@ native	AsyncDisposableStack.prototype	constructor	AsyncDisposableStack
 native	AsyncDisposableStack.prototype	defer	AsyncDisposableStack.prototype.defer
 native	AsyncDisposableStack.prototype	disposeAsync	AsyncDisposableStack.prototype.disposeAsync
 native	AsyncDisposableStack.prototype	move	AsyncDisposableStack.prototype.move
-native	AsyncDisposableStack.prototype	toLocaleString	AsyncDisposableStack.prototype.toLocaleString
 native	AsyncDisposableStack.prototype	use	AsyncDisposableStack.prototype.use
-native	AsyncDisposableStack.prototype	valueOf	AsyncDisposableStack.prototype.valueOf
 native	Atomics	__defineGetter__	Object.prototype.__defineGetter__
 native	Atomics	__defineSetter__	Object.prototype.__defineSetter__
 native	Atomics	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -614,8 +606,6 @@ native	Blob.prototype	constructor	Blob
 native	Blob.prototype	slice	Blob.prototype.slice
 native	Blob.prototype	stream	Blob.prototype.stream
 native	Blob.prototype	text	Blob.prototype.text
-native	Blob.prototype	toLocaleString	Blob.prototype.toLocaleString
-native	Blob.prototype	valueOf	Blob.prototype.valueOf
 native	Boolean	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Boolean	__defineGetter__	Object.prototype.__defineGetter__
 native	Boolean	__defineSetter__	Object.prototype.__defineSetter__
@@ -632,7 +622,6 @@ native	Boolean	toLocaleString	Object.prototype.toLocaleString
 native	Boolean	toString	Function.prototype.toString
 native	Boolean	valueOf	Object.prototype.valueOf
 native	Boolean.prototype	constructor	Boolean
-native	Boolean.prototype	toLocaleString	Boolean.prototype.toLocaleString
 native	Boolean.prototype	toString	Boolean.prototype.toString
 native	Boolean.prototype	valueOf	Boolean.prototype.valueOf
 native	BroadcastChannel	@@hasInstance	Function.prototype["@@hasInstance"]
@@ -811,8 +800,6 @@ native	Crypto	valueOf	Object.prototype.valueOf
 native	Crypto.prototype	constructor	Crypto
 native	Crypto.prototype	getRandomValues	Crypto.prototype.getRandomValues
 native	Crypto.prototype	randomUUID	Crypto.prototype.randomUUID
-native	Crypto.prototype	toLocaleString	Crypto.prototype.toLocaleString
-native	Crypto.prototype	valueOf	Crypto.prototype.valueOf
 native	CryptoKey	@@hasInstance	Function.prototype["@@hasInstance"]
 native	CryptoKey	__defineGetter__	Object.prototype.__defineGetter__
 native	CryptoKey	__defineSetter__	Object.prototype.__defineSetter__
@@ -829,8 +816,6 @@ native	CryptoKey	toLocaleString	Object.prototype.toLocaleString
 native	CryptoKey	toString	Function.prototype.toString
 native	CryptoKey	valueOf	Object.prototype.valueOf
 native	CryptoKey.prototype	constructor	CryptoKey
-native	CryptoKey.prototype	toLocaleString	CryptoKey.prototype.toLocaleString
-native	CryptoKey.prototype	valueOf	CryptoKey.prototype.valueOf
 native	CustomEvent	@@hasInstance	Function.prototype["@@hasInstance"]
 native	CustomEvent	__defineGetter__	Object.prototype.__defineGetter__
 native	CustomEvent	__defineSetter__	Object.prototype.__defineSetter__
@@ -940,7 +925,6 @@ native	Date.prototype	getUTCMinutes	Date.prototype.getUTCMinutes
 native	Date.prototype	getUTCMonth	Date.prototype.getUTCMonth
 native	Date.prototype	getUTCSeconds	Date.prototype.getUTCSeconds
 native	Date.prototype	getYear	Date.prototype.getYear
-native	Date.prototype	isPrototypeOf	Date.prototype.isPrototypeOf
 native	Date.prototype	setDate	Date.prototype.setDate
 native	Date.prototype	setFullYear	Date.prototype.setFullYear
 native	Date.prototype	setHours	Date.prototype.setHours
@@ -1006,9 +990,7 @@ native	DisposableStack.prototype	constructor	DisposableStack
 native	DisposableStack.prototype	defer	DisposableStack.prototype.defer
 native	DisposableStack.prototype	dispose	DisposableStack.prototype.dispose
 native	DisposableStack.prototype	move	DisposableStack.prototype.move
-native	DisposableStack.prototype	toLocaleString	DisposableStack.prototype.toLocaleString
 native	DisposableStack.prototype	use	DisposableStack.prototype.use
-native	DisposableStack.prototype	valueOf	DisposableStack.prototype.valueOf
 native	Error	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Error	__defineGetter__	Object.prototype.__defineGetter__
 native	Error	__defineSetter__	Object.prototype.__defineSetter__
@@ -1028,11 +1010,7 @@ native	Error	toLocaleString	Object.prototype.toLocaleString
 native	Error	toString	Function.prototype.toString
 native	Error	valueOf	Object.prototype.valueOf
 native	Error.prototype	constructor	Error
-native	Error.prototype	hasOwnProperty	Error.prototype.hasOwnProperty
-native	Error.prototype	isPrototypeOf	Error.prototype.isPrototypeOf
-native	Error.prototype	toLocaleString	Error.prototype.toLocaleString
 native	Error.prototype	toString	Error.prototype.toString
-native	Error.prototype	valueOf	Error.prototype.valueOf
 native	EvalError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	EvalError	__defineGetter__	Object.prototype.__defineGetter__
 native	EvalError	__defineSetter__	Object.prototype.__defineSetter__
@@ -1052,11 +1030,6 @@ native	EvalError	toLocaleString	Object.prototype.toLocaleString
 native	EvalError	toString	Function.prototype.toString
 native	EvalError	valueOf	Object.prototype.valueOf
 native	EvalError.prototype	constructor	EvalError
-native	EvalError.prototype	hasOwnProperty	EvalError.prototype.hasOwnProperty
-native	EvalError.prototype	isPrototypeOf	EvalError.prototype.isPrototypeOf
-native	EvalError.prototype	toLocaleString	EvalError.prototype.toLocaleString
-native	EvalError.prototype	toString	EvalError.prototype.toString
-native	EvalError.prototype	valueOf	EvalError.prototype.valueOf
 native	Event	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Event	__defineGetter__	Object.prototype.__defineGetter__
 native	Event	__defineSetter__	Object.prototype.__defineSetter__
@@ -1118,8 +1091,6 @@ native	File.prototype	constructor	File
 native	File.prototype	slice	File.prototype.slice
 native	File.prototype	stream	File.prototype.stream
 native	File.prototype	text	File.prototype.text
-native	File.prototype	toLocaleString	File.prototype.toLocaleString
-native	File.prototype	valueOf	File.prototype.valueOf
 native	FinalizationRegistry	@@hasInstance	Function.prototype["@@hasInstance"]
 native	FinalizationRegistry	__defineGetter__	Object.prototype.__defineGetter__
 native	FinalizationRegistry	__defineSetter__	Object.prototype.__defineSetter__
@@ -1137,9 +1108,7 @@ native	FinalizationRegistry	toString	Function.prototype.toString
 native	FinalizationRegistry	valueOf	Object.prototype.valueOf
 native	FinalizationRegistry.prototype	constructor	FinalizationRegistry
 native	FinalizationRegistry.prototype	register	FinalizationRegistry.prototype.register
-native	FinalizationRegistry.prototype	toLocaleString	FinalizationRegistry.prototype.toLocaleString
 native	FinalizationRegistry.prototype	unregister	FinalizationRegistry.prototype.unregister
-native	FinalizationRegistry.prototype	valueOf	FinalizationRegistry.prototype.valueOf
 native	Float16Array	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Float16Array	__defineGetter__	Object.prototype.__defineGetter__
 native	Float16Array	__defineSetter__	Object.prototype.__defineSetter__
@@ -1209,6 +1178,7 @@ native	FormData	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	FormData	toLocaleString	Object.prototype.toLocaleString
 native	FormData	toString	Function.prototype.toString
 native	FormData	valueOf	Object.prototype.valueOf
+native	FormData.prototype	@@iterator	FormData.prototype.entries
 native	FormData.prototype	append	FormData.prototype.append
 native	FormData.prototype	constructor	FormData
 native	FormData.prototype	delete	FormData.prototype.delete
@@ -1219,8 +1189,6 @@ native	FormData.prototype	getAll	FormData.prototype.getAll
 native	FormData.prototype	has	FormData.prototype.has
 native	FormData.prototype	keys	FormData.prototype.keys
 native	FormData.prototype	set	FormData.prototype.set
-native	FormData.prototype	toLocaleString	FormData.prototype.toLocaleString
-native	FormData.prototype	valueOf	FormData.prototype.valueOf
 native	FormData.prototype	values	FormData.prototype.values
 native	Function	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Function	__defineGetter__	Object.prototype.__defineGetter__
@@ -1269,8 +1237,6 @@ native	Headers.prototype	getSetCookie	Headers.prototype.getSetCookie
 native	Headers.prototype	has	Headers.prototype.has
 native	Headers.prototype	keys	Headers.prototype.keys
 native	Headers.prototype	set	Headers.prototype.set
-native	Headers.prototype	toLocaleString	Headers.prototype.toLocaleString
-native	Headers.prototype	valueOf	Headers.prototype.valueOf
 native	Headers.prototype	values	Headers.prototype.values
 native	Int16Array	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Int16Array	__defineGetter__	Object.prototype.__defineGetter__
@@ -1435,8 +1401,6 @@ native	Map.prototype	get	Map.prototype.get
 native	Map.prototype	has	Map.prototype.has
 native	Map.prototype	keys	Map.prototype.keys
 native	Map.prototype	set	Map.prototype.set
-native	Map.prototype	toLocaleString	Map.prototype.toLocaleString
-native	Map.prototype	valueOf	Map.prototype.valueOf
 native	Map.prototype	values	Map.prototype.values
 native	Math	__defineGetter__	Object.prototype.__defineGetter__
 native	Math	__defineSetter__	Object.prototype.__defineSetter__
@@ -1796,8 +1760,6 @@ native	Promise.prototype	catch	Promise.prototype.catch
 native	Promise.prototype	constructor	Promise
 native	Promise.prototype	finally	Promise.prototype.finally
 native	Promise.prototype	then	Promise.prototype.then
-native	Promise.prototype	toLocaleString	Promise.prototype.toLocaleString
-native	Promise.prototype	valueOf	Promise.prototype.valueOf
 native	Proxy	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Proxy	__defineGetter__	Object.prototype.__defineGetter__
 native	Proxy	__defineSetter__	Object.prototype.__defineSetter__
@@ -1834,11 +1796,6 @@ native	RangeError	toLocaleString	Object.prototype.toLocaleString
 native	RangeError	toString	Function.prototype.toString
 native	RangeError	valueOf	Object.prototype.valueOf
 native	RangeError.prototype	constructor	RangeError
-native	RangeError.prototype	hasOwnProperty	RangeError.prototype.hasOwnProperty
-native	RangeError.prototype	isPrototypeOf	RangeError.prototype.isPrototypeOf
-native	RangeError.prototype	toLocaleString	RangeError.prototype.toLocaleString
-native	RangeError.prototype	toString	RangeError.prototype.toString
-native	RangeError.prototype	valueOf	RangeError.prototype.valueOf
 native	ReadableStream	@@hasInstance	Function.prototype["@@hasInstance"]
 native	ReadableStream	__defineGetter__	Object.prototype.__defineGetter__
 native	ReadableStream	__defineSetter__	Object.prototype.__defineSetter__
@@ -1875,11 +1832,6 @@ native	ReferenceError	toLocaleString	Object.prototype.toLocaleString
 native	ReferenceError	toString	Function.prototype.toString
 native	ReferenceError	valueOf	Object.prototype.valueOf
 native	ReferenceError.prototype	constructor	ReferenceError
-native	ReferenceError.prototype	hasOwnProperty	ReferenceError.prototype.hasOwnProperty
-native	ReferenceError.prototype	isPrototypeOf	ReferenceError.prototype.isPrototypeOf
-native	ReferenceError.prototype	toLocaleString	ReferenceError.prototype.toLocaleString
-native	ReferenceError.prototype	toString	ReferenceError.prototype.toString
-native	ReferenceError.prototype	valueOf	ReferenceError.prototype.valueOf
 native	Reflect	__defineGetter__	Object.prototype.__defineGetter__
 native	Reflect	__defineSetter__	Object.prototype.__defineSetter__
 native	Reflect	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -1929,9 +1881,7 @@ native	RegExp.prototype	compile	RegExp.prototype.compile
 native	RegExp.prototype	constructor	RegExp
 native	RegExp.prototype	exec	RegExp.prototype.exec
 native	RegExp.prototype	test	RegExp.prototype.test
-native	RegExp.prototype	toLocaleString	RegExp.prototype.toLocaleString
 native	RegExp.prototype	toString	RegExp.prototype.toString
-native	RegExp.prototype	valueOf	RegExp.prototype.valueOf
 native	Request	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Request	__defineGetter__	Object.prototype.__defineGetter__
 native	Request	__defineSetter__	Object.prototype.__defineSetter__
@@ -1955,8 +1905,6 @@ native	Request.prototype	constructor	Request
 native	Request.prototype	formData	Request.prototype.formData
 native	Request.prototype	json	Request.prototype.json
 native	Request.prototype	text	Request.prototype.text
-native	Request.prototype	toLocaleString	Request.prototype.toLocaleString
-native	Request.prototype	valueOf	Request.prototype.valueOf
 native	Response	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Response	__defineGetter__	Object.prototype.__defineGetter__
 native	Response	__defineSetter__	Object.prototype.__defineSetter__
@@ -1983,8 +1931,6 @@ native	Response.prototype	constructor	Response
 native	Response.prototype	formData	Response.prototype.formData
 native	Response.prototype	json	Response.prototype.json
 native	Response.prototype	text	Response.prototype.text
-native	Response.prototype	toLocaleString	Response.prototype.toLocaleString
-native	Response.prototype	valueOf	Response.prototype.valueOf
 native	Set	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Set	__defineGetter__	Object.prototype.__defineGetter__
 native	Set	__defineSetter__	Object.prototype.__defineSetter__
@@ -2009,8 +1955,6 @@ native	Set.prototype	entries	Set.prototype.entries
 native	Set.prototype	forEach	Set.prototype.forEach
 native	Set.prototype	has	Set.prototype.has
 native	Set.prototype	keys	Set.prototype.keys
-native	Set.prototype	toLocaleString	Set.prototype.toLocaleString
-native	Set.prototype	valueOf	Set.prototype.valueOf
 native	Set.prototype	values	Set.prototype.keys
 native	SharedArrayBuffer	@@hasInstance	Function.prototype["@@hasInstance"]
 native	SharedArrayBuffer	__defineGetter__	Object.prototype.__defineGetter__
@@ -2110,7 +2054,6 @@ native	String.prototype	substr	String.prototype.substr
 native	String.prototype	substring	String.prototype.substring
 native	String.prototype	sup	String.prototype.sup
 native	String.prototype	toLocaleLowerCase	String.prototype.toLocaleLowerCase
-native	String.prototype	toLocaleString	String.prototype.toLocaleString
 native	String.prototype	toLocaleUpperCase	String.prototype.toLocaleUpperCase
 native	String.prototype	toLowerCase	String.prototype.toLowerCase
 native	String.prototype	toString	String.prototype.toString
@@ -2143,8 +2086,6 @@ native	SubtleCrypto.prototype	decapsulateBits	SubtleCrypto.prototype.decapsulate
 native	SubtleCrypto.prototype	decapsulateKey	SubtleCrypto.prototype.decapsulateKey
 native	SubtleCrypto.prototype	encapsulateBits	SubtleCrypto.prototype.encapsulateBits
 native	SubtleCrypto.prototype	encapsulateKey	SubtleCrypto.prototype.encapsulateKey
-native	SubtleCrypto.prototype	toLocaleString	SubtleCrypto.prototype.toLocaleString
-native	SubtleCrypto.prototype	valueOf	SubtleCrypto.prototype.valueOf
 native	SuppressedError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	SuppressedError	__defineGetter__	Object.prototype.__defineGetter__
 native	SuppressedError	__defineSetter__	Object.prototype.__defineSetter__
@@ -2182,7 +2123,6 @@ native	Symbol	toLocaleString	Object.prototype.toLocaleString
 native	Symbol	toString	Function.prototype.toString
 native	Symbol	valueOf	Object.prototype.valueOf
 native	Symbol.prototype	constructor	Symbol
-native	Symbol.prototype	toLocaleString	Symbol.prototype.toLocaleString
 native	Symbol.prototype	toString	Symbol.prototype.toString
 native	Symbol.prototype	valueOf	Symbol.prototype.valueOf
 native	SyntaxError	@@hasInstance	Function.prototype["@@hasInstance"]
@@ -2204,11 +2144,6 @@ native	SyntaxError	toLocaleString	Object.prototype.toLocaleString
 native	SyntaxError	toString	Function.prototype.toString
 native	SyntaxError	valueOf	Object.prototype.valueOf
 native	SyntaxError.prototype	constructor	SyntaxError
-native	SyntaxError.prototype	hasOwnProperty	SyntaxError.prototype.hasOwnProperty
-native	SyntaxError.prototype	isPrototypeOf	SyntaxError.prototype.isPrototypeOf
-native	SyntaxError.prototype	toLocaleString	SyntaxError.prototype.toLocaleString
-native	SyntaxError.prototype	toString	SyntaxError.prototype.toString
-native	SyntaxError.prototype	valueOf	SyntaxError.prototype.valueOf
 native	Temporal	Duration	Temporal.Duration
 native	Temporal	Instant	Temporal.Instant
 native	Temporal	PlainDate	Temporal.PlainDate
@@ -2355,8 +2290,6 @@ native	TextDecoder	toString	Function.prototype.toString
 native	TextDecoder	valueOf	Object.prototype.valueOf
 native	TextDecoder.prototype	constructor	TextDecoder
 native	TextDecoder.prototype	decode	TextDecoder.prototype.decode
-native	TextDecoder.prototype	toLocaleString	TextDecoder.prototype.toLocaleString
-native	TextDecoder.prototype	valueOf	TextDecoder.prototype.valueOf
 native	TextDecoderStream	@@hasInstance	Function.prototype["@@hasInstance"]
 native	TextDecoderStream	__defineGetter__	Object.prototype.__defineGetter__
 native	TextDecoderStream	__defineSetter__	Object.prototype.__defineSetter__
@@ -2391,8 +2324,6 @@ native	TextEncoder	valueOf	Object.prototype.valueOf
 native	TextEncoder.prototype	constructor	TextEncoder
 native	TextEncoder.prototype	encode	TextEncoder.prototype.encode
 native	TextEncoder.prototype	encodeInto	TextEncoder.prototype.encodeInto
-native	TextEncoder.prototype	toLocaleString	TextEncoder.prototype.toLocaleString
-native	TextEncoder.prototype	valueOf	TextEncoder.prototype.valueOf
 native	TextEncoderStream	@@hasInstance	Function.prototype["@@hasInstance"]
 native	TextEncoderStream	__defineGetter__	Object.prototype.__defineGetter__
 native	TextEncoderStream	__defineSetter__	Object.prototype.__defineSetter__
@@ -2444,11 +2375,6 @@ native	TypeError	toLocaleString	Object.prototype.toLocaleString
 native	TypeError	toString	Function.prototype.toString
 native	TypeError	valueOf	Object.prototype.valueOf
 native	TypeError.prototype	constructor	TypeError
-native	TypeError.prototype	hasOwnProperty	TypeError.prototype.hasOwnProperty
-native	TypeError.prototype	isPrototypeOf	TypeError.prototype.isPrototypeOf
-native	TypeError.prototype	toLocaleString	TypeError.prototype.toLocaleString
-native	TypeError.prototype	toString	TypeError.prototype.toString
-native	TypeError.prototype	valueOf	TypeError.prototype.valueOf
 native	URIError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	URIError	__defineGetter__	Object.prototype.__defineGetter__
 native	URIError	__defineSetter__	Object.prototype.__defineSetter__
@@ -2468,11 +2394,6 @@ native	URIError	toLocaleString	Object.prototype.toLocaleString
 native	URIError	toString	Function.prototype.toString
 native	URIError	valueOf	Object.prototype.valueOf
 native	URIError.prototype	constructor	URIError
-native	URIError.prototype	hasOwnProperty	URIError.prototype.hasOwnProperty
-native	URIError.prototype	isPrototypeOf	URIError.prototype.isPrototypeOf
-native	URIError.prototype	toLocaleString	URIError.prototype.toLocaleString
-native	URIError.prototype	toString	URIError.prototype.toString
-native	URIError.prototype	valueOf	URIError.prototype.valueOf
 native	URL	@@hasInstance	Function.prototype["@@hasInstance"]
 native	URL	__defineGetter__	Object.prototype.__defineGetter__
 native	URL	__defineSetter__	Object.prototype.__defineSetter__
@@ -2537,9 +2458,7 @@ native	URLSearchParams.prototype	has	URLSearchParams.prototype.has
 native	URLSearchParams.prototype	keys	URLSearchParams.prototype.keys
 native	URLSearchParams.prototype	set	URLSearchParams.prototype.set
 native	URLSearchParams.prototype	sort	URLSearchParams.prototype.sort
-native	URLSearchParams.prototype	toLocaleString	URLSearchParams.prototype.toLocaleString
 native	URLSearchParams.prototype	toString	URLSearchParams.prototype.toString
-native	URLSearchParams.prototype	valueOf	URLSearchParams.prototype.valueOf
 native	URLSearchParams.prototype	values	URLSearchParams.prototype.values
 native	Uint16Array	@@hasInstance	Function.prototype["@@hasInstance"]
 native	Uint16Array	__defineGetter__	Object.prototype.__defineGetter__
@@ -2639,8 +2558,6 @@ native	WeakMap.prototype	delete	WeakMap.prototype.delete
 native	WeakMap.prototype	get	WeakMap.prototype.get
 native	WeakMap.prototype	has	WeakMap.prototype.has
 native	WeakMap.prototype	set	WeakMap.prototype.set
-native	WeakMap.prototype	toLocaleString	WeakMap.prototype.toLocaleString
-native	WeakMap.prototype	valueOf	WeakMap.prototype.valueOf
 native	WeakRef	@@hasInstance	Function.prototype["@@hasInstance"]
 native	WeakRef	__defineGetter__	Object.prototype.__defineGetter__
 native	WeakRef	__defineSetter__	Object.prototype.__defineSetter__
@@ -2658,8 +2575,6 @@ native	WeakRef	toString	Function.prototype.toString
 native	WeakRef	valueOf	Object.prototype.valueOf
 native	WeakRef.prototype	constructor	WeakRef
 native	WeakRef.prototype	deref	WeakRef.prototype.deref
-native	WeakRef.prototype	toLocaleString	WeakRef.prototype.toLocaleString
-native	WeakRef.prototype	valueOf	WeakRef.prototype.valueOf
 native	WeakSet	@@hasInstance	Function.prototype["@@hasInstance"]
 native	WeakSet	__defineGetter__	Object.prototype.__defineGetter__
 native	WeakSet	__defineSetter__	Object.prototype.__defineSetter__
@@ -2679,8 +2594,6 @@ native	WeakSet.prototype	add	WeakSet.prototype.add
 native	WeakSet.prototype	constructor	WeakSet
 native	WeakSet.prototype	delete	WeakSet.prototype.delete
 native	WeakSet.prototype	has	WeakSet.prototype.has
-native	WeakSet.prototype	toLocaleString	WeakSet.prototype.toLocaleString
-native	WeakSet.prototype	valueOf	WeakSet.prototype.valueOf
 native	WebAssembly	CompileError	WebAssembly.CompileError
 native	WebAssembly	Exception	WebAssembly.Exception
 native	WebAssembly	Global	WebAssembly.Global
@@ -2741,8 +2654,6 @@ native	WebSocket	valueOf	Object.prototype.valueOf
 native	WebSocket.prototype	close	WebSocket.prototype.close
 native	WebSocket.prototype	constructor	WebSocket
 native	WebSocket.prototype	send	WebSocket.prototype.send
-native	WebSocket.prototype	toLocaleString	WebSocket.prototype.toLocaleString
-native	WebSocket.prototype	valueOf	WebSocket.prototype.valueOf
 native	WritableStream	@@hasInstance	Function.prototype["@@hasInstance"]
 native	WritableStream	__defineGetter__	Object.prototype.__defineGetter__
 native	WritableStream	__defineSetter__	Object.prototype.__defineSetter__
@@ -3342,9 +3253,9 @@ native	node:crypto.subtle	encapsulateKey	SubtleCrypto.prototype.encapsulateKey
 native	node:crypto.subtle	hasOwnProperty	Object.prototype.hasOwnProperty
 native	node:crypto.subtle	isPrototypeOf	Object.prototype.isPrototypeOf
 native	node:crypto.subtle	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:crypto.subtle	toLocaleString	SubtleCrypto.prototype.toLocaleString
+native	node:crypto.subtle	toLocaleString	Object.prototype.toLocaleString
 native	node:crypto.subtle	toString	Object.prototype.toString
-native	node:crypto.subtle	valueOf	SubtleCrypto.prototype.valueOf
+native	node:crypto.subtle	valueOf	Object.prototype.valueOf
 native	node:crypto.webcrypto	__defineGetter__	Object.prototype.__defineGetter__
 native	node:crypto.webcrypto	__defineSetter__	Object.prototype.__defineSetter__
 native	node:crypto.webcrypto	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -3355,9 +3266,9 @@ native	node:crypto.webcrypto	hasOwnProperty	Object.prototype.hasOwnProperty
 native	node:crypto.webcrypto	isPrototypeOf	Object.prototype.isPrototypeOf
 native	node:crypto.webcrypto	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	node:crypto.webcrypto	randomUUID	Crypto.prototype.randomUUID
-native	node:crypto.webcrypto	toLocaleString	Crypto.prototype.toLocaleString
+native	node:crypto.webcrypto	toLocaleString	Object.prototype.toLocaleString
 native	node:crypto.webcrypto	toString	Object.prototype.toString
-native	node:crypto.webcrypto	valueOf	Crypto.prototype.valueOf
+native	node:crypto.webcrypto	valueOf	Object.prototype.valueOf
 native	node:dgram	Socket	node:dgram.Socket
 native	node:dgram	createSocket	node:dgram.createSocket
 native	node:dgram.Socket.prototype	constructor	node:dgram.Socket
@@ -3568,7 +3479,7 @@ native	node:domain._stack	toSorted	Array.prototype.toSorted
 native	node:domain._stack	toSpliced	Array.prototype.toSpliced
 native	node:domain._stack	toString	Array.prototype.toString
 native	node:domain._stack	unshift	Array.prototype.unshift
-native	node:domain._stack	valueOf	Array.prototype.valueOf
+native	node:domain._stack	valueOf	Object.prototype.valueOf
 native	node:domain._stack	values	Array.prototype.values
 native	node:domain._stack	with	Array.prototype.with
 native	node:domain.default	Domain	node:domain.Domain
@@ -3630,7 +3541,7 @@ native	node:domain.default._stack	toSorted	Array.prototype.toSorted
 native	node:domain.default._stack	toSpliced	Array.prototype.toSpliced
 native	node:domain.default._stack	toString	Array.prototype.toString
 native	node:domain.default._stack	unshift	Array.prototype.unshift
-native	node:domain.default._stack	valueOf	Array.prototype.valueOf
+native	node:domain.default._stack	valueOf	Object.prototype.valueOf
 native	node:domain.default._stack	values	Array.prototype.values
 native	node:domain.default._stack	with	Array.prototype.with
 native	node:events	EventEmitter	node:events.EventEmitter
@@ -4031,7 +3942,7 @@ native	node:http.METHODS	toSorted	Array.prototype.toSorted
 native	node:http.METHODS	toSpliced	Array.prototype.toSpliced
 native	node:http.METHODS	toString	Array.prototype.toString
 native	node:http.METHODS	unshift	Array.prototype.unshift
-native	node:http.METHODS	valueOf	Array.prototype.valueOf
+native	node:http.METHODS	valueOf	Object.prototype.valueOf
 native	node:http.METHODS	values	Array.prototype.values
 native	node:http.METHODS	with	Array.prototype.with
 native	node:http.OutgoingMessage.prototype	@for:nodejs.rejection	node:http.OutgoingMessage.prototype["@runtime:nodejs.rejection"]
@@ -4470,7 +4381,7 @@ native	node:module.Module.wrapper	toSorted	Array.prototype.toSorted
 native	node:module.Module.wrapper	toSpliced	Array.prototype.toSpliced
 native	node:module.Module.wrapper	toString	Array.prototype.toString
 native	node:module.Module.wrapper	unshift	Array.prototype.unshift
-native	node:module.Module.wrapper	valueOf	Array.prototype.valueOf
+native	node:module.Module.wrapper	valueOf	Object.prototype.valueOf
 native	node:module.Module.wrapper	values	Array.prototype.values
 native	node:module.Module.wrapper	with	Array.prototype.with
 native	node:module.SourceMap.prototype	constructor	node:module.SourceMap
@@ -4535,7 +4446,7 @@ native	node:module.builtinModules	toSorted	Array.prototype.toSorted
 native	node:module.builtinModules	toSpliced	Array.prototype.toSpliced
 native	node:module.builtinModules	toString	Array.prototype.toString
 native	node:module.builtinModules	unshift	Array.prototype.unshift
-native	node:module.builtinModules	valueOf	Array.prototype.valueOf
+native	node:module.builtinModules	valueOf	Object.prototype.valueOf
 native	node:module.builtinModules	values	Array.prototype.values
 native	node:module.builtinModules	with	Array.prototype.with
 native	node:net	BlockList	node:net.BlockList
@@ -4894,7 +4805,7 @@ native	node:process._preload_modules	toSorted	Array.prototype.toSorted
 native	node:process._preload_modules	toSpliced	Array.prototype.toSpliced
 native	node:process._preload_modules	toString	Array.prototype.toString
 native	node:process._preload_modules	unshift	Array.prototype.unshift
-native	node:process._preload_modules	valueOf	Array.prototype.valueOf
+native	node:process._preload_modules	valueOf	Object.prototype.valueOf
 native	node:process._preload_modules	values	Array.prototype.values
 native	node:process._preload_modules	with	Array.prototype.with
 native	node:process.allowedNodeEnvironmentFlags	@@iterator	Set.prototype.keys
@@ -4913,9 +4824,9 @@ native	node:process.allowedNodeEnvironmentFlags	hasOwnProperty	Object.prototype.
 native	node:process.allowedNodeEnvironmentFlags	isPrototypeOf	Object.prototype.isPrototypeOf
 native	node:process.allowedNodeEnvironmentFlags	keys	Set.prototype.keys
 native	node:process.allowedNodeEnvironmentFlags	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:process.allowedNodeEnvironmentFlags	toLocaleString	Set.prototype.toLocaleString
+native	node:process.allowedNodeEnvironmentFlags	toLocaleString	Object.prototype.toLocaleString
 native	node:process.allowedNodeEnvironmentFlags	toString	Object.prototype.toString
-native	node:process.allowedNodeEnvironmentFlags	valueOf	Set.prototype.valueOf
+native	node:process.allowedNodeEnvironmentFlags	valueOf	Object.prototype.valueOf
 native	node:process.allowedNodeEnvironmentFlags	values	Set.prototype.keys
 native	node:process.config	__defineGetter__	Object.prototype.__defineGetter__
 native	node:process.config	__defineSetter__	Object.prototype.__defineSetter__
@@ -4984,7 +4895,7 @@ native	node:process.config.target_defaults.cflags	toSorted	Array.prototype.toSor
 native	node:process.config.target_defaults.cflags	toSpliced	Array.prototype.toSpliced
 native	node:process.config.target_defaults.cflags	toString	Array.prototype.toString
 native	node:process.config.target_defaults.cflags	unshift	Array.prototype.unshift
-native	node:process.config.target_defaults.cflags	valueOf	Array.prototype.valueOf
+native	node:process.config.target_defaults.cflags	valueOf	Object.prototype.valueOf
 native	node:process.config.target_defaults.cflags	values	Array.prototype.values
 native	node:process.config.target_defaults.cflags	with	Array.prototype.with
 native	node:process.config.target_defaults.conditions	@@iterator	Array.prototype.values
@@ -5032,7 +4943,7 @@ native	node:process.config.target_defaults.conditions	toSorted	Array.prototype.t
 native	node:process.config.target_defaults.conditions	toSpliced	Array.prototype.toSpliced
 native	node:process.config.target_defaults.conditions	toString	Array.prototype.toString
 native	node:process.config.target_defaults.conditions	unshift	Array.prototype.unshift
-native	node:process.config.target_defaults.conditions	valueOf	Array.prototype.valueOf
+native	node:process.config.target_defaults.conditions	valueOf	Object.prototype.valueOf
 native	node:process.config.target_defaults.conditions	values	Array.prototype.values
 native	node:process.config.target_defaults.conditions	with	Array.prototype.with
 native	node:process.config.target_defaults.configurations	__defineGetter__	Object.prototype.__defineGetter__
@@ -5102,7 +5013,7 @@ native	node:process.config.target_defaults.defines	toSorted	Array.prototype.toSo
 native	node:process.config.target_defaults.defines	toSpliced	Array.prototype.toSpliced
 native	node:process.config.target_defaults.defines	toString	Array.prototype.toString
 native	node:process.config.target_defaults.defines	unshift	Array.prototype.unshift
-native	node:process.config.target_defaults.defines	valueOf	Array.prototype.valueOf
+native	node:process.config.target_defaults.defines	valueOf	Object.prototype.valueOf
 native	node:process.config.target_defaults.defines	values	Array.prototype.values
 native	node:process.config.target_defaults.defines	with	Array.prototype.with
 native	node:process.config.target_defaults.include_dirs	@@iterator	Array.prototype.values
@@ -5150,7 +5061,7 @@ native	node:process.config.target_defaults.include_dirs	toSorted	Array.prototype
 native	node:process.config.target_defaults.include_dirs	toSpliced	Array.prototype.toSpliced
 native	node:process.config.target_defaults.include_dirs	toString	Array.prototype.toString
 native	node:process.config.target_defaults.include_dirs	unshift	Array.prototype.unshift
-native	node:process.config.target_defaults.include_dirs	valueOf	Array.prototype.valueOf
+native	node:process.config.target_defaults.include_dirs	valueOf	Object.prototype.valueOf
 native	node:process.config.target_defaults.include_dirs	values	Array.prototype.values
 native	node:process.config.target_defaults.include_dirs	with	Array.prototype.with
 native	node:process.config.target_defaults.libraries	@@iterator	Array.prototype.values
@@ -5198,7 +5109,7 @@ native	node:process.config.target_defaults.libraries	toSorted	Array.prototype.to
 native	node:process.config.target_defaults.libraries	toSpliced	Array.prototype.toSpliced
 native	node:process.config.target_defaults.libraries	toString	Array.prototype.toString
 native	node:process.config.target_defaults.libraries	unshift	Array.prototype.unshift
-native	node:process.config.target_defaults.libraries	valueOf	Array.prototype.valueOf
+native	node:process.config.target_defaults.libraries	valueOf	Object.prototype.valueOf
 native	node:process.config.target_defaults.libraries	values	Array.prototype.values
 native	node:process.config.target_defaults.libraries	with	Array.prototype.with
 native	node:process.config.variables	__defineGetter__	Object.prototype.__defineGetter__
@@ -5268,7 +5179,7 @@ native	node:process.moduleLoadList	toSorted	Array.prototype.toSorted
 native	node:process.moduleLoadList	toSpliced	Array.prototype.toSpliced
 native	node:process.moduleLoadList	toString	Array.prototype.toString
 native	node:process.moduleLoadList	unshift	Array.prototype.unshift
-native	node:process.moduleLoadList	valueOf	Array.prototype.valueOf
+native	node:process.moduleLoadList	valueOf	Object.prototype.valueOf
 native	node:process.moduleLoadList	values	Array.prototype.values
 native	node:process.moduleLoadList	with	Array.prototype.with
 native	node:process.release	__defineGetter__	Object.prototype.__defineGetter__
@@ -5731,7 +5642,7 @@ native	node:sys.inspect.colors.bgBlack	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgBlack	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgBlack	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgBlack	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgBlack	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgBlack	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgBlack	values	Array.prototype.values
 native	node:sys.inspect.colors.bgBlack	with	Array.prototype.with
 native	node:sys.inspect.colors.bgBlue	@@iterator	Array.prototype.values
@@ -5779,7 +5690,7 @@ native	node:sys.inspect.colors.bgBlue	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgBlue	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgBlue	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgBlue	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgBlue	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgBlue	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgBlue	values	Array.prototype.values
 native	node:sys.inspect.colors.bgBlue	with	Array.prototype.with
 native	node:sys.inspect.colors.bgBlueBright	@@iterator	Array.prototype.values
@@ -5827,7 +5738,7 @@ native	node:sys.inspect.colors.bgBlueBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgBlueBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgBlueBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgBlueBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgBlueBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgBlueBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgBlueBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgBlueBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bgCyan	@@iterator	Array.prototype.values
@@ -5875,7 +5786,7 @@ native	node:sys.inspect.colors.bgCyan	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgCyan	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgCyan	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgCyan	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgCyan	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgCyan	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgCyan	values	Array.prototype.values
 native	node:sys.inspect.colors.bgCyan	with	Array.prototype.with
 native	node:sys.inspect.colors.bgCyanBright	@@iterator	Array.prototype.values
@@ -5923,7 +5834,7 @@ native	node:sys.inspect.colors.bgCyanBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgCyanBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgCyanBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgCyanBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgCyanBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgCyanBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgCyanBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgCyanBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bgGray	@@iterator	Array.prototype.values
@@ -5971,7 +5882,7 @@ native	node:sys.inspect.colors.bgGray	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgGray	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgGray	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgGray	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgGray	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgGray	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgGray	values	Array.prototype.values
 native	node:sys.inspect.colors.bgGray	with	Array.prototype.with
 native	node:sys.inspect.colors.bgGreen	@@iterator	Array.prototype.values
@@ -6019,7 +5930,7 @@ native	node:sys.inspect.colors.bgGreen	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgGreen	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgGreen	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgGreen	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgGreen	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgGreen	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgGreen	values	Array.prototype.values
 native	node:sys.inspect.colors.bgGreen	with	Array.prototype.with
 native	node:sys.inspect.colors.bgGreenBright	@@iterator	Array.prototype.values
@@ -6067,7 +5978,7 @@ native	node:sys.inspect.colors.bgGreenBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgGreenBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgGreenBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgGreenBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgGreenBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgGreenBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgGreenBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgGreenBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bgMagenta	@@iterator	Array.prototype.values
@@ -6115,7 +6026,7 @@ native	node:sys.inspect.colors.bgMagenta	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgMagenta	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgMagenta	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgMagenta	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgMagenta	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgMagenta	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgMagenta	values	Array.prototype.values
 native	node:sys.inspect.colors.bgMagenta	with	Array.prototype.with
 native	node:sys.inspect.colors.bgMagentaBright	@@iterator	Array.prototype.values
@@ -6163,7 +6074,7 @@ native	node:sys.inspect.colors.bgMagentaBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgMagentaBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgMagentaBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgMagentaBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgMagentaBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgMagentaBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgMagentaBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgMagentaBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bgRed	@@iterator	Array.prototype.values
@@ -6211,7 +6122,7 @@ native	node:sys.inspect.colors.bgRed	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgRed	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgRed	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgRed	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgRed	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgRed	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgRed	values	Array.prototype.values
 native	node:sys.inspect.colors.bgRed	with	Array.prototype.with
 native	node:sys.inspect.colors.bgRedBright	@@iterator	Array.prototype.values
@@ -6259,7 +6170,7 @@ native	node:sys.inspect.colors.bgRedBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgRedBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgRedBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgRedBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgRedBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgRedBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgRedBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgRedBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bgWhite	@@iterator	Array.prototype.values
@@ -6307,7 +6218,7 @@ native	node:sys.inspect.colors.bgWhite	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgWhite	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgWhite	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgWhite	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgWhite	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgWhite	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgWhite	values	Array.prototype.values
 native	node:sys.inspect.colors.bgWhite	with	Array.prototype.with
 native	node:sys.inspect.colors.bgWhiteBright	@@iterator	Array.prototype.values
@@ -6355,7 +6266,7 @@ native	node:sys.inspect.colors.bgWhiteBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgWhiteBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgWhiteBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgWhiteBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgWhiteBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgWhiteBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgWhiteBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgWhiteBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bgYellow	@@iterator	Array.prototype.values
@@ -6403,7 +6314,7 @@ native	node:sys.inspect.colors.bgYellow	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgYellow	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgYellow	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgYellow	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgYellow	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgYellow	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgYellow	values	Array.prototype.values
 native	node:sys.inspect.colors.bgYellow	with	Array.prototype.with
 native	node:sys.inspect.colors.bgYellowBright	@@iterator	Array.prototype.values
@@ -6451,7 +6362,7 @@ native	node:sys.inspect.colors.bgYellowBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bgYellowBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bgYellowBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bgYellowBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bgYellowBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bgYellowBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bgYellowBright	values	Array.prototype.values
 native	node:sys.inspect.colors.bgYellowBright	with	Array.prototype.with
 native	node:sys.inspect.colors.black	@@iterator	Array.prototype.values
@@ -6499,7 +6410,7 @@ native	node:sys.inspect.colors.black	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.black	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.black	toString	Array.prototype.toString
 native	node:sys.inspect.colors.black	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.black	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.black	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.black	values	Array.prototype.values
 native	node:sys.inspect.colors.black	with	Array.prototype.with
 native	node:sys.inspect.colors.blink	@@iterator	Array.prototype.values
@@ -6547,7 +6458,7 @@ native	node:sys.inspect.colors.blink	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.blink	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.blink	toString	Array.prototype.toString
 native	node:sys.inspect.colors.blink	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.blink	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.blink	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.blink	values	Array.prototype.values
 native	node:sys.inspect.colors.blink	with	Array.prototype.with
 native	node:sys.inspect.colors.blue	@@iterator	Array.prototype.values
@@ -6595,7 +6506,7 @@ native	node:sys.inspect.colors.blue	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.blue	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.blue	toString	Array.prototype.toString
 native	node:sys.inspect.colors.blue	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.blue	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.blue	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.blue	values	Array.prototype.values
 native	node:sys.inspect.colors.blue	with	Array.prototype.with
 native	node:sys.inspect.colors.blueBright	@@iterator	Array.prototype.values
@@ -6643,7 +6554,7 @@ native	node:sys.inspect.colors.blueBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.blueBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.blueBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.blueBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.blueBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.blueBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.blueBright	values	Array.prototype.values
 native	node:sys.inspect.colors.blueBright	with	Array.prototype.with
 native	node:sys.inspect.colors.bold	@@iterator	Array.prototype.values
@@ -6691,7 +6602,7 @@ native	node:sys.inspect.colors.bold	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.bold	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.bold	toString	Array.prototype.toString
 native	node:sys.inspect.colors.bold	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.bold	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.bold	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.bold	values	Array.prototype.values
 native	node:sys.inspect.colors.bold	with	Array.prototype.with
 native	node:sys.inspect.colors.cyan	@@iterator	Array.prototype.values
@@ -6739,7 +6650,7 @@ native	node:sys.inspect.colors.cyan	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.cyan	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.cyan	toString	Array.prototype.toString
 native	node:sys.inspect.colors.cyan	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.cyan	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.cyan	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.cyan	values	Array.prototype.values
 native	node:sys.inspect.colors.cyan	with	Array.prototype.with
 native	node:sys.inspect.colors.cyanBright	@@iterator	Array.prototype.values
@@ -6787,7 +6698,7 @@ native	node:sys.inspect.colors.cyanBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.cyanBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.cyanBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.cyanBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.cyanBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.cyanBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.cyanBright	values	Array.prototype.values
 native	node:sys.inspect.colors.cyanBright	with	Array.prototype.with
 native	node:sys.inspect.colors.dim	@@iterator	Array.prototype.values
@@ -6835,7 +6746,7 @@ native	node:sys.inspect.colors.dim	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.dim	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.dim	toString	Array.prototype.toString
 native	node:sys.inspect.colors.dim	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.dim	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.dim	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.dim	values	Array.prototype.values
 native	node:sys.inspect.colors.dim	with	Array.prototype.with
 native	node:sys.inspect.colors.doubleunderline	@@iterator	Array.prototype.values
@@ -6883,7 +6794,7 @@ native	node:sys.inspect.colors.doubleunderline	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.doubleunderline	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.doubleunderline	toString	Array.prototype.toString
 native	node:sys.inspect.colors.doubleunderline	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.doubleunderline	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.doubleunderline	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.doubleunderline	values	Array.prototype.values
 native	node:sys.inspect.colors.doubleunderline	with	Array.prototype.with
 native	node:sys.inspect.colors.framed	@@iterator	Array.prototype.values
@@ -6931,7 +6842,7 @@ native	node:sys.inspect.colors.framed	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.framed	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.framed	toString	Array.prototype.toString
 native	node:sys.inspect.colors.framed	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.framed	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.framed	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.framed	values	Array.prototype.values
 native	node:sys.inspect.colors.framed	with	Array.prototype.with
 native	node:sys.inspect.colors.gray	@@iterator	Array.prototype.values
@@ -6979,7 +6890,7 @@ native	node:sys.inspect.colors.gray	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.gray	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.gray	toString	Array.prototype.toString
 native	node:sys.inspect.colors.gray	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.gray	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.gray	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.gray	values	Array.prototype.values
 native	node:sys.inspect.colors.gray	with	Array.prototype.with
 native	node:sys.inspect.colors.green	@@iterator	Array.prototype.values
@@ -7027,7 +6938,7 @@ native	node:sys.inspect.colors.green	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.green	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.green	toString	Array.prototype.toString
 native	node:sys.inspect.colors.green	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.green	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.green	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.green	values	Array.prototype.values
 native	node:sys.inspect.colors.green	with	Array.prototype.with
 native	node:sys.inspect.colors.greenBright	@@iterator	Array.prototype.values
@@ -7075,7 +6986,7 @@ native	node:sys.inspect.colors.greenBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.greenBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.greenBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.greenBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.greenBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.greenBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.greenBright	values	Array.prototype.values
 native	node:sys.inspect.colors.greenBright	with	Array.prototype.with
 native	node:sys.inspect.colors.hidden	@@iterator	Array.prototype.values
@@ -7123,7 +7034,7 @@ native	node:sys.inspect.colors.hidden	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.hidden	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.hidden	toString	Array.prototype.toString
 native	node:sys.inspect.colors.hidden	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.hidden	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.hidden	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.hidden	values	Array.prototype.values
 native	node:sys.inspect.colors.hidden	with	Array.prototype.with
 native	node:sys.inspect.colors.inverse	@@iterator	Array.prototype.values
@@ -7171,7 +7082,7 @@ native	node:sys.inspect.colors.inverse	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.inverse	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.inverse	toString	Array.prototype.toString
 native	node:sys.inspect.colors.inverse	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.inverse	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.inverse	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.inverse	values	Array.prototype.values
 native	node:sys.inspect.colors.inverse	with	Array.prototype.with
 native	node:sys.inspect.colors.italic	@@iterator	Array.prototype.values
@@ -7219,7 +7130,7 @@ native	node:sys.inspect.colors.italic	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.italic	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.italic	toString	Array.prototype.toString
 native	node:sys.inspect.colors.italic	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.italic	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.italic	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.italic	values	Array.prototype.values
 native	node:sys.inspect.colors.italic	with	Array.prototype.with
 native	node:sys.inspect.colors.magenta	@@iterator	Array.prototype.values
@@ -7267,7 +7178,7 @@ native	node:sys.inspect.colors.magenta	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.magenta	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.magenta	toString	Array.prototype.toString
 native	node:sys.inspect.colors.magenta	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.magenta	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.magenta	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.magenta	values	Array.prototype.values
 native	node:sys.inspect.colors.magenta	with	Array.prototype.with
 native	node:sys.inspect.colors.magentaBright	@@iterator	Array.prototype.values
@@ -7315,7 +7226,7 @@ native	node:sys.inspect.colors.magentaBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.magentaBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.magentaBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.magentaBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.magentaBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.magentaBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.magentaBright	values	Array.prototype.values
 native	node:sys.inspect.colors.magentaBright	with	Array.prototype.with
 native	node:sys.inspect.colors.overlined	@@iterator	Array.prototype.values
@@ -7363,7 +7274,7 @@ native	node:sys.inspect.colors.overlined	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.overlined	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.overlined	toString	Array.prototype.toString
 native	node:sys.inspect.colors.overlined	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.overlined	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.overlined	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.overlined	values	Array.prototype.values
 native	node:sys.inspect.colors.overlined	with	Array.prototype.with
 native	node:sys.inspect.colors.red	@@iterator	Array.prototype.values
@@ -7411,7 +7322,7 @@ native	node:sys.inspect.colors.red	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.red	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.red	toString	Array.prototype.toString
 native	node:sys.inspect.colors.red	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.red	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.red	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.red	values	Array.prototype.values
 native	node:sys.inspect.colors.red	with	Array.prototype.with
 native	node:sys.inspect.colors.redBright	@@iterator	Array.prototype.values
@@ -7459,7 +7370,7 @@ native	node:sys.inspect.colors.redBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.redBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.redBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.redBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.redBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.redBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.redBright	values	Array.prototype.values
 native	node:sys.inspect.colors.redBright	with	Array.prototype.with
 native	node:sys.inspect.colors.reset	@@iterator	Array.prototype.values
@@ -7507,7 +7418,7 @@ native	node:sys.inspect.colors.reset	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.reset	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.reset	toString	Array.prototype.toString
 native	node:sys.inspect.colors.reset	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.reset	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.reset	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.reset	values	Array.prototype.values
 native	node:sys.inspect.colors.reset	with	Array.prototype.with
 native	node:sys.inspect.colors.strikethrough	@@iterator	Array.prototype.values
@@ -7555,7 +7466,7 @@ native	node:sys.inspect.colors.strikethrough	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.strikethrough	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.strikethrough	toString	Array.prototype.toString
 native	node:sys.inspect.colors.strikethrough	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.strikethrough	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.strikethrough	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.strikethrough	values	Array.prototype.values
 native	node:sys.inspect.colors.strikethrough	with	Array.prototype.with
 native	node:sys.inspect.colors.underline	@@iterator	Array.prototype.values
@@ -7603,7 +7514,7 @@ native	node:sys.inspect.colors.underline	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.underline	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.underline	toString	Array.prototype.toString
 native	node:sys.inspect.colors.underline	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.underline	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.underline	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.underline	values	Array.prototype.values
 native	node:sys.inspect.colors.underline	with	Array.prototype.with
 native	node:sys.inspect.colors.white	@@iterator	Array.prototype.values
@@ -7651,7 +7562,7 @@ native	node:sys.inspect.colors.white	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.white	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.white	toString	Array.prototype.toString
 native	node:sys.inspect.colors.white	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.white	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.white	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.white	values	Array.prototype.values
 native	node:sys.inspect.colors.white	with	Array.prototype.with
 native	node:sys.inspect.colors.whiteBright	@@iterator	Array.prototype.values
@@ -7699,7 +7610,7 @@ native	node:sys.inspect.colors.whiteBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.whiteBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.whiteBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.whiteBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.whiteBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.whiteBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.whiteBright	values	Array.prototype.values
 native	node:sys.inspect.colors.whiteBright	with	Array.prototype.with
 native	node:sys.inspect.colors.yellow	@@iterator	Array.prototype.values
@@ -7747,7 +7658,7 @@ native	node:sys.inspect.colors.yellow	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.yellow	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.yellow	toString	Array.prototype.toString
 native	node:sys.inspect.colors.yellow	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.yellow	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.yellow	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.yellow	values	Array.prototype.values
 native	node:sys.inspect.colors.yellow	with	Array.prototype.with
 native	node:sys.inspect.colors.yellowBright	@@iterator	Array.prototype.values
@@ -7795,7 +7706,7 @@ native	node:sys.inspect.colors.yellowBright	toSorted	Array.prototype.toSorted
 native	node:sys.inspect.colors.yellowBright	toSpliced	Array.prototype.toSpliced
 native	node:sys.inspect.colors.yellowBright	toString	Array.prototype.toString
 native	node:sys.inspect.colors.yellowBright	unshift	Array.prototype.unshift
-native	node:sys.inspect.colors.yellowBright	valueOf	Array.prototype.valueOf
+native	node:sys.inspect.colors.yellowBright	valueOf	Object.prototype.valueOf
 native	node:sys.inspect.colors.yellowBright	values	Array.prototype.values
 native	node:sys.inspect.colors.yellowBright	with	Array.prototype.with
 native	node:sys.inspect.defaultOptions	__defineGetter__	Object.prototype.__defineGetter__
@@ -9238,12 +9149,6 @@ ns	console.trace	length
 ns	console.trace	name
 ns	console.warn	length
 ns	console.warn	name
-ns	navigator	hardwareConcurrency
-ns	navigator	language
-ns	navigator	languages
-ns	navigator	locks
-ns	navigator	platform
-ns	navigator	userAgent
 ns	node:assert.Assert	length
 ns	node:assert.Assert	name
 ns	node:assert.Assert	prototype

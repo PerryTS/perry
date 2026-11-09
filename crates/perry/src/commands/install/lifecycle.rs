@@ -1,27 +1,21 @@
-//! Lifecycle-script execution. Only invoked after the scan passes
-//! (or its findings have been overridden). Runs `preinstall`,
-//! `install`, and `postinstall` for packages on a trust allowlist —
-//! the bundled one in [`allowlist`] plus any names the user opted
-//! into via `package.json -> perry.allowScripts` or the
-//! `--run-scripts` / `--run-scripts-all` CLI flags.
+//! Lifecycle scripts run only after the scan passes and the user explicitly
+//! approves their installed package names through `perry.allowScripts`,
+//! `--run-scripts`, or `--run-scripts-all`.
 //!
 //! Scripts are executed under the host shell (`sh -c` on Unix,
 //! `cmd /C` on Windows), in the package's directory, with PATH
 //! prefixed so `node_modules/.bin` binaries (typescript, node-gyp,
 //! prebuild-install, …) are reachable without absolute paths.
 //!
-//! v2 will run these in an OS sandbox with redacted env (no SSH /
-//! AWS / GitHub / npm tokens) and a tight filesystem + network
-//! profile. v1 trusts the allowlist: a compromised version of an
-//! allowlisted package's script WILL run.
+//! Approval grants host-shell execution with the user's environment and
+//! privileges; it does not sandbox scripts or authenticate their contents.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::process::Command;
 
-use super::allowlist;
 use super::scanner::ScannedPackage;
 use super::InstallArgs;
 
@@ -37,6 +31,7 @@ pub fn run_all(
 ) -> Result<RunSummary> {
     let user_opt_in = read_user_allowscripts(project_root);
     let mut summary = RunSummary::default();
+    let mut executed = HashSet::new();
 
     for pkg in packages {
         if !has_lifecycle_scripts(pkg) {
@@ -46,11 +41,26 @@ pub fn run_all(
         let trusted = is_trusted(&pkg.name, &user_opt_in, args);
         if !trusted {
             summary.skipped.push(pkg.name.clone());
+            summary.skipped_locations.push(describe(pkg));
             continue;
         }
 
+        let identity = pkg.dir.canonicalize().with_context(|| {
+            format!(
+                "cannot resolve approved package {}@{} at {}; completed: [{}]; skipped: [{}]",
+                pkg.name,
+                pkg.version,
+                pkg.dir.display(),
+                summary.ran.join(", "),
+                summary.skipped.join(", ")
+            )
+        })?;
+        if !executed.insert(identity) {
+            continue;
+        }
         run_package(pkg, project_root)?;
         summary.ran.push(pkg.name.clone());
+        summary.ran_locations.push(describe(pkg));
     }
     Ok(summary)
 }
@@ -59,6 +69,14 @@ pub fn run_all(
 pub struct RunSummary {
     pub ran: Vec<String>,
     pub skipped: Vec<String>,
+    /// Parallel to `ran` and `skipped`, naming the copy that ran: one approved name can
+    /// match several installed directories.
+    pub ran_locations: Vec<String>,
+    pub skipped_locations: Vec<String>,
+}
+
+fn describe(pkg: &ScannedPackage) -> String {
+    format!("{}@{} at {}", pkg.name, pkg.version, pkg.dir.display())
 }
 
 fn has_lifecycle_scripts(pkg: &ScannedPackage) -> bool {
@@ -75,9 +93,6 @@ fn is_trusted(name: &str, user_opt_in: &BTreeSet<String>, args: &InstallArgs) ->
     if args.run_scripts_all {
         return true;
     }
-    if allowlist::is_bundled(name) {
-        return true;
-    }
     if user_opt_in.contains(name) {
         return true;
     }
@@ -89,8 +104,7 @@ fn is_trusted(name: &str, user_opt_in: &BTreeSet<String>, args: &InstallArgs) ->
 
 /// Read `perry.allowScripts` from the project root's package.json.
 /// Returns an empty set if the file or key is missing — this is the
-/// non-Perry-project case, where we just rely on the bundled
-/// allowlist + CLI flags.
+/// non-Perry-project case, where only explicit CLI approvals apply.
 fn read_user_allowscripts(project_root: &Path) -> BTreeSet<String> {
     let pkg_json = project_root.join("package.json");
     let content = match std::fs::read_to_string(&pkg_json) {
@@ -143,7 +157,7 @@ fn run_package(pkg: &ScannedPackage, project_root: &Path) -> Result<()> {
             .env("PATH", &augmented_path)
             .env("npm_lifecycle_event", key)
             .env("npm_lifecycle_script", body)
-            .env("npm_package_name", &pkg.name)
+            .env("npm_package_name", pkg.declared_name())
             .env("npm_package_version", &pkg.version)
             // INIT_CWD is what npm sets to the project root — many
             // scripts read it to locate sibling packages.
@@ -235,8 +249,8 @@ mod tests {
     }
 
     #[test]
-    fn trust_bundled() {
-        assert!(is_trusted("esbuild", &BTreeSet::new(), &args()));
+    fn known_package_names_are_not_implicit_approval() {
+        assert!(!is_trusted("esbuild", &BTreeSet::new(), &args()));
     }
 
     #[test]
