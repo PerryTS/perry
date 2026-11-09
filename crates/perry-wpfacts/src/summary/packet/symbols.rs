@@ -443,7 +443,7 @@ impl Model {
                     .get(site as usize)
                     .map(|s| (&s.desc, s.birth, s.rooted))
             ),
-            Cons::SpreadFrom { src, site } => format!(
+            Cons::SpreadFrom { src, site, .. } => format!(
                 "SpreadFrom src={:?} site={:?}",
                 self.packet_token(src, packet),
                 self.stores

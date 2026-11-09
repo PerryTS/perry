@@ -50,7 +50,7 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
         let rooted = scope.root_nanbox_f64(val);
         return typed_array_new_from_heap_source(kind, &rooted);
     }
-    if top16 == 0x7FFE {
+    if crate::value::is_int32_bits(bits) {
         // INT32_TAG — lower 32 bits are the signed length.
         let n = (bits & 0xFFFF_FFFF) as i32;
         let len = typed_array_length_or_throw(n as f64);

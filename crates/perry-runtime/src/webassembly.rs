@@ -966,12 +966,8 @@ unsafe extern "C" fn call_wasm_import(
         .iter()
         .zip(bits.iter())
         .map(|(kind, bits)| match *kind {
-            WASM_VAL_KIND_I32 => (*bits as u32 as i32) as f64,
-            WASM_VAL_KIND_I64 => wasm_i64_to_js(*bits),
-            WASM_VAL_KIND_F32 => f32::from_bits(*bits as u32) as f64,
-            WASM_VAL_KIND_F64 => f64::from_bits(*bits),
             WASM_VAL_KIND_EXTERNREF => f64::from_bits(*bits),
-            _ => f64::from_bits(TAG_UNDEFINED),
+            kind => decode_wasm_value(kind, *bits),
         })
         .collect();
     let result = match crate::exception::catch_thrown(|| {
