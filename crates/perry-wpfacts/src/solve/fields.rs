@@ -110,7 +110,7 @@ impl Model {
     /// stored under the same key on `d`; computed keys and getter results
     /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
     /// keys unknown; an unmodeled target takes `s`'s values.
-    pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId) {
+    pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId, from: NodeId) {
         if !self.spread_done.insert((s, d)) {
             return;
         }
@@ -140,7 +140,16 @@ impl Model {
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         if opaque {
+            // Census only: a spread of ⊤ is propagation of the ⊤ its source value holds, so the
+            // injection is attributed to that source node, not to the target node whose rule runs.
+            let saved = match self.diagnostic.as_mut() {
+                Some(dg) if s == TOP && from != NO_NODE => Some(dg.cause_node.replace(from)),
+                _ => None,
+            };
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
+            if let (Some(dg), Some(saved)) = (self.diagnostic.as_mut(), saved) {
+                dg.cause_node = saved;
+            }
             self.add_prim(fa_d, prim::ALL);
             if s == TOP {
                 return;
