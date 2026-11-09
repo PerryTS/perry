@@ -1253,6 +1253,87 @@ fn lower_string_strict_eq_inline(
 /// A compare operand that is statically a number (not a BigInt, not a value
 /// that may come back boxed from a raw-f64 fallback): two of them take the
 /// bare `fcmp`.
+/// P3 B1, C1 (DESIGN-p3 rev 3.1 §2.3): a compare whose operands are both
+/// proven plain Numbers, or Number-or-undefined, at least one of them by the
+/// facts (`facts_canonical`). There is no INT32 prefix and no runtime helper:
+///
+/// - relational: the ordered `fcmp` (`undefined` is a NaN pattern, so every
+///   comparison with it is false, as in JS);
+/// - `===` with at least one plain Number: `fcmp oeq` (`une` for `!==`);
+/// - `===` of two Number-or-undefined: `fcmp oeq || (bits equal and
+///   undefined)`, and `!==` is its exact negation (REVIEW-p3 D1).
+///
+/// Check mode tests each fact-trusted operand (`facts_canonical::witness`).
+fn lower_facts_number_compare(
+    ctx: &mut FnCtx<'_>,
+    op: CompareOp,
+    left: &Expr,
+    right: &Expr,
+    l: &str,
+    r: &str,
+) -> Result<Option<String>> {
+    use super::facts_canonical::{self, Num};
+    if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
+        return Ok(None);
+    }
+    let fl = facts_canonical::of(ctx, left);
+    let fr = facts_canonical::of(ctx, right);
+    if fl.is_none() && fr.is_none() {
+        return Ok(None);
+    }
+    let side = |ctx: &FnCtx<'_>, e: &Expr, f: Option<Num>| {
+        f.or_else(|| compare_operand_is_numeric(ctx, e).then_some(Num::Number))
+    };
+    let (Some(kl), Some(kr)) = (side(ctx, left, fl), side(ctx, right, fr)) else {
+        return Ok(None);
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "compare": format!("{op:?}") }),
+    );
+    crate::facts_consumed::used();
+    if let Some(f) = fl {
+        facts_canonical::witness(ctx, l, f, "compare operand")?;
+    }
+    if let Some(f) = fr {
+        facts_canonical::witness(ctx, r, f, "compare operand")?;
+    }
+    let blk = ctx.block();
+    let bit = match op {
+        CompareOp::Lt => blk.fcmp("olt", l, r),
+        CompareOp::Le => blk.fcmp("ole", l, r),
+        CompareOp::Gt => blk.fcmp("ogt", l, r),
+        CompareOp::Ge => blk.fcmp("oge", l, r),
+        CompareOp::Eq | CompareOp::Ne
+            if kl == Num::NumberOrUndefined && kr == Num::NumberOrUndefined =>
+        {
+            let oeq = blk.fcmp("oeq", l, r);
+            let lb = blk.bitcast_double_to_i64(l);
+            let rb = blk.bitcast_double_to_i64(r);
+            let same = blk.icmp_eq(I64, &lb, &rb);
+            let undef = blk.icmp_eq(I64, &lb, crate::nanbox::TAG_UNDEFINED_I64);
+            let both_undef = blk.and(I1, &same, &undef);
+            let eq = blk.or(I1, &oeq, &both_undef);
+            if matches!(op, CompareOp::Ne) {
+                blk.xor(I1, &eq, "true")
+            } else {
+                eq
+            }
+        }
+        CompareOp::Eq => blk.fcmp("oeq", l, r),
+        CompareOp::Ne => blk.fcmp("une", l, r),
+        CompareOp::LooseEq | CompareOp::LooseNe => unreachable!(),
+    };
+    let tagged = blk.select(
+        I1,
+        &bit,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    Ok(Some(blk.bitcast_i64_to_double(&tagged)))
+}
+
 fn compare_operand_is_numeric(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
     is_numeric_expr(ctx, operand)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand)
@@ -1891,6 +1972,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         return Ok(blk.bitcast_i64_to_double(&tagged));
                     }
                     return Ok(blk.bitcast_i64_to_double(&result_bits));
+                }
+
+                // P3 B1, C1 (`facts_canonical`): both operands proven plain
+                // Numbers (or Number-or-undefined), at least one by the facts.
+                if let Some(v) = lower_facts_number_compare(ctx, *op, left, right, &l, &r)? {
+                    return Ok(v);
                 }
 
                 // An ordered relational compare (`<`, `<=`, `>`, `>=`) whose

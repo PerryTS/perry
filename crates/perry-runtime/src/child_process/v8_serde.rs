@@ -1279,3 +1279,7 @@ fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
     });
     cp_box_ptr(ta as *const u8)
 }
+
+#[cfg(test)]
+#[path = "v8_serde_canonical_tests.rs"]
+mod canonical_tests;
