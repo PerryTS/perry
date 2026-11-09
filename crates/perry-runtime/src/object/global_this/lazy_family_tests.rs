@@ -212,3 +212,137 @@ fn global_enumeration_does_not_birth_lazy_families() {
         crate::array::intrinsic_prototype_addr_if_bound(navigator)
     );
 }
+
+/// LAZYPROTO P2 batch B2: the families declared lazy, by name. Pinned here so
+/// that a family forced back to eager fails this test instead of silently
+/// costing its setup again.
+const B2_LAZY: &[&str] = &[
+    "TextEncoder",
+    "TextDecoder",
+    "TextEncoderStream",
+    "TextDecoderStream",
+    "CompressionStream",
+    "DecompressionStream",
+    "WritableStream",
+    "TransformStream",
+    "URLPattern",
+    "MessageEvent",
+    "CustomEvent",
+    "FormData",
+    "Blob",
+    "File",
+    "Headers",
+    "Request",
+    "MessageChannel",
+    "MessagePort",
+    "BroadcastChannel",
+    "Crypto",
+    "CryptoKey",
+    "Storage",
+];
+
+#[test]
+fn b2_families_are_lazy_and_unborn_after_setup() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    for name in B2_LAZY {
+        let identity = crate::object::BuiltinConstructorIdentity::for_name(name)
+            .unwrap_or_else(|| panic!("{name} is not a builtin constructor"));
+        assert!(identity.declaration().lazy, "{name} is not declared lazy");
+        assert_eq!(
+            crate::array::intrinsic_prototype_addr_if_bound(identity),
+            0,
+            "{name} was born at realm setup"
+        );
+        assert_ne!(
+            crate::array::intrinsic_constructor_addr_if_bound(identity),
+            0,
+            "{name}: setup binds the constructor"
+        );
+    }
+}
+
+/// `length` of an unborn constructor reads as the birth installs it.
+#[test]
+fn unborn_lazy_constructor_length_is_the_spec_length() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    let read_length = |name: &str| {
+        let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        js_object_get_field_by_name_f64(
+            crate::value::js_nanbox_get_pointer(ctor) as *const ObjectHeader,
+            key,
+        )
+    };
+    for name in B2_LAZY {
+        let identity = crate::object::BuiltinConstructorIdentity::for_name(name).unwrap();
+        let unborn = read_length(name);
+        assert_eq!(
+            crate::array::intrinsic_prototype_addr_if_bound(identity),
+            0,
+            "{name}: reading length birthed it"
+        );
+        builtin_prototype_value(name);
+        let born = read_length(name);
+        assert_eq!(unborn.to_bits(), born.to_bits(), "{name}: length changed at birth");
+        if let Some(spec) = crate::object::builtin_constructor_spec_length(name) {
+            assert_eq!(born, spec as f64, "{name}: declared length");
+        }
+    }
+}
+
+/// The areas behind `localStorage` / `sessionStorage` are made by the first
+/// read of the global (Node's accessors), and that read births `Storage`.
+#[test]
+fn storage_areas_are_made_by_their_getters() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    let storage = crate::object::BuiltinConstructorIdentity::Storage;
+    assert_eq!(crate::object::LOCAL_STORAGE_PTR.load(std::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(crate::object::SESSION_STORAGE_PTR.load(std::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(storage), 0);
+    crate::web_storage::test_read_storage_globals();
+    let proto = crate::array::intrinsic_prototype_addr_if_bound(storage);
+    assert_ne!(proto, 0, "the first read of the global births Storage");
+    for slot in [&crate::object::LOCAL_STORAGE_PTR, &crate::object::SESSION_STORAGE_PTR] {
+        let area = slot.load(std::sync::atomic::Ordering::Acquire) as usize;
+        assert_ne!(area, 0, "the getter made the area");
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(area),
+            Some(crate::value::js_nanbox_pointer(proto as i64).to_bits()),
+            "the area inherits Storage.prototype"
+        );
+    }
+}
+
+/// A lazy interface child links to its parent in its own birth: the same two
+/// links the population makes for an eager child.
+#[test]
+fn lazy_interface_children_link_to_their_parent_in_their_birth() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    for (child, parent) in [
+        ("CustomEvent", "Event"),
+        ("MessageEvent", "Event"),
+        ("BroadcastChannel", "EventTarget"),
+    ] {
+        let child_id = crate::object::BuiltinConstructorIdentity::for_name(child).unwrap();
+        let parent_id = crate::object::BuiltinConstructorIdentity::for_name(parent).unwrap();
+        assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(child_id), 0, "{child}");
+        let proto = crate::value::js_nanbox_get_pointer(builtin_prototype_value(child)) as usize;
+        let parent_proto = crate::array::intrinsic_prototype_addr_if_bound(parent_id);
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(proto),
+            Some(crate::value::js_nanbox_pointer(parent_proto as i64).to_bits()),
+            "{child}.prototype inherits {parent}.prototype"
+        );
+        let ctor = crate::array::intrinsic_constructor_addr_if_bound(child_id);
+        let parent_ctor = crate::array::intrinsic_constructor_addr_if_bound(parent_id);
+        assert_eq!(
+            crate::closure::closure_static_prototype(ctor),
+            Some(crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits()),
+            "{child} inherits the {parent} constructor"
+        );
+    }
+}

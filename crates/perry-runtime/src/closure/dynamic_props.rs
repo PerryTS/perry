@@ -206,6 +206,12 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
+    // An unborn lazy builtin family answers `prototype` by being born (F2).
+    if prop == "prototype" {
+        // SAFETY: `ptr` is a proven, live closure cell.
+        unsafe { crate::object::birth_unborn_family_of(ptr) };
+    }
+
     // `PerformanceObserver.supportedEntryTypes` is a built-in static accessor:
     // reflection reads its descriptor below, while ordinary property reads
     // must invoke it and receive a fresh frozen array. Native-module class
