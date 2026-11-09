@@ -238,15 +238,24 @@ cleanup failure does not turn a committed install into failure. Interrupted
 backup preparation can leave an exclusively created `.prev.prepare-<pid>-<id>`
 sibling directory, which may be removed manually when no update is running.
 A failed publication can leave `.prev` refreshed to the current version, but
-never removes the live target. Successful directory rollback can leave the
-broken tree at `.prev` if cleanup fails.
+never removes the live target. Rollback writes a `<target>.prev.rollback`
+marker before it swaps. The marker only proves the swap may have committed,
+not that `.prev` is disposable: a rollback that finds the marker armed
+reports the earlier publication and never swaps or deletes anything, leaving
+the live target and `.prev` exactly as the crash left them. After a
+publication commits in this call, the marker is removed once `.prev` cleanup
+succeeds; a crash or cleanup failure leaves it armed until the next install,
+which clears it once its fresh backup holds the current version. An armed
+marker can therefore leave the broken tree at `.prev` for manual removal.
 
 These guarantees cover namespace publication on supported local filesystems,
 not power-loss durability, concurrently modified source trees, network
 filesystems, or concurrent updater invocations. Bundle backup publication and
 target publication are separate atomic steps; they are not a multi-path
 transaction. The numeric native ABI remains `1` for committed publication,
-`0` for failure. The wrapper disarms its matching sentinel on install failure.
+`0` for failure. On install failure the wrapper attempts to disarm its
+matching sentinel; the disarm itself can fail silently, leaving the sentinel
+armed, so a later boot may roll back to `.prev` after a rejected install.
 
 The sentinel is a JSON file at a per-OS user-writable path:
 

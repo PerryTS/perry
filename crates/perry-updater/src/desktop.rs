@@ -196,6 +196,11 @@ where
         {
             return false;
         }
+        // The fresh backup now holds the current live version, so a later
+        // rollback swap is safe again. Clearing earlier would re-expose a
+        // stale broken prev when this install fails before the backup
+        // publishes.
+        let _ = remove_path(&format!("{}.rollback", prev));
         scratch = Some(prepared);
     }
 
@@ -245,16 +250,46 @@ fn perform_rollback_with<F>(target: &str, publish: &mut F) -> bool
 where
     F: FnMut(&str, &str) -> std::io::Result<()>,
 {
+    // Derive `.prev` from the normalized target, mirroring install_paths: a
+    // caller-supplied trailing separator must not resolve the backup inside
+    // the target bundle.
+    let Ok(normalized) = normalized_path(target) else {
+        return false;
+    };
+    let Some(target) = normalized.to_str() else {
+        return false;
+    };
     let prev = format!("{}.prev", target);
+    let marker = format!("{}.rollback", prev);
+    // The marker is write-ahead intent, not proof: the swap may have
+    // committed, or the process may have died between the marker write and
+    // the swap, in which case prev still holds the only good backup. Nothing
+    // distinguishes the two states, so the armed path swaps nothing and
+    // deletes nothing; the next install refreshes prev and clears the marker.
+    if std::path::Path::new(&marker).exists() {
+        return true;
+    }
     let Ok((prev, target)) = replacement_paths(&prev, target) else {
         return false;
     };
+    if std::fs::write(&marker, b"").is_err() {
+        return false;
+    }
     if publish(&prev, &target).is_err() {
+        // An atomic rename either commits or does not, so a failed publish
+        // leaves no swap to record; drop the intent so a later rollback can
+        // retry from the intact backup.
+        let _ = remove_path(&marker);
         return false;
     }
     // A successful directory swap puts the broken version at prev. Cleanup
-    // is not part of the publication result and may be retried manually.
-    let _ = remove_path(&prev);
+    // is not part of the publication result; leaving the marker armed when
+    // cleanup fails makes every later attempt stop without touching either
+    // path, since the armed branch cannot tell a completed swap from a
+    // crashed one.
+    if remove_path(&prev).is_ok() {
+        let _ = remove_path(&marker);
+    }
     true
 }
 

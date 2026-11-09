@@ -48,6 +48,82 @@ fn install_and_rollback_roundtrip() {
 }
 
 #[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn rollback_after_committed_swap_cleans_up_without_swapping_again() {
+    let (_dir, target, stage, _prev) = protocol_fixture(false);
+    assert_eq!(perry_updater_install(make_str(&stage), make_str(&target)), 1);
+    assert_eq!(read_version(&target, false), b"new");
+    assert_eq!(perry_updater_perform_rollback(make_str(&target)), 1);
+    assert_eq!(read_version(&target, false), b"old");
+
+    // Simulate a crash after a committed rollback whose cleanup never ran:
+    // the broken version sits at .prev and the rollback marker is armed.
+    let prev = format!("{}.prev", target);
+    let marker = format!("{}.rollback", prev);
+    std::fs::write(&prev, b"new").unwrap();
+    std::fs::write(&marker, b"").unwrap();
+
+    // The second call reports the earlier publication and tolerates the
+    // stale backup instead of deleting it: prev may still be the only good
+    // copy when the marker was armed before the swap committed.
+    assert_eq!(perry_updater_perform_rollback(make_str(&target)), 1);
+    assert_eq!(read_version(&target, false), b"old");
+    assert_eq!(std::fs::read(&prev).unwrap(), b"new");
+    assert!(std::path::Path::new(&marker).exists());
+}
+
+#[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn rollback_with_armed_marker_never_deletes_the_backup() {
+    let (_dir, target, _stage, _prev) = protocol_fixture(false);
+    // Crash window: the marker is armed before the swap commits, so prev
+    // still holds the good backup while target holds the broken version.
+    let prev = format!("{}.prev", target);
+    let marker = format!("{}.rollback", prev);
+    std::fs::write(&prev, b"good").unwrap();
+    std::fs::write(&target, b"broken").unwrap();
+    std::fs::write(&marker, b"").unwrap();
+
+    assert_eq!(perry_updater_perform_rollback(make_str(&target)), 1);
+    assert_eq!(std::fs::read(&prev).unwrap(), b"good");
+    assert!(std::path::Path::new(&marker).exists());
+    assert_eq!(std::fs::read(&target).unwrap(), b"broken");
+}
+
+#[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn install_clears_armed_rollback_marker() {
+    let (_dir, target, stage, _prev) = protocol_fixture(false);
+    let marker = format!("{}.prev.rollback", target);
+    // A previous rollback left the marker armed after a failed cleanup.
+    std::fs::write(&marker, b"").unwrap();
+
+    assert_eq!(perry_updater_install(make_str(&stage), make_str(&target)), 1);
+    assert_eq!(read_version(&target, false), b"new");
+    assert!(!std::path::Path::new(&marker).exists());
+
+    // The next rollback swaps again instead of reporting a stale success.
+    assert_eq!(perry_updater_perform_rollback(make_str(&target)), 1);
+    assert_eq!(read_version(&target, false), b"old");
+}
+
+#[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn rollback_normalizes_trailing_separator_target() {
+    let (_dir, target, stage, _prev) = protocol_fixture(false);
+    assert_eq!(perry_updater_install(make_str(&stage), make_str(&target)), 1);
+    assert_eq!(read_version(&target, false), b"new");
+
+    // A trailing separator must not derive .prev inside the target, where
+    // the backup cannot resolve and rollback would fail with the backup
+    // intact at the sibling path.
+    let trailing = format!("{}/", target);
+    assert_eq!(perry_updater_perform_rollback(make_str(&trailing)), 1);
+    assert_eq!(read_version(&target, false), b"old");
+    assert!(!std::path::Path::new(&format!("{}.prev", target)).exists());
+}
+
+#[test]
 fn rollback_without_backup_fails() {
     let dir = std::env::temp_dir().join(format!("perry-updater-rb-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
