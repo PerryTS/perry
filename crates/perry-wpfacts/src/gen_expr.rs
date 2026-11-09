@@ -651,6 +651,11 @@ impl<'a> Gen<'a> {
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let n = self.expr_inner(fx, e);
+        if let Expr::IndexGet { element_offset, .. } = e {
+            if *element_offset != 0 {
+                self.element_values.push((fx.module, *element_offset, n));
+            }
+        }
         if self.diagnostic.is_some() {
             self.diagnostic_expr(fx, e, n);
         }

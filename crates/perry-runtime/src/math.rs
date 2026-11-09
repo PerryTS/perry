@@ -32,7 +32,19 @@ pub extern "C" fn js_math_trunc(value: f64) -> f64 {
 /// `js_math_round_value` (test262 Math/round/S15.8.2.15_A7).
 #[no_mangle]
 pub extern "C" fn js_math_round(value: f64) -> f64 {
-    crate::object::js_math_round_value(js_math_to_number(value))
+    let rounded = crate::object::js_math_round_value(js_math_to_number(value));
+    // P3 B1 negative control (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): a runtime
+    // built with `PERRY_FACTS_SABOTAGE=canonnum` returns an INT32-boxed word
+    // from this declared-NUM builtin, so a consumer that trusts the NUM fact
+    // must be caught by its check-mode witness (rc 86). Build-time, so an
+    // ordinary build compiles the branch away.
+    if matches!(option_env!("PERRY_FACTS_SABOTAGE"), Some("canonnum"))
+        && rounded.fract() == 0.0
+        && rounded.abs() < 2_147_483_648.0
+    {
+        return f64::from_bits(crate::value::INT32_TAG | (rounded as i32 as u32 as u64));
+    }
+    rounded
 }
 
 /// Math.sign(x) -> number
