@@ -316,6 +316,12 @@ impl Model {
                     self.packet_shape(shape)
                 )
             }
+            Cons::ElemUndef { obj, key, dst } => format!(
+                "ElemUndef obj={:?} key={:?} dst={:?}",
+                self.packet_token(obj, packet),
+                key,
+                dst
+            ),
             Cons::IdxKey { obj, dst, shape } => format!(
                 "IdxKey obj={:?} dst={:?} shape={:?}",
                 self.packet_token(obj, packet),

@@ -65,6 +65,7 @@ mod descriptor_reads;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
+mod elem_undef;
 mod element_reads;
 mod element_sites;
 mod enum_member_type;

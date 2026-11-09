@@ -39,6 +39,7 @@ pub(crate) enum Fact {
     ElementRead,
     FieldReadCall,
     CanonicalNumber,
+    ElementFloor,
     Signature,
     ArrayRep,
 }
@@ -79,6 +80,7 @@ impl Fact {
             Self::ElementRead => "proven element read",
             Self::FieldReadCall => "field read call",
             Self::CanonicalNumber => "canonical number",
+            Self::ElementFloor => "element floor",
             Self::Signature => "signature",
             Self::ArrayRep => "array rep",
         }
