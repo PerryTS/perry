@@ -146,6 +146,39 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
     })
 }
 
+/// `e` is an element read the tier loads below a dense floor and whose
+/// value is a proven Number: a present own element, never `undefined` or
+/// `null`, so `e ?? d` is `e`.
+pub(crate) fn number_in_floor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Expr::IndexGet {
+        object,
+        element_offset,
+        ..
+    } = e
+    else {
+        return false;
+    };
+    !ctx.wpfacts_off
+        && rep_read(ctx, object, *element_offset)
+            .is_some_and(|read| read.in_floor && read.rep.dense && read.number)
+}
+
+/// `left ?? d` is `left` (`number_in_floor`): the consumption record, and
+/// in check mode the test that `value`, its lowering, is a plain double.
+pub(crate) fn coalesce_is_left(ctx: &mut FnCtx<'_>, value: &str) -> anyhow::Result<()> {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "coalesce": "left" }),
+    );
+    crate::facts_consumed::used();
+    crate::expr::facts_canonical::witness(
+        ctx,
+        value,
+        crate::expr::facts_canonical::Num::Number,
+        "coalesce left",
+    )
+}
+
 /// The wpfacts proof for the read of `object` at `element_offset`, when the
 /// facts cover this function and the build emits no observing guards.
 pub(super) fn fact(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> Option<Proven> {
