@@ -268,13 +268,13 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
         proven_sites(&w).into_iter().collect::<Vec<_>>(),
         [
             "/t2/m.js@2019.exports",
-            "/t2/m.js@5286.log",
-            "/t2/m.js@5368.exports",
-            "/t2/m.js@5399.()",
+            "/t2/m.js@5284.log",
+            "/t2/m.js@5366.exports",
+            "/t2/m.js@5397.()",
             "/t2/r.js@1950.exports",
-            "/t2/r.js@5810.exports",
-            "/t2/r.js@5841.()",
-            "/t2/r.js@5921.newInstance",
+            "/t2/r.js@5808.exports",
+            "/t2/r.js@5839.()",
+            "/t2/r.js@5919.newInstance",
         ]
     );
     // Per unit `R`, `S` and `T` stay unbroken. `super()` in the `S` and `T`
