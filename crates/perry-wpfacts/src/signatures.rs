@@ -125,10 +125,20 @@ pub(crate) fn collect(
             .chain(copies.get(&n).into_iter().flatten().copied())
             .collect()
     };
+    // A node the solve did not create (`NO_NODE`, a unit's missing
+    // interface term) is no fact: Boxed.
+    let live = |n: NodeId| (n as usize) < m.nodes.len();
+    let rep1 = |n: NodeId| -> Rep {
+        if live(n) {
+            crate::bindings::rep_of_node(g, n)
+        } else {
+            Rep::Boxed
+        }
+    };
     let rep_at = |n: NodeId| -> Rep {
         all(n)
             .into_iter()
-            .map(|c| crate::bindings::rep_of_node(g, c))
+            .map(rep1)
             .reduce(join)
             .unwrap_or(Rep::Boxed)
     };
@@ -158,7 +168,7 @@ pub(crate) fn collect(
                 // `BindingFacts::rep`: instance copies flow into the shared
                 // node, so its values cover every copy.
                 _ => match g.mods[f.module as usize].locals.get(&p.id) {
-                    Some(&n) => crate::bindings::rep_of_node(g, n),
+                    Some(&n) => rep1(n),
                     None => Rep::Boxed,
                 },
             };
@@ -168,7 +178,7 @@ pub(crate) fn collect(
         let mut this_nodes = vec![f.this];
         for it in &m.sum.insts {
             if it.f as usize == fx {
-                ret = join(ret, crate::bindings::rep_of_node(g, it.ret));
+                ret = join(ret, rep1(it.ret));
                 this_nodes.push(it.this);
             }
         }
@@ -215,7 +225,7 @@ pub(crate) fn collect(
                 let mut one: Option<(u32, u32)> = None;
                 let mut ok = true;
                 for r in recs {
-                    for c in all(r.callee.unwrap()) {
+                    for c in all(r.callee.unwrap()).into_iter().filter(|&c| live(c)) {
                         match single_body(g, c) {
                             Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
                             _ => ok = false,
@@ -291,6 +301,9 @@ fn single_body(g: &Gen<'_>, n: NodeId) -> Option<(u32, u32)> {
 fn one_class(g: &Gen<'_>, nodes: &[NodeId]) -> Option<u32> {
     let mut one: Option<u32> = None;
     for &n in nodes {
+        if (n as usize) >= g.m.nodes.len() {
+            return None;
+        }
         let b = crate::bindings::facts_of_node(g, n);
         if b.other || b.prims != 0 || b.class_ids.len() != 1 {
             return None;
