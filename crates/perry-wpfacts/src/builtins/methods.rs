@@ -65,9 +65,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            let retained = if !m.unit_mode
-                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
-            {
+            let retained = if !m.unit_mode && super::global_object(m, t) {
                 match _key {
                     Key::Named(a) => m
                         .native_property(t, &m.atoms[a as usize])

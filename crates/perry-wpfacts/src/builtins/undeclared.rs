@@ -23,6 +23,15 @@ fn field_key(m: &Model, a: Atom) -> bool {
         || crate::solve::numeric_key(name))
 }
 
+/// The global object: `globalThis`, and the HIR global sentinel (`Other`,
+/// the receiver a bare global name is read off), which is the same object.
+pub fn global_object(m: &Model, t: Tok) -> bool {
+    matches!(
+        m.toks[t as usize],
+        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
+    )
+}
+
 /// Native function-value tokens, including the Object.prototype method
 /// identities represented as namespaces.
 pub fn builtin_function(m: &Model, t: Tok) -> bool {
@@ -60,7 +69,7 @@ pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
                 .is_some_and(|p| p.own_namespace)
                 && members::member(Family::Function, &m.atoms[a as usize]).is_none()
         }
-        TokKind::Builtin(BuiltinNs::GlobalThis) => false,
+        _ if global_object(m, t) => false,
         TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),
         _ => false,
     }
