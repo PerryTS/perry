@@ -296,6 +296,7 @@ fn hand_lowered_owner(surface: &Surface<'_>) -> Option<OwnerKind> {
     match surface {
         Surface::Module(module) => match *module {
             "readable_stream"
+            | "readable_stream_controller"
             | "readable_stream_reader"
             | "writable_stream"
             | "writable_stream_writer"

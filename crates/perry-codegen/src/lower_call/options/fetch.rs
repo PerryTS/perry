@@ -965,7 +965,18 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 );
                 return Ok(Some(v));
             }
-            // ReadableStreamDefaultController on the same handle:
+            _ => return Ok(None),
+        }
+    }
+
+    // A stream's controller (`start`/`pull`/`transform`/`flush` parameter):
+    // its own handle (stream id + controller bit), never the stream. Only the
+    // members all controller families own are lowered here; `close`,
+    // `terminate` and `byobRequest` go through the handle's dispatch, which
+    // knows the family.
+    if module == "readable_stream_controller" {
+        let recv = lower_expr(ctx, recv)?;
+        match method {
             "enqueue" => {
                 let chunk = if !args.is_empty() {
                     lower_expr(ctx, &args[0])?
@@ -975,15 +986,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let v = ctx.block().call(
                     DOUBLE,
                     "js_readable_stream_controller_enqueue",
-                    &[(DOUBLE, &recv_handle), (DOUBLE, &chunk)],
-                );
-                return Ok(Some(v));
-            }
-            "close" => {
-                let v = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_controller_close",
-                    &[(DOUBLE, &recv_handle)],
+                    &[(DOUBLE, &recv), (DOUBLE, &chunk)],
                 );
                 return Ok(Some(v));
             }
@@ -996,7 +999,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let v = ctx.block().call(
                     DOUBLE,
                     "js_readable_stream_controller_error",
-                    &[(DOUBLE, &recv_handle), (DOUBLE, &reason)],
+                    &[(DOUBLE, &recv), (DOUBLE, &reason)],
                 );
                 return Ok(Some(v));
             }
@@ -1004,18 +1007,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let v = ctx.block().call(
                     DOUBLE,
                     "js_readable_stream_controller_desired_size",
-                    &[(DOUBLE, &recv_handle)],
-                );
-                return Ok(Some(v));
-            }
-            // #4915: byte-stream controller's BYOB request — `{ view,
-            // respond, respondWithNewView }` while a BYOB read is parked,
-            // null otherwise.
-            "byobRequest" => {
-                let v = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_controller_byob_request",
-                    &[(DOUBLE, &recv_handle)],
+                    &[(DOUBLE, &recv)],
                 );
                 return Ok(Some(v));
             }

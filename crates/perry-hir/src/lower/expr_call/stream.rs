@@ -18,18 +18,12 @@ pub(super) fn is_stream_api_method(module: &str, method: &str) -> bool {
     match module {
         "readable_stream" => matches!(
             method,
-            "getReader"
-                | "cancel"
-                | "tee"
-                | "pipeTo"
-                | "pipeThrough"
-                | "locked"
-                | "enqueue"
-                | "close"
-                | "error"
-                | "desiredSize"
-                | "byobRequest"
+            "getReader" | "cancel" | "tee" | "pipeTo" | "pipeThrough" | "locked"
         ),
+        // The members every controller family owns (Default, Transform,
+        // Byte); `close`, `terminate` and `byobRequest` depend on the family
+        // and go through the controller handle's dispatch.
+        "readable_stream_controller" => matches!(method, "enqueue" | "error" | "desiredSize"),
         "readable_stream_reader" => {
             matches!(method, "read" | "releaseLock" | "cancel" | "closed")
         }
@@ -45,7 +39,7 @@ pub(super) fn is_stream_api_method(module: &str, method: &str) -> bool {
 
 /// Issue #562 — `class X extends ReadableStream/TransformStream`
 /// constructor: register the controller param of each callback in
-/// `super({...})` as a `readable_stream` native instance so
+/// `super({...})` as a `readable_stream_controller` native instance so
 /// `controller.enqueue(...)` inside those bodies dispatches through the
 /// streams arms in `lower_call.rs`.
 ///
@@ -60,12 +54,32 @@ pub(super) fn register_super_stream_controller_params(
 ) {
     let field_specs: &[(&'static str, usize, &'static str, &'static str)] = match parent_ident {
         "ReadableStream" => &[
-            ("start", 0, "readable_stream", "ReadableStream"),
-            ("pull", 0, "readable_stream", "ReadableStream"),
+            (
+                "start",
+                0,
+                "readable_stream_controller",
+                "ReadableStreamDefaultController",
+            ),
+            (
+                "pull",
+                0,
+                "readable_stream_controller",
+                "ReadableStreamDefaultController",
+            ),
         ],
         "TransformStream" => &[
-            ("transform", 1, "readable_stream", "ReadableStream"),
-            ("flush", 0, "readable_stream", "ReadableStream"),
+            (
+                "transform",
+                1,
+                "readable_stream_controller",
+                "TransformStreamDefaultController",
+            ),
+            (
+                "flush",
+                0,
+                "readable_stream_controller",
+                "TransformStreamDefaultController",
+            ),
         ],
         _ => return,
     };

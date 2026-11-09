@@ -1192,6 +1192,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 if matches!(
                     module_name.as_str(),
                     "readable_stream"
+                        | "readable_stream_controller"
                         | "writable_stream"
                         | "transform_stream"
                         | "readable_stream_reader"
@@ -1550,6 +1551,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
+                        | "readable_stream_controller"
                         | "writable_stream"
                         | "transform_stream"
                         | "readable_stream_reader"

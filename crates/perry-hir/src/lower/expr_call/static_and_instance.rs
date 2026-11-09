@@ -254,6 +254,7 @@ pub(super) fn try_static_method_and_instance(
                     let is_stream_module = matches!(
                         module_name.as_str(),
                         "readable_stream"
+                            | "readable_stream_controller"
                             | "writable_stream"
                             | "transform_stream"
                             | "readable_stream_reader"

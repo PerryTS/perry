@@ -17,7 +17,7 @@ use super::super::{lower_expr, LoweringContext};
 /// Issue #237: pre-register the controller param of every
 /// `start` / `pull` / `cancel` / `transform` / `flush` callback
 /// passed to `new ReadableStream({...})` / `new TransformStream({...})` as a
-/// native instance so `controller.enqueue(...)` etc. dispatch through the
+/// controller native instance so `controller.enqueue(...)` etc. dispatch through the
 /// streams arms in lower_call.rs. Side-effect only.
 pub(crate) fn register_stream_controller_params(
     ctx: &mut LoweringContext,
@@ -27,12 +27,32 @@ pub(crate) fn register_stream_controller_params(
         let cls = ident.sym.as_ref();
         let field_specs: &[(&'static str, usize, &'static str, &'static str)] = match cls {
             "ReadableStream" => &[
-                ("start", 0, "readable_stream", "ReadableStream"),
-                ("pull", 0, "readable_stream", "ReadableStream"),
+                (
+                    "start",
+                    0,
+                    "readable_stream_controller",
+                    "ReadableStreamDefaultController",
+                ),
+                (
+                    "pull",
+                    0,
+                    "readable_stream_controller",
+                    "ReadableStreamDefaultController",
+                ),
             ],
             "TransformStream" => &[
-                ("transform", 1, "readable_stream", "ReadableStream"),
-                ("flush", 0, "readable_stream", "ReadableStream"),
+                (
+                    "transform",
+                    1,
+                    "readable_stream_controller",
+                    "TransformStreamDefaultController",
+                ),
+                (
+                    "flush",
+                    0,
+                    "readable_stream_controller",
+                    "TransformStreamDefaultController",
+                ),
             ],
             _ => &[],
         };

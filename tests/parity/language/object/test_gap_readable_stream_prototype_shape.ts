@@ -29,6 +29,12 @@ console.log("proto(s)===P", Object.getPrototypeOf(s) === P);
 console.log("s own", pub(s).length);
 console.log("s.getReader===P.getReader", s.getReader === P.getReader);
 console.log("s.enqueue", typeof s.enqueue);
+// A ReadableStream-typed binding: `enqueue`/`desiredSize` belong to the controller only.
+const s3 = new ReadableStream({ start(c) { c.enqueue(1); } });
+// @ts-ignore
+try { s3.enqueue(2); console.log("s3.enqueue() no throw"); } catch (e: any) { console.log("s3.enqueue()", e.name); }
+// @ts-ignore
+console.log("s3.desiredSize", s3.desiredSize);
 console.log("ctl===s", ctl === s);
 console.log("ctl.getReader", typeof ctl.getReader);
 const CP: any = Object.getPrototypeOf(ctl);
