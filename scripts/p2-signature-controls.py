@@ -48,6 +48,9 @@ ASSERTIONS = [
     # enter `e3cInner$sig`.
     ("functions", "calls", "main", "e3cInner$sig"),
     ("functions", "calls", "e3cSmall", "e3cInner$sig"),
+    # S26: the recursive typed body is entered, and is a named JS frame
+    # (`sig_frames`).
+    ("functions", "calls", "s26_depth$sig", "s26_depth$sig"),
     # T4d: typed_i1 is an excluded tier.
     ("functions", "no-define", "isOdd$sig", None),
     # S6: the site holds two bodies (T0Set): neither is typed.
@@ -128,7 +131,25 @@ def compile_control(perry, name, keep):
     text = "".join(
         open(os.path.join(ll, f)).read() for f in sorted(os.listdir(ll)) if f.endswith(".ll")
     )
-    return functions(text)
+    return functions(text), text
+
+
+def sig_frames(text):
+    """Failures of the frame rule: a typed body is its function's frame, so
+    (as main's spec clones) it has a function record (`$info`) and, on x86_64
+    Linux, lives in the JS text section the `Error` capture reads."""
+    linux = sys.platform.startswith("linux") and os.uname().machine == "x86_64"
+    out = []
+    for line in text.splitlines():
+        m = DEFINE.match(line)
+        if not m or not m.group(1).strip('"').endswith("$sig"):
+            continue
+        name = m.group(1).strip('"')
+        if linux and 'section "perry_js_text"' not in line:
+            out.append(f"{name} is not in perry_js_text")
+        if f"@\"{name}$info\" =" not in text and f"@{name}$info =" not in text:
+            out.append(f"{name} has no $info record")
+    return out
 
 
 def check(fns, kind, subject, obj):
@@ -159,7 +180,7 @@ def main():
     keep = args[args.index("--keep") + 1] if "--keep" in args else tempfile.mkdtemp()
     failures = 0
     for name in ("functions", "methods"):
-        fns = compile_control(perry, name, keep)
+        fns, text = compile_control(perry, name, keep)
         if expect_off:
             sigs = sorted(n for n in fns if n.endswith("$sig"))
             ok = not sigs
@@ -172,6 +193,9 @@ def main():
             ok, what = check(fns, kind, subject, obj)
             print(("ok  " if ok else "FAIL"), name, what)
             failures += not ok
+        bad = sig_frames(text)
+        print(("ok  " if not bad else "FAIL"), name, "every $sig body is a named JS frame", bad[:5])
+        failures += bool(bad)
     print(f"p2-signature-controls: {failures} failure(s); IR in {keep}")
     sys.exit(1 if failures else 0)
 
