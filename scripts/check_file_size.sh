@@ -37,6 +37,8 @@ crates/perry-runtime/src/map.rs	3040
 crates/perry-runtime/src/set.rs	2347
 # Representation feedback core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/typed_feedback.rs	2437
+# Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
+crates/perry-runtime/src/snap_census/runner.rs	3572
 # Native ABI proof cases; test organization is a separate follow-up.
 crates/perry-codegen/tests/native_proof_regressions.rs	15680
 # Representation feedback regression cases; test organization is a separate follow-up.
@@ -51,8 +53,6 @@ crates/perry-stdlib/src/streams.rs	2409
 crates/perry-runtime/src/gc/policy.rs	2860
 # Shape registry table and publication invariants require a coordinated split.
 crates/perry-runtime/src/object/shapes.rs	4926
-# Qualified Turnloop snapshot; preserve upstream layout (third_party/turnloop/VENDORED.md).
-third_party/turnloop/turnloop/src/driver.rs	2287
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.

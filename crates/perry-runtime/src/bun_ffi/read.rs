@@ -95,9 +95,9 @@ unsafe fn read_value(kind: u8, pointer: f64, offset: f64) -> f64 {
             std::ptr::read_unaligned(pointer.cast::<u64>()),
         ),
         super::types::T_F32 => {
-            super::number_value(std::ptr::read_unaligned(pointer.cast::<f32>()) as f64)
+            super::float_value(std::ptr::read_unaligned(pointer.cast::<f32>()) as f64)
         }
-        super::types::T_F64 => super::number_value(std::ptr::read_unaligned(pointer.cast::<f64>())),
+        super::types::T_F64 => super::float_value(std::ptr::read_unaligned(pointer.cast::<f64>())),
         _ => super::undefined(),
     }
 }
