@@ -39,10 +39,19 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// names.
     pub named_serial: Option<u64>,
     pub instance_identity: Option<BuiltinInstanceIdentity>,
+    /// The family is born on first observation, not at realm setup: setup
+    /// allocates only the constructor (the realm's [[Intrinsics]] entry holds
+    /// it, and `globalThis.<name>` binds it); `realm_intrinsic_addr`, the one
+    /// materialize point, births the rest (`global_this::populate::birth_family`)
+    /// the first time the intrinsic prototype is asked for. The constructor
+    /// has no own property bag until then: its `length`, `name` and
+    /// `prototype` are the ordinary not-yet-materialized intrinsic slots, and
+    /// whatever needs the bag or the prototype births the family first.
+    pub lazy: bool,
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
@@ -83,6 +92,7 @@ macro_rules! builtin_constructors {
                 sealed_serial: builtin_constructors!(@optional $($sealed)?),
                 named_serial: builtin_constructors!(@optional $($named)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
+                lazy: builtin_constructors!(@callable $($lazy)?),
             },)*
         ];
     };

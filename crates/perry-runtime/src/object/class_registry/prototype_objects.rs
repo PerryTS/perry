@@ -6,17 +6,27 @@ pub(crate) fn ensure_function_prototype_object(func_value: f64) -> *mut ObjectHe
         return std::ptr::null_mut();
     }
     let func_ptr = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
-    if let Some(value) = crate::closure::closure_get_own_dynamic_prop(func_ptr, "prototype") {
+    let own_prototype = |func_ptr: usize| {
+        let value = crate::closure::closure_get_own_dynamic_prop(func_ptr, "prototype")?;
         let value = JSValue::from_bits(value.to_bits());
         if value.is_pointer() {
             let ptr = value.as_pointer::<ObjectHeader>() as usize;
             if unsafe { crate::value::addr_class::try_read_gc_header(ptr) }
                 .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
             {
-                return ptr as *mut ObjectHeader;
+                return Some(ptr as *mut ObjectHeader);
             }
         }
-        return std::ptr::null_mut();
+        Some(std::ptr::null_mut())
+    };
+    if let Some(proto) = own_prototype(func_ptr) {
+        return proto;
+    }
+    // An unborn lazy builtin family's constructor: its `prototype` is the
+    // realm's intrinsic, born with the constructor's bag.
+    // SAFETY: `is_callable_function_value` proved a live closure cell.
+    if unsafe { crate::object::birth_unborn_family_of(func_ptr) } {
+        return own_prototype(func_ptr).unwrap_or(std::ptr::null_mut());
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let func_handle = scope.root_nanbox_f64(func_value);

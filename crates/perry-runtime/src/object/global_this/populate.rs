@@ -262,7 +262,19 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         if closure_ptr.is_null() {
             continue;
         }
-        let ctor_value = birth_family(declaration, closure_ptr, &singleton, &mut birth);
+        // A lazy family keeps only its constructor at setup: the realm's
+        // [[Intrinsics]] entry holds it (prototype half 0) and the global
+        // binds it below; `birth_lazy_family` births the rest on first ask.
+        // Only the realm that owns the thread's entries defers: a later realm
+        // on the same thread (a `vm` context) births its families here.
+        let ctor_value = if declaration.lazy
+            && crate::array::intrinsic_constructor_addr_if_bound(declaration.identity) == 0
+        {
+            crate::array::note_realm_intrinsic(declaration.identity, 0, closure_ptr as usize);
+            crate::value::js_nanbox_pointer(closure_ptr as i64)
+        } else {
+            birth_family(declaration, closure_ptr, &singleton, &mut birth)
+        };
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         super::super::define_builtin_data_property(
@@ -666,10 +678,7 @@ pub(super) struct FamilyBirthState {
 /// One builtin family's birth after its constructor exists: the prototype,
 /// the constructor's own properties, the prototype's members and hooks, and
 /// the realm's [[Intrinsics]] entry. Returns the constructor value.
-// Inlined into its one caller exactly where the loop body was, and compacted
-// like that caller (`#[optimize(size)]`): the population compiles as before
-// the move.
-#[inline(always)]
+// Once per family, compacted like the population that calls it.
 #[optimize(size)]
 fn birth_family<S: Fn() -> *mut ObjectHeader>(
     declaration: &BuiltinConstructorDeclaration,
@@ -1015,6 +1024,89 @@ fn birth_family<S: Fn() -> *mut ObjectHeader>(
         },
     );
     ctor_value
+}
+
+crate::perry_thread_local! {
+    /// The lazy family this thread is birthing (its identity), 0 when none:
+    /// the birth's own bag install must not ask for the birth again.
+    static BIRTHING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Birth the `lazy` family `identity` (`BuiltinConstructorDeclaration::lazy`)
+/// in this thread's realm: everything realm setup did not do, by the same
+/// `birth_family` as an eager family, so the members are in declaration
+/// order whatever observation came first. Entered only from
+/// `array::realm_intrinsic_addr`, when the family's intrinsic prototype is
+/// still 0 after the realm exists. No-op while the realm has not bound the
+/// constructor yet (realm setup itself).
+#[cold]
+#[inline(never)]
+pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {
+    let declaration = identity.declaration();
+    debug_assert!(declaration.lazy);
+    let ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
+    if ctor == 0 || crate::array::intrinsic_prototype_addr_if_bound(identity) != 0 {
+        return;
+    }
+    // A member install that asks for its own family's prototype is a
+    // programming error: it would read the unfinished birth.
+    debug_assert_ne!(
+        BIRTHING.with(|c| c.get()),
+        identity as u8,
+        "{} asked for its own prototype during its birth",
+        declaration.name
+    );
+    let outer = BIRTHING.with(|c| c.replace(identity as u8));
+    // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
+    let _realm = crate::snap_census::realm_build();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let global = (js_get_global_this().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let bits =
+        |addr: usize| (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits());
+    let error = crate::object::BuiltinConstructorIdentity::Error;
+    let mut state = FamilyBirthState {
+        error_ctor_bits: bits(crate::array::intrinsic_constructor_addr_if_bound(error)),
+        error_proto_bits: bits(crate::array::intrinsic_prototype_addr_if_bound(error)),
+        typed_array_intrinsic_ctor: ensure_typed_array_intrinsic().0,
+    };
+    super::super::own_override::as_builtin_definition(|| {
+        birth_family(
+            declaration,
+            ctor as *mut crate::closure::ClosureHeader,
+            &|| global,
+            &mut state,
+        );
+    });
+    BIRTHING.with(|c| c.set(outer));
+}
+
+/// Birth the family of the closure at `ptr` when `ptr` is its realm's still
+/// unborn `lazy` constructor (which has no own property bag until then);
+/// true when it did. Every path that needs that constructor's bag or its
+/// `prototype` value asks this first; presence and key listing need neither.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn birth_unborn_family_of(ptr: usize) -> bool {
+    let word = (*(ptr as *const crate::closure::ClosureHeader)).capture_count;
+    word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK != 0 && birth_unborn_family_slow(ptr, word)
+}
+
+#[cold]
+#[inline(never)]
+fn birth_unborn_family_slow(ptr: usize, word: u32) -> bool {
+    let Some(identity) = crate::object::BuiltinConstructorIdentity::from_header(word) else {
+        return false;
+    };
+    if !identity.declaration().lazy
+        || BIRTHING.with(|c| c.get()) == identity as u8
+        || crate::array::intrinsic_prototype_addr_if_bound(identity) != 0
+        || crate::array::intrinsic_constructor_addr_if_bound(identity) != ptr
+    {
+        return false;
+    }
+    crate::array::intrinsic_prototype_addr(identity) != 0
 }
 
 fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
