@@ -1229,6 +1229,13 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
     /// counts as one inside its array's birth length (`arr_len_index`).
     pub arr_len_sabotage: bool,
+    /// PR-C1 (DESIGN-p4l1 §2.8): a computed-key read of a program Array
+    /// adds its past-the-end `undefined` through `Cons::ElemUndef`, not
+    /// unconditionally (`PERRY_FACTS_ELEM_UNDEF=0` turns it off).
+    pub elem_undef: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrundef`): `ElemUndef`
+    /// takes a key that reaches the length's lower bound as below it.
+    pub elem_undef_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.

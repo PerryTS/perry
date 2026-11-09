@@ -110,6 +110,7 @@ def main():
         ("element-read-negative", "arrlen", "proven element read"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
+        ("array-undef-negative", "arrundef", "element floor"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:

@@ -93,4 +93,61 @@ impl Model {
             self.arr_len_top(t);
         }
     }
+
+    /// PR-C1 (DESIGN-p4l1 §2.8): does a computed-key read of `t` take its
+    /// past-the-end `undefined` from `Cons::ElemUndef`? A program Array of
+    /// this unit whose birth recorded a length and whose length is not ⊤
+    /// yet. Any other token's read adds it at once, as before.
+    pub(crate) fn elem_undef_watched(&mut self, t: Tok) -> bool {
+        if !self.elem_undef || t == TOP || !self.is_arr(t) || self.is_marker(t) {
+            return false;
+        }
+        let TokKind::Obj(tm, _) = self.toks[t as usize] else {
+            return false;
+        };
+        if !self.arr_birth_len.contains_key(&tm) || self.foreign.contains_key(&tm) {
+            return false;
+        }
+        let n = self.arr_len(t);
+        !self.nodes[n as usize].range.is_top()
+    }
+
+    /// `Cons::ElemUndef`: the read of `t` under key node `key` into `dst`
+    /// may be at or past the end of `t` once its length is ⊤ or the key may
+    /// be anything but an integer Number below the length's lower bound
+    /// (Invariant L: the length never drops below it). Monotone: a length
+    /// only widens, a key only grows. A key with no value yet decides
+    /// nothing; the rule runs again when one arrives.
+    pub(crate) fn elem_undef(&mut self, t: Tok, key: NodeId, dst: NodeId) {
+        if self.nodes[dst as usize].prim & prim::UNDEF != 0 {
+            return;
+        }
+        if self.elem_in_floor(t, key) == Some(false) {
+            self.add_prim(dst, prim::UNDEF);
+        }
+    }
+
+    /// The `ElemUndef` verdict of reading `t` under `key` now: `Some(true)`
+    /// when every key is an integer in `[0, lo)` of `t`'s length interval
+    /// `[lo, hi]`, `None` while the key holds nothing. The negative control
+    /// `arrundef` admits a key that reaches `lo`.
+    pub(crate) fn elem_in_floor(&self, t: Tok, key: NodeId) -> Option<bool> {
+        let Some(&ln) = self.arr_len.get(&t) else {
+            return Some(false);
+        };
+        let len = self.nodes[ln as usize].range;
+        let k = self.range_input(key);
+        if k.is_empty() {
+            return None;
+        }
+        if len.is_top() || k.is_top() {
+            return Some(false);
+        }
+        let last = if self.elem_undef_sabotage {
+            len.lo
+        } else {
+            len.lo - 1
+        };
+        Some(k.lo >= 0 && k.hi <= last)
+    }
 }
