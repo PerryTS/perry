@@ -12,29 +12,8 @@ pub(crate) use own_keys::{OwnNamesSnapshot, OwnProperty};
 unsafe fn class_ref_wtf8_own_property(
     obj_value: f64,
     class_id: u32,
-    key_value: f64,
     name: &[u8],
 ) -> Option<OwnProperty> {
-    let is_prototype = super::class_prototype_ref_id(obj_value).is_some();
-    if is_prototype {
-        if super::class_registry::class_proto_key_deleted_bytes(class_id, name) {
-            return None;
-        }
-        if let Some(proto) =
-            super::class_registry::decl_prototype_own_accessor_bytes(class_id, name)
-        {
-            return own_property(proto, key_value);
-        }
-        if super::native_module::class_has_own_method_bytes(class_id, name) {
-            if let Some(value) =
-                super::class_registry::class_method_slot_value_bytes(class_id, name)
-            {
-                return OwnProperty::data(f64::from_bits(value), true, false, true);
-            }
-        }
-        return None;
-    }
-
     if super::class_registry::class_static_key_deleted_bytes(class_id, name) {
         return None;
     }
@@ -591,54 +570,39 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                 let method_name = match String::from_utf8(method_name_bytes.clone()) {
                     Ok(name) => name,
                     Err(_) => {
-                        return class_ref_wtf8_own_property(
-                            obj_value,
-                            class_id,
-                            key_value,
-                            &method_name_bytes,
-                        )
+                        return class_ref_wtf8_own_property(obj_value, class_id, &method_name_bytes)
                     }
                 };
-                if if class_prototype_ref_id(obj_value).is_some() {
-                    super::class_registry::class_proto_key_deleted(class_id, &method_name)
-                } else {
-                    super::class_registry::class_static_key_deleted(class_id, &method_name)
-                } {
+                if super::class_registry::class_static_key_deleted(class_id, &method_name) {
                     return None;
                 }
                 // Private registry entries retain their source spelling, but
                 // a public computed static field named `"#x"` is a distinct
                 // String property and must remain reflectable.
                 if method_name.starts_with('#') {
-                    if super::class_prototype_ref_id(obj_value).is_none() {
-                        if let Some(v) = super::class_registry::class_own_static_field_value(
-                            class_id,
-                            &method_name,
-                        ) {
-                            return OwnProperty::data(v, true, true, true);
-                        }
+                    if let Some(v) =
+                        super::class_registry::class_own_static_field_value(class_id, &method_name)
+                    {
+                        return OwnProperty::data(v, true, true, true);
                     }
                     return None;
                 }
-                if super::class_prototype_ref_id(obj_value).is_none() {
-                    if let Some((acc, attrs)) =
-                        super::class_registry::class_dynamic_static_accessor_descriptor(
-                            class_id,
-                            &method_name,
-                            obj_value,
-                        )
-                    {
-                        let undef = crate::value::TAG_UNDEFINED;
-                        return OwnProperty::accessor(
-                            f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
-                            f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
-                            attrs.enumerable(),
-                            attrs.configurable(),
-                        );
-                    }
+                if let Some((acc, attrs)) =
+                    super::class_registry::class_dynamic_static_accessor_descriptor(
+                        class_id,
+                        &method_name,
+                        obj_value,
+                    )
+                {
+                    let undef = crate::value::TAG_UNDEFINED;
+                    return OwnProperty::accessor(
+                        f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
+                        f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
                 }
                 if method_name == "name"
-                    && super::class_prototype_ref_id(obj_value).is_none()
                     && super::class_registry::lookup_static_method_in_chain(class_id, "name")
                         .is_none()
                     // #7190: an own static `name` — installed by
@@ -664,56 +628,28 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                         );
                     }
                 }
-                // Class accessors reflect as accessor descriptors. An instance
-                // `get x(){}` is a real accessor property of the declared
-                // prototype object, so a `C.prototype` ref reflects that
-                // object. A static accessor is an own property of `C` itself,
-                // whose raw func_ptrs are wrapped as callable function values.
-                if super::class_prototype_ref_id(obj_value).is_some() {
-                    if let Some(proto) =
-                        super::class_registry::decl_prototype_own_accessor(class_id, &method_name)
-                    {
-                        return own_property(proto, key_value);
-                    }
-                } else if let Some(desc) =
-                    crate::object::class_value::class_static_accessor_descriptor(
-                        class_id,
-                        &method_name,
-                    )
-                {
+                // A static accessor is an own property of `C` itself and
+                // reflects as an accessor descriptor, its raw func_ptrs
+                // wrapped as callable function values.
+                if let Some(desc) = crate::object::class_value::class_static_accessor_descriptor(
+                    class_id,
+                    &method_name,
+                ) {
                     return OwnProperty::public(desc);
-                }
-                if super::class_prototype_ref_id(obj_value).is_some()
-                    && (method_name == "constructor"
-                        || class_has_own_method(class_id, &method_name))
-                {
-                    let value = if method_name == "constructor"
-                        && !class_has_own_method(class_id, &method_name)
-                    {
-                        super::class_constructor_ref_value(class_id)
-                    } else {
-                        class_prototype_method_value_for_name(class_id, &method_name)
-                    };
-                    return OwnProperty::data(value, true, false, true);
                 }
                 // Own data properties, including `prototype`, live in the
                 // class function object's property bag. Read their actual
                 // values and shape attributes, never an encoded class ref.
-                if super::class_prototype_ref_id(obj_value).is_none() {
-                    if let Some(v) =
-                        super::class_registry::class_own_static_field_value(class_id, &method_name)
-                    {
-                        // #7190: a key installed by `Object.defineProperty`
-                        // reports the attributes it was defined with; a
-                        // declared `static x = …` field keeps (true, true, true).
-                        let (writable, enumerable, configurable) =
-                            super::class_registry::class_static_defined_attrs(
-                                class_id,
-                                &method_name,
-                            )
+                if let Some(v) =
+                    super::class_registry::class_own_static_field_value(class_id, &method_name)
+                {
+                    // #7190: a key installed by `Object.defineProperty`
+                    // reports the attributes it was defined with; a
+                    // declared `static x = …` field keeps (true, true, true).
+                    let (writable, enumerable, configurable) =
+                        super::class_registry::class_static_defined_attrs(class_id, &method_name)
                             .unwrap_or((true, true, true));
-                        return OwnProperty::data(v, writable, enumerable, configurable);
-                    }
+                    return OwnProperty::data(v, writable, enumerable, configurable);
                 }
             }
             return None;
@@ -1352,81 +1288,64 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             return f64::from_bits((out as u64) | 0x7FFD_0000_0000_0000);
         }
         if let Some(class_id) = class_ref_id(obj_value) {
-            let is_prototype_ref = super::class_prototype_ref_id(obj_value).is_some();
             // The class function object's own keys, in its bag's creation
             // order: a key deleted and defined again is a new key and comes
             // last, as for any object.
-            if !is_prototype_ref {
-                if let Some(fo) = crate::object::class_value::class_value_if_minted(class_id) {
-                    let ptr = fo as usize;
-                    // This agent's live class closure (the enclosing `unsafe`).
-                    let names = crate::closure::bag_own_key_names_bytes(ptr);
-                    let mut out: Vec<Vec<u8>> = Vec::new();
-                    for intrinsic in [b"length".as_slice(), b"name", b"prototype"] {
-                        if !names.iter().any(|n| n == intrinsic)
-                            && !crate::closure::closure_is_key_deleted(
-                                ptr,
+            if let Some(fo) = crate::object::class_value::class_value_if_minted(class_id) {
+                let ptr = fo as usize;
+                // This agent's live class closure (the enclosing `unsafe`).
+                let names = crate::closure::bag_own_key_names_bytes(ptr);
+                let mut out: Vec<Vec<u8>> = Vec::new();
+                for intrinsic in [b"length".as_slice(), b"name", b"prototype"] {
+                    if !names.iter().any(|n| n == intrinsic)
+                        && !crate::closure::closure_is_key_deleted(
+                            ptr,
+                            std::str::from_utf8(intrinsic).unwrap(),
+                        )
+                        && (intrinsic == b"prototype"
+                            || !super::class_registry::class_static_key_deleted(
+                                class_id,
                                 std::str::from_utf8(intrinsic).unwrap(),
-                            )
-                            && (intrinsic == b"prototype"
-                                || !super::class_registry::class_static_key_deleted(
-                                    class_id,
-                                    std::str::from_utf8(intrinsic).unwrap(),
-                                ))
-                        {
-                            out.push(intrinsic.to_vec());
-                        }
+                            ))
+                    {
+                        out.push(intrinsic.to_vec());
                     }
-                    for name in names {
-                        if name.starts_with(b"#")
-                            || super::field_get_set::is_internal_runtime_key_bytes(&name)
-                        {
-                            continue;
-                        }
-                        push_unique_name_bytes(&mut out, name);
-                    }
-                    sort_property_name_bytes_ecma(&mut out);
-                    let result = crate::array::js_array_alloc(out.len() as u32);
-                    for name in out {
-                        let str_ptr =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
-                    }
-                    return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
                 }
+                for name in names {
+                    if name.starts_with(b"#")
+                        || super::field_get_set::is_internal_runtime_key_bytes(&name)
+                    {
+                        continue;
+                    }
+                    push_unique_name_bytes(&mut out, name);
+                }
+                sort_property_name_bytes_ecma(&mut out);
+                let result = crate::array::js_array_alloc(out.len() as u32);
+                for name in out {
+                    let str_ptr =
+                        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
+                }
+                return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
             }
-            let mut names: Vec<Vec<u8>> = if is_prototype_ref {
-                vec![b"constructor".to_vec()]
-            } else {
-                vec![b"length".to_vec(), b"name".to_vec(), b"prototype".to_vec()]
-            };
-            for name in
-                super::class_registry::class_own_string_member_names(class_id, !is_prototype_ref)
-            {
-                let deleted = if is_prototype_ref {
-                    super::class_registry::class_proto_key_deleted_bytes(class_id, &name)
-                } else {
-                    super::class_registry::class_static_key_deleted_bytes(class_id, &name)
-                };
-                if !deleted {
+            let mut names: Vec<Vec<u8>> =
+                vec![b"length".to_vec(), b"name".to_vec(), b"prototype".to_vec()];
+            for name in super::class_registry::class_own_string_member_names(class_id, true) {
+                if !super::class_registry::class_static_key_deleted_bytes(class_id, &name) {
                     push_unique_name_bytes(&mut names, name);
                 }
             }
-            if !is_prototype_ref {
-                for name in super::class_registry::class_own_dynamic_prop_names(class_id) {
-                    push_unique_name_bytes(&mut names, name.into_bytes());
-                }
-                // Accessor properties a `defineProperty` added.
-                for name in crate::object::class_value::class_static_accessor_names_bytes(class_id)
-                {
-                    push_unique_name_bytes(&mut names, name);
-                }
+            for name in super::class_registry::class_own_dynamic_prop_names(class_id) {
+                push_unique_name_bytes(&mut names, name.into_bytes());
+            }
+            // Accessor properties a `defineProperty` added.
+            for name in crate::object::class_value::class_static_accessor_names_bytes(class_id) {
+                push_unique_name_bytes(&mut names, name);
             }
             names.retain(|n| {
                 !super::field_get_set::is_internal_runtime_key_bytes(n)
                     // A deleted `length` / `name` is no longer own.
-                    && !(!is_prototype_ref
-                        && (n.as_slice() == b"length" || n.as_slice() == b"name")
+                    && !((n.as_slice() == b"length" || n.as_slice() == b"name")
                         && super::class_registry::class_static_key_deleted_bytes(class_id, n))
             });
             sort_property_name_bytes_ecma(&mut names);

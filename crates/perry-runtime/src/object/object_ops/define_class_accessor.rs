@@ -1,23 +1,19 @@
-//! `Object.defineProperty` onto a DECLARED class accessor (#10480) reached
-//! through a class REF value: `C` (static accessors) or a `C.prototype` ref.
+//! `Object.defineProperty` onto a DECLARED static class accessor (#10480)
+//! reached through the class constructor `C`.
 //!
-//! An instance accessor is a real accessor property of the class's decl
-//! prototype, so a define through the prototype ref is the ordinary define on
-//! that object. A static accessor is an accessor property of the class
-//! function object's own-property object (`object::class_value`), attributes
-//! with its key.
+//! A static accessor is an accessor property of the class function object's
+//! own-property object (`object::class_value`), attributes with its key. (An
+//! instance accessor is a real accessor property of the class's decl
+//! prototype object, so a define on `C.prototype` is the ordinary define on
+//! that object and never reaches here.)
 use super::*;
 
-/// ValidateAndApplyPropertyDescriptor for the declared accessor `name` of
-/// `class_id` (`is_static` selects `C` over `C.prototype`).
+/// ValidateAndApplyPropertyDescriptor for the declared static accessor `name`
+/// of `class_id`.
 ///
 /// `None` means this is not a declared accessor definition and the caller's
 /// path decides; `Some(verdict)` is the definition's verdict.
 ///
-/// * Instance: when the prototype ref reflects `name` through the decl
-///   prototype (`decl_prototype_own_accessor`), the define applies to that
-///   object — attributes, replacement and conversion alike — and its verdict
-///   is returned.
 /// * Static, not a live declared accessor → `None`.
 /// * Static, current accessor non-configurable → the spec's rejections are
 ///   `Some(false)`, exactly as for any other property.
@@ -29,24 +25,9 @@ use super::*;
 ///   existing path is unchanged.
 pub(super) unsafe fn define_declared_class_accessor(
     class_id: u32,
-    is_static: bool,
     name: &str,
     descriptor: &DescView<'_>,
 ) -> Option<bool> {
-    if !is_static {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let Some(proto) = super::super::class_registry::decl_prototype_own_accessor(class_id, name)
-        else {
-            return None;
-        };
-        let proto = scope.root_nanbox_u64(proto.to_bits());
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
-        let key = scope.root_nanbox_f64(key);
-        return Some(super::define_own_property_decoded(
-            &scope, &proto, &key, descriptor,
-        ));
-    }
     let Some((acc, enumerable, configurable)) =
         crate::object::class_value::class_static_own_accessor(class_id, name)
     else {

@@ -261,6 +261,8 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 class_id,
                 &name,
                 class_value,
+                proto
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
             )
         });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
