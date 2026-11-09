@@ -1149,6 +1149,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// entry (internal linkage, named by `spec_function_name`). Mutually
     /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// P2 (DESIGN-p2 §3.2): typed class methods by HIR function id
+    /// (`signature_entry::select_methods`).
+    pub typed_methods: std::collections::HashMap<u32, super::signature_entry::TypedMethod>,
     /// Declared return types independently verified from the specialized
     /// body's guarded inputs and runtime-derived constructions. A direct call
     /// result may become a local proof only when its arguments also route to
