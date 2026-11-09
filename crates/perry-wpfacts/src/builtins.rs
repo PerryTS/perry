@@ -1291,7 +1291,7 @@ mod accessor_lookup;
 mod methods;
 pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
-pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
+pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// Whether the generated global object declares a callable under this key.
 pub(crate) fn global_function(m: &Model, name: &str) -> bool {
     m.namespace_property(BuiltinNs::GlobalThis, name)
