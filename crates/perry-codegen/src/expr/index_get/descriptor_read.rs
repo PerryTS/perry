@@ -47,8 +47,9 @@ fn enabled() -> bool {
 
 /// Negative controls (`PERRY_RECEIVER_COLD_ARM_SABOTAGE`): drop one step of
 /// the recipe. `reload`: no box reload after the slow arm; `guard`: the
-/// valid slot is not cleared by calls; `handle`: revalidation keeps the old
-/// handle. Each must make a fixture fail.
+/// valid slot is cleared neither by calls nor by the refresh; `clear`: only
+/// the clear at every call is dropped; `handle`: neither the refresh nor
+/// revalidation re-derives the handle. Each must make a fixture fail.
 fn sabotage(step: &str) -> bool {
     std::env::var("PERRY_RECEIVER_COLD_ARM_SABOTAGE").as_deref() == Ok(step)
 }
@@ -260,6 +261,12 @@ fn emit_cold_arm_refresh(ctx: &mut FnCtx<'_>) {
     for r in &recipes {
         let fresh = blk.load(DOUBLE, &r.refresh.source_root);
         blk.store(DOUBLE, &fresh, &r.refresh.rooted_box_slot);
+        // Design step 4: the handle follows the reloaded box.
+        if !sabotage("handle") {
+            let bits = blk.bitcast_double_to_i64(&fresh);
+            let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+            blk.store(I64, &handle, &r.refresh.base_handle_slot);
+        }
         if !sabotage("guard") {
             blk.store(I8, "0", &r.valid_slot);
         }
@@ -341,27 +348,24 @@ fn loop_writes(stmts: &[Stmt], controls: &[&Expr], out: &mut std::collections::H
 }
 
 /// Every element read in the loop, with its receiver binding.
-fn candidate_reads(stmts: &[Stmt], controls: &[&Expr]) -> Vec<(u32, usize)> {
-    let mut out = Vec::new();
-    let mut visit = |e: &Expr| {
+fn candidate_reads<'a>(stmts: &'a [Stmt], controls: &[&'a Expr]) -> Vec<(u32, &'a Expr)> {
+    fn walk<'a>(e: &'a Expr, out: &mut Vec<(u32, &'a Expr)>) {
         if let Expr::IndexGet { object, .. } = e {
             if let Expr::LocalGet(id) = object.as_ref() {
-                out.push((*id, e as *const Expr as usize));
+                out.push((*id, e));
             }
         }
-    };
-    fn walk(e: &Expr, f: &mut dyn FnMut(&Expr)) {
-        f(e);
-        perry_hir::walker::walk_expr_children(e, &mut |c| walk(c, f));
+        perry_hir::walker::walk_expr_children(e, &mut |c| walk(c, out));
     }
+    let mut out = Vec::new();
     for s in stmts {
         perry_hir::walker::stmt_any_expr(s, &mut |e| {
-            walk(e, &mut visit);
+            walk(e, &mut out);
             false
         });
     }
     for c in controls {
-        walk(c, &mut visit);
+        walk(c, &mut out);
     }
     out
 }
@@ -418,10 +422,8 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
     for &id in &receivers {
         let trusted: Vec<usize> = reads
             .iter()
-            .filter(|(r, addr)| {
-                *r == id && read_shape(ctx, unsafe { &*(*addr as *const Expr) }, id)
-            })
-            .map(|(_, addr)| *addr)
+            .filter(|(r, e)| *r == id && read_shape(ctx, e, id))
+            .map(|(_, e)| *e as *const Expr as usize)
             .collect();
         if trusted.is_empty() {
             continue;
@@ -429,12 +431,15 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
         let Some((rooted, handle, source)) =
             crate::stmt::create_poll_refreshed_receiver_cache(ctx, id)
         else {
-            continue;
+            // Its reads were classified as cold arms: without its own
+            // descriptor they would be ordinary calls no refresh covers.
+            uninstall(ctx, Installed(installed));
+            return Installed::none();
         };
         let valid = ctx.func.alloca_entry(I8);
         ctx.func.entry_allocas_push_store(I8, "0", &valid);
         ctx.block().store(I8, "0", &valid);
-        if !sabotage("guard") {
+        if !sabotage("guard") && !sabotage("clear") {
             ctx.func
                 .reg_counter()
                 .push_byte_access_dirty_slot(valid.clone());
@@ -450,9 +455,12 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
             trusted,
         ) {
             Ok(true) => installed.push(id),
-            // A duplicate, or a fact the cold arm would stale: the reads
-            // keep the ordinary route.
-            Ok(false) | Err(_) => {}
+            // A duplicate, or a fact the cold arm would stale: no receiver
+            // of this loop gets a descriptor (all or nothing, REVIEW R5).
+            Ok(false) | Err(_) => {
+                uninstall(ctx, Installed(installed));
+                return Installed::none();
+            }
         }
     }
     Installed(installed)
