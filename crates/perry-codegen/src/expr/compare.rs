@@ -1437,6 +1437,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                 let l = operand_value(ctx, &left_literal);
                 let r = operand_value(ctx, &right_literal);
+                // SNAPK2b census (instrumented compiles only): the hook reads
+                // the two values this compare reads, here, where they are
+                // live. A numeric-literal operand is never a string, so that
+                // compare keeps no row and emits none.
+                if left_literal.is_none() && right_literal.is_none() {
+                    super::snap_compare_site::emit(ctx, *op, left, right, &l, &r);
+                }
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values
                 // are unordered under fcmp (NaN), so `a > b` on two bigints
                 // always returns false. Route through js_bigint_cmp which

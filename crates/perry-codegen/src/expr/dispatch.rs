@@ -31,7 +31,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     crate::expr::layout_read::run_enter(ctx, &run);
     let value = lower_expr_inner(ctx, expr)?;
     crate::expr::layout_read::run_exit(ctx, &run);
-    crate::expr::snap_compare_site::lowered(ctx, expr, &value);
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(
             DOUBLE,
@@ -55,7 +54,6 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // expression stores is a store site (`expr/snap_env_site.rs`).
     super::snap_env_site::note_store_parent(ctx, expr);
     super::snap_argv_site::note_parent(expr);
-    super::snap_compare_site::note_parent(expr);
     // #9856: under `--debug-symbols`, record this expression's source line
     // for the DWARF line table (`crate::debug_info`). No-op otherwise.
     crate::debug_info::mark_expr_location(ctx, expr);
