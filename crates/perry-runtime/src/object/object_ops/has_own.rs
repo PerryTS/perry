@@ -184,16 +184,11 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         if crate::symbol::js_is_symbol(key_value) != 0 {
             let sym_key = crate::symbol::sym_key_from_f64(key_value);
             if let Some(class_id) = super::super::class_ref_id(obj_value) {
-                let is_prototype = super::super::class_prototype_ref_id(obj_value).is_some();
-                let present = if is_prototype {
-                    let proto = super::super::class_registry::class_decl_prototype_value(class_id);
-                    crate::symbol::js_object_has_own_symbol(proto, key_value)
-                } else {
-                    crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some()
-                        || super::super::class_registry::class_has_own_symbol_member(
-                            class_id, sym_key, true,
-                        )
-                };
+                let present = crate::symbol::class_static_symbol_lookup(class_id, key_value)
+                    .is_some()
+                    || super::super::class_registry::class_has_own_symbol_member(
+                        class_id, sym_key, true,
+                    );
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
             let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
@@ -634,28 +629,24 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // `verifyProperty(C, "f", …)`'s isEnumerable check failed (test262
         // class/elements static-field-declaration & friends).
         if let Some(class_id) = super::super::class_ref_id(obj_value) {
-            if super::super::class_prototype_ref_id(obj_value).is_none() {
-                if let Some(key_name) =
-                    super::super::has_own_helpers::str_from_string_header(key_str)
-                {
-                    let is_static_field =
-                        !super::super::field_get_set::is_internal_runtime_key(key_name)
-                            && super::super::class_registry::class_own_static_field_value(
-                                class_id, key_name,
-                            )
-                            .is_some();
-                    // #10480: a declared static accessor is non-enumerable by
-                    // ClassBody default, but a generic descriptor can flip it
-                    // (Object.defineProperty(C, "x", { enumerable: true })).
-                    let is_enumerable_static_accessor =
-                        crate::object::class_value::class_static_own_accessor(class_id, key_name)
-                            .is_some_and(|(_, enumerable, _)| enumerable);
-                    return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
-                        TAG_TRUE
-                    } else {
-                        TAG_FALSE
-                    });
-                }
+            if let Some(key_name) = super::super::has_own_helpers::str_from_string_header(key_str) {
+                let is_static_field =
+                    !super::super::field_get_set::is_internal_runtime_key(key_name)
+                        && super::super::class_registry::class_own_static_field_value(
+                            class_id, key_name,
+                        )
+                        .is_some();
+                // #10480: a declared static accessor is non-enumerable by
+                // ClassBody default, but a generic descriptor can flip it
+                // (Object.defineProperty(C, "x", { enumerable: true })).
+                let is_enumerable_static_accessor =
+                    crate::object::class_value::class_static_own_accessor(class_id, key_name)
+                        .is_some_and(|(_, enumerable, _)| enumerable);
+                return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
+                    TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
             }
         }
 

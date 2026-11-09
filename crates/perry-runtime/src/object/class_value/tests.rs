@@ -6,7 +6,6 @@ fn static_property_lookups_do_not_mint_builtin_class_values() {
         assert!(class_static_get(cid, "from").is_none());
         assert!(class_static_own_accessor(cid, "from").is_none());
         assert!(crate::object::class_registry::class_static_prototype(cid).is_null());
-        assert!(!crate::object::class_registry::class_static_prototype_is_nulled(cid));
         assert!(class_value_cached(cid).is_none());
     }
 }
@@ -521,8 +520,9 @@ fn first_evaluation_receives_its_heritage_before_later_evaluations() {
 }
 
 /// #11414: an INT32 word is a number, also when it equals a registered class
-/// id; only the class function object names the class, and the `C.prototype`
-/// ref word (bit 32 set, never an int32 number) keeps naming its class.
+/// id; only the class function object names the class. A method's home word
+/// (bit 32 set, never an int32 number) is runtime-internal and names no class
+/// as a value either.
 #[test]
 fn an_int32_equal_to_a_registered_class_id_is_a_number() {
     let cid = 0x6A10;
@@ -533,9 +533,10 @@ fn an_int32_equal_to_a_registered_class_id_is_a_number() {
     assert_eq!(class_ref_word(int.to_bits()), None);
     assert_eq!(crate::object::class_ref_id(int), None);
     assert_eq!(class_ref_word(class.to_bits()), Some(cid));
-    let proto_ref = crate::object::class_prototype_ref_value(cid);
-    assert_eq!(class_ref_word(proto_ref.to_bits()), Some(cid));
-    assert_eq!(class_value_id(proto_ref), None);
+    let home = crate::object::class_method_home_word(cid);
+    assert_eq!(class_ref_word(home.to_bits()), None);
+    assert_eq!(crate::object::class_ref_id(home), None);
+    assert_eq!(class_value_id(home), None);
     assert!(matches!(
         crate::builtins::arithmetic::classify_value_typeof(int),
         crate::builtins::arithmetic::ValueTypeofTag::Number

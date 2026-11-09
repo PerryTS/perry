@@ -920,12 +920,6 @@ fn class_recorded_prototype_bits(class_id: u32) -> Option<u64> {
         .then_some(actual)
 }
 
-/// True when `Object.setPrototypeOf(Ctor, null)` explicitly severed the
-/// constructor's prototype chain, as opposed to never having linked one.
-pub(crate) fn class_static_prototype_is_nulled(class_id: u32) -> bool {
-    class_recorded_prototype_bits(class_id) == Some(crate::value::TAG_NULL)
-}
-
 /// The constructor-side `[[Prototype]]` recorded for `class_id`, or null.
 pub(crate) fn class_static_prototype(class_id: u32) -> *mut ObjectHeader {
     match class_recorded_prototype_bits(class_id) {
@@ -1415,7 +1409,7 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
 /// is a ConstFn lane (step 5C), and a later store of anything else to it
 /// generalizes the lane through the store check.
 fn learn_decl_prototype_method_lanes(proto: *mut ObjectHeader, class_id: u32) {
-    let home = super::super::class_prototype_ref_value(class_id).to_bits();
+    let home = super::super::class_method_home_word(class_id).to_bits();
     unsafe {
         crate::object::shapes::learn_object_constfn_lanes(proto, |_, bits| {
             class_method_entry_object_of(bits, home)

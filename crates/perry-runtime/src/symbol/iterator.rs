@@ -45,10 +45,6 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         return (arr.to_bits() & POINTER_MASK) as i64;
     }
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
-        if crate::object::class_prototype_ref_id(obj_f64).is_some() {
-            let proto = crate::object::class_decl_prototype_value(class_id);
-            return js_object_get_own_property_symbols(proto);
-        }
         let mut entries = class_static_symbol_keys_for_class(class_id);
         let mut arr = crate::array::js_array_alloc(entries.len() as u32);
         for sym_ptr_usize in entries.drain(..) {

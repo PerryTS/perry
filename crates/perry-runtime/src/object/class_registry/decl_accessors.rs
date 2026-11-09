@@ -119,33 +119,6 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str, newly
     }
 }
 
-/// The object a `C.prototype` ref value (`class_prototype_ref_value`) reflects
-/// the accessor key `name` through: the decl prototype of `class_id`
-/// (materialized on demand) when the ClassBody declares an accessor `name`
-/// that `delete` has not removed, or the prototype holds one now. `getOwnPropertyDescriptor` / `defineProperty`
-/// / `delete` on the ref then apply to that object's real property — whatever
-/// a `defineProperty` or `delete` has made of it — so the ref and the object
-/// never disagree. `None` for every other key.
-pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f64> {
-    decl_prototype_own_accessor_bytes(class_id, name.as_bytes())
-}
-
-pub(crate) fn decl_prototype_own_accessor_bytes(class_id: u32, name: &[u8]) -> Option<f64> {
-    let proto = class_decl_prototype_value(class_id);
-    let js = crate::JSValue::from_bits(proto.to_bits());
-    if !js.is_pointer() {
-        return None;
-    }
-    let obj = js.as_pointer::<ObjectHeader>();
-    // The live shape alone decides whether the key is an accessor. A
-    // declaration cannot resurrect a deleted or replaced property.
-    let holds = unsafe {
-        crate::object::key_attrs::attrs_live_in_keys(obj as usize)
-            && crate::object::key_attrs::object_key_is_accessor(obj, name)
-    };
-    holds.then_some(proto)
-}
-
 /// The accessor a read or write of `name` on an instance of `class_id` meets
 /// on the prototype chain, with the object that holds it: the class's decl
 /// prototype (materialized on demand) and its ancestors, stopping at the first
@@ -305,34 +278,6 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[
         cur = next;
     }
     true
-}
-
-/// `[[Get]]` of `name` through the class prototype chain.
-/// `None` when no accessor answers (the caller
-/// keeps resolving), otherwise the getter's result — `undefined` for a
-/// setter-only accessor. `this_of` supplies the receiver and is called only
-/// when an accessor answers (it may consume the inherited-read receiver
-/// override). A compiled class getter is called directly; a getter installed
-/// by `defineProperty` runs as a closure.
-///
-/// # Safety
-/// `this_of` returns a live receiver.
-pub(crate) unsafe fn class_chain_getter_value(
-    class_id: u32,
-    name: &str,
-    this_of: impl FnOnce() -> f64,
-) -> Option<(crate::JSValue, usize)> {
-    let acc = class_proto_accessor(class_id, name)?.1;
-    Some(invoke_instance_getter(acc, this_of()))
-}
-
-pub(crate) unsafe fn class_chain_getter_value_bytes(
-    class_id: u32,
-    name: &[u8],
-    this_of: impl FnOnce() -> f64,
-) -> Option<(crate::JSValue, usize)> {
-    let acc = class_proto_accessor_bytes(class_id, name)?.1;
-    Some(invoke_instance_getter(acc, this_of()))
 }
 
 /// Generic instance read, resolved through the receiver's current chain.

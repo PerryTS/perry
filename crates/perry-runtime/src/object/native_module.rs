@@ -1420,8 +1420,8 @@ include!("native_module/class_method_values.rs");
 /// symbol method has no string name to re-resolve at call time, so the
 /// closure instead carries the already-resolved dispatch data in two extra
 /// capture slots:
-///   slot 0: receiver (NaN-boxed instance/prototype-ref, or the INT32 class
-///           ref for a static method)
+///   slot 0: receiver (NaN-boxed instance, or the class constructor for a
+///           static method)
 ///   slot 1: `SYMBOL_BOUND_METHOD_NAME.as_ptr()` — the discriminant, compared
 ///           by ADDRESS in `dispatch_bound_method`, never by content
 ///   slot 2: `SYMBOL_BOUND_METHOD_NAME.len()`
@@ -1524,23 +1524,7 @@ pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
         return false;
     }
     let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
-    (class_ref_id(captured).is_some() && class_prototype_ref_id(captured).is_none())
-        || class_registry::is_class_object_value(captured)
-}
-
-pub(crate) fn canonical_bound_method_receiver(
-    captured: f64,
-    call_this: crate::closure::JsThis,
-) -> f64 {
-    if class_prototype_ref_id(captured).is_some() {
-        // The captured prototype identifies the method's owner, not its receiver.
-        // Class methods are strict: every call-site value, including null,
-        // undefined, primitives and arrays, must reach the body unchanged.
-        // Dispatch resolves the body from the captured owner independently.
-        call_this.as_f64()
-    } else {
-        captured
-    }
+    class_ref_id(captured).is_some() || class_registry::is_class_object_value(captured)
 }
 
 /// The `class_id` of `instance`, when `instance` really is a class instance.
@@ -1573,7 +1557,7 @@ fn class_id_from_method_receiver_known(instance: f64, class_ref: Option<u32>) ->
             // the call-site `this` was the `assert` function) would mis-substitute the
             // function object as the receiver and dispatch `assert.method(...)`
             // instead of `C.prototype.method`, bypassing the generator wrapper's
-            // param prologue. See `canonical_bound_method_receiver`.
+            // param prologue. See `dispatch_bound_method`.
             if crate::closure::is_closure_ptr(obj as usize) {
                 return None;
             }
