@@ -103,9 +103,7 @@ pub(crate) fn emit_typed_i32_guard_and_raw(
     use crate::types::{I1, I32, I64};
 
     let bits = blk.bitcast_double_to_i64(value);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_tagged = super::emit_int32_bits_test(blk, &bits);
 
     let (plain_ok, plain_raw) = emit_typed_i32_plain_guard_and_raw(blk, value, &bits);
     let admitted = blk.or(I1, &is_tagged, &plain_ok);
@@ -125,9 +123,7 @@ pub(crate) fn emit_typed_i32_raw_assuming_guarded(
     use crate::types::{DOUBLE, I1, I32, I64};
 
     let bits = blk.bitcast_double_to_i64(value);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_tagged = super::emit_int32_bits_test(blk, &bits);
     let safe_plain = blk.select(I1, &is_tagged, DOUBLE, "0.0", value);
     let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
     let tagged_raw = blk.trunc(I64, &bits, I32);
@@ -292,9 +288,7 @@ pub(crate) fn emit_typed_f64_guard(blk: &mut crate::block::LlBlock, arg: &str) -
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
     );
     // JSValue::is_int32: the INT32 tag with any payload.
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_int32 = super::emit_int32_bits_test(blk, &bits);
     blk.or(I1, &is_plain_number, &is_int32)
 }
 
@@ -305,9 +299,7 @@ pub(crate) fn emit_typed_f64_guard(blk: &mut crate::block::LlBlock, arg: &str) -
 pub(crate) fn emit_typed_f64_to_raw_guarded(blk: &mut crate::block::LlBlock, arg: &str) -> String {
     use crate::types::{DOUBLE, I1, I32, I64};
     let bits = blk.bitcast_double_to_i64(arg);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let is_int32 = super::emit_int32_bits_test(blk, &bits);
     let low = blk.trunc(I64, &bits, I32);
     let converted = blk.sitofp(I32, &low, DOUBLE);
     blk.select(I1, &is_int32, DOUBLE, &converted, arg)

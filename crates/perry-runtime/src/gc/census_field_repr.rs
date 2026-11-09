@@ -41,7 +41,8 @@ const C_NUMBER: u8 = C_INT32 | C_DOUBLE | C_NAN_INF;
 pub(super) fn value_class(bits: u64) -> u8 {
     use crate::value::*;
     match bits & TAG_MASK {
-        INT32_TAG => C_INT32,
+        INT32_TAG if crate::value::is_int32_bits(bits) => C_INT32,
+        INT32_TAG => C_OTHER,
         POINTER_TAG | STRING_TAG | SHORT_STRING_TAG | BIGINT_TAG | JS_HANDLE_TAG | TAG_MARKER => {
             C_OTHER
         }
@@ -233,5 +234,11 @@ mod tests {
         let s = census(&[(9, &slots)]);
         assert_eq!(s["f64_slots"], REP_SLOTS as u64);
         assert_eq!(s["f64_nan_inf"], 0);
+    }
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_c_int32() {
+        assert_eq!(value_class(0x7FFE_0001_0000_0005), C_OTHER);
+        assert_eq!(value_class(0x7FFE_00FF_0000_0001), C_OTHER);
     }
 }

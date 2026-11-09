@@ -176,8 +176,12 @@ fn is_truthy_bits(bits: u64) -> bool {
         return true;
     }
     // INT32_TAG: check if value is 0
-    if (bits & TAG_MASK) == INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         return (bits & INT32_MASK) != 0;
+    }
+    // Any other `0x7FFE` word (a `C.prototype` ref) is an object: truthy.
+    if (bits & TAG_MASK) == INT32_TAG {
+        return true;
     }
     // String: empty string is falsy (check length == 0)
     if (bits & TAG_MASK) == STRING_TAG {
@@ -1470,3 +1474,7 @@ mod error_stack_clone_tests;
 #[cfg(test)]
 #[path = "thread/error_cause_clone_tests.rs"]
 mod error_cause_clone_tests;
+
+#[cfg(test)]
+#[path = "thread_int32_exact_tests.rs"]
+mod int32_exact_tests;

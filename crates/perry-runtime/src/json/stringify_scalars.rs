@@ -30,7 +30,7 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     // the sqlite binding (and other int32-tagged numbers) funnel here; numeric
     // literals are stored as plain f64 doubles by codegen and never take this
     // branch. Mirrors the BigInt funnel above.
-    if (value.to_bits() & 0xFFFF_0000_0000_0000) == INT32_TAG {
+    if crate::value::is_int32_bits(value.to_bits()) {
         let n = (value.to_bits() & INT32_MASK) as u32 as i32;
         let mut itoa_buf = itoa::Buffer::new();
         super::stringify_copy::push_str(buf, itoa_buf.format(n));

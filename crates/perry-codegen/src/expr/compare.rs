@@ -766,12 +766,8 @@ fn lower_strict_eq_inline_any(
         .block()
         .icmp_eq(I64, &r_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
     let both_sso = ctx.block().and(I1, &l_sso, &r_sso);
-    let l_i32 = ctx
-        .block()
-        .icmp_eq(I64, &l_tag, crate::nanbox::INT32_TAG_TOP16_I64);
-    let r_i32 = ctx
-        .block()
-        .icmp_eq(I64, &r_tag, crate::nanbox::INT32_TAG_TOP16_I64);
+    let l_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &l_bits);
+    let r_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &r_bits);
     let both_i32 = ctx.block().and(I1, &l_i32, &r_i32);
     let canonical = ctx.block().or(I1, &both_sso, &both_i32);
     ctx.block().cond_br(&canonical, &false_l, &slow_l);
@@ -826,10 +822,7 @@ fn is_plain_number_or_undefined(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// participate in the numeric comparison.
 fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let bits = ctx.block().bitcast_double_to_i64(value);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
+    let is_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
     let raw = ctx.block().trunc(I64, &bits, I32);
     let decoded = ctx.block().sitofp(I32, &raw, DOUBLE);
     ctx.block().select(I1, &is_i32, DOUBLE, &decoded, value)
@@ -881,10 +874,7 @@ fn lower_strict_eq_against_number(
     let compact = if plain {
         None
     } else {
-        let tag = ctx.block().lshr(I64, &bits, "48");
-        let is_i32 = ctx
-            .block()
-            .icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
+        let is_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
         let integer = ctx
             .block()
             .call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, number)]);
@@ -946,13 +936,10 @@ fn lower_relational_against_number(
 ) -> String {
     let dynamic = if dynamic_is_left { l } else { r };
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
     // Use the same raw-Number admission as the fully dynamic comparison.
     // Negative IEEE values and canonical NaNs precede the positive tag band.
     let is_plain_number = emit_is_unboxed_number(ctx, &bits);
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
+    let is_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
     // undefined/null/false/true are four consecutive immediate values.
     // A range decides admission without separately classifying each value.
     debug_assert_eq!(crate::nanbox::TAG_UNDEFINED + 3, crate::nanbox::TAG_TRUE);
