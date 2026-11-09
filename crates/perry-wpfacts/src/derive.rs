@@ -177,6 +177,9 @@ pub struct SiteFacts {
     /// A call site: the bodies its callee set holds (every body, sorted;
     /// empty when the set holds anything that is not a body).
     pub targets: Vec<String>,
+    /// The HIR identity `(module, function id)` of each body in `targets`,
+    /// sorted (`field_read_calls`).
+    pub(crate) target_fns: Vec<(u32, u32)>,
     /// Per-unit run: the receiver is a parameter whose TS object type
     /// names these keys; its verdict is decided after the census
     /// (`units::typed_param_verdicts`).
@@ -1265,6 +1268,12 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 })
                 .collect::<Vec<_>>()
         });
+        let mut target_fns: Vec<(u32, u32)> = targets
+            .keys()
+            .map(|&f| (m.funcs[f as usize].module, m.funcs[f as usize].func_id))
+            .collect();
+        target_fns.sort_unstable();
+        target_fns.dedup();
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
         t.dedup();
@@ -1295,6 +1304,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             verdict,
             fixed_shape,
             targets: t,
+            target_fns,
             guard_keys,
         });
     }

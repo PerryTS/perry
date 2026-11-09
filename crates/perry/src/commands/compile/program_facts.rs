@@ -532,6 +532,24 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
         out.number_calls.extend(mb.number_calls.iter().copied());
+        for (offset, c) in &mb.field_read_calls {
+            let default = match &c.default {
+                None => None,
+                Some(perry_wpfacts::FieldReadDefault::Number(bits)) => Some(*bits),
+                // Codegen applies a Number default only.
+                Some(_) => continue,
+            };
+            out.field_read_calls.insert(
+                *offset,
+                perry_codegen::FactsFieldReadCall {
+                    field: c.field.clone(),
+                    index_arg: c.index_arg,
+                    default,
+                    element_offset: c.element_offset,
+                    field_offset: c.field_offset,
+                },
+            );
+        }
         if element_reads_enabled() {
             for (offset, r) in &mb.element_reads {
                 out.element_reads.insert(
