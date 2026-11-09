@@ -969,6 +969,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     if crate::expr::snap_env_site::census_compile() {
         module.declare_function("js_snap_env_site", VOID, &[I32]);
         module.declare_function("js_snap_argv_site", VOID, &[I32, I64]);
+        module.declare_function("js_snap_compare_literal", VOID, &[I32, DOUBLE, DOUBLE, I32]);
         module.declare_function("js_snap_require_edge", VOID, &[I32]);
     }
     // #1344: process.env.X = v / delete process.env.X.

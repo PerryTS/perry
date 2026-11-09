@@ -126,7 +126,14 @@ pub(super) fn event(st: &mut State, op: &str, value: String) -> u64 {
                 | "host_value.held"
         )
     {
-        st.entry_rows.push((seq, op.to_owned()));
+        // SNAPK2b: the argv grain P-reach narrows (`init_enter`).
+        let label = match op {
+            "argv.read" if value.starts_with("escape") => "argv.escape",
+            "host_value" if value.starts_with("what=argv;") => "host_value.argv",
+            "compare_literal" if value.contains(";src=argv") => "compare_literal.argv",
+            _ => op,
+        };
+        st.entry_rows.push((seq, label.to_owned()));
     }
     let mut row = format!("{seq}\t{ir}\t{init}\t");
     for (i, f) in st.frames.iter().enumerate() {

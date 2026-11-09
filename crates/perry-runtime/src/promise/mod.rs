@@ -729,6 +729,13 @@ pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
 
 }
 
+/// SNAPK2b census: the promise jobs queued and not yet run (None while the
+/// queue is being changed).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_pending_jobs() -> Option<usize> {
+    TASK_QUEUE.with(|q| q.try_borrow().ok().map(|q| q.len()))
+}
+
 pub(crate) fn enqueue_queue_microtask(callback: i64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =

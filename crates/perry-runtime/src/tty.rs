@@ -632,6 +632,22 @@ fn color_depth_for_env(env: ColorEnv<'_>) -> u8 {
     color_depth_from_lookup(|name| env.get(name))
 }
 
+/// Whether text styled for `process.stdout` gets its escapes: node's
+/// `shouldColorize(process.stdout)`. With `FORCE_COLOR` set it is
+/// `getColorDepth() > 2`; otherwise stdout must be a tty and
+/// `getColorDepth() > 2` (`NO_COLOR`, `NODE_DISABLE_COLORS` and
+/// `TERM=dumb` give depth 1). One funnel: the SNAP guard computes the same
+/// bit at startup that the run computes here (DESIGN27 §3 member 6).
+pub(crate) fn stdout_style_bit() -> bool {
+    crate::snap_funnel!(StyleBit);
+    let depth = color_depth_for_env(ColorEnv::process());
+    let tty = std::env::var_os("FORCE_COLOR").is_some() || is_tty_fd(1);
+    let bit = tty && depth > 2;
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::style_bit(bit, tty, depth);
+    bit
+}
+
 fn has_colors_for_depth(count: f64, depth: u8) -> bool {
     count <= 2_f64.powi(depth as i32)
 }

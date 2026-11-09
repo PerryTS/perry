@@ -283,7 +283,7 @@ mod walk {
     extern "C" fn js_text_anchor() {}
 
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-    fn js_text_bounds() -> (usize, usize) {
+    pub(super) fn js_text_bounds() -> (usize, usize) {
         unsafe extern "C" {
             static __start_perry_js_text: u8;
             static __stop_perry_js_text: u8;
@@ -453,7 +453,7 @@ fn capture_encoded(
         return crate::snap_census::input_call("stack.capture", &format!("{:?}", (want,)), || {
             let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
             let n = walk::capture_js(origin, &mut pcs, want);
-            crate::snap_census::pc_check(&pcs[..n]);
+            crate::snap_census::pc_check(&pcs[..n], walk::js_text_bounds());
             if diag_enabled() {
                 eprintln!(
                     "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",

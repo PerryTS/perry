@@ -826,6 +826,18 @@ struct State {
     /// P-reach (`PERRY_SNAP_PREACH=0` off): an init an entry reaches by
     /// `import()`/`require` names the entry's inputs read before it.
     p_reach_rule: bool,
+    /// SNAPK2b (DESIGN27 §1.1, §1.2, §1.5, §3), each with its off knob:
+    /// `compare_literal` predicate rows and the P-reach argv narrowing
+    /// (`PERRY_SNAP_CMPLIT=0`), the `stdout_style_bit` row
+    /// (`PERRY_SNAP_STYLE=0`), the job-queue check (`PERRY_SNAP_JOBQ=0`),
+    /// the open-frame row (`PERRY_SNAP_OPENF=0`), the runtime-pc STOP
+    /// (`PERRY_SNAP_RTPC=0`) and the worker-flag STOP (`PERRY_SNAP_WORKER=0`).
+    pub(super) cmplit_rule: bool,
+    pub(super) style_rule: bool,
+    jobq_rule: bool,
+    openf_rule: bool,
+    pub(super) rtpc_rule: bool,
+    worker_rule: bool,
     /// Words an entry read (P-entry (b)).
     er: WordSet,
     /// Words whose last writer is an entry (P-entry (a)). `w`/`wby` cannot
@@ -1081,6 +1093,12 @@ unsafe fn start_census(out: String) {
         host_rule: !std::env::var("PERRY_SNAP_HOST").is_ok_and(|v| v == "0"),
         p_entry_rule: !std::env::var("PERRY_SNAP_PENTRY").is_ok_and(|v| v == "0"),
         p_reach_rule: !std::env::var("PERRY_SNAP_PREACH").is_ok_and(|v| v == "0"),
+        cmplit_rule: !std::env::var("PERRY_SNAP_CMPLIT").is_ok_and(|v| v == "0"),
+        style_rule: !std::env::var("PERRY_SNAP_STYLE").is_ok_and(|v| v == "0"),
+        jobq_rule: !std::env::var("PERRY_SNAP_JOBQ").is_ok_and(|v| v == "0"),
+        openf_rule: !std::env::var("PERRY_SNAP_OPENF").is_ok_and(|v| v == "0"),
+        rtpc_rule: !std::env::var("PERRY_SNAP_RTPC").is_ok_and(|v| v == "0"),
+        worker_rule: !std::env::var("PERRY_SNAP_WORKER").is_ok_and(|v| v == "0"),
         er: WordSet::new(24),
         ew: WordSet::new(24),
         p_entry_log: Vec::with_capacity(CHECK_FAIL_MAX),
@@ -1396,14 +1414,20 @@ pub(super) fn init_enter(addr: usize) {
         && matches!(reach, Reach::DynImport | Reach::Require)
         && is_entry(st, parent_id))
     .then(|| {
-        let members: Vec<String> = st
-            .entry_rows
-            .drain(..)
+        let rows: Vec<(u64, String)> = st.entry_rows.drain(..).collect();
+        // SNAPK2b (DESIGN27 §2, §3): when the entry compared argv strings
+        // with constants, those predicates are the members its argv escape
+        // (the copy dispatch reads) stood for; without one it stays whole-argv.
+        let narrowed = st.cmplit_rule && rows.iter().any(|(_, op)| op == "compare_literal.argv");
+        let members: Vec<String> = rows
+            .iter()
+            .filter(|(_, op)| !(narrowed && (op == "argv.escape" || op == "host_value.argv")))
             .map(|(s, op)| format!("{s}:{op}"))
             .collect();
         format!(
-            "reach_init={};addr={addr:x};members={}",
+            "reach_init={};addr={addr:x};argv={};members={}",
             st.inits.len(),
+            if narrowed { "predicate" } else { "whole" },
             members.join(",")
         )
     });
@@ -1457,6 +1481,7 @@ pub(super) fn init_enter(addr: usize) {
     if let Some(row) = reach_row {
         input_record::event(st, "p_reach", row);
     }
+    k2b_enter_rows(st);
     set_mode_for_top(st);
 }
 
@@ -1584,7 +1609,19 @@ pub(super) fn entry_body() {
 
 /// The entry module's evaluation is next (`js_snap_entry_module`).
 pub(super) fn entry_module() {
-    state().entry_module_next = true;
+    let st = state();
+    st.entry_module_next = true;
+    // Codegen emits this hook only for a program with worker_threads use
+    // (entry.rs `entry_in_init`): its init flags are thread-local, which an
+    // image cannot initialize (DESIGN27 §1.5), so the cut is 0.
+    if st.worker_rule && inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        input_record::event(
+            st,
+            "worker_flag",
+            "program_has_worker=1;cut=0;policy=STOP".to_owned(),
+        );
+    }
 }
 
 /// `object_meta_ensure` stores a fresh (all-zero) record into the owner's
@@ -5055,6 +5092,7 @@ pub(super) fn funnel_name(id: u8) -> &'static str {
         5 => "parallelism",
         6 => "gc",
         7 => "exec_argv",
+        8 => "style_bit",
         _ => "none",
     }
 }
@@ -5181,4 +5219,201 @@ pub(super) fn exe_text() -> (bool, usize, usize) {
         EXE_TEXT[1].load(Relaxed),
         EXE_TEXT[2].load(Relaxed),
     )
+}
+
+/// SNAPK2b runtime-pc STOP (DESIGN27 §1.1): an Error's captured pc is imaged
+/// as (program function symbol, offset); one outside the JS text section is
+/// runtime code, which the runner links as the `_instr` runtime and
+/// production does not, so it STOPs at the capturing init.
+/// `PERRY_SNAP_RTPC_JS=none` (diagnostic) empties the program range: every
+/// pc is a runtime pc (F13's STOP arm).
+pub(super) fn runtime_pcs(pcs: &[usize], (lo, hi): (usize, usize)) {
+    let st = state();
+    if !st.rtpc_rule {
+        return;
+    }
+    let (lo, hi) = if std::env::var("PERRY_SNAP_RTPC_JS").is_ok_and(|v| v == "none") {
+        (0, 0)
+    } else {
+        (lo, hi)
+    };
+    let rt: Vec<usize> = pcs
+        .iter()
+        .copied()
+        .filter(|&pc| pc < lo || pc >= hi)
+        .collect();
+    let top = top_init(st);
+    let row = match rt.first() {
+        Some(pc) => format!(
+            "init={top};rt={};n={};pc={pc:x};js={lo:x}-{hi:x};policy=STOP",
+            rt.len(),
+            pcs.len()
+        ),
+        None => format!(
+            "init={top};rt=0;n={};js={lo:x}-{hi:x};policy=symbol",
+            pcs.len()
+        ),
+    };
+    input_record::event(st, "stack.runtime_pc", row);
+}
+
+/// SNAPK2b `stdout_style_bit` funnel row (DESIGN27 §3 member 6): the guard
+/// member is the bit, not the env values or the tty probe it came from.
+pub(super) fn style_bit(bit: bool, tty: bool, depth: u8) {
+    if !(inputs_on() && on_main_thread()) {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.style_rule {
+        return;
+    }
+    let by = match top_init(st) {
+        0 => "runtime",
+        t if is_entry(st, t) => "entry",
+        _ => "imaged",
+    };
+    input_record::event(
+        st,
+        "stdout_style_bit",
+        format!(
+            "bit={};tty={};depth={depth};by={by};member=predicate",
+            bit as u8, tty as u8
+        ),
+    );
+}
+
+/// The text of a string value (heap or inline), or None.
+fn string_text(bits: u64) -> Option<String> {
+    let v = crate::value::JSValue::from_bits(bits);
+    if v.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = v.short_string_to_buf(&mut buf);
+        return Some(String::from_utf8_lossy(&buf[..n]).into_owned());
+    }
+    (bits >> 48 == 0x7fff).then(|| {
+        input_record::Value::input_value(
+            &((bits & 0x0000_ffff_ffff_ffff) as *mut crate::StringHeader),
+        )
+    })
+}
+
+/// Where a string operand came from: a host value's birth (argv element,
+/// execPath) or an env read's string, else None.
+fn compare_source(st: &State, bits: u64) -> Option<String> {
+    if bits >> 48 != 0x7fff {
+        return None;
+    }
+    let p = (bits & 0x0000_ffff_ffff_ffff) as usize;
+    let h = p.wrapping_sub(crate::gc::GC_HEADER_SIZE);
+    if let Some(&(_, _, w, s)) = st
+        .host_targets
+        .iter()
+        .find(|t| (h >= t.0 && h < t.1) || (p >= t.0 && p < t.1))
+    {
+        return Some(format!("{}@{s}", host_name(w)));
+    }
+    st.env_obs
+        .iter()
+        .rev()
+        .find(|o| o.ptr != 0 && o.ptr == p)
+        .map(|o| format!("env:{}", o.name))
+}
+
+/// SNAPK2b `compare_literal` (DESIGN27 §3): an equality compare of a host
+/// value or env string with another string is one predicate row; the
+/// guard member is "the value compares so", not the value. P-reach narrows
+/// an entry's argv escape to these rows (`init_enter`).
+pub(super) fn compare_literal(op: i32, left: u64, right: u64, literal: i32) {
+    if !(c25() && inputs_on() && on_main_thread()) {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.cmplit_rule {
+        return;
+    }
+    let (src, other, lit) = match (compare_source(st, left), compare_source(st, right)) {
+        (Some(s), None) => (s, right, literal & 2 != 0),
+        (None, Some(s)) => (s, left, literal & 1 != 0),
+        _ => return,
+    };
+    let Some(text) = string_text(other) else {
+        return;
+    };
+    let value = string_text(if other == right { left } else { right });
+    let eq = value.as_deref() == Some(text.as_str());
+    let result = if op & 1 == 0 { eq } else { !eq };
+    let opn = ["===", "!==", "==", "!="][(op & 3) as usize];
+    let by = match top_init(st) {
+        0 => "runtime",
+        t if is_entry(st, t) => "entry",
+        _ => "imaged",
+    };
+    input_record::event(
+        st,
+        "compare_literal",
+        format!(
+            "op={opn};literal={};lit_kind={};src={src};result={};by={by};member=predicate",
+            input_record::hex(text.as_bytes()),
+            if lit { "const" } else { "value" },
+            result as u8
+        ),
+    );
+}
+
+/// SNAPK2b checks at a candidate cut, `init_enter` of the init just pushed
+/// (DESIGN27 §1.1, §1.2). Open frames: every open ancestor resumes at its
+/// flag test (R1: static dependency or eager entry import, before the
+/// parent's body) or at its `import()` (R2); K4 images their flags 0. A
+/// require edge or a job frame below the cut has no such resume point
+/// (STOP). Job queue: at the cut no promise job may be queued (a TLA
+/// suspended before it, or any other job, would run before the cut's
+/// continuation in the build run and after the adopted image in the real
+/// one), so a queued job STOPs.
+fn k2b_enter_rows(st: &mut State) {
+    if st.openf_rule && st.frames.len() >= 2 {
+        let mut kinds = Vec::with_capacity(st.frames.len() - 1);
+        let mut stop = false;
+        for w in st.frames.windows(2) {
+            let (a, c) = (w[0], w[1]);
+            let k = if a.kind == FrameKind::Job || c.kind == FrameKind::Job {
+                "job"
+            } else {
+                match st.inits[c.init as usize].reach {
+                    Reach::EntryEager | Reach::StaticDep => "R1",
+                    Reach::DynImport => "R2",
+                    Reach::Require => "require",
+                }
+            };
+            stop |= k == "job" || k == "require";
+            kinds.push(format!("{}:{k}", a.init));
+        }
+        input_record::event(
+            st,
+            "open_frames",
+            format!(
+                "init={};open={};flags=0;policy={}",
+                st.frames.last().map_or(0, |f| f.init),
+                kinds.join(","),
+                if stop { "STOP" } else { "resume" }
+            ),
+        );
+    }
+    if st.jobq_rule {
+        match crate::promise::snap_pending_jobs() {
+            Some(0) => {}
+            n => {
+                input_record::event(
+                    st,
+                    "job_queue",
+                    format!(
+                        "init={};pending={};policy=STOP",
+                        st.frames.last().map_or(0, |f| f.init),
+                        n.map_or("busy".to_owned(), |n| n.to_string())
+                    ),
+                );
+            }
+        }
+    }
 }

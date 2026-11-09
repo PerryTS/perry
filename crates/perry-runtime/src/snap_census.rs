@@ -656,6 +656,7 @@ pub(crate) enum Funnel {
     Parallelism = 5,
     Gc = 6,
     ExecArgv = 7,
+    StyleBit = 8,
 }
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
@@ -707,6 +708,22 @@ macro_rules! snap_funnel {
     };
 }
 
+/// SNAPK2b `compare_literal` site (`expr/snap_compare_site.rs`, instrumented
+/// compiles only): an equality compare `op` (0 `===`, 1 `!==`, 2 `==`,
+/// 3 `!=`) of `left` and `right`; `literal` bit 0/1: that side is a string
+/// literal.
+#[cfg(perry_gc_instruments)]
+#[no_mangle]
+pub extern "C" fn js_snap_compare_literal(op: i32, left: f64, right: f64, literal: i32) {
+    crate::effect!(pure);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::compare_literal(op, left.to_bits(), right.to_bits(), literal);
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (op, left, right, literal);
+}
+
 /// Codegen calls this right before a `process.argv` read, in instrumented
 /// compiles only (`expr/snap_argv_site.rs`): `kind` 1 = the read is
 /// `process.argv.length`, 2 = `process.argv[index]` with a constant index,
@@ -741,10 +758,17 @@ pub(crate) fn clock_input(operation: &str, value: u64) {
     }
 }
 
+/// SNAPK2b: the `stdout_style_bit` funnel computed `bit` (`tty`: forced or
+/// fd 1 a tty; `depth`: getColorDepth).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn style_bit(bit: bool, tty: bool, depth: u8) {
+    runner::style_bit(bit, tty, depth);
+}
+
 /// SNAP25: every captured Error pc must lie in the executable text of an
 /// EXEC (non-PIE) image (`stack.pc_check` row).
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn pc_check(pcs: &[usize]) {
+pub(crate) fn pc_check(pcs: &[usize], js_text: (usize, usize)) {
     if runner::c25() && runner::inputs_on() && runner::on_main_thread() {
         let (exec, lo, hi) = runner::exe_text();
         let out = pcs.iter().filter(|&&pc| pc < lo || pc >= hi).count();
@@ -753,6 +777,7 @@ pub(crate) fn pc_check(pcs: &[usize]) {
             "stack.pc_check",
             format!("exec={};out={out};n={};text={lo:x}-{hi:x}", exec as u8, pcs.len()),
         );
+        runner::runtime_pcs(pcs, js_text);
     }
 }
 
