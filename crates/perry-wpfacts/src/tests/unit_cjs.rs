@@ -105,6 +105,20 @@ const T7: [(&str, &str); 4] = [
     ),
 ];
 
+/// An ESM entry's `createRequire(import.meta.url)` loads a compiled
+/// CommonJS module by a literal relative path: `m.js` is the entry as the
+/// static-require transform leaves it (a deferred side-effect import of the
+/// target, the call kept), `l.js` the target's real wrap with the open arms
+/// (the entry's loader makes the program not closed).
+const T8: [(&str, &str); 3] = [
+    ("/t8/m.js", include_str!("fixtures/cjs_t8/m.js")),
+    ("/t8/l.js", include_str!("fixtures/cjs_t8/l.js")),
+    (
+        "/t8/perry_cjs.js",
+        include_str!("fixtures/cjs_t8/perry_cjs.js"),
+    ),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
@@ -113,6 +127,15 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
             let module = perry_parser::parse_typescript(src, path).expect("parses");
             let mut hir = perry_hir::lower_module(&module, name, path).expect("lowers");
             for imp in &mut hir.imports {
+                // The driver's deferred-require bindings (`collect_modules`
+                // `is_deferred_require_binding`).
+                imp.is_deferred_require |= imp.specifiers.iter().any(|sp| match sp {
+                    perry_hir::ImportSpecifier::Named { local, .. }
+                    | perry_hir::ImportSpecifier::Default { local }
+                    | perry_hir::ImportSpecifier::Namespace { local } => {
+                        local.starts_with("_lazyreq_")
+                    }
+                });
                 if let Some(n) = imp.source.strip_prefix("./") {
                     imp.resolved_path = Some(format!("{dir}/{n}.js"));
                 } else if imp.source.starts_with(&format!("{dir}/")) {
@@ -741,4 +764,67 @@ fn an_escaped_constructor_function_of_an_unflattened_factory_is_constructed_by_u
         "per unit claims prefix_stable, the whole program does not\n{}",
         u.dump_text()
     );
+}
+
+/// The function `createRequire` returns is a CommonJS `require` relative to
+/// its base: `require("./l.js")` runs `l.js` and returns its
+/// `module.exports`, so `l.load(..)` runs `exports.load`. Main-red: the
+/// body of `exports.load` was inactive (PERRY_VERIFY_FACTS rc 86).
+#[test]
+fn a_create_require_call_runs_the_module_it_names() {
+    assert!(load_runs(&T8));
+}
+
+/// The specifier is the call's literal when the callee is already the
+/// program's `require` as the call is made: `r("module")` is the node:module
+/// namespace, whose `Module._cache` hands out every record (here the one
+/// whose `exports.load` runs). Main-red: the literal was recorded after the
+/// call had resolved, `Module._cache` was never sunk, `exports.load` was an
+/// inactive body. Control: through `require("./l.js")`'s result, as above.
+#[test]
+fn a_create_require_literal_is_known_when_the_call_resolves() {
+    let m = T8[0].1.replace(
+        "const l = require(\"./l.js\");\nconsole.log(l.load({ k: 1 }));",
+        "require(\"./l.js\");\nconst r = createRequire(process.argv[1]);\n\
+         console.log(r(\"module\")._cache[\"/t8/l.js\"].exports.load({ k: 1 }));",
+    );
+    assert_ne!(m, T8[0].1, "the entry was rewritten");
+    assert!(load_runs(&[(T8[0].0, m.as_str()), T8[1], T8[2]]));
+}
+
+/// A specifier that is no literal may name `module` too: the loader
+/// resolves builtins first (`createRequire`'s `require`, the wrappers'
+/// `builtin`), and `Module._cache` hands out every record. Main-red:
+/// `r(process.argv[2])._cache[..]` read a ⊤ that holds no record, and
+/// `exports.load` was an inactive body. Control: the literal `r("module")`
+/// above.
+#[test]
+fn a_computed_require_may_be_node_module() {
+    let m = T8[0].1.replace(
+        "const l = require(\"./l.js\");\nconsole.log(l.load({ k: 1 }));",
+        "require(\"./l.js\");\nconst r = createRequire(process.argv[1]);\n\
+         console.log(r(process.argv[2])._cache[\"/t8/l.js\"].exports.load({ k: 1 }));",
+    );
+    assert_ne!(m, T8[0].1, "the entry was rewritten");
+    assert!(load_runs(&[(T8[0].0, m.as_str()), T8[1], T8[2]]));
+}
+
+/// `/t8/l.js`'s `exports.load` runs: its `o.k` read is a live site.
+fn load_runs(mods: &[(&str, &str)]) -> bool {
+    let (w, _) = both(mods);
+    let off = T8[1].1.find("o.k").expect("load's read") as u32;
+    let live: Vec<&crate::SiteFacts> = w
+        .sites
+        .iter()
+        .filter(|s| {
+            w.module_paths[s.module as usize] == "/t8/l.js"
+                && s.key == "k"
+                && s.byte_offset.abs_diff(off) <= 2
+                && !w.dead_site("/t8/l.js", s)
+        })
+        .collect();
+    if live.is_empty() {
+        eprintln!("{}", w.dump_text());
+    }
+    !live.is_empty()
 }
