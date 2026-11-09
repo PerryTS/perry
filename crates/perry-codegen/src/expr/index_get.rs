@@ -40,8 +40,8 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
-pub(crate) mod descriptor_read;
 mod foreign_counter;
+pub(crate) mod descriptor_read;
 pub(super) mod guarded_array;
 mod proven_array;
 #[cfg(test)]
