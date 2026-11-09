@@ -969,52 +969,6 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         }
     }
 
-    // A stream's controller (`start`/`pull`/`transform`/`flush` parameter):
-    // its own handle (stream id + controller bit), never the stream. Only the
-    // members all controller families own are lowered here; `close`,
-    // `terminate` and `byobRequest` go through the handle's dispatch, which
-    // knows the family.
-    if module == "readable_stream_controller" {
-        let recv = lower_expr(ctx, recv)?;
-        match method {
-            "enqueue" => {
-                let chunk = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let v = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_controller_enqueue",
-                    &[(DOUBLE, &recv), (DOUBLE, &chunk)],
-                );
-                return Ok(Some(v));
-            }
-            "error" => {
-                let reason = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let v = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_controller_error",
-                    &[(DOUBLE, &recv), (DOUBLE, &reason)],
-                );
-                return Ok(Some(v));
-            }
-            "desiredSize" => {
-                let v = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_controller_desired_size",
-                    &[(DOUBLE, &recv)],
-                );
-                return Ok(Some(v));
-            }
-            _ => return Ok(None),
-        }
-    }
-
     if module == "readable_stream_reader" {
         let recv_handle = lower_expr(ctx, recv)?;
         match method {

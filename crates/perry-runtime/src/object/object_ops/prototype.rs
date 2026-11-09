@@ -396,6 +396,16 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     if top16 == (crate::value::HANDLE_TAG >> 48) {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         {
+            // RSTREAM R6: a Web Streams handle's prototype is its interface's
+            // (born on first observation for the lazy stream families).
+            if let Some(name) = crate::object::stream_handle_id(obj_value)
+                .and_then(crate::object::web_stream_interface_name)
+            {
+                let proto = crate::object::builtin_prototype_value(name);
+                if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                    return proto;
+                }
+            }
             // WHATWG fetch values are registry handles rather than heap
             // ObjectHeaders, but they still have the intrinsic prototype for
             // their interface.  Axios walks this chain to distinguish a

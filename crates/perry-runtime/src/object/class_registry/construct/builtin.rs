@@ -51,7 +51,12 @@ pub(super) unsafe fn construct(
         // WHATWG: the `AbortSignal` constructor throws; signals come from an
         // `AbortController` or the static factories. A direct `new`, a value
         // `new` and a live `super()` of a subclass all reach this switch.
-        BuiltinConstructorIdentity::Navigator | BuiltinConstructorIdentity::AbortSignal => {
+        BuiltinConstructorIdentity::ReadableStreamDefaultReader => {
+            return Some(crate::web_stream_prototypes::construct_reader(args));
+        }
+        BuiltinConstructorIdentity::Navigator
+        | BuiltinConstructorIdentity::AbortSignal
+        | BuiltinConstructorIdentity::ReadableStreamDefaultController => {
             return Some(crate::error::js_throw_illegal_constructor_type_error());
         }
         BuiltinConstructorIdentity::Iterator => {

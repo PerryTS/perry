@@ -299,13 +299,12 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         let async_iterator_f64 =
             f64::from_bits(crate::value::JSValue::pointer(async_iterator as *const u8).bits());
         if sym_key == sym_key_from_f64(async_iterator_f64) {
+            // RSTREAM R5: the prototype's own member (`=== P.values`).
             if kind == 1 {
-                let mname = b"values";
-                return Some(crate::object::js_class_method_bind(
-                    obj_f64,
-                    mname.as_ptr(),
-                    mname.len(),
-                ));
+                let proto = crate::object::builtin_prototype_value("ReadableStream");
+                if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+                    return Some(js_object_get_symbol_property(proto, sym_f64));
+                }
             }
             return Some(f64::from_bits(TAG_UNDEFINED));
         }
@@ -316,11 +315,8 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         let to_string_tag_f64 =
             f64::from_bits(crate::value::JSValue::pointer(to_string_tag as *const u8).bits());
         if sym_key == sym_key_from_f64(to_string_tag_f64) {
-            let tag = match kind {
-                1 => "ReadableStream",
-                2 => "WritableStream",
-                5 => "TransformStream",
-                _ => return Some(f64::from_bits(TAG_UNDEFINED)),
+            let Some(tag) = crate::object::web_stream_interface_name(id) else {
+                return Some(f64::from_bits(TAG_UNDEFINED));
             };
             let str_ptr = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
             return Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)));

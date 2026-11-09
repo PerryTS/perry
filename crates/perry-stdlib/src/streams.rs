@@ -353,6 +353,7 @@ pub(crate) use native::{
     alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,
 };
 mod strategy;
+mod prototypes;
 mod subclass;
 mod tee;
 #[cfg(test)]
@@ -385,9 +386,10 @@ pub(crate) use self::expando::stream_expando_get;
 pub(crate) use self::expando::stream_expando_set_hook;
 use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
+pub(crate) use self::prototypes::install_stream_prototypes;
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
-    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_controller_family,
+    drain_readable_into_bytes, js_readable_stream_subclass_init,
     js_stream_handle_is_registered, js_stream_handle_kind, js_transform_stream_subclass_init,
     js_writable_stream_subclass_init,
 };

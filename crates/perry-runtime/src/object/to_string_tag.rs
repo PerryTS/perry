@@ -7,12 +7,22 @@ use super::*;
 mod fetch_handle_tests;
 
 pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
-    let id = stream_handle_id(value)?;
+    web_stream_interface_name(stream_handle_id(value)?)
+}
+
+/// The Web Streams interface stream registry id `id` is an instance of: the
+/// one map behind its tag and its prototype. Kind 3 is a default reader
+/// (BYOB readers are a follow-up); 6/7/8 are the controller families.
+pub(crate) fn web_stream_interface_name(id: usize) -> Option<&'static str> {
     let kind_probe = stream_handle_kind_probe()?;
     match unsafe { kind_probe(id) } {
         1 => Some("ReadableStream"),
         2 => Some("WritableStream"),
+        3 => Some("ReadableStreamDefaultReader"),
         5 => Some("TransformStream"),
+        6 => Some("ReadableStreamDefaultController"),
+        7 => Some("TransformStreamDefaultController"),
+        8 => Some("ReadableByteStreamController"),
         _ => None,
     }
 }

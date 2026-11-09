@@ -668,8 +668,7 @@ fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
         }
         assert!(dispatch_stream_method(controller, "getReader", &[]).is_none());
         assert!(dispatch_stream_method(controller, "close", &[]).is_none());
-        assert_eq!(js_stream_handle_kind(stream_id(controller)), 6);
-        assert_eq!(js_stream_controller_family(stream_id(controller)), 2);
+        assert_eq!(js_stream_handle_kind(stream_id(controller)), 7);
         assert!(dispatch_stream_method(controller, "enqueue", &[42.0]).is_some());
         assert!(dispatch_stream_method(reader, "releaseLock", &[]).is_some());
         assert!(dispatch_stream_method(writer, "releaseLock", &[]).is_some());
@@ -771,6 +770,4 @@ fn controller_value_round_trips_and_stays_out_of_the_allocator() {
     assert_eq!(controller_stream_id(stream_value(id)), 0);
     assert_eq!(js_stream_handle_kind(stream_id(controller)), 6);
     assert_eq!(js_stream_handle_kind(id), 1);
-    assert_eq!(js_stream_controller_family(stream_id(controller)), 1);
-    assert_eq!(js_stream_controller_family(id), 0);
 }

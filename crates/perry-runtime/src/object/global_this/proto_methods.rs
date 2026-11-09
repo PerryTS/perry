@@ -198,10 +198,20 @@ fn install_buffer_proto_getter(
 /// spec descriptor. Mirrors `collection_proto_thunks::install_collection_iterator_symbol`;
 /// kept here because `Array.prototype` is populated in this module.
 fn install_builtin_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
+    install_builtin_well_known_symbol_method(proto_obj, "iterator", value);
+}
+
+/// `proto[Symbol.<symbol_name>] = value` as a method alias (`{ writable,
+/// configurable }`): the same function object as the named member.
+pub(crate) fn install_builtin_well_known_symbol_method(
+    proto_obj: *mut ObjectHeader,
+    symbol_name: &str,
+    value: f64,
+) {
     if proto_obj.is_null() || value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
-    let iter = crate::symbol::well_known_symbol("iterator");
+    let iter = crate::symbol::well_known_symbol(symbol_name);
     if iter.is_null() {
         return;
     }
@@ -1237,6 +1247,11 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
         }
         // Node's getters, installed only for a program that reaches navigator.
         "Navigator" => crate::navigator::populate_prototype(proto_obj),
+        // RSTREAM: the members when streams are linked, then the fixed tag.
+        "ReadableStream" | "ReadableStreamDefaultController" | "ReadableStreamDefaultReader" => {
+            crate::web_stream_prototypes::populate_prototype(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
+        }
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
         | "DOMException" | "MessageEvent" => {
             let _gc = crate::gc::GcSuppressScope::new();

@@ -1,6 +1,5 @@
 //! RSTREAM: a stream's controller is its own value (stream id + controller
-//! bit), so the static controller lowering keys on the controller parameter,
-//! never on a stream. `s.enqueue` on a ReadableStream is not a member in Node.
+//! bit); its calls dispatch at run time on that handle, never on a stream. `s.enqueue` on a ReadableStream is not a member in Node.
 use perry_diagnostics::SourceCache;
 use perry_hir::lower_module;
 use perry_parser::parse_typescript_with_cache;
@@ -23,7 +22,7 @@ fn lowered_debug(src: &str) -> String {
 }
 
 #[test]
-fn controller_parameter_lowers_on_the_controller_module() {
+fn controller_calls_dispatch_on_the_controller_handle() {
     let dbg = lowered_debug(
         r#"
         import { ReadableStream, TransformStream } from "node:stream/web";
@@ -32,16 +31,13 @@ fn controller_parameter_lowers_on_the_controller_module() {
         const u = new ReadableStream({ pull: (c) => { c.enqueue(3); } });
     "#,
     );
-    // Each controller call that lowers statically names the controller
-    // module (one module string per NativeMethodCall); the others go through
-    // the controller handle's own dispatch. None lowers on the stream module.
-    let statics =
-        dbg.matches("method: \"enqueue\"").count() + dbg.matches("method: \"error\"").count();
-    assert_eq!(
-        dbg.matches("\"readable_stream_controller\"").count(),
-        statics,
-        "{dbg}"
-    );
+    // One path: every controller call dispatches at run time on the
+    // controller handle (stream id + controller bit), whose kind knows the
+    // family. Nothing lowers a controller member statically.
+    assert!(!dbg.contains("readable_stream_controller"), "{dbg}");
+    for m in ["enqueue", "error"] {
+        assert!(!dbg.contains(&format!("method: "{m}"")), "{m}: {dbg}");
+    }
 }
 
 #[test]

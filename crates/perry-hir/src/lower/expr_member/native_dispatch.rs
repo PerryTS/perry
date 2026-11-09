@@ -45,7 +45,6 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // Web Streams: only the getter list reaches dispatch (methods are
         // PropertyGet bound-method reads).
         "readable_stream"
-        | "readable_stream_controller"
         | "writable_stream"
         | "transform_stream"
         | "readable_stream_reader"
@@ -180,7 +179,6 @@ pub(crate) fn is_stream_api_member(module: &str, prop: &str) -> bool {
         // The members every controller family owns (Default, Transform,
         // Byte); `close`, `terminate` and `byobRequest` depend on the family
         // and go through the controller handle's dispatch.
-        "readable_stream_controller" => matches!(prop, "enqueue" | "error" | "desiredSize"),
         "readable_stream_reader" => {
             matches!(prop, "read" | "releaseLock" | "cancel" | "closed")
         }

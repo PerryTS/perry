@@ -167,7 +167,7 @@ pub(crate) use populate::{
     populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
-    install_error_prototype_data_properties, populate_builtin_prototype_methods,
+    install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
