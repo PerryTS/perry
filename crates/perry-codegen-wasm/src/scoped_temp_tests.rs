@@ -864,3 +864,65 @@ function breaking(){outer:while(true){try{try{return 'wrong';}finally{break oute
 console.log(breaking());
 "#, "require('node:assert/strict').equal(tryDepth,0);require('node:assert/strict').equal(__memDispatch.has_exception(),0);"),"nested\nnested final\ntrue\noverride final\n8\n9\npending final\npending nested\ntrue\n0\nouter\n1\nouter\n2\nouter\ndone\nbreak final\nbroken");
 }
+
+#[test]
+fn host_interop_closure_calls_pad_after_captures_only() {
+    assert_eq!(run_ts(r#"
+function factory(offset: number) {
+  return (a: number, b?: number, c?: number, d?: number) => {
+    console.log(offset);
+    console.log(a);
+    console.log(b);
+    console.log(c);
+    console.log(d);
+  };
+}
+const callback = factory(9);
+callback(1);
+callback(1, 2);
+callback(1, 2, 3);
+"#), "9\n1\nundefined\nundefined\nundefined\n9\n1\n2\nundefined\nundefined\n9\n1\n2\n3\nundefined");
+}
+
+#[test]
+fn host_interop_reduce_callback_argument_contract() {
+    assert_eq!(
+        run_ts(
+            r#"
+const xs = [2, 4];
+const total = xs.reduce((accumulator, value, index, array, missing) => {
+  console.log(accumulator);
+  console.log(value);
+  console.log(index);
+  console.log(array === xs);
+  console.log(missing);
+  return accumulator + value;
+}, 10);
+console.log(total);
+"#
+        ),
+        "10\n2\n0\ntrue\nundefined\n12\n4\n1\ntrue\nundefined\n16"
+    );
+}
+
+#[test]
+fn host_interop_legacy_closure_calls_pad_after_captures_only() {
+    assert_eq!(run_ts_after(r#"
+function factory(offset: number) {
+  return (a: number, b?: number, c?: number, d?: number) => {
+    console.log(offset);
+    console.log(a);
+    console.log(b);
+    console.log(c);
+    console.log(d);
+  };
+}
+globalThis.savedCallback = factory(9);
+"#, r#"
+const rt = buildImports().rt;
+const callback = fromJsValue(globalThis.savedCallback);
+rt.closure_call_1(callback, 1);
+rt.closure_call_2(callback, 1, 2);
+rt.closure_call_3(callback, 1, 2, 3);
+"#), "9\n1\nundefined\nundefined\nundefined\n9\n1\n2\nundefined\nundefined\n9\n1\n2\n3\nundefined");
+}
