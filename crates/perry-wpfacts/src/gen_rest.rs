@@ -97,18 +97,18 @@ impl<'a> Gen<'a> {
                 // `require("process") === globalThis.process`); HIR names
                 // the value of `require("process")` and of a namespace
                 // import `process.namespace`.
-                if matches!(name, "process" | "process.namespace") {
-                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
-                    return self.tok_node(t);
-                }
                 // node:module as a value hands out `Module._cache`.
                 if name == "module" {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
                 }
                 // A module the realm declares is its namespace object.
-                if let Some(ns) = crate::builtins::node_module_ns(m) {
-                    let t = self.m.tok(TokKind::Builtin(ns));
+                let name = if name == "process.namespace" {
+                    "process"
+                } else {
+                    name
+                };
+                if let Some(t) = crate::builtins::builtin_module_tok(&mut self.m, name) {
                     return self.tok_node(t);
                 }
                 self.m.top_val(&format!("native module ref {m}"))
