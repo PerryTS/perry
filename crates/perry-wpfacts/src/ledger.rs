@@ -217,6 +217,8 @@ pub(crate) fn route(why: &str) -> Option<Route> {
         } else if starts("argument of native ")
             || starts("argument of builtin ")
             || starts("argument of a primitive method")
+            // Class.prototype.method: the argument of a native method the realm declares.
+            || w.strip_prefix("argument of ").is_some_and(|r| r.contains('.') && !r.contains(' '))
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
             || (starts("argument of host ") && w.ends_with(" (kept by the stream)"))
