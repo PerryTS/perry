@@ -116,6 +116,13 @@ fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, receiver: u32, numeric: bool) -> Re
         .rooted_box_slot(receiver)
         .expect("a cold-arm descriptor is an address")
         .to_owned();
+    // A fact that does not survive a cold arm became active inside the region
+    // (an inner loop's cached length, packed clone, ...): no fast form here.
+    // The read keeps the ordinary route, which that fact's own tier admitted,
+    // and still reloads every cold-arm binding after it.
+    if ctx.receiver_descriptors.cold_arm_refreshes().is_err() {
+        return lower_slow(ctx, e, numeric);
+    }
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     // The index first: inert and ender-free, so the base is unchanged by it.
     let idx = crate::expr::lower_expr(ctx, index)?;
@@ -209,21 +216,7 @@ fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, receiver: u32, numeric: bool) -> Re
     // Slow: the ordinary route with this descriptor bypassed, then the
     // cold-arm refresh.
     ctx.current_block = slow;
-    let addr = e as *const Expr as usize;
-    ctx.receiver_descriptors.push_cold_arm_bypass(addr);
-    let slow_value = if numeric {
-        match super::lower_numeric_index_get_for_number_context(ctx, e)? {
-            Some(v) => v,
-            None => {
-                let v = super::lower(ctx, e)?;
-                ctx.block().call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)])
-            }
-        }
-    } else {
-        super::lower(ctx, e)?
-    };
-    ctx.receiver_descriptors.pop_cold_arm_bypass(addr);
-    emit_cold_arm_refresh(ctx);
+    let slow_value = lower_slow(ctx, e, numeric)?;
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = merge;
@@ -233,14 +226,33 @@ fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, receiver: u32, numeric: bool) -> Re
     ))
 }
 
-/// After a slow arm returns: reload every active descriptor's box from its
+/// The read by the ordinary route (this descriptor bypassed), then the
+/// cold-arm refresh.
+fn lower_slow(ctx: &mut FnCtx<'_>, e: &Expr, numeric: bool) -> Result<String> {
+    let addr = e as *const Expr as usize;
+    ctx.receiver_descriptors.push_cold_arm_bypass(addr);
+    let value = if numeric {
+        match super::lower_numeric_index_get_for_number_context(ctx, e)? {
+            Some(v) => v,
+            None => {
+                let v = super::lower(ctx, e)?;
+                ctx.block()
+                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)])
+            }
+        }
+    } else {
+        super::lower(ctx, e)?
+    };
+    ctx.receiver_descriptors.pop_cold_arm_bypass(addr);
+    emit_cold_arm_refresh(ctx);
+    Ok(value)
+}
+
+/// After a slow arm returns: reload every cold-arm descriptor's box from its
 /// binding (a getter may have reassigned it). The calls on the arm already
 /// cleared every valid slot, so the next read revalidates the fresh box.
 fn emit_cold_arm_refresh(ctx: &mut FnCtx<'_>) {
-    let recipes = ctx
-        .receiver_descriptors
-        .cold_arm_refreshes()
-        .expect("every active receiver fact must admit a cold arm");
+    let recipes = ctx.receiver_descriptors.cold_arm_reloads();
     if sabotage("reload") {
         return;
     }
@@ -281,7 +293,9 @@ fn lets(s: &Stmt, out: &mut std::collections::HashSet<u32>) {
             then_branch.iter().for_each(|x| lets(x, out));
             else_branch.iter().flatten().for_each(|x| lets(x, out));
         }
-        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body.iter().for_each(|x| lets(x, out)),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            body.iter().for_each(|x| lets(x, out))
+        }
         Stmt::For { init, body, .. } => {
             init.iter().for_each(|x| lets(x, out));
             body.iter().for_each(|x| lets(x, out));
@@ -365,18 +379,11 @@ impl Installed {
 /// each array binding the loop reads through the shared predicate, when the
 /// region's every ender is the back-edge poll or such a read's cold arm and
 /// every other active fact survives a cold arm.
-fn dbg(why: &str) {
-    if std::env::var_os("PERRY_DEBUG_COLD_ARM").is_some() {
-        eprintln!("COLD_ARM {why}");
-    }
-}
-
 pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) -> Installed {
     if !enabled() {
         return Installed(Vec::new());
     }
     if !side_tables_clear(ctx) {
-        dbg("side tables");
         return Installed(Vec::new());
     }
     let mut written = std::collections::HashSet::new();
@@ -389,33 +396,19 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
     }
     receivers.retain(|&id| !ctx.receiver_descriptors.contains(id));
     if receivers.is_empty() {
-        let c = candidate_reads(body, controls);
-        if !c.is_empty() {
-            let id = c[0].0;
-            dbg(&format!(
-                "no receiver ({} reads; first {id}: written={} boxed={} cap={} local={} global={} array={})",
-                c.len(),
-                written.contains(&id),
-                ctx.boxed_vars.contains(&id),
-                ctx.closure_captures.contains_key(&id),
-                ctx.locals.contains_key(&id),
-                ctx.module_globals.contains_key(&id),
-                crate::type_analysis::is_array_expr(ctx, &Expr::LocalGet(id))
-            ));
-        }
         return Installed(Vec::new());
     }
     let is_inert = |x: &Expr| crate::rooting::expr_is_inert_primitive(ctx, x);
     let trusted_of = |e: &Expr| receivers.iter().find(|&&r| read_shape(ctx, e, r)).copied();
-    let enders = crate::collectors::region_enders_in_stmts_classified(body, controls, &is_inert, &|e| {
-        trusted_of(e).map(|_| Some(RegionEnder::ColdArmCall))
-    });
+    let enders =
+        crate::collectors::region_enders_in_stmts_classified(body, controls, &is_inert, &|e| {
+            trusted_of(e).map(|_| Some(RegionEnder::ColdArmCall))
+        });
     if enders
         .iter()
         .any(|x| !matches!(x, RegionEnder::BackEdgePoll | RegionEnder::ColdArmCall))
         || !enders.contains(&RegionEnder::ColdArmCall)
     {
-        dbg(&format!("enders {enders:?}"));
         return Installed(Vec::new());
     }
     let mut enders = enders;
@@ -442,7 +435,9 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
         ctx.func.entry_allocas_push_store(I8, "0", &valid);
         ctx.block().store(I8, "0", &valid);
         if !sabotage("guard") {
-            ctx.func.reg_counter().push_byte_access_dirty_slot(valid.clone());
+            ctx.func
+                .reg_counter()
+                .push_byte_access_dirty_slot(valid.clone());
         }
         match ctx.receiver_descriptors.materialize_cold_arm_array(
             id,
@@ -454,12 +449,10 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
             &enders,
             trusted,
         ) {
-            Ok(true) => {
-                dbg(&format!("installed {id}"));
-                installed.push(id)
-            }
-            Ok(false) => {}
-            Err(v) => dbg(&format!("refused {v:?}")),
+            Ok(true) => installed.push(id),
+            // A duplicate, or a fact the cold arm would stale: the reads
+            // keep the ordinary route.
+            Ok(false) | Err(_) => {}
         }
     }
     Installed(installed)

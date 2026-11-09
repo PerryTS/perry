@@ -1164,6 +1164,26 @@ impl ReceiverDescriptorTable {
             .collect()
     }
 
+    /// The reload recipes of every active cold-arm entry, whatever else is
+    /// active (an inner loop's fact): the slow arm always re-reads their
+    /// bindings.
+    pub(crate) fn cold_arm_reloads(&self) -> Vec<ColdArmRefreshRecipe> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.data {
+                ActiveReceiverData::Address {
+                    refresh,
+                    array_validation: Some(v),
+                } if v.cold_arm.is_some() => Some(ColdArmRefreshRecipe {
+                    refresh: refresh.clone(),
+                    valid_slot: v.valid_i1.clone(),
+                    kind: v.kind,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Refresh recipes after a cold call returns (DESIGN-b2 §3–§4), the
     /// mirror of [`Self::poll_refreshes`].
     ///
@@ -1452,7 +1472,10 @@ pub(crate) fn region_enders_in_stmts_classified(
 
 /// The enders evaluating `e` reaches, in execution order (no trusted
 /// operations): b2 refuses a trusted read whose index has any.
-pub(crate) fn region_enders_in_expr(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> Vec<RegionEnder> {
+pub(crate) fn region_enders_in_expr(
+    e: &Expr,
+    is_inert: &dyn Fn(&Expr) -> bool,
+) -> Vec<RegionEnder> {
     let mut out = Vec::new();
     enders_in_expr(e, is_inert, &|_| None, &mut out);
     out

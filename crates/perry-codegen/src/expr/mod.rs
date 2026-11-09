@@ -3326,9 +3326,8 @@ mod env_clones;
 mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
-mod index_get;
+pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
-pub(crate) use index_get::descriptor_read;
 #[cfg(test)]
 mod index_get_claim_tests;
 mod index_key;
