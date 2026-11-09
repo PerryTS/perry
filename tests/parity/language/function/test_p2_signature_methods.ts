@@ -1,7 +1,7 @@
 // P2 typed signatures (DESIGN-p2 rev 2.3 §5): the method controls. Exact
 // against node with the fact on, off and in check mode.
-// A loop bound the compiler cannot fold keeps each call site one HIR call
-// (a static loop is unrolled, and its copies share the site's offset).
+// A loop bound the compiler cannot fold keeps each loop as written (E3 joins
+// the copies of one source call).
 const RUN = Math.random() < 2 ? 1 : 0;
 
 // S6: an override, so the site has two bodies (T0Set).
@@ -128,3 +128,18 @@ function mixed25(n: number): number {
   return s;
 }
 console.log("S25", typed25(100 * RUN), mixed25(100 * RUN));
+
+// E3j (CWN 11-09): a method call in a for…of body over a plain array; both
+// arms of the loop are copies of the one site, joined, and typed.
+class Q3 {
+  k = 3;
+  f(x: number): number {
+    return (x * this.k) | 0;
+  }
+}
+const q3 = new Q3();
+const xs3: number[] = [];
+for (let i = 0; i < 16 * RUN; i++) xs3.push(i);
+let e3j = 0;
+for (const x of xs3) e3j = (e3j + q3.f(x)) | 0;
+console.log("E3j", e3j);

@@ -1,8 +1,9 @@
 // P2 typed signatures (DESIGN-p2 rev 2.3 §5): the function controls. Each
 // line is exact against node with the fact on, off and in check mode;
 // scripts/p2-signature-controls.py asserts the IR shape of each.
-// A loop bound the compiler cannot fold keeps each call site one HIR call
-// (a static loop is unrolled, and its copies share the site's offset).
+// A loop bound the compiler cannot fold keeps each loop as written (E3 joins
+// the copies of one source call: a static loop's unrolled copies, the two
+// arms of a for…of, a callee the inliner copied into its callers).
 const RUN = Math.random() < 2 ? 1 : 0;
 
 // S1: chess `encode`, with 2 and with 4 arguments (literal defaults).
@@ -16,12 +17,15 @@ for (let i = 0; i < 64 * RUN; i++) {
 }
 console.log("S1", s1);
 
-// S2: one caller passes 1.5, so that parameter is F64.
+// S2: every caller passes a fraction, so that parameter is F64 (and no
+// spec_abi tier proves more). The self-call (never taken) keeps `twice` out of
+// the inliner, so its call sites survive.
 function twice(x: number): number {
+  if (x > 1e15) return twice(x / 4);
   return x + x;
 }
 let s2 = 0;
-for (let i = 0; i < 8 * RUN; i++) s2 += twice(i);
+for (let i = 0; i < 8 * RUN; i++) s2 += twice(i + 0.5);
 console.log("S2", s2, twice(1.5));
 
 // S3: defaults: passed undefined, a computed maybe-undefined argument, an
@@ -79,6 +83,12 @@ function isOddM(n: number): boolean {
   return n === 0 ? false : isEven(n - 1);
 }
 console.log("S8", fib(20), isEven(10), isOddM(7));
+// S8b: a recursive body whose argument has an int32 interval at every call
+// is typed and enters itself.
+function down(n: number): number {
+  return n <= 0 ? 0 : (down((n - 1) & 1023) + 1) | 0;
+}
+console.log("S8b", down(100));
 
 // S9: a throw through a typed call under try/catch/finally.
 function boom(n: number): number {
@@ -143,8 +153,13 @@ try {
   console.log("S18", e instanceof RangeError);
 }
 
-// S21: an integer caller beside one passing 0.5 (signature F64).
+// S21: an integer caller beside one passing 0.5 (signature F64), where
+// main's spec_abi tier gives the integer site I32: the signature is less
+// precise than that tier, so `half` stays untyped and keeps it (CWN 11-09
+// precision selector). The self-call (never taken) keeps `half` out of the
+// inliner.
 function half(x: number): number {
+  if (x > 1e15) return half(x - 1e15);
   return x / 2;
 }
 let s21 = 0;
@@ -206,3 +221,56 @@ function isOdd(n: number): boolean {
 let t4d = 0;
 for (let i = 0; i < 10 * RUN; i++) if (isOdd(i)) t4d++;
 console.log("T4d", t4d);
+
+// E3a (CWN 11-09): a for…of body is lowered twice (a counted arm and the
+// IteratorRecord arm). Here the IteratorRecord arm runs a user
+// `Symbol.iterator` yielding a fraction and a String, so that copy passes a
+// non-integer and the site is not typed.
+function e3a(x: number): number {
+  return x + 1;
+}
+const xs3a: number[] = [1, 2, 3];
+let e3aOut = "";
+for (const x of xs3a) e3aOut += e3a(x) + ",";
+(xs3a as any)[Symbol.iterator] = function* () {
+  yield 0.5;
+  yield "x";
+};
+for (const x of xs3a) e3aOut += e3a(x) + ",";
+console.log("E3a", e3aOut);
+
+// E3b (CWN 11-09): a small function the inliner copies into two callers that
+// pass different representations (an int and a String); the inner call's
+// copies keep one source offset, and the site is not typed.
+function e3bInner(m: number): number {
+  return m + m;
+}
+function e3bSmall(m: number): number {
+  return e3bInner(m);
+}
+function e3bInts(): number {
+  let s = 0;
+  for (let i = 0; i < 10 * RUN; i++) s += e3bSmall(i);
+  return s;
+}
+function e3bStr(): string {
+  return String(e3bSmall("7" as any));
+}
+console.log("E3b", e3bInts(), e3bStr());
+
+// E3c: the inlined shape with int arguments at every copy. `e3cSmall` is
+// inlined into both top-level sites, so the call of `e3cInner` has three
+// copies with one span (its own body's and the two inlined ones); they join,
+// and each copy enters the typed body. The self-call (never taken) keeps
+// `e3cInner` itself out of the inliner.
+function e3cInner(m: number): number {
+  if (m > 1e9) return e3cInner(m - 1e9);
+  return (m >> 7) & 127;
+}
+function e3cSmall(m: number): number {
+  return e3cInner(m) + 1;
+}
+let e3c = 0;
+for (let i = 0; i < 100 * RUN; i++) e3c += e3cSmall(i * 129);
+for (let i = 0; i < 10 * RUN; i++) e3c += e3cSmall(i) * 2;
+console.log("E3c", e3c);
