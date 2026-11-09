@@ -1702,6 +1702,7 @@ impl Model {
             && !self.native_given.contains(&(t, src))
         {
             self.native_given.push((t, src));
+            self.census_given(t, src);
             let members = self.node_l("given-prototype-members");
             self.cons(
                 src,

@@ -415,12 +415,12 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
 /// store under another key leaves the description alone.
 #[test]
 fn a_store_into_top_replaces_a_described_member_under_its_key() {
-    let body = |w: &str| {
+    let body = |hand: &str, w: &str| {
         format!(
             "{CLASSES}
             const unknown: any = (globalThis as any)[process.argv[2]];
             class Q {{ x = 5; b = 1; }}
-            const t: any = unknown.reach(Map);
+            const t: any = unknown.reach({hand});
             {w}
             const mp = new Map<number, any>(); mp.set(1, new B());
             const g = mp.get(1);
@@ -435,17 +435,43 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             .filter(|s| s.key == "b")
             .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
     };
-    let pf = facts(&body("t.unrelated = function () { return new Q(); };"));
+    let pf = facts(&body("Map", "t.unrelated = function () { return new Q(); };"));
     assert!(site_b(&pf), "{}", pf.dump_text());
-    for w in [
-        "t.get = function () { return new Q(); };",
-        "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };",
-    ] {
-        let pf = facts(&body(w));
+    let computed = "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };";
+    for (hand, w) in [
+        ("Map", "t.get = function () { return new Q(); };"),
+        ("Map", computed),
+        ("Map, globalThis", computed),
+    ]
+    .into_iter()
+    .map(|(h, w)| (h, w.to_string()))
+    .chain(
+        // Control (DEC 150): interpreted code holds the global object, so
+        // a program with dynamic code has handed it to unknown code.
+        [
+            "eval(process.argv[4]);",
+            "new Function(process.argv[4])();",
+            "Function('return this')();",
+        ]
+        .map(|d| ("Map", format!("{d} {computed}"))),
+    ) {
+        let w = w.as_str();
+        let dynamic = w.len() > computed.len() && w.ends_with(computed);
+        // The driver links the interpreter for a program with dynamic code.
+        let pf = if dynamic {
+            facts_with(&body(hand, w), interp_cfg())
+        } else {
+            facts(&body(hand, w))
+        };
         // DEC 250: replacing `Map.prototype.get` is a TypeError, the read is
-        // final; a computed key may still replace the global `Map` binding
-        // (global writes stay open, DEC 250 12:4xZ ruling): `mp` holds ⊤.
-        assert_eq!(site_b(&pf), !w.contains("kk"), "{w}\n{}", pf.dump_text());
+        // final. A computed key may still replace the global `Map` binding
+        // (global writes stay open, DEC 250 12:4xZ ruling) once the store
+        // into ⊤ may write the global object: unknown code was handed it
+        // (`global_in_top`), as in `a_store_into_top_writes_the_intrinsics_under_its_key`.
+        // ⊤ is no builtin function that may be the global object (the HIR
+        // global sentinel is the global object, not a function).
+        let open = hand.contains("globalThis") || dynamic;
+        assert_eq!(site_b(&pf), !open, "{hand} {w}\n{}", pf.dump_text());
     }
 }
 

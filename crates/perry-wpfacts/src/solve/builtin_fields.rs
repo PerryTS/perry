@@ -175,8 +175,10 @@ impl Model {
             self.escape(t, r);
             return;
         }
+        if builtins::global_object(self, t) {
+            return;
+        }
         let holder = match self.toks[t as usize] {
-            TokKind::Builtin(BuiltinNs::GlobalThis) => return,
             TokKind::Builtin(_) => t,
             _ => return,
         };
