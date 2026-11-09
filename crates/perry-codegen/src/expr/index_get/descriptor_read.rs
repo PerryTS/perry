@@ -458,6 +458,35 @@ pub(crate) fn install(ctx: &mut FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) ->
     Installed(installed)
 }
 
+/// `install` around `lower` (a `while` or `do..while` body's lowering).
+pub(crate) fn scoped<T>(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    controls: &[&Expr],
+    lower: impl FnOnce(&mut FnCtx<'_>) -> T,
+) -> T {
+    let installed = install(ctx, body, controls);
+    let out = lower(ctx);
+    uninstall(ctx, installed);
+    out
+}
+
+/// `install` for a `for` loop's generic tier, unless `skip` (a call-free
+/// clone, or phase 3 holds the loop's receiver).
+pub(crate) fn install_for(
+    ctx: &mut FnCtx<'_>,
+    skip: bool,
+    condition: Option<&Expr>,
+    update: Option<&Expr>,
+    body: &[Stmt],
+) -> Installed {
+    if skip {
+        return Installed::none();
+    }
+    let controls: Vec<&Expr> = condition.into_iter().chain(update).collect();
+    install(ctx, body, &controls)
+}
+
 pub(crate) fn uninstall(ctx: &mut FnCtx<'_>, installed: Installed) {
     for id in installed.0 {
         let removed = ctx.receiver_descriptors.dematerialize(id);
