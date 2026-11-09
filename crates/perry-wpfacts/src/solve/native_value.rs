@@ -66,7 +66,7 @@ impl Model {
             (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity),
         };
         if !builtins::native_receiver(self, fam, what, r) {
-            if fam == Family::Str && r != TOP {
+            if fam == Family::Str {
                 return self.string_this(call, t, r, key);
             }
             return self.declared_proto_call(call, t, identity);
@@ -101,9 +101,22 @@ impl Model {
     /// own ToPrimitive and nothing else on it; the rest is the method on that
     /// string. `r` is not handed to unknown code. (`toString` and `valueOf`
     /// throw on such an `r` instead: the model is a superset of that.)
+    /// An unknown `r` (⊤) is no exception: its ToPrimitive is its own code,
+    /// which receives nothing but `r` and may throw anything (an operation
+    /// on ⊤); the arguments still go only where the method sends them, and
+    /// the result is the string method's.
     fn string_this(&mut self, call: CallId, t: Tok, r: Tok, key: Atom) -> bool {
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
+            if r == TOP {
+                let c = &self.calls[call as usize];
+                let (region, ret) = (c.region, c.ret);
+                self.raise_top(
+                    region,
+                    ret,
+                    "unknown code may throw in the region (an operation on ⊤)",
+                );
+            }
             let why = self.reason("ToString(this) of a String.prototype method");
             self.implicit(r, why, Protocol::ToPrimitive);
             self.with_b(|m| builtins::prim_method(m, prim::STR, Key::Named(key), call));

@@ -25,9 +25,9 @@ pub(super) unsafe fn array_sparse_index_property_get(
     array_named_property_get_by_name(arr, &key)
 }
 
-/// Returns the live head: the first sparse index on a full array reserves the
-/// named-property slot by growing it (`named_props.rs`), exactly as a dense
-/// extension past capacity would.
+/// Returns the live head. The sparse index goes to the named-property bag, a
+/// separate object (`named_props.rs`): the element storage neither grows nor
+/// moves, and only `length` rises to `index + 1`.
 pub(super) unsafe fn array_sparse_index_property_set(
     arr: *mut ArrayHeader,
     index: u32,
