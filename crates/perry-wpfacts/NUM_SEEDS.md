@@ -50,11 +50,11 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `solve/apply.rs:1337` | read/map | read: tests or masks the fact, seeds nothing |
 | `solve/apply.rs:1456` | read/map | read: tests or masks the fact, seeds nothing |
 | `solve/apply.rs:1472` | read/map | read: tests or masks the fact, seeds nothing |
-| `solve/apply.rs:1473` | seed | result of a ToNumber/ToNumeric operator that codegen lowers itself (expr/binary.rs, expr/unary.rs: fadd/fsub/fmul/fdiv, toint32 + sitofp); a raw double by the lowering contract |
-| `solve/apply.rs:1486` | seed | result of a ToNumber/ToNumeric operator that codegen lowers itself (expr/binary.rs, expr/unary.rs: fadd/fsub/fmul/fdiv, toint32 + sitofp); a raw double by the lowering contract |
-| `solve/apply.rs:1492` | seed | result of a ToNumber/ToNumeric operator that codegen lowers itself (expr/binary.rs, expr/unary.rs: fadd/fsub/fmul/fdiv, toint32 + sitofp); a raw double by the lowering contract |
-| `solve/apply.rs:1502` | seed | result of a ToNumber/ToNumeric operator that codegen lowers itself (expr/binary.rs, expr/unary.rs: fadd/fsub/fmul/fdiv, toint32 + sitofp); a raw double by the lowering contract |
-| `solve/apply.rs:1503` | seed | result of a ToNumber/ToNumeric operator that codegen lowers itself (expr/binary.rs, expr/unary.rs: fadd/fsub/fmul/fdiv, toint32 + sitofp); a raw double by the lowering contract |
+| `solve/apply.rs:1473` | seed | numeric result of an arithmetic or `+` operator: codegen expr/binary.rs and expr/unary.rs lower it inline (fadd/fsub/fmul/fdiv, toint32 + sitofp), and the dynamic arm calls perry-runtime value/dynamic_arith.rs js_dynamic_string_or_number_add / dynamic_add_non_plain, which decodes an INT32 operand (`as_int32() as f64`) and returns `a_num + b_num` (f64) |
+| `solve/apply.rs:1486` | seed | numeric result of an arithmetic or `+` operator: codegen expr/binary.rs and expr/unary.rs lower it inline (fadd/fsub/fmul/fdiv, toint32 + sitofp), and the dynamic arm calls perry-runtime value/dynamic_arith.rs js_dynamic_string_or_number_add / dynamic_add_non_plain, which decodes an INT32 operand (`as_int32() as f64`) and returns `a_num + b_num` (f64) |
+| `solve/apply.rs:1492` | seed | numeric result of an arithmetic or `+` operator: codegen expr/binary.rs and expr/unary.rs lower it inline (fadd/fsub/fmul/fdiv, toint32 + sitofp), and the dynamic arm calls perry-runtime value/dynamic_arith.rs js_dynamic_string_or_number_add / dynamic_add_non_plain, which decodes an INT32 operand (`as_int32() as f64`) and returns `a_num + b_num` (f64) |
+| `solve/apply.rs:1502` | seed | numeric result of an arithmetic or `+` operator: codegen expr/binary.rs and expr/unary.rs lower it inline (fadd/fsub/fmul/fdiv, toint32 + sitofp), and the dynamic arm calls perry-runtime value/dynamic_arith.rs js_dynamic_string_or_number_add / dynamic_add_non_plain, which decodes an INT32 operand (`as_int32() as f64`) and returns `a_num + b_num` (f64) |
+| `solve/apply.rs:1503` | seed | numeric result of an arithmetic or `+` operator: codegen expr/binary.rs and expr/unary.rs lower it inline (fadd/fsub/fmul/fdiv, toint32 + sitofp), and the dynamic arm calls perry-runtime value/dynamic_arith.rs js_dynamic_string_or_number_add / dynamic_add_non_plain, which decodes an INT32 operand (`as_int32() as f64`) and returns `a_num + b_num` (f64) |
 | `solve/apply.rs:1513` | read/map | read: tests or masks the fact, seeds nothing |
 | `gen/primitives.rs:64` | read/map | family/realm/const mapping: no value of its own; the seeds that use it are audited at their own rows |
 | `gen/primitives.rs:100` | seed | computed enum member: NUM|STR, not NUM-only (no consumer drops a test) |
@@ -115,7 +115,7 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `builtins/typed_array_methods.rs:91` | seed | typed-array callback index: typedarray/iterate.rs, `as f64` |
 | `builtins/typed_array_methods.rs:93` | seed | typed-array element: NUM|BIGINT, not NUM-only |
 | `builtins/typed_array_methods.rs:113` | seed | at(): NUM|BIGINT|UNDEF, not NUM-only |
-| `builtins/typed_array_methods.rs:142` | seed | indexOf/lastIndexOf/findIndex results: typedarray/iterate.rs js_typed_array_index_of (i32 `as f64`) |
+| `builtins/typed_array_methods.rs:142` | seed | indexOf/lastIndexOf/findIndex results: perry-runtime object/native_call_method/typed_array.rs:271 (`js_array_indexOf_jsvalue(..) as f64`, `js_array_last_index_of_jsvalue(..) as f64`), reached from object/typed_array_proto_thunks.rs ta_index_of_thunk / ta_last_index_of_thunk |
 | `builtins/typed_array_methods.rs:175` | seed | find/findLast: NUM|BIGINT|UNDEF, not NUM-only |
 | `builtins/typed_array_methods.rs:176` | seed | other typed-array Number results (length, reduce of numbers...): typedarray/*.rs, f64 |
 | `derive/element.rs:120` | read/map | read: tests or masks the fact, seeds nothing |
