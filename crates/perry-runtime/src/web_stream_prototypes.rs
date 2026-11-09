@@ -63,6 +63,46 @@ static INSTALL: crate::feature_hooks::Hook<InstallFn> = crate::feature_hooks::Ho
 static READER_CONSTRUCT: crate::feature_hooks::Hook<ReaderConstructFn> =
     crate::feature_hooks::Hook::empty();
 
+/// The provider's `ReadableStream.from` (a `JsFunctionInfo` address, 0 until
+/// the stdlib's streams init registers it).
+static FROM_INFO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Registers the provider's `ReadableStream.from`. Init writes nothing to the
+/// lazy constructor: the family's birth installs `from` beside the prototype
+/// members (`populate_prototype`), so no init order matters.
+/// # Safety
+/// `info` must have static lifetime and describe a one-argument JS method.
+#[no_mangle]
+pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunctionInfo) {
+    FROM_INFO.store(info as usize, std::sync::atomic::Ordering::Release);
+}
+
+/// `ReadableStream.from` on the family's constructor, after its `prototype`
+/// (Node's own key order: `length`, `name`, `prototype`, `from`).
+unsafe fn install_from(info: *const JsFunctionInfo) {
+    use crate::closure::ClosureHeader;
+    let ctor = crate::array::intrinsic_constructor_addr_if_bound(
+        crate::object::BuiltinConstructorIdentity::ReadableStream,
+    );
+    if ctor == 0 {
+        return;
+    }
+    let method = crate::closure::js_closure_alloc(&*info, 0);
+    crate::object::set_bound_native_closure_name(method, "from");
+    crate::object::set_builtin_closure_length(method as usize, 1);
+    crate::object::set_builtin_closure_non_constructable(method as usize);
+    crate::closure::closure_set_dynamic_prop(
+        ctor,
+        "from",
+        crate::value::js_nanbox_pointer(method as *const ClosureHeader as i64),
+    );
+    crate::object::set_builtin_property_attrs(
+        ctor,
+        "from".to_string(),
+        crate::object::PropertyAttrs::new(true, true, true),
+    );
+}
+
 /// Called by the stdlib's streams init (beside `ReadableStream.from`).
 #[no_mangle]
 pub extern "C" fn js_stream_prototypes_install(
@@ -83,6 +123,11 @@ pub(crate) fn populate_prototype(builtin_name: &str, proto: *mut ObjectHeader) -
     let _gc = crate::gc::GcSuppressScope::new();
     if let Some(install) = INSTALL.peek() {
         install(family as u8, proto);
+    }
+    let from = FROM_INFO.load(std::sync::atomic::Ordering::Acquire);
+    if family == StreamFamily::ReadableStream && from != 0 {
+        // SAFETY: registered by `js_install_readable_stream_from` (static).
+        unsafe { install_from(from as *const JsFunctionInfo) };
     }
     true
 }

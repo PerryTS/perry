@@ -72,6 +72,21 @@ pub(crate) unsafe fn bag_of(ptr: usize) -> *mut ObjectHeader {
     (*(ptr as *const ClosureHeader)).props
 }
 
+/// The bag a read of the closure at `ptr` observes: an unborn lazy builtin
+/// family's constructor is born first (its statics live in the bag the
+/// birth gives it), so the first observation of `ReadableStream.from` sees it.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline]
+unsafe fn bag_observed(ptr: usize) -> *mut ObjectHeader {
+    let bag = bag_of(ptr);
+    if !bag.is_null() || !crate::object::birth_unborn_family_of(ptr) {
+        return bag;
+    }
+    bag_of(ptr)
+}
+
 /// Allocate the bag if absent and install it with the store barrier.
 pub(crate) unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
     let existing = bag_of(ptr);
@@ -344,7 +359,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_get(ptr: usize, key: &[u8]) -> Option<f64> {
-    let bag = bag_of(ptr);
+    let bag = bag_observed(ptr);
     if bag.is_null() {
         return None;
     }
@@ -516,7 +531,7 @@ pub(crate) unsafe fn bag_remove_bytes(ptr: usize, key: &[u8]) -> bool {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
-    let bag = bag_of(ptr);
+    let bag = bag_observed(ptr);
     if bag.is_null() {
         return false;
     }
@@ -628,7 +643,7 @@ pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_snapshot(ptr: usize) -> Vec<(String, f64)> {
-    let bag = bag_of(ptr);
+    let bag = bag_observed(ptr);
     if bag.is_null() {
         return Vec::new();
     }

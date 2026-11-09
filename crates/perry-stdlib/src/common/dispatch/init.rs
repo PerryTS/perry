@@ -501,10 +501,8 @@ pub(super) unsafe fn install_streams_registrations() {
     }
     STREAM_PROPERTY_BAG.set(stream_property_bag);
 
-    // RSTREAM R5: the ReadableStream families' prototype members, born lazily.
-    // Set before `ReadableStream.from` is decorated: that writes the
-    // constructor's bag, which births the family, and a birth with no
-    // install hook leaves the prototype with `constructor` and the tag only.
+    // RSTREAM R5: the ReadableStream families' prototype members and
+    // `ReadableStream.from`, both installed by the family's lazy birth.
     crate::streams::install_stream_prototypes();
     crate::streams::install_readable_stream_from_static();
     // #1545: register the Web Streams numeric-handle probe so method calls on

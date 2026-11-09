@@ -3632,6 +3632,7 @@ js_runtime_install_messaging	void
 js_runtime_install_mod_dgram	void	
 js_runtime_install_mod_http2_constants	void	
 js_runtime_install_mod_node_test	void	
+js_runtime_install_navigator	void	
 js_runtime_install_node_api_host	void	
 js_runtime_install_os	void	
 js_runtime_install_perf_hooks	void	
@@ -3848,8 +3849,13 @@ js_stdlib_install_turnloop_http_client	void
 js_stdlib_install_web_fetch	void	
 js_stdlib_process_pending	i32s	
 js_stdlib_register_feature_installer	void	ptr
+js_stream_family_member	f64	i8u,ptr,usize
 js_stream_handle_is_registered	bool	usize
 js_stream_handle_kind	i8u	usize
+js_stream_prototype_async_iterator	void	ptr,f64
+js_stream_prototype_getter	void	ptr,ptr,usize,ptr
+js_stream_prototype_method	f64	ptr,ptr,usize,ptr,i32u
+js_stream_prototypes_install	void	ptr,ptr
 js_stream_unwrap_handle	f64	f64
 js_stream_web_compression_stream_new	f64	f64
 js_stream_web_decompression_stream_new	f64	f64

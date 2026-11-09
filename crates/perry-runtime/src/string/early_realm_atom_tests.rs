@@ -17,7 +17,7 @@ fn early_realm_bootstrap_does_not_preempt_error_static_program_atoms() {
             let _no_move = crate::gc::GcSuppressScope::new();
             // The streams provider installs this static before module literals
             // register. Exercise its actual runtime entry on a fresh agent.
-            crate::node_submodules::js_install_readable_stream_from(crate::fn_info!(
+            crate::web_stream_prototypes::js_install_readable_stream_from(crate::fn_info!(
                 from_fixture,
                 1
             ));
