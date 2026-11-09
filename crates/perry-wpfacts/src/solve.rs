@@ -1683,7 +1683,7 @@ impl Model {
             }
             Cons::AnnexBDefine { call, setter } => format!("annexbdefine {n} {call} {setter}"),
             Cons::AnnexBLookup { call, setter } => format!("annexblookup {n} {call} {setter}"),
-            Cons::AccessorInstall { key, f, setter } => {
+            Cons::AccessorInstall { key, f, setter, .. } => {
                 format!(
                     "accinstall {n} {} {} {}",
                     self.key_name(Key::Named(*key)),

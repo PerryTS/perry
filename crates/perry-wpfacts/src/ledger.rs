@@ -209,6 +209,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || w.contains("from unmodeled code")
             || w.contains("unknown code")
             || starts("unknown holder of the box")
+            || w.contains("hands its resource to async_hooks init")
             || starts("unregistered function id")
             || starts("bind with spread arguments")
             || w.contains("decorator")
@@ -371,6 +372,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
             || starts("result of an unmodeled native accessor lookup")
+            || starts("a closure native's captures")
         {
             OpaqueBuiltin
         } else if starts("global ")

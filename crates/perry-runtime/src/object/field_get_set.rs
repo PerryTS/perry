@@ -246,6 +246,9 @@ pub(crate) mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
+#[cfg(test)]
+#[path = "field_get_set/undeclared_prototype_tests.rs"]
+mod undeclared_prototype_tests;
 mod map_set_receiver;
 #[cfg(test)]
 mod map_set_receiver_tests;
@@ -341,6 +344,7 @@ pub use has_property::{js_in_operator, js_object_has_property};
 #[cfg(test)]
 pub(crate) use ic_miss::get_field_miss;
 pub(crate) use ic_miss::intrinsic_private_add;
+pub(crate) use ic_miss::intrinsic_private_get;
 pub(crate) use ic_miss::intrinsic_private_set;
 #[cfg(test)]
 pub(crate) use ic_miss::private_lexical_brand_depth;

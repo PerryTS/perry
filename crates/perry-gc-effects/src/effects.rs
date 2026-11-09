@@ -173,6 +173,7 @@ fn runs_code(e: &RealmEffect) -> bool {
         | RealmEffect::Reads(_)
         | RealmEffect::Stores { .. }
         | RealmEffect::Escapes(_)
+        | RealmEffect::AsyncResource(_)
         | RealmEffect::Open => true,
         RealmEffect::Returns(o) => species(o),
         RealmEffect::StoresFresh => false,
@@ -184,6 +185,7 @@ fn keeps(e: &RealmEffect) -> bool {
         RealmEffect::Stores { .. }
         | RealmEffect::StoresFresh
         | RealmEffect::Escapes(_)
+        | RealmEffect::AsyncResource(_)
         | RealmEffect::Open => true,
 
         RealmEffect::Returns(o) => fresh(o) || species(o),

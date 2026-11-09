@@ -166,9 +166,9 @@ fn metadata_keys_for(target: f64, property_key: f64, inherited: bool) -> f64 {
 /// class constructor (`ClassRef`), and several existing tests
 /// (`test_decorators_legacy_property_metadata.ts`) read it back off the class.
 /// To satisfy BOTH access shapes we treat a class's prototype and its
-/// constructor as one metadata bucket: any class-prototype target — the
-/// synthetic `class_prototype_ref` value or the live decl-prototype heap object
-/// — folds onto the stable class-constructor key (`INT32_TAG | class_id`).
+/// constructor as one metadata bucket: a class-prototype target (the live
+/// decl-prototype heap object) folds onto the stable class-constructor key
+/// (`class_constructor_key_bits`).
 ///
 /// This is the runtime "compatibility shim" alternative to re-targeting the
 /// emit (REFLECT-METADATA-SCOPING.md, Task B). It is also GC-safe: the
@@ -178,10 +178,6 @@ fn metadata_keys_for(target: f64, property_key: f64, inherited: bool) -> f64 {
 /// no dedicated GC scanner. Non-prototype targets (constructors, method `.value`
 /// closures, plain objects) pass through unchanged.
 fn normalize_target_bits(target: f64) -> u64 {
-    // Synthetic class-prototype ref → fold onto the class constructor key.
-    if let Some(cid) = crate::object::class_prototype_ref_id(target) {
-        return crate::object::class_constructor_key_bits(cid);
-    }
     // A class constructor (either form) -> its stable key: the function object
     // is a heap cell whose address is not a durable key.
     if let Some(cid) = crate::object::class_value::class_value_id(target) {
@@ -275,25 +271,10 @@ mod tests {
             .insert(cid);
     }
 
-    // A class's synthetic prototype-ref and its live decl-prototype heap object
-    // both fold onto the class-constructor key, so `getMetadata(design:type,
+    // A class's live decl-prototype heap object folds onto the
+    // class-constructor key, so `getMetadata(design:type,
     // SomeClass.prototype, prop)` (class-transformer) finds metadata stored
     // against `ClassRef(SomeClass)` (Perry's emit).
-    #[test]
-    fn synthetic_prototype_ref_folds_onto_constructor_key() {
-        let cid = 0x4242;
-        register_test_class(cid);
-        let ctor_key = crate::object::class_constructor_key_bits(cid);
-
-        let proto_ref = crate::object::class_prototype_ref_value(cid);
-        assert_eq!(normalize_target_bits(proto_ref), ctor_key);
-
-        // The constructor VALUE (its function object) folds onto the same key.
-        let ctor_ref = crate::object::class_constructor_ref_value(cid);
-        assert_ne!(ctor_ref.to_bits(), ctor_key, "the value is not the key");
-        assert_eq!(normalize_target_bits(ctor_ref), ctor_key);
-    }
-
     #[test]
     fn decl_prototype_heap_object_folds_onto_constructor_key() {
         let cid = 0x5151;

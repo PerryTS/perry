@@ -66,6 +66,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
     let (root, steps) = match (name, inner) {
         ("this", None) => (Value::String("this".into()), Vec::new()),
         ("result", None) => (Value::String("result".into()), Vec::new()),
+        ("callee", None) => (Value::String("callee".into()), Vec::new()),
         ("arg" | "rest" | "returned", Some(_)) => {
             (tagged(name, index(name, inner)?), Vec::new())
         }
@@ -95,7 +96,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, arg(N), rest(N), returned(N), elems(slot), field(slot, key), islot(slot, name))",
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), field(slot, key), islot(slot, name))",
                 info::text(ts)
             ))
         }
@@ -306,6 +307,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
             tagged("reads", Value::Array(read))
         }
         "escapes" => tagged("escapes", slot(inner()?)?),
+        "async_resource" => tagged("async_resource", slot(inner()?)?),
         "coerce" => {
             let parts = info::split(inner()?, ",");
 

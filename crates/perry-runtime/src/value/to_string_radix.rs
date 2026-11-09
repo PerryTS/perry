@@ -418,10 +418,7 @@ mod radix_tostring_tests {
             // ToInteger truncation.
             assert_eq!(coerce_validate_radix(2.9), Some(2));
             // int32-boxed radix.
-            assert_eq!(
-                coerce_validate_radix(f64::from_bits(JSValue::int32(16).bits())),
-                Some(16)
-            );
+            assert_eq!(coerce_validate_radix(f64::from(16)), Some(16));
             // String radix coerces via ToNumber.
             let s = crate::string::js_string_from_bytes(b"16".as_ptr(), 2);
             assert_eq!(

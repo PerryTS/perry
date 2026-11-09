@@ -498,20 +498,23 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for performance.now() and the W3C User Timing methods.
-            // `now()` keeps its dedicated Expr; the rest lower to a
-            // receiver-less NativeMethodCall on the perf_hooks module, which
-            // the codegen dispatches to the `js_perf_*` runtime helpers. This
-            // applies only to the unshadowed global. Imports and local objects
-            // use normal receiver dispatch, preserving their actual methods.
+            // Check for the W3C User Timing methods on `performance`. They
+            // lower to a receiver-less NativeMethodCall on the perf_hooks
+            // module, which the codegen dispatches to the `js_perf_*` runtime
+            // helpers. This applies only to the unshadowed global. Imports and
+            // local objects use normal receiver dispatch, preserving their
+            // actual methods.
+            //
+            // `performance.now()` is NOT folded: harnesses and polyfills
+            // replace it (`Object.defineProperty(performance, "now", …)`,
+            // `performance.now = fake`), from any module, so the call must read
+            // the property. The ordinary method call does, and still reaches
+            // the native clock when nothing replaced it.
             if obj_ident.sym.as_ref() == "performance"
                 && !ctx.shadows_unqualified_global("performance")
             {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let m = method_ident.sym.as_ref();
-                    if m == "now" {
-                        return Ok(Ok(Expr::PerformanceNow));
-                    }
                     if matches!(
                         m,
                         "mark"

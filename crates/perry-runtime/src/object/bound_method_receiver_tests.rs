@@ -63,9 +63,6 @@ unsafe fn register_class() -> (f64, f64) {
         record_setter_11201 as *const () as usize as i64,
         1,
     );
-    let proto_ref = super::native_module::class_prototype_ref_value(RECEIVER_TEST_CLASS_ID);
-    let method =
-        super::native_module::js_class_method_bind(proto_ref, METHOD.as_ptr(), METHOD.len());
     // `class_decl_prototype_value` materializes `C.prototype` only for a
     // named class, exactly as codegen registers one.
     const CLASS_NAME: &[u8] = b"Receiver11201";
@@ -75,6 +72,9 @@ unsafe fn register_class() -> (f64, f64) {
         CLASS_NAME.len() as u32,
     );
     let proto = super::class_registry::class_decl_prototype_value(RECEIVER_TEST_CLASS_ID);
+    // `C.prototype.whoAmI`: the read's receiver is the prototype object (P3
+    // B2/B4a), never the 0x7FFE prototype word.
+    let method = super::native_module::js_class_method_bind(proto, METHOD.as_ptr(), METHOD.len());
     (method, proto)
 }
 
