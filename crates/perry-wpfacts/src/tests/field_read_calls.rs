@@ -151,10 +151,10 @@ fn controls_keep_the_call() {
             "if (b.at(keys[0]) === 0) s++;",
         ),
     );
-    // K11: F with another `this`.
+    // K11: F with another `this` (after `b` exists).
     assert_no_fact(
         "K11",
-        &base(at, "const g = b.at; g.call({ board: 'abc' }, 1);", call),
+        "class Board { board: number[] = new Array<number>(8).fill(0);\nat(i: number): number { return this.board[i] ?? 0; } }\nconst b = new Board();\nconst g = b.at;\nconsole.log(g.call({ board: 'abc' }, 1));\nlet s = 0; for (let i = 0; i < 8; i++) { if (b.at(i & 7) === 0) s++; }\nconsole.log(s);\n",
     );
     // K13: the field may hold undefined.
     assert_no_fact(
