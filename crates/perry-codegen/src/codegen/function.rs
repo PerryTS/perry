@@ -716,9 +716,10 @@ pub(super) fn compile_function(
     // The full IEEE body remains below, including its public entry guards.
     let integer_contract = if spec_entry.is_some_and(|plan| {
         plan.signature.is_none()
-            && plan.reps
-            .iter()
-            .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
+            && plan
+                .reps
+                .iter()
+                .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
     }) && super::checked_integer::eligible(f, &llmod.target_triple)
     {
         super::integer_contract::prove(f)
