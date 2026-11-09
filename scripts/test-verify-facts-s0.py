@@ -110,6 +110,9 @@ def main():
         ("element-read-negative", "arrlen", "proven element read"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
+        ("signature-negative", "signature", "signature"),
+        ("signature-escape-negative", "signature-escape", "signature"),
+        ("signature-range-negative", "signature-range", "signature"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:

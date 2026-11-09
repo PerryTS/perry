@@ -670,6 +670,18 @@ pub(super) fn compile_function(
         .get(&f.id)
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    // P2: a typed function's public symbol is its boxed entry (§3.3); its
+    // one body is `F$sig`, compiled through the spec path below.
+    if spec_entry.is_none() && typed_public_trampoline.is_none() {
+        if let Some(plan) = cross_module
+            .spec_abi_functions
+            .get(&f.id)
+            .filter(|plan| plan.signature.is_some())
+        {
+            super::signature_entry::emit_boxed_entry(llmod, f, &public_llvm_name, plan);
+            return Ok(());
+        }
+    }
     let guarded_public_plan = if typed_public_trampoline.is_none() && spec_entry.is_none() {
         cross_module
             .spec_abi_functions
@@ -694,7 +706,7 @@ pub(super) fn compile_function(
         // (mutual exclusion is enforced at plan selection).
         debug_assert!(typed_public_trampoline.is_none());
         debug_assert_eq!(plan.reps.len(), f.params.len());
-        spec_function_name(&public_llvm_name, &plan.reps)
+        super::spec_abi::spec_entry_name(&public_llvm_name, plan)
     } else if typed_public_trampoline.is_some() || guarded_public_plan.is_some() {
         generic_function_body_name(&public_llvm_name)
     } else {
@@ -703,7 +715,8 @@ pub(super) fn compile_function(
     // A separate raw return ABI is admitted only for a closed pure body.
     // The full IEEE body remains below, including its public entry guards.
     let integer_contract = if spec_entry.is_some_and(|plan| {
-        plan.reps
+        plan.signature.is_none()
+            && plan.reps
             .iter()
             .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
     }) && super::checked_integer::eligible(f, &llmod.target_triple)
@@ -744,6 +757,21 @@ pub(super) fn compile_function(
     // (representation-selection Phase 2) instead type each parameter register
     // by its rep — raw i32, raw f64, or raw typed-array header pointer (i64).
     let mut params: Vec<(LlvmType, String)> = match spec_entry {
+        // P2: `F$sig`'s registers take the signature's representations.
+        Some(SpecFnPlan {
+            signature: Some(sig),
+            ..
+        }) => f
+            .params
+            .iter()
+            .zip(sig.params.iter())
+            .map(|(p, rep)| {
+                (
+                    super::signature_entry::sig_llvm_ty(*rep),
+                    format!("%arg{}", p.id),
+                )
+            })
+            .collect(),
         Some(plan) => f
             .params
             .iter()
@@ -765,7 +793,14 @@ pub(super) fn compile_function(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
-    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    let sig_return = spec_entry
+        .and_then(|plan| plan.signature.as_ref())
+        .map(|sig| sig.ret);
+    let lf = llmod.define_function(
+        &llvm_name,
+        super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
+        params,
+    );
     let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
     // #8595: these functions exist specifically to bound backend work. Letting
     // the ordinary or pre-statepoint inliner fold them back into module init
@@ -903,7 +938,18 @@ pub(super) fn compile_function(
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
         for (idx, p) in f.params.iter().enumerate() {
-            let arg_name = format!("%arg{}", p.id);
+            let mut arg_name = format!("%arg{}", p.id);
+            // P2: an I32 register the body writes binds as today's double.
+            if spec_entry
+                .and_then(|plan| plan.signature.as_ref())
+                .is_some_and(|sig| sig.params[idx] == super::FactsRep::I32)
+                && !matches!(
+                    spec_entry.map(|plan| plan.reps[idx]),
+                    Some(crate::collectors::SpecParamRep::I32)
+                )
+            {
+                arg_name = blk.sitofp(I32, &arg_name, DOUBLE);
+            }
             match spec_entry.map(|plan| plan.reps[idx]) {
                 Some(crate::collectors::SpecParamRep::I32) => {
                     if crate::expr::canonical_i32_locals_enabled() {
@@ -1586,6 +1632,7 @@ pub(super) fn compile_function(
         ),
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
+        sig_return: None,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -1689,6 +1736,11 @@ pub(super) fn compile_function(
         buffer_alias_scopes,
     };
 
+    if let Some(plan) = spec_entry.filter(|plan| plan.signature.is_some()) {
+        ctx.sig_return = sig_return;
+        ctx.nonnegative_integer_locals
+            .extend(super::signature_entry::nonnegative_params(f, plan));
+    }
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(
         &mut ctx,
@@ -1895,6 +1947,12 @@ pub(super) fn compile_function(
     // does `f() === undefined` / `f() !== undefined` observes the
     // correct value. For async functions, wrap undefined in a
     // resolved promise so callers can await the result.
+    if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
+        // P2: the facts prove an I32 entry never completes normally.
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        super::signature_entry::witness_return(&mut ctx, super::FactsRep::I32, &undef);
+        ctx.block().unreachable();
+    }
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         if f.is_async {
