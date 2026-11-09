@@ -63,14 +63,34 @@ impl Model {
                 }
                 return true;
             }
-            (None, ThisArg::Undef) => return false,
+            (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity),
         };
         if !builtins::native_receiver(self, fam, what, r) {
-            return fam == Family::Str && self.string_this(call, t, r, key);
+            if fam == Family::Str {
+                return self.string_this(call, t, r, key);
+            }
+            return self.declared_proto_call(call, t, identity);
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
             self.with_b(|m| builtins::native_prototype_call(m, fam, r, key, call));
+        }
+        true
+    }
+
+    /// A prototype method called on a receiver its family model does not
+    /// cover (`Performance.prototype.now` on `performance`, a host object
+    /// with no family), when the runtime declares what a call does without
+    /// naming `this`: the declaration runs, whatever the receiver (one of
+    /// another brand throws before any of it: the declaration is a
+    /// superset). `false`: no such declaration, the unknown callee's arm.
+    fn declared_proto_call(&mut self, call: CallId, t: Tok, identity: &str) -> bool {
+        let Some(e) = builtins::declared_proto_method(identity) else {
+            return false;
+        };
+        if self.bind_done.insert((call, t, u32::MAX - 7)) {
+            self.diagnostic_callee(call, t);
+            self.with_b(|m| builtins::run_function(m, e, call));
         }
         true
     }
