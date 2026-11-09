@@ -261,13 +261,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     }
     let is_readable = matches!(
         method,
-        "getReader"
-            | "values"
-            | "@@asyncIterator"
-            | "cancel"
-            | "tee"
-            | "pipeTo"
-            | "pipeThrough"
+        "getReader" | "values" | "@@asyncIterator" | "cancel" | "tee" | "pipeTo" | "pipeThrough"
     ) && READABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_readable {
         match method {

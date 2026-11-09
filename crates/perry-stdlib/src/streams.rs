@@ -387,8 +387,9 @@ use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
-    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_handle_is_registered,
-    js_stream_handle_kind, js_transform_stream_subclass_init, js_writable_stream_subclass_init,
+    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_controller_family,
+    js_stream_handle_is_registered, js_stream_handle_kind, js_transform_stream_subclass_init,
+    js_writable_stream_subclass_init,
 };
 #[cfg(test)]
 pub(crate) use self::transform::transform_side_tables_hold_for_test;

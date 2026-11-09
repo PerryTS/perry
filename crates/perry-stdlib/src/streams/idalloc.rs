@@ -33,8 +33,8 @@
 
 use super::transform::TRANSFORM_PAIRS;
 use super::{
-    byob, expando, tee, ReadableState, WritableState, READABLE_STREAMS, READERS,
-    STREAM_ALLOC_END, STREAM_HANDLE_ID_START, TRANSFORM_STREAMS, WRITABLE_STREAMS, WRITERS,
+    byob, expando, tee, ReadableState, WritableState, READABLE_STREAMS, READERS, STREAM_ALLOC_END,
+    STREAM_HANDLE_ID_START, TRANSFORM_STREAMS, WRITABLE_STREAMS, WRITERS,
 };
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};

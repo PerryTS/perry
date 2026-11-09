@@ -318,9 +318,9 @@ fn response_done(stream: usize, outcome: Outcome) {
     unsafe {
         match outcome {
             Outcome::Ok(_) => {
-                crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
-                    stream,
-                ));
+                crate::streams::js_readable_stream_controller_close(
+                    crate::streams::controller_value(stream),
+                );
             }
             Outcome::Err(error) => {
                 let bits = if error.aborted {

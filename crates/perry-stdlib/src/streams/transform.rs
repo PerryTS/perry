@@ -956,7 +956,10 @@ unsafe fn error_transform_close(
     reason_bits: u64,
 ) {
     if readable_id != 0 {
-        js_readable_stream_controller_error(controller_value(readable_id), f64::from_bits(reason_bits));
+        js_readable_stream_controller_error(
+            controller_value(readable_id),
+            f64::from_bits(reason_bits),
+        );
     }
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
         s.state = WritableState::Errored;
@@ -1144,7 +1147,10 @@ unsafe fn native_transform_write(
         NativeTransformKind::TextEncoder => {
             let text = js_string_value_to_string(chunk, true).unwrap_or_default();
             let bytes = alloc_uint8array_from_bytes(text.as_bytes());
-            js_readable_stream_controller_enqueue(controller_value(readable_id), f64::from_bits(bytes));
+            js_readable_stream_controller_enqueue(
+                controller_value(readable_id),
+                f64::from_bits(bytes),
+            );
             Ok(())
         }
         NativeTransformKind::TextDecoder { fatal, pending } => {
