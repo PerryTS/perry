@@ -1186,17 +1186,41 @@ pub(crate) unsafe fn birth_unborn_family_of(ptr: usize) -> bool {
 #[cold]
 #[inline(never)]
 fn birth_unborn_family_slow(ptr: usize, word: u32) -> bool {
-    let Some(identity) = crate::object::BuiltinConstructorIdentity::from_header(word) else {
-        return false;
-    };
-    if !identity.declaration().lazy
-        || BIRTHING.with(|c| c.get()) == identity as u8
-        || crate::array::intrinsic_prototype_addr_if_bound(identity) != 0
-        || crate::array::intrinsic_constructor_addr_if_bound(identity) != ptr
-    {
-        return false;
+    unborn_lazy_identity(ptr, word)
+        .is_some_and(|identity| crate::array::intrinsic_prototype_addr(identity) != 0)
+}
+
+/// The declared static keys of the closure at `ptr` while it is its realm's
+/// still unborn `lazy` constructor (`BuiltinConstructorDeclaration::statics`),
+/// else none. Presence and key listing answer them without a birth; reading
+/// one's value births the family ([`birth_unborn_family_of`]).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline]
+pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'static str] {
+    let word = (*(ptr as *const crate::closure::ClosureHeader)).capture_count;
+    if word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK == 0 {
+        return &[];
     }
-    crate::array::intrinsic_prototype_addr(identity) != 0
+    unborn_declared_statics_slow(ptr, word)
+}
+
+#[cold]
+#[inline(never)]
+fn unborn_declared_statics_slow(ptr: usize, word: u32) -> &'static [&'static str] {
+    unborn_lazy_identity(ptr, word).map_or(&[], |identity| identity.declaration().statics)
+}
+
+/// The identity of the closure at `ptr` (header word `word`) while it is its
+/// realm's still unborn `lazy` constructor, outside that family's own birth.
+fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
+    let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
+    (identity.declaration().lazy
+        && BIRTHING.with(|c| c.get()) != identity as u8
+        && crate::array::intrinsic_prototype_addr_if_bound(identity) == 0
+        && crate::array::intrinsic_constructor_addr_if_bound(identity) == ptr)
+        .then_some(identity)
 }
 
 fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {

@@ -691,9 +691,13 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     }
                     // A generator function declares `prototype`: an
                     // unmaterialized slot is born with its bag (allocates).
-                    // So does an unborn lazy builtin family's constructor:
-                    // its family's birth gives it the bag.
-                    if crate::closure::props::bag_of(ptr).is_null() {
+                    // So does an unborn lazy builtin family's constructor when
+                    // the key is `prototype` or a declared static (the value
+                    // is read): its family's birth gives it the bag.
+                    if crate::closure::props::bag_of(ptr).is_null()
+                        && (name == "prototype"
+                            || crate::object::unborn_declared_statics_of(ptr).contains(&name))
+                    {
                         ptr_handle.across_mut::<u8, _>(|| {
                             crate::object::birth_unborn_family_of(ptr);
                         });

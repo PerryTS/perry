@@ -72,19 +72,16 @@ pub(crate) unsafe fn bag_of(ptr: usize) -> *mut ObjectHeader {
     (*(ptr as *const ClosureHeader)).props
 }
 
-/// The bag a read of the closure at `ptr` observes: an unborn lazy builtin
-/// family's constructor is born first (its statics live in the bag the
-/// birth gives it), so the first observation of `ReadableStream.from` sees it.
+/// Is `key` a declared static of the closure at `ptr` while it is an unborn
+/// lazy constructor (`BuiltinConstructorDeclaration::statics`)?
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 #[inline]
-unsafe fn bag_observed(ptr: usize) -> *mut ObjectHeader {
-    let bag = bag_of(ptr);
-    if !bag.is_null() || !crate::object::birth_unborn_family_of(ptr) {
-        return bag;
-    }
-    bag_of(ptr)
+pub(crate) unsafe fn is_declared_static(ptr: usize, key: &[u8]) -> bool {
+    crate::object::unborn_declared_statics_of(ptr)
+        .iter()
+        .any(|declared| declared.as_bytes() == key)
 }
 
 /// Allocate the bag if absent and install it with the store barrier.
@@ -359,9 +356,17 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_get(ptr: usize, key: &[u8]) -> Option<f64> {
-    let bag = bag_observed(ptr);
+    let mut bag = bag_of(ptr);
     if bag.is_null() {
-        return None;
+        // Reading a declared static of an unborn lazy constructor births its
+        // family; the birth installs the static.
+        if !is_declared_static(ptr, key) || !crate::object::birth_unborn_family_of(ptr) {
+            return None;
+        }
+        bag = bag_of(ptr);
+        if bag.is_null() {
+            return None;
+        }
     }
     object_own_get(bag, key)
 }
@@ -531,9 +536,9 @@ pub(crate) unsafe fn bag_remove_bytes(ptr: usize, key: &[u8]) -> bool {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
-    let bag = bag_observed(ptr);
+    let bag = bag_of(ptr);
     if bag.is_null() {
-        return false;
+        return is_declared_static(ptr, key);
     }
     let keys = crate::object::object_keys(bag);
     let arr = keys.arr();
@@ -607,9 +612,14 @@ pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
 }
 
 pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
-    let bag = bag_observed(ptr);
+    let bag = bag_of(ptr);
     if bag.is_null() {
-        return Vec::new();
+        // An unborn lazy constructor's declared statics follow its intrinsic
+        // slots; listing them births nothing.
+        return crate::object::unborn_declared_statics_of(ptr)
+            .iter()
+            .map(|key| key.as_bytes().to_vec())
+            .collect();
     }
     let keys = crate::object::object_keys(bag);
     let arr = keys.arr();
@@ -643,9 +653,19 @@ pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_snapshot(ptr: usize) -> Vec<(String, f64)> {
-    let bag = bag_observed(ptr);
+    let mut bag = bag_of(ptr);
     if bag.is_null() {
-        return Vec::new();
+        // The snapshot reads values: an unborn lazy constructor with declared
+        // statics is born to read them.
+        if crate::object::unborn_declared_statics_of(ptr).is_empty()
+            || !crate::object::birth_unborn_family_of(ptr)
+        {
+            return Vec::new();
+        }
+        bag = bag_of(ptr);
+        if bag.is_null() {
+            return Vec::new();
+        }
     }
     let keys = crate::object::object_keys(bag);
     let arr = keys.arr();

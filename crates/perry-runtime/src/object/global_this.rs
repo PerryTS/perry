@@ -163,7 +163,7 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
+    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
     populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{

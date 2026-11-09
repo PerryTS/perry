@@ -67,14 +67,28 @@ fn realm_population_does_not_birth_lazy_families() {
     }
 }
 
+extern "C" fn declared_static_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    value
+}
+
 /// Fixture 5: every `lazy` declaration can be born late. Its constructor
-/// owns `length`, `name` and `prototype` first, the realm seal does not name it (the seal would read its
-/// prototype at setup), and no setup step reached its prototype (the
-/// population test above). Listing a bagless
-/// constructor's keys births its family.
+/// owns `length`, `name`, `prototype` and its declared statics only, in the
+/// realm source's own-key order, the realm seal does not name it (the seal
+/// would read its prototype at setup), and no setup step reached its
+/// prototype (the population test above). Listing a bagless constructor's
+/// keys births nothing.
 #[test]
 fn lazy_declarations_are_bornable_late() {
     let _lock = crate::gc::global_side_table_test_lock();
+    // The provider installs the declared statics at the birth (the stdlib's
+    // streams install, in miniature).
+    crate::external_family::provide_from_for_tests(crate::fn_info!(
+        declared_static_fixture, 1; with_declared(1)
+    ));
     js_get_global_this();
     for declaration in lazy_declarations() {
         assert!(
@@ -94,22 +108,60 @@ fn lazy_declarations_are_bornable_late() {
             declaration.name
         );
         let before = own_names(constructor(declaration));
-        // Listing a constructor's keys is an observation of it: its statics
-        // (ReadableStream.from) belong to the birth, so the listing births.
-        assert_ne!(
+        assert_eq!(
             crate::array::intrinsic_prototype_addr_if_bound(declaration.identity),
             0,
-            "{}: listing its constructor's keys must birth it",
+            "{}: listing its constructor's keys birthed it",
             declaration.name
         );
-        assert_eq!(before[..3], ["length", "name", "prototype"], "{}", declaration.name);
+        let declared: Vec<&str> = ["length", "name", "prototype"]
+            .into_iter()
+            .chain(declaration.statics.iter().copied())
+            .collect();
+        assert_eq!(before, declared, "{}", declaration.name);
+        for key in declaration.statics {
+            let ptr = crate::value::js_nanbox_get_pointer(constructor(declaration)) as usize;
+            assert!(
+                crate::object::has_own_helpers::closure_own_key_present(ptr, key)
+                    && crate::array::intrinsic_prototype_addr_if_bound(declaration.identity) == 0,
+                "{}.{key}: presence birthed it",
+                declaration.name
+            );
+        }
         builtin_prototype_value(declaration.name);
         assert_eq!(
             own_names(constructor(declaration)),
-            before,
-            "{}: the birth gave the constructor its keys once",
+            declared,
+            "{}: the birth gave the constructor other keys than it declares",
             declaration.name
         );
+    }
+}
+
+/// A lazy constructor's declared statics are the realm source's: its own-key
+/// order there is `length`, `name`, `prototype`, then exactly `statics`.
+#[test]
+fn lazy_declared_statics_are_the_realm_sources() {
+    let realm: serde_json::Value =
+        serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/realm-v1.json")))
+            .expect("realm-v1.json");
+    let declarations = realm["declarations"].as_array().expect("declarations");
+    for declaration in lazy_declarations() {
+        let source = declarations
+            .iter()
+            .find(|d| d["kind"] == "constructor" && d["name"] == declaration.name)
+            .unwrap_or_else(|| panic!("{}: no realm constructor declaration", declaration.name));
+        let order: Vec<&str> = source["own_key_order"]
+            .as_array()
+            .expect("own_key_order")
+            .iter()
+            .map(|key| key.as_str().expect("key"))
+            .collect();
+        let declared: Vec<&str> = ["length", "name", "prototype"]
+            .into_iter()
+            .chain(declaration.statics.iter().copied())
+            .collect();
+        assert_eq!(order, declared, "{}: declared statics differ from the realm source", declaration.name);
     }
 }
 

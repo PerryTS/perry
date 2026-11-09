@@ -51,10 +51,16 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// The family's members are provided outside the runtime: its birth
     /// calls the registered provider hook (`external_family.rs`). Always `lazy`.
     pub external: bool,
+    /// A `lazy` constructor's own static keys, in creation order after
+    /// `length`, `name` and `prototype` (its declared static slots): while
+    /// the family is unborn, presence and key listing answer them from here;
+    /// reading one's value births the family, which installs it. The realm
+    /// source's own-key order is the check (`lazy_family_tests`).
+    pub statics: &'static [&'static str],
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)? $(; external $external:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)? $(; external $external:expr)? $(; statics [$($static:literal),* $(,)?])?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
@@ -97,6 +103,7 @@ macro_rules! builtin_constructors {
                 instance_identity: builtin_constructors!(@optional $($instance)?),
                 lazy: builtin_constructors!(@callable $($lazy)?),
                 external: builtin_constructors!(@callable $($external)?),
+                statics: &[$($($static,)*)?],
             },)*
         ];
     };
@@ -172,7 +179,7 @@ builtin_constructors! {
     // RSTREAM: the three ReadableStream families are born on first
     // observation; their members come from the program's streams install
     // (an `external` family: `external_family.rs`).
-    ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060); lazy true; external true,
+    ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060); lazy true; external true; statics ["from"],
     ReadableStreamDefaultController => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
     ReadableStreamDefaultReader => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
     WritableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0061); lazy true,

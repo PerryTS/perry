@@ -52,6 +52,10 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 // Who installs the members (a provider outside the runtime);
                 // the members themselves are the realm declaration's rows.
                 "external" => continue,
+                // A lazy constructor's declared static slots: the statics
+                // themselves are the realm declaration's rows (the runtime's
+                // `lazy_declared_statics_are_the_realm_sources` checks them).
+                "statics" => continue,
                 other => return Err(format!("unknown constructor family field {other}")),
             };
             let value = if field == "prototype_callable" {
