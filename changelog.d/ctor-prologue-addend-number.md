@@ -1,0 +1,1 @@
+A constructor that stores `this.x = p + 1` no longer drops the `+` for a non-Number argument: `new P("s")` stores `"s1"` (and objects, `undefined` and booleans convert) instead of keeping the argument unchanged. The inline constructor stores test the value, or take the constructor call.
