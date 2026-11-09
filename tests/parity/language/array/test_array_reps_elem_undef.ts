@@ -146,4 +146,14 @@ for (let i = 0; i < 100; i++) {
 }
 out.push("k" + mask);
 
+// Two reads at one site start: `rows[i][0]` reads `rows` under `i` (eight
+// rows) and each row under 0 (two cells). Check mode re-tests `i` against
+// the outer read's floor, never the row's.
+const rows: [string, number][] = [
+  ["a", 1], ["b", 2], ["c", 3], ["d", 4], ["e", 5], ["f", 6], ["g", 7], ["h", 8],
+];
+let rowText = "";
+for (let i = 0; i < rows.length; i++) rowText += rows[i][0] + rows[i][1];
+out.push("w" + rowText);
+
 console.log(out.join(" "));

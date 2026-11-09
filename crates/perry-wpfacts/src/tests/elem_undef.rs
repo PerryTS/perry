@@ -177,3 +177,16 @@ fn a_for_of_walk_read_has_a_site_key() {
     assert_eq!(r.number, Some(false), "a Number element of K");
     assert_eq!(r.floor, Some(8));
 }
+
+#[test]
+fn reads_sharing_an_offset_export_the_largest_floor() {
+    // `t[i][0]`: the outer read (key `[0, 7]`, floor 8) and the inner one
+    // (key 0 of a length-2 row) both start at `t`. Each proves its key below
+    // its own floor; only the larger floor holds for both.
+    let src = "const t: [string, number][] = [\n\
+                 [\"a\", 1], [\"b\", 2], [\"c\", 3], [\"d\", 4], [\"e\", 5], [\"f\", 6], [\"g\", 7], [\"h\", 8],\n\
+               ];\n\
+               for (let i = 0; i < t.length; i++) console.log(t[i][0] + \" \" + i);";
+    let r = read(src, "t[i][0]", &check());
+    assert_eq!(r.floor, Some(8));
+}

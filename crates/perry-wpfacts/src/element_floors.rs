@@ -5,8 +5,12 @@
 //! and an enclosing for-of rewrite duplicate a read; a summarized body has
 //! one copy per instance), its receiver holds only program Arrays and each
 //! one's `ElemUndef` verdict is "in the floor": the key is an integer in
-//! `[0, lo)` of that Array's length interval `[lo, hi]`. The export is the
-//! smallest such `lo`. Codegen re-tests `0 <= key < floor` at the read
+//! `[0, lo)` of that Array's length interval `[lo, hi]`. A copy's floor is
+//! the smallest such `lo` over its receivers; the site's is the largest over
+//! its copies, since each copy proves only its own key below its own floor.
+//! Reads that are not copies of one another may share an offset: in
+//! `a[i][0]` both member expressions start at `a`. Codegen re-tests
+//! `0 <= key < floor` at the read
 //! (`expr::index_get::elem_floor`): a key the facts placed below the length
 //! but that reaches it is a false proof (exit 86).
 //!
@@ -69,21 +73,21 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
             let recv = map.get(&site.recv).copied().unwrap_or(site.recv);
             let idx = map.get(&site.idx).copied().unwrap_or(site.idx);
             f = match (f, copy_floor(g, recv, idx)) {
-                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), Some(b)) => Some(a.max(b)),
                 _ => None,
             };
         }
         let entry = sites
             .entry((site.module, site.byte_offset))
-            .or_insert(Some(u32::MAX));
+            .or_insert(Some(0));
         *entry = match (*entry, f) {
-            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), Some(b)) => Some(a.max(b)),
             _ => None,
         };
     }
     for ((mi, offset), floor) in sites {
         if let (Some(floor), Some(mb)) = (floor, bindings.get_mut(mi as usize)) {
-            if floor > 0 && floor != u32::MAX {
+            if floor > 0 {
                 mb.element_floors.push((offset, floor));
             }
         }
