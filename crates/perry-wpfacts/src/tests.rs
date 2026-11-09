@@ -1921,6 +1921,7 @@ mod string_results;
 mod string_this;
 mod guard_presence;
 mod field_read_calls;
+mod signatures;
 mod typed_array_methods;
 mod web_timer_methods;
 
@@ -1979,6 +1980,7 @@ mod uri_coercion;
 mod accessor_lookup_values;
 mod native_fs_effects;
 mod native_module_ref;
+mod fresh_proto_chain;
 mod host_browser_effects;
 mod host_fs_effects;
 mod native_fs_watch;

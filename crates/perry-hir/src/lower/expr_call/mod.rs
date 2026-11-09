@@ -23,6 +23,11 @@ use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
 
+/// A remaining qualified name does not establish an Array receiver.
+fn is_qualified_type_name(name: &str) -> bool {
+    name.contains('.')
+}
+
 fn is_typed_array_type(ty: &Type) -> bool {
     matches!(
         ty,

@@ -38,6 +38,7 @@ mod ledger;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+pub mod signatures;
 mod rooted;
 mod solve;
 mod summary;
@@ -47,6 +48,7 @@ mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
+pub use signatures::Signature;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -887,6 +889,15 @@ fn compute_act<'a>(
     }
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
+    }
+    if !g.m.aborted && signatures::enabled() {
+        signatures::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref(),
+        );
     }
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.

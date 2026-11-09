@@ -670,6 +670,19 @@ pub(super) fn compile_function(
         .get(&f.id)
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    // P2: a typed function's public symbol is its boxed entry (§3.3); its
+    // one body is `F$sig`, compiled through the spec path below.
+    if spec_entry.is_none() && typed_public_trampoline.is_none() {
+        if let Some(plan) = cross_module
+            .spec_abi_functions
+            .get(&f.id)
+            .filter(|plan| plan.signature.is_some())
+        {
+            super::signature_entry::emit_boxed_entry(llmod, f, &public_llvm_name, plan);
+            apply_boxed_entry_inline_attrs(llmod, f, &public_llvm_name, plan, cross_module);
+            return Ok(());
+        }
+    }
     let guarded_public_plan = if typed_public_trampoline.is_none() && spec_entry.is_none() {
         cross_module
             .spec_abi_functions
@@ -694,7 +707,7 @@ pub(super) fn compile_function(
         // (mutual exclusion is enforced at plan selection).
         debug_assert!(typed_public_trampoline.is_none());
         debug_assert_eq!(plan.reps.len(), f.params.len());
-        spec_function_name(&public_llvm_name, &plan.reps)
+        super::spec_abi::spec_entry_name(&public_llvm_name, plan)
     } else if typed_public_trampoline.is_some() || guarded_public_plan.is_some() {
         generic_function_body_name(&public_llvm_name)
     } else {
@@ -703,9 +716,11 @@ pub(super) fn compile_function(
     // A separate raw return ABI is admitted only for a closed pure body.
     // The full IEEE body remains below, including its public entry guards.
     let integer_contract = if spec_entry.is_some_and(|plan| {
-        plan.reps
-            .iter()
-            .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
+        plan.signature.is_none()
+            && plan
+                .reps
+                .iter()
+                .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
     }) && super::checked_integer::eligible(f, &llmod.target_triple)
     {
         super::integer_contract::prove(f)
@@ -744,6 +759,21 @@ pub(super) fn compile_function(
     // (representation-selection Phase 2) instead type each parameter register
     // by its rep — raw i32, raw f64, or raw typed-array header pointer (i64).
     let mut params: Vec<(LlvmType, String)> = match spec_entry {
+        // P2: `F$sig`'s registers take the signature's representations.
+        Some(SpecFnPlan {
+            signature: Some(sig),
+            ..
+        }) => f
+            .params
+            .iter()
+            .zip(sig.params.iter())
+            .map(|(p, rep)| {
+                (
+                    super::signature_entry::sig_llvm_ty(*rep),
+                    format!("%arg{}", p.id),
+                )
+            })
+            .collect(),
         Some(plan) => f
             .params
             .iter()
@@ -765,7 +795,14 @@ pub(super) fn compile_function(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
-    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    let sig_return = spec_entry
+        .and_then(|plan| plan.signature.as_ref())
+        .map(|sig| sig.ret);
+    let lf = llmod.define_function(
+        &llvm_name,
+        super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
+        params,
+    );
     let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
     // #8595: these functions exist specifically to bound backend work. Letting
     // the ordinary or pre-statepoint inliner fold them back into module init
@@ -774,6 +811,20 @@ pub(super) fn compile_function(
     // back into its parent would rebuild the giant function.
     let split_region = super::split_regions::is_region_function(f) && spec_entry.is_none();
     lf.no_inline = entry_outline_chunk || split_region;
+    let specialized_entry = spec_entry.is_some();
+    // P2 (CWN 11-09): `F$sig` where main had no spec clone replaces the body
+    // main's direct sites entered, the public body: it takes its attributes
+    // (and not a spec clone's early-inline admission, below).
+    let sig_as_public = spec_entry.is_some_and(|plan| {
+        plan.signature.is_some()
+            && matches!(
+                plan.sig_public,
+                super::spec_abi::MainPublic::Body | super::spec_abi::MainPublic::TypedTrampoline
+            )
+    });
+    if !specialized_entry || sig_as_public {
+        apply_public_inline_attrs(lf, f, cross_module);
+    }
     if typed_public_trampoline.is_some()
         || guarded_public_plan.is_some()
         || spec_entry.is_some()
@@ -807,33 +858,6 @@ pub(super) fn compile_function(
     } else {
         std::collections::HashMap::new()
     };
-    // Small leaf functions (≤ 8 statements) get alwaysinline so LLVM
-    // exposes their operations to the caller's optimizer context — critical
-    // for vectorizing clamp helpers and similar patterns. Excluded:
-    // async/generator functions, AND functions rewritten by the
-    // async-to-generator pre-pass (was_plain_async=true). Inlining the
-    // rewritten wrapper into its caller breaks GC-root coverage of the
-    // step closure's iter capture, hanging async chains (issue #447).
-    let specialized_entry = spec_entry.is_some();
-    if !entry_outline_chunk
-        && !split_region
-        && !specialized_entry
-        && f.body.len() <= 8
-        && !f.is_async
-        && !f.is_generator
-        && !f.was_plain_async
-    {
-        lf.force_inline = true;
-    }
-    // Inline-hot-small (PERRY_INLINE_HOT_SMALL, default ON): bias — do not
-    // force — LLVM toward inlining a *small* function that has a *hot* (in-loop)
-    // call site. `inlinehint` only raises LLVM's inline threshold for this
-    // callee; its `-O3` growth budget still refuses cold/oversized inlines, so
-    // cold utility functions never bloat the binary (that is the anti-bloat
-    // property, proved by the binary-size gate). We skip `alwaysinline`
-    // functions (the hint would be redundant) and async/generator forms.
-    // Try-containing functions are ordinary inline candidates since #7302
-    // (invoke-EH removed the setjmp-era noinline requirement).
     // #7834: record the raw admission, before the `inline_hint` window narrows
     // it. `lower_call/new_alloc.rs` uses this to decide the inline-bump
     // allocation, which wants "is this code hot" and not "may LLVM's inline
@@ -844,19 +868,6 @@ pub(super) fn compile_function(
     // as `hot_loop_callee` (before the entry block exists and before any
     // expression is lowered), for the same reason.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
-    if !entry_outline_chunk
-        && !split_region
-        && !specialized_entry
-        && !lf.force_inline
-        && inline_hot_small_enabled()
-        && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
-        && !f.is_async
-        && !f.is_generator
-        && !f.was_plain_async
-        && cross_module.hot_loop_callees.contains(&f.id)
-    {
-        lf.inline_hint = true;
-    }
     let _ = lf.create_block("entry");
     let _verify_body = crate::verify_facts::body_scope(&lf.name);
     crate::verify_facts::raw_body_entry(lf, f.id);
@@ -903,7 +914,18 @@ pub(super) fn compile_function(
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
         for (idx, p) in f.params.iter().enumerate() {
-            let arg_name = format!("%arg{}", p.id);
+            let mut arg_name = format!("%arg{}", p.id);
+            // P2: an I32 register the body writes binds as today's double.
+            if spec_entry
+                .and_then(|plan| plan.signature.as_ref())
+                .is_some_and(|sig| sig.params[idx] == super::FactsRep::I32)
+                && !matches!(
+                    spec_entry.map(|plan| plan.reps[idx]),
+                    Some(crate::collectors::SpecParamRep::I32)
+                )
+            {
+                arg_name = blk.sitofp(I32, &arg_name, DOUBLE);
+            }
             match spec_entry.map(|plan| plan.reps[idx]) {
                 Some(crate::collectors::SpecParamRep::I32) => {
                     if crate::expr::canonical_i32_locals_enabled() {
@@ -1586,6 +1608,8 @@ pub(super) fn compile_function(
         ),
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
+        sig_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -1689,6 +1713,11 @@ pub(super) fn compile_function(
         buffer_alias_scopes,
     };
 
+    if let Some(plan) = spec_entry.filter(|plan| plan.signature.is_some()) {
+        ctx.sig_return = sig_return;
+        ctx.nonnegative_integer_locals
+            .extend(super::signature_entry::nonnegative_params(f, plan));
+    }
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(
         &mut ctx,
@@ -1895,6 +1924,12 @@ pub(super) fn compile_function(
     // does `f() === undefined` / `f() !== undefined` observes the
     // correct value. For async functions, wrap undefined in a
     // resolved promise so callers can await the result.
+    if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
+        // P2: the facts prove an I32 entry never completes normally.
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        super::signature_entry::witness_return(&mut ctx, super::FactsRep::I32, &undef);
+        ctx.block().unreachable();
+    }
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         if f.is_async {
@@ -1938,6 +1973,7 @@ pub(super) fn compile_function(
     // budget is the clone's real IR size. `PERRY_SPEC_INLINE=0` keeps the
     // clone out of line.
     if spec_entry.is_some()
+        && !sig_as_public
         && !f.is_async
         && !f.is_generator
         && !f.was_plain_async
@@ -2002,6 +2038,98 @@ pub(super) fn compile_function(
         emit_public_receiverless_forwarder(llmod, f, &public_llvm_name, &llvm_name);
     }
     Ok(())
+}
+
+/// P2 (CWN 11-09): a typed function's boxed entry takes the attributes of
+/// the public symbol main emitted (`plan.sig_public`): the guarded
+/// trampoline's (`emit_public_spec_function_trampoline`: an optimization
+/// boundary, admitted to the early inliner by the size of the body it
+/// enters, here `F$sig`), the typed_abi trampoline's (none), or the public
+/// body's (`apply_public_inline_attrs`).
+fn apply_boxed_entry_inline_attrs(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    plan: &SpecFnPlan,
+    cross_module: &CrossModuleCtx,
+) {
+    use super::spec_abi::MainPublic;
+    let sig_name = super::spec_abi::spec_entry_name(public_name, plan);
+    let statements = f.body.len();
+    let admit = std::env::var("PERRY_SPEC_INLINE").as_deref() != Ok("0")
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let callable_worker = llmod.callable_worker;
+    let preinline = admit
+        && !callable_worker
+        && llmod
+            .function_estimated_ir_bytes(&sig_name)
+            .is_some_and(|ir_bytes| {
+                super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
+            });
+    let Some(entry) = llmod.function_named_mut(public_name) else {
+        return;
+    };
+    match plan.sig_public {
+        MainPublic::GuardedSpec => {
+            entry.no_inline = true;
+            entry.pre_statepoint_inline = preinline;
+            if admit && callable_worker {
+                entry.defer_body_preinline(statements, sig_name);
+            }
+        }
+        MainPublic::TypedTrampoline => {}
+        MainPublic::Body | MainPublic::SpecBody => {
+            apply_public_inline_attrs(entry, f, cross_module)
+        }
+    }
+}
+
+/// The inline attributes of `f`'s public body. Backend-bounding chunks and
+/// split regions never inline (#8595). P2 (CWN 11-09): a typed function's
+/// boxed entry is that public symbol and takes the same attributes.
+///
+/// Small leaf functions (≤ 8 statements) get alwaysinline so LLVM
+/// exposes their operations to the caller's optimizer context — critical
+/// for vectorizing clamp helpers and similar patterns. Excluded:
+/// async/generator functions, AND functions rewritten by the
+/// async-to-generator pre-pass (was_plain_async=true). Inlining the
+/// rewritten wrapper into its caller breaks GC-root coverage of the
+/// step closure's iter capture, hanging async chains (issue #447).
+/// Inline-hot-small (PERRY_INLINE_HOT_SMALL, default ON): bias — do not
+/// force — LLVM toward inlining a *small* function that has a *hot* (in-loop)
+/// call site. `inlinehint` only raises LLVM's inline threshold for this
+/// callee; its `-O3` growth budget still refuses cold/oversized inlines, so
+/// cold utility functions never bloat the binary (that is the anti-bloat
+/// property, proved by the binary-size gate). We skip `alwaysinline`
+/// functions (the hint would be redundant) and async/generator forms.
+/// Try-containing functions are ordinary inline candidates since #7302
+/// (invoke-EH removed the setjmp-era noinline requirement).
+pub(super) fn apply_public_inline_attrs(
+    lf: &mut crate::function::LlFunction,
+    f: &Function,
+    cross_module: &CrossModuleCtx,
+) {
+    let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
+    let split_region = super::split_regions::is_region_function(f);
+    lf.no_inline = entry_outline_chunk || split_region;
+    let plain = !entry_outline_chunk
+        && !split_region
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    if plain && f.body.len() <= 8 {
+        lf.force_inline = true;
+    }
+    if plain
+        && !lf.force_inline
+        && inline_hot_small_enabled()
+        && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
+        && cross_module.hot_loop_callees.contains(&f.id)
+    {
+        lf.inline_hint = true;
+    }
 }
 
 /// The public `perry_fn_*` symbol of a this-reading function: every direct

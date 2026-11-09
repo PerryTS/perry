@@ -117,6 +117,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             _ => {}
         }
     }
+    // E3 (DESIGN-p2, CWN 11-09): a call's and a member's span end, with its
+    // offset, names the source call every copy of it (an inlined body, a
+    // for…of arm) shares. Stable hashing ignores it.
+    if let Ok(value) = &mut result {
+        match (expr, value) {
+            (ast::Expr::Member(_), Expr::PropertyGet { byte_end, .. })
+            | (ast::Expr::Call(_), Expr::Call { byte_end, .. }) => *byte_end = expr.span().hi.0,
+            _ => {}
+        }
+    }
     if std::env::var_os("PERRY_FACTS_DUMP").is_some() {
         if let Ok(value) = &mut result {
             let span = expr.span();
@@ -177,9 +187,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     *byte_offset = span.lo.0;
                     *byte_end = span.hi.0;
                 }
-                (ast::Expr::Member(_), Expr::PropertyGet { byte_end, .. })
-                | (ast::Expr::Call(_), Expr::Call { byte_end, .. })
-                | (ast::Expr::New(_), Expr::New { byte_end, .. })
+                (ast::Expr::New(_), Expr::New { byte_end, .. })
                 | (ast::Expr::New(_), Expr::NewDynamic { byte_end, .. })
                 | (ast::Expr::New(_), Expr::NewDynamicSpread { byte_end, .. }) => {
                     *byte_end = span.hi.0

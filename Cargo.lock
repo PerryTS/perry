@@ -5744,6 +5744,7 @@ dependencies = [
  "perry-ffi",
  "perry-ui-model",
  "tempfile",
+ "url",
 ]
 
 [[package]]
