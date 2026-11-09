@@ -10,8 +10,12 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 /// Where a slot starts: the receiver, a positional argument, the arguments
-/// from an index on, the function's own result, or the value the N-th
-/// declared `calls` (0-based, in declaration order) returned.
+/// from an index on, the function's own result, the value the N-th
+/// declared `calls` (0-based, in declaration order) returned, or the
+/// function value called itself (`callee`): a closure the runtime made
+/// keeps what it captured in internal slots of that value
+/// (`islot(callee, self)`: the object whose declaration installed it),
+/// which a closure body reads instead of `this`.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmSlotRoot {
@@ -20,6 +24,7 @@ pub enum RealmSlotRoot {
     Rest(u8),
     Result,
     Returned(u8),
+    Callee,
 }
 
 /// One step from a slot into what it holds: its elements (array elements,
@@ -245,7 +250,8 @@ impl RealmOperand {
 }
 
 /// Checks a declaration's effects against the realm graph: `open` stands
-/// alone, `result` is only a store destination, `returned(N)` names one of
+/// alone, `result` is only a store destination (or, as it is, a store
+/// source), `returned(N)` names one of
 /// the declared calls and is only a value (never a callee, read or
 /// destination; it may be coerced: `sort` runs ToNumber on its comparator's
 /// result), fresh prototypes exist.
@@ -345,7 +351,14 @@ pub fn validate_effects(
                 args.iter().try_for_each(operand)?;
             }
             RealmEffect::Stores { src, dst } => {
-                value(src)?;
+                // The call's own result may be kept as it is (`watchFile`
+                // keeps the watcher it returns, which a later call on the
+                // same path returns again).
+                if src.root == RealmSlotRoot::Result && src.steps.is_empty() {
+                    src.validate(at)?;
+                } else {
+                    value(src)?;
+                }
                 if let RealmSlotRoot::Returned(n) = dst.root {
                     return Err(format!(
                         "{at}: `returned({n})` is a value, not a store destination"
@@ -379,6 +392,7 @@ pub mod emit {
             RealmSlotRoot::Rest(i) => format!("{p}RealmSlotRoot::Rest({i})"),
             RealmSlotRoot::Result => format!("{p}RealmSlotRoot::Result"),
             RealmSlotRoot::Returned(i) => format!("{p}RealmSlotRoot::Returned({i})"),
+            RealmSlotRoot::Callee => format!("{p}RealmSlotRoot::Callee"),
         };
         let steps = list(&s.steps, |step| match step {
             RealmSlotStep::Elems => format!("{p}RealmSlotStep::Elems"),

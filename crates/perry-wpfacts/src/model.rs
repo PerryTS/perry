@@ -283,7 +283,15 @@ pub use crate::builtins::Family;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Native {
     Any,
-    Member { identity: &'static str },
+    /// `holder`: for a closure native whose declaration reads its own
+    /// internal slots (`islot(callee, self)`), the object whose
+    /// declaration installed this value (one value per holder, as the
+    /// runtime makes one closure per object); `None`: the identity's one
+    /// value.
+    Member {
+        identity: &'static str,
+        holder: Option<Tok>,
+    },
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects

@@ -72,7 +72,7 @@ impl<'a> Gen<'a> {
         let args = args.iter().map(|a| self.expr(fx, a)).collect();
         let t = self
             .m
-            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name }));
+            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name, holder: None }));
         let callee = self.tok_node(t);
         let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
         self.m.cons(callee, Cons::Call { call });

@@ -1977,6 +1977,7 @@ mod native_fs_effects;
 mod native_module_ref;
 mod host_browser_effects;
 mod host_fs_effects;
+mod native_fs_watch;
 mod host_inspector_effects;
 mod host_fs_read_effects;
 mod native_process;

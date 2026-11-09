@@ -31,7 +31,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_static, run_construct, run_function, run_native,
+    declared_construct, declared_member, declared_static, run_construct, run_function, run_member,
+    run_native,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -855,7 +856,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named("Buffer.prototype", m)
             .and_then(|h| m.declarations.property(h, name, m))
         {
-            return p.native.map(|identity| Native::Member { identity });
+            return p.native.map(|identity| Native::Member { identity, holder: None });
         }
     }
     // The prototype of an object a declaration made
@@ -868,7 +869,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named(w, m)
             .and_then(|h| m.declarations.property(h, name, m))?
             .native?;
-        return Some(Native::Member { identity });
+        return Some(Native::Member { identity, holder: None });
     }
     let holder = match what {
         Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
@@ -890,7 +891,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             let object = m.declarations.family(Family::Object, m)?;
             m.declarations.property(object, name, m)?.native
         })?;
-    Some(Native::Member { identity })
+    Some(Native::Member { identity, holder: None })
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.
@@ -919,7 +920,7 @@ pub(crate) fn native_model(
 /// The three receiver-independent Object.prototype summaries already have
 /// namespace tokens. Intern every path to those objects under those tokens.
 pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
-    if let TokKind::BuiltinFn(Native::Member { identity }) = k {
+    if let TokKind::BuiltinFn(Native::Member { identity, .. }) = k {
         if whole {
             if let Some(ns) = ns_by_name(identity) {
                 if members::ns_chain(ns) == Family::Function {
@@ -1365,7 +1366,7 @@ pub(crate) fn native_own_load(
             } else {
                 m.native_missing.push((holder, a, NativeMiss::Load(dst)));
                 if let Some(identity) = value {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
                     m.add_tok(dst, value);
                 } else {
                     opaque_member(m, dst);
@@ -1387,7 +1388,7 @@ pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
 /// Read the function reference from this receiver's declared property shape.
 pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
     if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
-        return Some(Native::Member { identity });
+        return Some(Native::Member { identity, holder: None });
     }
     matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
         .then(|| member_native(m, members::ns_chain(ns), None, name))
