@@ -143,6 +143,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_guard_presence: matches!(
+            std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -527,6 +531,25 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         for (offset, iv) in &mb.call_arg_ranges {
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
+        out.number_calls.extend(mb.number_calls.iter().copied());
+        for (offset, c) in &mb.field_read_calls {
+            let default = match &c.default {
+                None => None,
+                Some(perry_wpfacts::FieldReadDefault::Number(bits)) => Some(*bits),
+                // Codegen applies a Number default only.
+                Some(_) => continue,
+            };
+            out.field_read_calls.insert(
+                *offset,
+                perry_codegen::FactsFieldReadCall {
+                    field: c.field.clone(),
+                    index_arg: c.index_arg,
+                    default,
+                    element_offset: c.element_offset,
+                    field_offset: c.field_offset,
+                },
+            );
+        }
         if element_reads_enabled() {
             for (offset, r) in &mb.element_reads {
                 out.element_reads.insert(
@@ -824,6 +847,10 @@ pub(crate) fn activation(
         ),
         no_guard_ranges: matches!(
             std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_presence: matches!(
+            std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")

@@ -358,7 +358,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, callback);
-                self.emit_memcall_void(func, "array_for_each", 2);
+                self.emit_memcall_void(func, "array_forEach", 2);
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::ArrayFind { array, callback } => {

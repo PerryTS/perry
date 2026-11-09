@@ -37,6 +37,7 @@ pub(crate) enum Fact {
     ProtoHolder,
     ProtoAdd,
     ElementRead,
+    FieldReadCall,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -73,6 +74,7 @@ impl Fact {
             Self::ProtoHolder => "prototype holder",
             Self::ProtoAdd => "prototype add",
             Self::ElementRead => "proven element read",
+            Self::FieldReadCall => "field read call",
         }
     }
 }

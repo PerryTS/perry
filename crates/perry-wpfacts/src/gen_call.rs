@@ -121,7 +121,11 @@ impl<'a> Gen<'a> {
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        self.call_with(fx, callee, a, vec![], byte_offset)
+        let result = self.call_with(fx, callee, a, vec![], byte_offset);
+        if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+            self.call_results_at.push((fx.module, byte_offset, result));
+        }
+        result
     }
 
     /// The key of member access `object.property`: a guarded private
@@ -431,12 +435,28 @@ impl<'a> Gen<'a> {
             body,
             is_async,
             is_generator,
+            is_arrow,
+            is_strict,
+            captures,
             ..
         } = e
         else {
             return;
         };
         let ret = self.m.funcs[f as usize].ret;
+        // A sloppy function expression's body reads its `this` through the
+        // view (`sloppy_this`); an arrow's `this` is its creator's.
+        let sloppy = !*is_strict && !*is_arrow && crate::ctor_phase::body_mentions_this(body);
+        let mut sfx;
+        let cfx = if sloppy {
+            sfx = cfx.clone();
+            let prev = std::mem::replace(&mut self.m.cur_fn, f);
+            sfx.this = self.sloppy_this(cfx.this);
+            self.m.cur_fn = prev;
+            &sfx
+        } else {
+            cfx
+        };
         // RPG1b: its statements are ordered in its own body; a parameter
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
@@ -454,12 +474,13 @@ impl<'a> Gen<'a> {
         }
         self.order_ok = true;
         let own = self.own_helper_shape(params, body, *is_async || *is_generator);
-        let scope = self
-            .int_ranges
-            .then(|| (f, crate::gen::narrow::scope_locals(params, body)));
-        let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
+        let scope = self.narrow_enter_body(cfx.module, f, params, body, captures);
         self.stmts(cfx, body);
-        self.narrow_scope = saved_scope;
+        if crate::gen::narrow::may_complete(body) {
+            // The body's normal completion returns `undefined`.
+            self.m.add_prim(ret, prim::UNDEF);
+        }
+        self.narrow_exit_body(scope);
         self.own_helper_finish(f, own);
         #[cfg(test)]
         {
@@ -572,6 +593,21 @@ impl<'a> Gen<'a> {
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
+        }
+        // No binding of the program: the global object's property, when
+        // the realm has one under the name (`AbortSignal`): a load of it,
+        // which reads the realm value while the program writes no value
+        // under the key (`native_written`) and what it wrote once it does.
+        if !self.m.unit_mode
+            && self
+                .m
+                .namespace_property(BuiltinNs::GlobalThis, name)
+                .is_some_and(|p| p.native.is_some())
+        {
+            let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let gn = self.tok_node(g);
+            let a = self.m.atom(name);
+            return self.load(gn, Key::Named(a));
         }
         self.m.top_val(&format!("unresolved class value {name}"))
     }

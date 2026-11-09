@@ -107,6 +107,13 @@ pub(crate) enum RegionEnder {
     /// A loop back-edge GC poll. Deliberately placed, and the only collection
     /// point inside an otherwise call-free fast clone.
     BackEdgePoll,
+    /// The collecting call on the miss arm of a descriptor read
+    /// (`expr::index_get::descriptor_read`): the exact generic `Get`, which
+    /// may run a getter (arbitrary JS: it allocates, moves, writes any
+    /// binding or array, and may throw). The lowering emits the cold-arm
+    /// refresh of every active descriptor right after its normal return
+    /// (`ReceiverDescriptorTable::cold_arm_refreshes`).
+    ColdArmCall,
     /// An expression this model does not classify. Reported as an ender
     /// because the default must be "assume it collects": the allowlist below
     /// is what has been argued sound, and everything else — a closure
@@ -126,6 +133,14 @@ impl RegionEnder {
     /// not, because the unwind edge skips that exit block.
     pub(crate) fn is_fallthrough(self) -> bool {
         !matches!(self, RegionEnder::UnwindEdge)
+    }
+
+    /// Whether the ender may also leave the region by a throw. A cold-arm
+    /// call is both a fall-through relocation and an implicit unwind edge
+    /// (its getter can throw), so a fact written back at region exit must
+    /// refuse it.
+    pub(crate) fn may_unwind(self) -> bool {
+        !matches!(self, RegionEnder::BackEdgePoll)
     }
 }
 
@@ -147,6 +162,11 @@ pub(crate) enum FactBoundary {
     /// Reloaded from the authoritative root at the safepoint, rather than
     /// invalidated. `receiver_descriptors` is the first consumer.
     PollRefresh,
+    /// `PollRefresh`, and re-derived on the cold arm of a descriptor read
+    /// too: after the cold call returns, the box is reloaded from its
+    /// binding, re-rooted and re-validated, and the handle re-derived
+    /// (`ReceiverDescriptorTable::cold_arm_refreshes`).
+    ColdArmRefresh,
     /// Nothing removes or downgrades it.
     Never,
 }
@@ -218,14 +238,27 @@ pub(crate) fn boundary_admits(
     };
 
     match desc.claim {
-        // A length or an index range is a value. Relocation does not touch it.
-        // It dies at mutation, which no ender in this enum implies on its own.
-        ReceiverClaim::ScalarRelation | ReceiverClaim::NonMovingAddress => Ok(()),
+        // A length or an index range is a value: relocation does not touch
+        // it, but mutation does. A cold-arm call runs user code that can
+        // shorten an array, detach or resize a buffer: no scalar is believed
+        // across it. (Today no region admits a scalar claim together with any
+        // other user-code ender.)
+        ReceiverClaim::ScalarRelation | ReceiverClaim::NonMovingAddress => match ender {
+            RegionEnder::ColdArmCall => {
+                deny("user code on a cold arm can change a length, an index bound or a backing")
+            }
+            _ => Ok(()),
+        },
 
         // A representation claim survives relocation but not arbitrary user
         // code, which can convert the receiver's storage out from under it.
         ReceiverClaim::Representation => match ender {
             RegionEnder::BackEdgePoll => Ok(()),
+            // Re-validated on the cold arm itself.
+            RegionEnder::ColdArmCall if desc.boundary == FactBoundary::ColdArmRefresh => Ok(()),
+            RegionEnder::ColdArmCall => {
+                deny("representation claim is not re-validated after the cold arm's user code")
+            }
             RegionEnder::CollectingCall
             | RegionEnder::AllocatingOperation
             | RegionEnder::Coercion
@@ -244,8 +277,16 @@ pub(crate) fn boundary_admits(
 
         // An address dies at every relocation, with exactly one exception.
         ReceiverClaim::Address => match (ender, desc.boundary) {
-            // The poll is the one ender a refresh recipe is written for.
-            (RegionEnder::BackEdgePoll, FactBoundary::PollRefresh) => Ok(()),
+            // The poll is the one ender a refresh recipe is written for; a
+            // cold-arm descriptor's recipe covers the poll as well.
+            (
+                RegionEnder::BackEdgePoll,
+                FactBoundary::PollRefresh | FactBoundary::ColdArmRefresh,
+            ) => Ok(()),
+            (RegionEnder::ColdArmCall, FactBoundary::ColdArmRefresh) => Ok(()),
+            (RegionEnder::ColdArmCall, _) => {
+                deny("cached address is not reloaded after the cold arm that may have moved or replaced it")
+            }
             (RegionEnder::BackEdgePoll, _) => {
                 deny("cached address is not reloaded at the back-edge poll that may have moved it")
             }
@@ -300,7 +341,31 @@ pub(crate) struct ReceiverArrayAccess {
 struct ActiveArrayValidation {
     contract: ReceiverDescriptor,
     kind: ReceiverArrayValidationKind,
+    /// Phase 3: a loop-invariant SSA `i1`. A cold-arm entry: an `i1` slot
+    /// the cold-arm refresh re-validates into (`cold_arm`).
     valid_i1: String,
+    /// The trusted descriptor reads of a cold-arm entry (`Expr` addresses
+    /// the region classified through `descriptor_read_route`); `None` for
+    /// phase 3.
+    cold_arm: Option<Vec<usize>>,
+}
+
+/// A cold-arm descriptor's data at a descriptor read
+/// (`expr::index_get::descriptor_read`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColdArmArrayAccess {
+    /// `i1` slot: the receiver passed the validation since the last refresh.
+    pub(crate) valid_slot: String,
+    pub(crate) base_handle_slot: String,
+    pub(crate) kind: ReceiverArrayValidationKind,
+}
+
+/// What one active cold-arm entry re-derives after a cold call returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColdArmRefreshRecipe {
+    pub(crate) refresh: ReceiverPollRefresh,
+    pub(crate) valid_slot: String,
+    pub(crate) kind: ReceiverArrayValidationKind,
 }
 
 #[derive(Debug, Clone)]
@@ -376,9 +441,26 @@ pub(crate) struct ReceiverDescriptorTable {
     // Scalar SSA captures, owned by the same guarded proof scope. No runtime state.
     numeric_callbacks: Vec<(u32, u32, crate::stmt::numeric_callbacks::Admission)>,
     raw_callback_locals: Vec<(u32, Vec<u32>)>,
+    /// b2: descriptor reads being lowered by their slow arm (the ordinary
+    /// route), by `Expr` address; innermost last.
+    cold_arm_bypass: Vec<usize>,
 }
 
 impl ReceiverDescriptorTable {
+    /// Lower the descriptor read at `index_get` by the ordinary route (its
+    /// slow arm) until the matching `pop_cold_arm_bypass`.
+    pub(crate) fn push_cold_arm_bypass(&mut self, index_get: usize) {
+        self.cold_arm_bypass.push(index_get);
+    }
+
+    pub(crate) fn pop_cold_arm_bypass(&mut self, index_get: usize) {
+        assert_eq!(self.cold_arm_bypass.pop(), Some(index_get));
+    }
+
+    pub(crate) fn cold_arm_bypassed(&self, index_get: usize) -> bool {
+        self.cold_arm_bypass.contains(&index_get)
+    }
+
     pub(crate) fn materialize_raw_callback_locals(&mut self, scope: u32, locals: Vec<u32>) {
         self.raw_callback_locals.push((scope, locals));
     }
@@ -560,6 +642,7 @@ impl ReceiverDescriptorTable {
                     contract: representation_contract,
                     kind,
                     valid_i1,
+                    cold_arm: None,
                 }),
             },
         });
@@ -925,9 +1008,18 @@ impl ReceiverDescriptorTable {
     }
 
     /// The pre-masked base-handle slot consumed by packed address math.
+    /// Never a cold-arm entry's (REVIEW-b2-code R1): that handle is believed
+    /// only behind its own valid slot (`cold_arm_access`).
     pub(crate) fn base_handle_slot(&self, receiver: u32) -> Option<&str> {
         self.entries.iter().find_map(|entry| match &entry.data {
-            ActiveReceiverData::Address { refresh, .. } if entry.contract.receiver == receiver => {
+            ActiveReceiverData::Address {
+                refresh,
+                array_validation,
+            } if entry.contract.receiver == receiver
+                && !array_validation
+                    .as_ref()
+                    .is_some_and(|v| v.cold_arm.is_some()) =>
+            {
                 Some(refresh.base_handle_slot.as_str())
             }
             _ => None,
@@ -954,13 +1046,205 @@ impl ReceiverDescriptorTable {
             unreachable!("address lookup selected a non-address descriptor")
         };
         let validation = array_validation.as_ref()?;
-        if require_numeric && validation.kind != ReceiverArrayValidationKind::Numeric {
+        // A cold-arm entry's validity is a slot, read by its own form only.
+        if validation.cold_arm.is_some()
+            || require_numeric && validation.kind != ReceiverArrayValidationKind::Numeric
+        {
             return None;
         }
         Some(ReceiverArrayAccess {
             valid_i1: validation.valid_i1.clone(),
             base_handle_slot: refresh.base_handle_slot.clone(),
         })
+    }
+
+    /// b2 (DESIGN-b2 §2–§3): install a cold-arm descriptor for `receiver`.
+    ///
+    /// `enders` is the region's exact ender list, with each trusted read
+    /// (`trusted`: the `IndexGet` addresses `descriptor_read_route` admitted)
+    /// reported as `ColdArmCall`. Every ender must be admitted by the
+    /// address and the representation contracts, and every OTHER active
+    /// entry and scoped table must survive a cold arm
+    /// (`cold_arm_refreshes`): the cold arm runs arbitrary code, so nothing
+    /// that does not re-derive itself there may be believed across it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn materialize_cold_arm_array(
+        &mut self,
+        receiver: u32,
+        rooted_box_slot: String,
+        base_handle_slot: String,
+        source_root: String,
+        kind: ReceiverArrayValidationKind,
+        valid_slot: String,
+        enders: &[RegionEnder],
+        trusted: Vec<usize>,
+    ) -> Result<bool, BoundaryViolation> {
+        if self.contains(receiver) {
+            return Ok(false);
+        }
+        if enders.contains(&RegionEnder::ColdArmCall) {
+            self.cold_arm_refreshes()?;
+        }
+        let address_contract = ReceiverDescriptor {
+            table: "receiver_descriptors[cold_arm]",
+            receiver,
+            claim: ReceiverClaim::Address,
+            boundary: FactBoundary::ColdArmRefresh,
+            excludes_try: false,
+        };
+        let representation_contract = ReceiverDescriptor {
+            table: "receiver_descriptors[cold_arm_validation]",
+            receiver,
+            claim: ReceiverClaim::Representation,
+            boundary: FactBoundary::ColdArmRefresh,
+            excludes_try: false,
+        };
+        for &ender in enders {
+            boundary_admits(&address_contract, ender)?;
+            boundary_admits(&representation_contract, ender)?;
+        }
+        self.entries.push(ActiveReceiverDescriptor {
+            contract: address_contract,
+            data: ActiveReceiverData::Address {
+                refresh: ReceiverPollRefresh {
+                    rooted_box_slot,
+                    base_handle_slot,
+                    source_root,
+                },
+                array_validation: Some(ActiveArrayValidation {
+                    contract: representation_contract,
+                    kind,
+                    valid_i1: valid_slot,
+                    cold_arm: Some(trusted),
+                }),
+            },
+        });
+        Ok(true)
+    }
+
+    /// The cold-arm entry of `receiver`, for a descriptor read.
+    pub(crate) fn cold_arm_access(&self, receiver: u32) -> Option<ColdArmArrayAccess> {
+        self.entries.iter().find_map(|entry| match &entry.data {
+            ActiveReceiverData::Address {
+                refresh,
+                array_validation: Some(v),
+            } if entry.contract.receiver == receiver && v.cold_arm.is_some() => {
+                Some(ColdArmArrayAccess {
+                    valid_slot: v.valid_i1.clone(),
+                    base_handle_slot: refresh.base_handle_slot.clone(),
+                    kind: v.kind,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// Whether `index_get` (an `Expr` address) is a read the active region
+    /// classified as trusted: it must lower through the descriptor read form
+    /// (DESIGN-b2 §1, the lowering-side assertion).
+    pub(crate) fn is_trusted_cold_arm_read(&self, index_get: usize) -> bool {
+        self.entries.iter().any(|entry| match &entry.data {
+            ActiveReceiverData::Address {
+                array_validation: Some(v),
+                ..
+            } => v.cold_arm.as_ref().is_some_and(|t| t.contains(&index_get)),
+            _ => false,
+        })
+    }
+
+    /// Whether any cold-arm entry is active (the call-emission backstop).
+    pub(crate) fn has_cold_arm_entries(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            matches!(&entry.data, ActiveReceiverData::Address { array_validation: Some(v), .. } if v.cold_arm.is_some())
+        })
+    }
+
+    /// The `valid` slots of every active cold-arm entry.
+    pub(crate) fn cold_arm_valid_slots(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.data {
+                ActiveReceiverData::Address {
+                    array_validation: Some(v),
+                    ..
+                } if v.cold_arm.is_some() => Some(v.valid_i1.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The reload recipes of every active cold-arm entry, whatever else is
+    /// active (an inner loop's fact): the slow arm always re-reads their
+    /// bindings.
+    pub(crate) fn cold_arm_reloads(&self) -> Vec<ColdArmRefreshRecipe> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.data {
+                ActiveReceiverData::Address {
+                    refresh,
+                    array_validation: Some(v),
+                } if v.cold_arm.is_some() => Some(ColdArmRefreshRecipe {
+                    refresh: refresh.clone(),
+                    valid_slot: v.valid_i1.clone(),
+                    kind: v.kind,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Refresh recipes after a cold call returns (DESIGN-b2 §3–§4), the
+    /// mirror of [`Self::poll_refreshes`].
+    ///
+    /// EVERY active entry, for every receiver and scope, must admit
+    /// `ColdArmCall`: only cold-arm descriptors do (they re-derive
+    /// themselves); a cached length, a bounded index, a packed or masked
+    /// representation, a buffer view, a phase-3 address, and every scoped
+    /// Number-local, callback or byte-view proof are refused, since the cold
+    /// arm's user code can invalidate each of them.
+    pub(crate) fn cold_arm_refreshes(
+        &self,
+    ) -> Result<Vec<ColdArmRefreshRecipe>, BoundaryViolation> {
+        let scoped = |table: &'static str| {
+            Err(BoundaryViolation {
+                table,
+                receiver: 0,
+                ender: RegionEnder::ColdArmCall,
+                why: "a scoped proof is not re-derived after the cold arm's user code",
+            })
+        };
+        if !self.number_locals.is_empty() {
+            return scoped("receiver_descriptors[number_locals]");
+        }
+        if !self.numeric_callbacks.is_empty() || !self.raw_callback_locals.is_empty() {
+            return scoped("receiver_descriptors[callbacks]");
+        }
+        if !self.byte_view_params.is_empty() {
+            return scoped("receiver_descriptors[byte_view_params]");
+        }
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            boundary_admits(&entry.contract, RegionEnder::ColdArmCall)?;
+            if let ActiveReceiverData::Address {
+                refresh,
+                array_validation,
+            } = &entry.data
+            {
+                let Some(v) = array_validation else {
+                    // An address with no validation admits a cold arm only
+                    // under `ColdArmRefresh`, which only cold-arm entries
+                    // (always validated) carry.
+                    unreachable!("an unvalidated address admitted a cold arm");
+                };
+                boundary_admits(&v.contract, RegionEnder::ColdArmCall)?;
+                out.push(ColdArmRefreshRecipe {
+                    refresh: refresh.clone(),
+                    valid_slot: v.valid_i1.clone(),
+                    kind: v.kind,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Refresh recipes admitted at a back-edge poll.
@@ -982,6 +1266,13 @@ impl ReceiverDescriptorTable {
             boundary_admits(&entry.contract, RegionEnder::BackEdgePoll)?;
             if let Some(validation) = array_validation {
                 boundary_admits(&validation.contract, RegionEnder::BackEdgePoll)?;
+                // b2's `handle` negative control drops every re-derivation of
+                // a cold-arm handle, the poll's included.
+                if validation.cold_arm.is_some()
+                    && std::env::var("PERRY_RECEIVER_COLD_ARM_SABOTAGE").as_deref() == Ok("handle")
+                {
+                    continue;
+                }
             }
             refreshes.push(refresh.clone());
         }
@@ -1009,20 +1300,20 @@ pub(crate) fn violations_for(
 /// Returns the *first* reason found; an expression can qualify several ways
 /// and the caller only needs to know the region ends.
 pub(crate) fn expr_region_ender(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> Option<RegionEnder> {
-    expr_region_ender_with_trusted_operation(e, is_inert, &|_| false)
+    expr_region_ender_with_trusted_operation(e, is_inert, &|_| None)
 }
 
 fn expr_region_ender_with_trusted_operation(
     e: &Expr,
     is_inert: &dyn Fn(&Expr) -> bool,
-    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> Option<Option<RegionEnder>>,
 ) -> Option<RegionEnder> {
     // A production consumer may replace one exact operation with a form whose
     // guard establishes that it cannot dispatch or allocate. Children still
     // run through the ordinary walker before this classification, so trusting
     // `arr[i]` never accidentally trusts an effectful `i`.
-    if is_trusted_operation(e) {
-        return None;
+    if let Some(reported) = is_trusted_operation(e) {
+        return reported;
     }
     match e {
         // ---- Provably not a relocation point -------------------------------
@@ -1086,6 +1377,11 @@ fn expr_region_ender_with_trusted_operation(
                 Some(RegionEnder::Coercion)
             }
         }
+
+        // c1: a Math intrinsic over proven Numbers emits no call
+        // (`expr::math_intrinsic_operands`); any other Math form keeps the
+        // `Unmodelled` catch-all.
+        e if crate::expr::math_intrinsic_operands(e).is_some() && is_inert(e) => None,
 
         // ---- Suspension ----------------------------------------------------
         // Control reaches the microtask pump, whose outermost boundary runs
@@ -1169,6 +1465,22 @@ pub(crate) fn region_enders_in_stmts_with_trusted_operations(
     is_inert: &dyn Fn(&Expr) -> bool,
     is_trusted_operation: &dyn Fn(&Expr) -> bool,
 ) -> Vec<RegionEnder> {
+    region_enders_in_stmts_classified(stmts, controls, is_inert, &|e| {
+        is_trusted_operation(e).then_some(None)
+    })
+}
+
+/// The region walk with a classifier for replaced operations: `Some(None)`
+/// for an operation whose replacement cannot dispatch or allocate (phase 3),
+/// `Some(Some(ender))` for one that reports its own ender instead of the
+/// generic one (b2's descriptor read: `ColdArmCall`), `None` for the
+/// ordinary classification. Children are classified normally either way.
+pub(crate) fn region_enders_in_stmts_classified(
+    stmts: &[Stmt],
+    controls: &[&Expr],
+    is_inert: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> Option<Option<RegionEnder>>,
+) -> Vec<RegionEnder> {
     let mut out = Vec::new();
     for s in stmts {
         enders_in_stmt(s, is_inert, is_trusted_operation, &mut out);
@@ -1179,10 +1491,21 @@ pub(crate) fn region_enders_in_stmts_with_trusted_operations(
     out
 }
 
+/// The enders evaluating `e` reaches, in execution order (no trusted
+/// operations): b2 refuses a trusted read whose index has any.
+pub(crate) fn region_enders_in_expr(
+    e: &Expr,
+    is_inert: &dyn Fn(&Expr) -> bool,
+) -> Vec<RegionEnder> {
+    let mut out = Vec::new();
+    enders_in_expr(e, is_inert, &|_| None, &mut out);
+    out
+}
+
 fn enders_in_expr(
     e: &Expr,
     is_inert: &dyn Fn(&Expr) -> bool,
-    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> Option<Option<RegionEnder>>,
     out: &mut Vec<RegionEnder>,
 ) {
     // Child expressions execute before the operation represented by their
@@ -1200,7 +1523,7 @@ fn enders_in_expr(
 fn enders_in_stmt(
     s: &Stmt,
     is_inert: &dyn Fn(&Expr) -> bool,
-    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> Option<Option<RegionEnder>>,
     out: &mut Vec<RegionEnder>,
 ) {
     match s {

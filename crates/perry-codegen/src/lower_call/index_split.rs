@@ -153,8 +153,8 @@ pub(crate) fn number_index_positions(
 }
 
 /// Check mode (`PERRY_VERIFY_FACTS=1`): the argument the proof covers is an
-/// exact int32 (a plain double or an INT32 box, never `-0`) and not
-/// negative (fact `index argument`).
+/// exact int32 (a canonical double, never `-0`; an INT32 box too with
+/// `PERRY_WP_REP_P3=0`) and not negative (fact `index argument`).
 fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::IndexArgument,
@@ -165,7 +165,14 @@ fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
         return;
     }
     let blk = ctx.block();
-    let (exact, int) = crate::codegen::emit_typed_i32_guard_and_raw(blk, value);
+    // A proven Number is a canonical double (P3): the witness admits an
+    // exact int32 double only, never an INT32 box.
+    let (exact, int) = if crate::codegen::facts_rep::canonical_numbers() {
+        let bits = blk.bitcast_double_to_i64(value);
+        crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, value, &bits)
+    } else {
+        crate::codegen::emit_typed_i32_guard_and_raw(blk, value)
+    };
     let nonnegative = blk.icmp_sge(I32, &int, "0");
     let ok = blk.and(I1, &exact, &nonnegative);
     crate::verify_facts::tick(ctx);
@@ -197,10 +204,20 @@ fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
 }
 
 /// The i32 of a proven non-negative int32 local: its canonical i32 slot, or
-/// its double (an exact int32: plain or an INT32 box).
+/// its double (an exact int32, `proven_number_raw`).
 fn proven_raw(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> String {
     if let Some((slot, _)) = crate::expr::canonical_local_i32_slot(ctx, id) {
         return ctx.block().load(I32, &slot);
+    }
+    proven_number_raw(ctx, value)
+}
+
+/// The i32 of `value`, a Number the facts prove an int32: a canonical
+/// double (P3, `facts_rep::canonical_numbers`), so one `fptosi`. With
+/// `PERRY_WP_REP_P3=0` an INT32 box converts through its payload.
+fn proven_number_raw(ctx: &mut FnCtx<'_>, value: &str) -> String {
+    if crate::codegen::facts_rep::canonical_numbers() {
+        return ctx.block().fptosi(crate::types::DOUBLE, value, I32);
     }
     crate::codegen::emit_typed_i32_raw_assuming_guarded(ctx.block(), value)
 }
@@ -225,9 +242,7 @@ pub(crate) fn emit_number_index_split(
             witness_nonneg(ctx, &value, proof);
             let raw = match proof {
                 Proof::Local(id) | Proof::Site(Some(id)) => proven_raw(ctx, id, &value),
-                Proof::Site(None) => {
-                    crate::codegen::emit_typed_i32_raw_assuming_guarded(ctx.block(), &value)
-                }
+                Proof::Site(None) => proven_number_raw(ctx, &value),
             };
             raws.push(raw);
             continue;
@@ -285,3 +300,7 @@ pub(crate) fn emit_number_index_split(
         &[(fast.as_str(), &fast_end), (slow.as_str(), &slow_end)],
     )
 }
+
+#[cfg(test)]
+#[path = "index_split_tests.rs"]
+mod tests;

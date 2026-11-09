@@ -86,14 +86,15 @@ fn match_element_or_empty_is_a_string() {
     );
 }
 
-/// A program-written `RegExp.prototype.exec` is what `@@split` calls: its
-/// captures are what it returns.
+/// `RegExp.prototype` is sealed (DEC 250, rt/lock.ts): `RegExp.prototype.exec = f`
+/// throws, so the splitter still calls the intrinsic and the captures keep
+/// their String|undefined fact. (Subclass and species `exec` below run.)
 #[test]
-fn written_exec_makes_split_captures_unknown() {
+fn sealed_prototype_exec_write_keeps_split_captures() {
     let src = format!(
         "(RegExp.prototype as any).exec = function (s: string): any {{ const r: any = [\"b\", {{ length: 9 }}]; r.index = 0; return r; }};\n{SPLIT}"
     );
-    unproven(&src, "(p[1]", "length");
+    proves(&src, "(p[1]", "length");
 }
 
 /// A subclass is the species constructor of its instances; its `exec` runs.
@@ -133,12 +134,26 @@ fn subclass_exec_makes_match_elements_unknown() {
     );
 }
 
-/// A written `exec` called directly is the program function.
+/// `RegExp.prototype.exec = f` throws (sealed): a direct `exec` of a
+/// literal is still the intrinsic and keeps its result facts.
 #[test]
-fn written_exec_result_is_unknown() {
-    unproven(
+fn sealed_prototype_exec_write_keeps_exec_result() {
+    proves(
         "(RegExp.prototype as any).exec = function (s: string): any { return [{ length: 9 }, 1]; };\n\
          function f(s: string) { const m = /(a)/.exec(s); return m === null ? 0 : (m[0] ?? \"\").length; }\n\
+         console.log(f(\"a\"));\n",
+        "(m[0]",
+        "length",
+    );
+}
+
+/// Named control: an own-key `exec` written on an escaped regexp instance
+/// is a program function, so its result is unknown (the caller's path, DESIGN 2).
+#[test]
+fn own_key_exec_write_on_an_instance_makes_exec_result_unknown() {
+    unproven(
+        "function f(s: string) { const re: any = /(a)/; re.exec = function (s: string): any { return (globalThis as any)[process.argv[2]](s); };\n\
+         const m = re.exec(s); return m === null ? 0 : (m[0] ?? \"\").length; }\n\
          console.log(f(\"a\"));\n",
         "(m[0]",
         "length",

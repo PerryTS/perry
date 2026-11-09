@@ -1183,10 +1183,15 @@ pub(crate) fn lower_let(
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
-    let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+    // A local the facts give `I32` is proven int32 (never -0) on every
+    // write by the whole-program interval: that proof is the value-level
+    // admission, and the per-function collectors' proofs are not needed.
+    let facts_i32 = matches!(facts_rep, Some(crate::codegen::FactsRep::I32));
+    let collectors_value_proof = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
         && !unprofitable
-        && init_in_i32_range
+        && init_in_i32_range;
+    let canonical_i32_value_eligible = (facts_i32 || collectors_value_proof)
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)

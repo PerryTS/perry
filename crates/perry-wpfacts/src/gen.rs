@@ -270,9 +270,16 @@ pub struct Gen<'a> {
     /// The function body being walked and its locals a guard may narrow
     /// (`narrow::scope_locals`).
     pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    /// The `const` bindings the bodies being walked declare
+    /// (`narrow::Consts`): a body a closure creates may narrow the ones it
+    /// captures.
+    pub(crate) narrow_consts: crate::pts::FxHashSet<(u32, u32)>,
     /// `(module, byte offset, argument nodes)` of each method call site
     /// (`bindings::ModuleBindings::call_arg_ranges`).
     pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
+    /// `(module, byte offset, result node)` of each method call site
+    /// (`bindings::ModuleBindings::number_calls`).
+    pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
     /// One-unit String literal nodes by code (`Gen::str_literal`).
     pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
@@ -345,6 +352,9 @@ pub struct Gen<'a> {
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
+    /// Guards narrow locals by presence: a truthy or non-nullish test
+    /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
+    pub guard_presence: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -631,7 +641,9 @@ impl<'a> Gen<'a> {
             for_binding: None,
             narrow: Vec::new(),
             narrow_scope: None,
+            narrow_consts: Default::default(),
             call_args_at: Vec::new(),
+            call_results_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
@@ -664,6 +676,7 @@ impl<'a> Gen<'a> {
             int_ranges: true,
             arr_lengths: true,
             guard_ranges: true,
+            guard_presence: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -1719,8 +1732,8 @@ impl<'a> Gen<'a> {
         };
         let binding = c.extends_name.as_deref().filter(|_| !member);
         let parent = binding.and_then(|n| self.resolve_class_name(mi, n));
-        let builtin_parent = binding
-            .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
+        let builtin_parent =
+            binding.filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
@@ -1740,7 +1753,8 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            self.parent_values.push((mi, tm, binding.map(str::to_string)));
+            self.parent_values
+                .push((mi, tm, binding.map(str::to_string)));
         }
     }
 

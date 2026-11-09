@@ -784,7 +784,11 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // 2n + 8 more -> (975, 2639, 8271). The n^2 growth is unchanged.
         // SEEDAB: an Annex B lookup under an unknown key hands out the
         // realm's accessor functions (one token): two entries more at every n.
-        (977, 2641, 8273),
+        // Guard presence (`gen::narrow`): each `if (c)` narrows the
+        // parameter `c` by presence, a start and an end node holding its
+        // marker and primitives: three entries per `if`, 3(n - 1) more
+        // (linear; the n^2 growth is unchanged) -> the pin.
+        (998, 2686, 8366),
         "entries {e8} {e16} {e32}"
     );
 }

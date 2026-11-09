@@ -874,7 +874,7 @@ fn emit_range_loop_accumulator_admission(
 /// Materialize the address half shared by packed clones and phase 3 ordinary
 /// counted loops. The returned box is a precise root, while the handle slot is
 /// refreshed from it after every fired loop poll.
-fn create_poll_refreshed_receiver_cache(
+pub(crate) fn create_poll_refreshed_receiver_cache(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
 ) -> Option<(String, String, String)> {
@@ -7973,6 +7973,9 @@ fn lower_for_after_init_impl(
         } else {
             false
         };
+    // b2: cold-arm descriptors for the loop's other array reads.
+    let skip = in_call_free_clone || ordinary_receiver_descriptor_installed;
+    let cold_arm = super::descriptor_read::install_for(ctx, skip, condition, update, body);
 
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
     // detect the simpler `i < n` shape where `n` is a statically proven
@@ -8375,6 +8378,7 @@ fn lower_for_after_init_impl(
 
     ctx.loop_targets.pop();
 
+    super::descriptor_read::uninstall(ctx, cold_arm);
     if ordinary_receiver_descriptor_installed {
         let arr_id = hoisted_length_arr_id.expect("installed descriptor has a length receiver");
         let removed = ctx.receiver_descriptors.dematerialize(arr_id);
@@ -10488,7 +10492,9 @@ pub(crate) fn lower_while(
     }
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_while_impl(ctx, condition, body)
+        super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_while_impl(c, condition, body)
+        })
     });
     super::region_loop::end(ctx, region);
     lowered
@@ -10575,7 +10581,9 @@ pub(crate) fn lower_do_while(
 ) -> Result<()> {
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_do_while_impl(ctx, body, condition)
+        super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_do_while_impl(c, body, condition)
+        })
     });
     super::region_loop::end(ctx, region);
     lowered

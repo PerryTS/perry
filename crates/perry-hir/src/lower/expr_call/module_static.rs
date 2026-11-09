@@ -30,7 +30,7 @@ fn peel_webassembly_receiver_expr(mut expr: &ast::Expr) -> &ast::Expr {
 fn is_webassembly_namespace_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     match peel_webassembly_receiver_expr(expr) {
         ast::Expr::Ident(id) => {
-            id.sym.as_ref() == "WebAssembly" && ctx.lookup_local("WebAssembly").is_none()
+            id.sym.as_ref() == "WebAssembly" && !ctx.shadows_unqualified_global("WebAssembly")
         }
         ast::Expr::Member(member) => {
             let ast::MemberProp::Ident(prop) = &member.prop else {
@@ -43,7 +43,7 @@ fn is_webassembly_namespace_receiver(ctx: &LoweringContext, expr: &ast::Expr) ->
                 peel_webassembly_receiver_expr(member.obj.as_ref()),
                 ast::Expr::Ident(root)
                     if root.sym.as_ref() == "globalThis"
-                        && ctx.lookup_local("globalThis").is_none()
+                        && !ctx.shadows_unqualified_global("globalThis")
             )
         }
         _ => false,
@@ -70,7 +70,7 @@ pub(super) fn try_module_static_methods(
                 (member.obj.as_ref(), &member.prop)
             {
                 if obj_ident.sym.as_ref() == "Bun"
-                    && ctx.lookup_local("Bun").is_none()
+                    && !ctx.shadows_unqualified_global("Bun")
                     && ctx.lookup_native_module("Bun").is_none()
                 {
                     if matches!(
@@ -379,7 +379,10 @@ pub(super) fn try_module_static_methods(
             // computed key does not fall through to generic dispatch (→
             // `TypeError: value is not a function`).
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "JSON" && !has_spread {
+            if obj_ident.sym.as_ref() == "JSON"
+                && !ctx.shadows_unqualified_global("JSON")
+                && !has_spread
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "parse" => {
@@ -576,7 +579,7 @@ pub(super) fn try_module_static_methods(
 
             // Check for Response.json(value) / Response.redirect(url, status?) /
             // Response.error() static factories.
-            if obj_ident.sym.as_ref() == "Response" {
+            if obj_ident.sym.as_ref() == "Response" && !ctx.shadows_unqualified_global("Response") {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
@@ -602,7 +605,8 @@ pub(super) fn try_module_static_methods(
             //   helper kept for compatibility with the first PoC pass)
             // The standard `inst.exports.<method>(...)` shape is
             // recognised separately below as a syntactic pattern.
-            if obj_ident.sym.as_ref() == "WebAssembly" && ctx.lookup_local("WebAssembly").is_none()
+            if obj_ident.sym.as_ref() == "WebAssembly"
+                && !ctx.shadows_unqualified_global("WebAssembly")
             {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -651,7 +655,7 @@ pub(super) fn try_module_static_methods(
 
             // Check for Math.methodName() calls. #6677: match BOTH the dot form
             // and the string-literal computed form (`Math["max"](...)`).
-            if obj_ident.sym.as_ref() == "Math" {
+            if obj_ident.sym.as_ref() == "Math" && !ctx.shadows_unqualified_global("Math") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     // Only `min` / `max` have arms written for a spread; every
                     // other spread call declines (see `call_has_spread_arg`).
@@ -867,7 +871,10 @@ pub(super) fn try_module_static_methods(
             // DataView-marked buffers) by re-emitting a `util/types`
             // NativeMethodCall — no new HIR variant or runtime helper needed.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "ArrayBuffer" && !has_spread {
+            if obj_ident.sym.as_ref() == "ArrayBuffer"
+                && !ctx.shadows_unqualified_global("ArrayBuffer")
+                && !has_spread
+            {
                 // #6677: accept the string-literal computed form too.
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "isView" {
@@ -891,7 +898,10 @@ pub(super) fn try_module_static_methods(
             // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
             // value path.)
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "BigInt" && !has_spread {
+            if obj_ident.sym.as_ref() == "BigInt"
+                && !ctx.shadows_unqualified_global("BigInt")
+                && !has_spread
+            {
                 // #6677: accept the string-literal computed form too.
                 if let Some(m) = super::static_call_prop_name(&member.prop) {
                     if m == "asIntN" || m == "asUintN" {
@@ -911,7 +921,10 @@ pub(super) fn try_module_static_methods(
 
             // Check for Number.methodName() static calls. #6677: computed form too.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "Number" && !has_spread {
+            if obj_ident.sym.as_ref() == "Number"
+                && !ctx.shadows_unqualified_global("Number")
+                && !has_spread
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         // A missing argument is `undefined` (Type ≠ Number), so
@@ -967,7 +980,7 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for String.methodName() static calls. #6677: computed form too.
-            if obj_ident.sym.as_ref() == "String" {
+            if obj_ident.sym.as_ref() == "String" && !ctx.shadows_unqualified_global("String") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     // Scalar intrinsics receive flattened AST arguments, not
                     // expanded values. Let CallSpread preserve every argument
@@ -1185,7 +1198,7 @@ pub(super) fn try_module_static_methods(
             // Check for Buffer.methodName() static calls — also accept
             // aliased imports per #831 (see the longer note at the
             // first Buffer site above).
-            let is_buffer_ref = obj_name == "Buffer"
+            let is_buffer_ref = (obj_name == "Buffer" && !ctx.shadows_unqualified_global("Buffer"))
                 || matches!(
                     ctx.lookup_native_module(obj_name),
                     Some(("buffer", Some("Buffer")))
@@ -1317,7 +1330,7 @@ pub(super) fn try_module_static_methods(
             // static factories. Perry aliases Uint8Array → Buffer; route these
             // through the buffer native-module dispatch table (no new HIR
             // variant) so the runtime decodes into a fresh BufferHeader.
-            if obj_name == "Uint8Array" {
+            if obj_name == "Uint8Array" && !ctx.shadows_unqualified_global("Uint8Array") {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "fromBase64" | "fromHex") {
@@ -1342,10 +1355,7 @@ pub(super) fn try_module_static_methods(
             // is a real global typed-array constructor (not shadowed by a
             // local/import/class binding).
             if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
-                let shadowed = ctx.lookup_local(obj_name).is_some()
-                    || ctx.lookup_func(obj_name).is_some()
-                    || ctx.lookup_imported_func(obj_name).is_some()
-                    || ctx.lookup_class(obj_name).is_some();
+                let shadowed = ctx.shadows_unqualified_global(obj_name);
                 // A spread call declines: see `call_has_spread_arg`.
                 if !shadowed && obj_name != "Uint8Array" && !has_spread {
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
@@ -1515,7 +1525,9 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for AbortSignal static helpers: timeout / abort / any (#2582).
-            if obj_ident.sym.as_ref() == "AbortSignal" {
+            if obj_ident.sym.as_ref() == "AbortSignal"
+                && !ctx.shadows_unqualified_global("AbortSignal")
+            {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "timeout" | "abort" | "any") {
@@ -1531,7 +1543,10 @@ pub(super) fn try_module_static_methods(
             // Check for Date.now() / Date.parse() / Date.UTC() static method calls.
             // #6677: computed form too.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "Date" && !has_spread {
+            if obj_ident.sym.as_ref() == "Date"
+                && !ctx.shadows_unqualified_global("Date")
+                && !has_spread
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "now" {
                         return Ok(Ok(Expr::DateNow));
@@ -1555,7 +1570,10 @@ pub(super) fn try_module_static_methods(
             // arm intercepts both spellings and routes to dedicated
             // HIR variants.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "URL" && !has_spread {
+            if obj_ident.sym.as_ref() == "URL"
+                && !ctx.shadows_unqualified_global("URL")
+                && !has_spread
+            {
                 // #6677: accept the string-literal computed form too.
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "canParse" && !args.is_empty() {
