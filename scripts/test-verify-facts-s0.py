@@ -111,6 +111,7 @@ def main():
         ("element-read-sparse-birth", "densebirth", "proven element read"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
+        ("array-undef-negative", "arrundef", "element floor"),
         ("signature-negative", "signature", "signature"),
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),

@@ -281,7 +281,7 @@ fn source_for_of(
             init: Some(Expr::IndexGet {
                 byte_offset: 0,
                 byte_end: 0,
-                element_offset: 0,
+                element_offset: walk_site_key(binding),
                 object: Box::new(Expr::LocalGet(array)),
                 index: Box::new(Expr::LocalGet(counter)),
             }),
@@ -358,6 +358,25 @@ fn source_for_of(
     })();
     ctx.pop_block_scope(scope);
     result.map(|()| Some(out))
+}
+
+/// The element-fact key of the walk's element read (DESIGN-p4l1 §2.9,
+/// PR-C1): the loop binding's span start. That byte starts a binding
+/// identifier of a declaration, where no expression starts, so it is no
+/// other read's `element_offset` (a member expression's span start). Each
+/// copy of the loop (both arms of an enclosing rewrite) is the same read,
+/// and its facts are joined over every copy. `PERRY_FACTS_ELEM_UNDEF=0`
+/// keeps 0, no key, as before.
+fn walk_site_key(binding: &ast::BindingIdent) -> u32 {
+    let off = matches!(
+        std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    if off {
+        0
+    } else {
+        binding.id.span.lo.0
+    }
 }
 
 /// How many rewritten loops may enclose another rewrite. Each rewrite lowers

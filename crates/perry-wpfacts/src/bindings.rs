@@ -345,6 +345,11 @@ pub struct ModuleBindings {
     /// `element_offset`, sorted; `true` when the value may also be
     /// `undefined` (`canonical_numbers`, P3 B1).
     pub number_element_reads: Vec<(u32, bool)>,
+    /// Check mode: element reads by `element_offset` whose past-the-end
+    /// `undefined` the solve withheld at every copy (`Cons::ElemUndef`,
+    /// PR-C1), with the least length lower bound of their receivers; sorted
+    /// (`element_floors`).
+    pub element_floors: Vec<(u32, u32)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that

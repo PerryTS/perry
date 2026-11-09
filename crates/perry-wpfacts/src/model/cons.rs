@@ -368,6 +368,14 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
+    /// The past-the-end `undefined` of a computed-key read `o[key]` of
+    /// program Array token `obj` (DESIGN-p4l1 §2.8, PR-C1). Watches both
+    /// inputs: it sits on the key node and on `arr_len(obj)`. `dst` ⊇
+    /// `undefined` once the read may be at or past the length: the length
+    /// is ⊤, or the key may be anything but an integer Number in
+    /// `[0, arr_len(obj).lo)`. Below the length the read is an element or a
+    /// hole, which the read's own edges carry (`all_fields`, `hole`).
+    ElemUndef { obj: Tok, key: NodeId, dst: NodeId },
     /// `IdxLoad` of a read that runs only after an own-property test of the
     /// same object and key (`gen/own_guard.rs`): a program object's own
     /// fields under the key (`IdxOwnKey`), never its prototype chain; any
@@ -577,6 +585,7 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::ElemUndef { .. }
                 | Cons::StoreIndexed { .. }
                 | Cons::RetInto { .. }
                 | Cons::Defined { .. }
@@ -660,6 +669,7 @@ impl Cons {
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::ElemUndef { .. } => "elemundef",
             Cons::IdxOwnLoad { .. } => "idxownload",
             Cons::IdxOwnKey { .. } => "idxownkey",
             Cons::OwnGate { .. } => "owngate",

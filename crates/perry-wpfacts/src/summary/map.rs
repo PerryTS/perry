@@ -265,6 +265,11 @@ pub fn map_cons(
             dst: n(dst),
             shape,
         },
+        ElemUndef { obj, key, dst } => ElemUndef {
+            obj,
+            key: n(key),
+            dst: n(dst),
+        },
         IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
             idx: n(idx),
             dst: n(dst),
@@ -519,6 +524,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
+        | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }
