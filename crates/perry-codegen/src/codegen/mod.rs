@@ -3910,6 +3910,7 @@ fn lower_module(
                         guards,
                         signature: None,
                         sig_defaults: Vec::new(),
+                        sig_public: Default::default(),
                     }
                 }
                 None => {
@@ -3934,6 +3935,7 @@ fn lower_module(
                             guards,
                             signature: None,
                             sig_defaults: Vec::new(),
+                            sig_public: Default::default(),
                         }
                     } else {
                         reject(

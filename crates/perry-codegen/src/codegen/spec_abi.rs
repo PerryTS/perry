@@ -157,6 +157,21 @@ pub(crate) struct SpecFnPlan {
     /// boxed entry) applies outside `$sig`. Only non-Boxed parameters carry
     /// one; `$sig` is compiled without their default prologue.
     pub sig_defaults: Vec<Option<f64>>,
+    /// P2 (CWN 11-09): the public symbol main emitted for this function; a
+    /// typed function's boxed entry takes that symbol's inline attributes.
+    pub sig_public: MainPublic,
+}
+
+/// The public symbol main emits for a function (`compile_function`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum MainPublic {
+    /// The ordinary body (`function::apply_public_inline_attrs`).
+    #[default]
+    Body,
+    /// The Tier B guarded trampoline (`emit_public_spec_function_trampoline`).
+    GuardedSpec,
+    /// The typed_abi `typed_f64`/`typed_i32` trampoline.
+    TypedTrampoline,
 }
 
 /// The entry symbol `plan` names: `{public}$sig` for a typed function (P2),

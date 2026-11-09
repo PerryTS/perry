@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use perry_hir::{CompareOp, Expr, Function, Stmt};
 
 use super::opts::CrossModuleCtx;
+use super::spec_abi::MainPublic;
 use super::{FactsRep, FactsSignature, SpecDispatch, SpecFnPlan};
 use crate::block::LlBlock;
 use crate::collectors::SpecParamRep;
@@ -140,11 +141,27 @@ fn typed_plan(
     {
         return None;
     }
+    // CWN 11-09 (T6 as the selector): every tier `F$sig` would subsume must
+    // be no more precise than the signature, parameter by parameter.
+    let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
+    if cm.typed_i32_functions.contains(&f.id) && !all(FactsRep::I32)
+        || cm.typed_f64_functions.contains(&f.id) && !all(FactsRep::F64)
+    {
+        return None;
+    }
     if let Some(plan) = cm.spec_abi_functions.get(&f.id) {
         if plan
             .reps
             .iter()
             .any(|r| matches!(r, SpecParamRep::TaPtr { .. } | SpecParamRep::NumberArray))
+        {
+            return None;
+        }
+        if !sig
+            .params
+            .iter()
+            .zip(plan.reps.iter())
+            .all(|(have, clone)| at_least(*have, spec_rep(*clone)))
         {
             return None;
         }
@@ -174,13 +191,47 @@ fn typed_plan(
             _ => SpecParamRep::Boxed,
         })
         .collect();
+    // The public symbol main emits (`compile_function`: the typed_abi
+    // trampoline first, then a Tier B guarded trampoline, else the body).
+    let sig_public =
+        if cm.typed_f64_functions.contains(&f.id) || cm.typed_i32_functions.contains(&f.id) {
+            MainPublic::TypedTrampoline
+        } else if cm
+            .spec_abi_functions
+            .get(&f.id)
+            .is_some_and(|plan| matches!(plan.dispatch, SpecDispatch::Guarded))
+        {
+            MainPublic::GuardedSpec
+        } else {
+            MainPublic::Body
+        };
     Some(SpecFnPlan {
         reps,
         dispatch: SpecDispatch::Static,
         guards: vec![None; f.params.len()],
         signature: Some(sig.clone()),
         sig_defaults: defaults,
+        sig_public,
     })
+}
+
+/// `have` is at least as precise as `want` (I32 ⊑ F64 ⊑ Boxed).
+fn at_least(have: FactsRep, want: FactsRep) -> bool {
+    let rank = |r: FactsRep| match r {
+        FactsRep::I32 => 2,
+        FactsRep::F64 => 1,
+        FactsRep::Boxed => 0,
+    };
+    rank(have) >= rank(want)
+}
+
+/// The representation a spec_abi tuple slot proves.
+fn spec_rep(r: SpecParamRep) -> FactsRep {
+    match r {
+        SpecParamRep::I32 => FactsRep::I32,
+        SpecParamRep::F64 => FactsRep::F64,
+        _ => FactsRep::Boxed,
+    }
 }
 
 /// Compute `typed_fns` once (T2) and install it: each typed function's plan
@@ -236,6 +287,9 @@ pub(crate) struct TypedMethod {
     /// tier `M$sig` subsumes: `M$sig` inherits that clone's early-inline
     /// admission (`method.rs`, CWN 11-09).
     pub index_admission: bool,
+    /// Main's public symbol was a typed_abi `typed_f64`/`typed_i32`
+    /// trampoline (no inline admission).
+    pub typed_trampoline: bool,
 }
 
 /// The typed methods of `hir` (T2), installed after every method selector
@@ -332,6 +386,30 @@ pub(crate) fn select_methods(
             if tower && proven_this.is_none() {
                 continue;
             }
+            // CWN 11-09 (T6 as the selector): every tier `M$sig` would
+            // subsume must be no more precise than the signature, parameter
+            // by parameter (`this` included): typed_abi's all-I32/all-F64
+            // clones, the index clone's non-negative int32 indices, the
+            // `$pshape` layout, and `$pshape_args`' proven argument shapes
+            // (which no representation carries).
+            let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
+            let index_ok = cm.nonnegative_index_methods.get(&key).is_none_or(|ids| {
+                m.params
+                    .iter()
+                    .zip(sig.params.iter().zip(sig.ranges.iter()))
+                    .all(|(p, (rep, range))| {
+                        !ids.contains(&p.id)
+                            || *rep == FactsRep::I32 && range.is_some_and(|(lo, _)| lo >= 0)
+                    })
+            });
+            if cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
+                || cm.typed_f64_methods.contains(&key) && !all(FactsRep::F64)
+                || !index_ok
+                || cm.pshape_methods.contains_key(&key) && proven_this.is_none()
+                || cm.pshape_arg_methods.contains_key(&key)
+            {
+                continue;
+            }
             // A signature whose every slot is Boxed changes the body only
             // through its `this` layout: without one, `M$sig` would be the
             // public body again.
@@ -344,6 +422,8 @@ pub(crate) fn select_methods(
             typed.push(TypedMethod {
                 published_pshape: cm.pshape_methods.contains_key(&key),
                 index_admission: cm.nonnegative_index_methods.contains_key(&key),
+                typed_trampoline: cm.typed_f64_methods.contains(&key)
+                    || cm.typed_i32_methods.contains(&key),
                 class: class.name.clone(),
                 name: m.name.clone(),
                 plan: SpecFnPlan {
@@ -352,6 +432,7 @@ pub(crate) fn select_methods(
                     guards: vec![None; m.params.len()],
                     signature: Some(sig.clone()),
                     sig_defaults: defaults,
+                    sig_public: MainPublic::Body,
                 },
                 proven_this,
             });
@@ -648,14 +729,28 @@ pub(crate) fn emit_boxed_method_entry(
         .and(tm.plan.signature.as_ref())
         .and_then(|sig| sig.this_class);
     emit_entry(llmod, m, public_name, &tm.plan, Some(this_class));
-    // CWN 11-09: the boxed entry is the public symbol, so it takes the
-    // primary body's admission (`method.rs`): the early inliner when the
-    // facts close a call site over it and the body fits the budget.
-    let body_bytes = llmod.function_estimated_ir_bytes(&format!("{public_name}$sig"));
-    if let Some(entry) = llmod.function_named_mut(public_name) {
-        entry.closed_target_preinline = body_bytes.is_some_and(|bytes| {
-            super::helpers::guarded_specialization_admits_preinline(bytes, m.body.len())
+    // CWN 11-09: the boxed entry takes the attributes of the public symbol
+    // main emitted: the guarded index wrapper's early-inline admission
+    // (`method_trampolines::emit_guarded_nonnegative_index`, sized by the
+    // body it enters), a typed_abi trampoline's none, else the primary
+    // body's closed-target admission (`method.rs`).
+    let sig_name = format!("{public_name}$sig");
+    let statements = m.body.len();
+    let callable_worker = llmod.callable_worker;
+    let admits = llmod
+        .function_estimated_ir_bytes(&sig_name)
+        .is_some_and(|bytes| {
+            super::helpers::guarded_specialization_admits_preinline(bytes, statements)
         });
+    if let Some(entry) = llmod.function_named_mut(public_name) {
+        if tm.index_admission {
+            entry.pre_statepoint_inline = !callable_worker && admits;
+            if callable_worker {
+                entry.defer_body_preinline(statements, sig_name);
+            }
+        } else if !tm.typed_trampoline {
+            entry.closed_target_preinline = admits;
+        }
     }
     if tm.published_pshape {
         let tys = vec!["double"; m.params.len() + 1].join(", ");

@@ -958,6 +958,7 @@ mod tests {
             })],
             signature: None,
             sig_defaults: Vec::new(),
+            sig_public: Default::default(),
         }
     }
 
