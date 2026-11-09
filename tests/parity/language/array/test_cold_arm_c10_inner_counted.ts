@@ -2,7 +2,6 @@
 // an inner counted loop over `a` (its own tier: cached length, packed or
 // validated receiver) must use the current array, never a stale handle.
 let a: number[] = [];
-for (let i = 0; i < 32; i++) a.push(i);
 let mode = 0;
 let junk: any[] = [];
 Object.defineProperty(Array.prototype, "1.5", {
@@ -22,5 +21,13 @@ function run(n: number): string {
   }
   return hits + " " + inner + " " + a.length;
 }
-for (mode = 0; mode < 2; mode++) console.log(mode, run(8));
+function fresh(): void {
+  const b: number[] = [];
+  for (let i = 0; i < 32; i++) b.push(i);
+  a = b;
+}
+for (mode = 0; mode < 2; mode++) {
+  fresh();
+  console.log(mode, run(8));
+}
 delete (Array.prototype as any)["1.5"];
