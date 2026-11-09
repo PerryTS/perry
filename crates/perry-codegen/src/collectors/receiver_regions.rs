@@ -1008,9 +1008,18 @@ impl ReceiverDescriptorTable {
     }
 
     /// The pre-masked base-handle slot consumed by packed address math.
+    /// Never a cold-arm entry's (REVIEW-b2-code R1): that handle is believed
+    /// only behind its own valid slot (`cold_arm_access`).
     pub(crate) fn base_handle_slot(&self, receiver: u32) -> Option<&str> {
         self.entries.iter().find_map(|entry| match &entry.data {
-            ActiveReceiverData::Address { refresh, .. } if entry.contract.receiver == receiver => {
+            ActiveReceiverData::Address {
+                refresh,
+                array_validation,
+            } if entry.contract.receiver == receiver
+                && !array_validation
+                    .as_ref()
+                    .is_some_and(|v| v.cold_arm.is_some()) =>
+            {
                 Some(refresh.base_handle_slot.as_str())
             }
             _ => None,
