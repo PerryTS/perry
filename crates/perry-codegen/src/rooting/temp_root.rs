@@ -557,7 +557,7 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
             condition,
             then_expr,
             else_expr,
-        } => {
+        } if crate::expr::inert_math_enabled() => {
             expr_is_inert_primitive(ctx, condition)
                 && expr_is_inert_primitive(ctx, then_expr)
                 && expr_is_inert_primitive(ctx, else_expr)
