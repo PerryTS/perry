@@ -1149,6 +1149,24 @@ pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
 pub(crate) fn function_start_for(pc: u64) -> Option<u64> {
     let walker = locked_walker()?;
     let image = walker.image_for(pc)?;
+    image_function_start(image, pc)
+}
+
+fn image_function_start(image: &WalkerImage, pc: u64) -> Option<u64> {
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    if let Some(start) = trace::direct_function_start(&image.image, pc) {
+        return start;
+    }
+    gimli_function_start(image, pc)
+}
+
+#[cfg(test)]
+static FUNCTION_START_GIMLI_FALLBACKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn gimli_function_start(image: &WalkerImage, pc: u64) -> Option<u64> {
+    #[cfg(test)]
+    FUNCTION_START_GIMLI_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let hdr = image.image.hdr.as_ref()?;
     let table = hdr.table()?;
     let fde = table
