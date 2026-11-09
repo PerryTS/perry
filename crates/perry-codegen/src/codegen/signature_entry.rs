@@ -279,7 +279,7 @@ pub(crate) struct TypedMethod {
     pub proven_this: Option<crate::collectors::PtrShapeLocal>,
     /// Main published a proven-`this` capability for this method to importing
     /// modules (`exported_proven_this_method_capabilities`): that symbol
-    /// stays, as an alias of the boxed entry, so an importer's guarded call
+    /// stays, as a forwarder to the boxed entry, so an importer's guarded call
     /// still links.
     pub published_pshape: bool,
     /// Main selected a nonnegative-index clone of this method (`$idx`), the
@@ -712,8 +712,8 @@ pub(crate) fn emit_boxed_entry(
 }
 
 /// The boxed entry of a typed method: `emit_boxed_entry` with the receiver
-/// passed through unchanged. A published proven-`this` capability becomes an
-/// alias of it.
+/// passed through unchanged. A published proven-`this` capability becomes a
+/// forwarder to it.
 pub(crate) fn emit_boxed_method_entry(
     llmod: &mut LlModule,
     m: &Function,
@@ -752,11 +752,16 @@ pub(crate) fn emit_boxed_method_entry(
         }
     }
     if tm.published_pshape {
-        let tys = vec!["double"; m.params.len() + 1].join(", ");
-        llmod.add_raw_global(format!(
-            "@{} = alias double ({tys}), ptr @{public_name}",
-            crate::collectors::pshape_method_name(public_name)
-        ));
+        // A function, not an alias: a module split into codegen units may
+        // place an alias apart from its definition.
+        let mut params: Vec<(LlvmType, String)> = vec![(DOUBLE, "%this_arg".to_string())];
+        params.extend(m.params.iter().map(|p| (DOUBLE, format!("%arg{}", p.id))));
+        let name = crate::collectors::pshape_method_name(public_name);
+        let wf = llmod.define_function(&name, DOUBLE, params.clone());
+        let blk = wf.create_block("entry");
+        let args: Vec<(LlvmType, &str)> = params.iter().map(|(t, v)| (*t, v.as_str())).collect();
+        let value = blk.call(DOUBLE, public_name, &args);
+        blk.ret(DOUBLE, &value);
     }
 }
 
