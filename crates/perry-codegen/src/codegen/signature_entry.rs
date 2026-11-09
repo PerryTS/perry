@@ -198,7 +198,17 @@ pub(crate) fn select(
     }
     let reached: HashSet<u32> = facts.typed_calls.values().copied().collect();
     let mut typed: Vec<(u32, SpecFnPlan)> = Vec::new();
+    let debug = std::env::var("PERRY_P2_DEBUG").is_ok();
     for f in &hir.functions {
+        if debug {
+            eprintln!(
+                "p2: fn {} #{} sig={:?} reached={}",
+                f.name,
+                f.id,
+                facts.signatures.get(&f.id),
+                reached.contains(&f.id)
+            );
+        }
         if !reached.contains(&f.id) {
             continue;
         }
@@ -207,6 +217,8 @@ pub(crate) fn select(
         };
         if let Some(plan) = typed_plan(f, sig, cm, func_synthetic_arguments, triple) {
             typed.push((f.id, plan));
+        } else if debug {
+            eprintln!("p2: fn {} excluded", f.name);
         }
     }
     for (id, plan) in typed {
@@ -214,6 +226,156 @@ pub(crate) fn select(
         cm.typed_i32_functions.remove(&id);
         cm.spec_return_proofs.remove(&id);
         cm.spec_abi_functions.insert(id, plan);
+    }
+}
+
+/// A typed class method (§3.2): its plan, and the proven-`this` layout
+/// `M$sig` is compiled with (E2): `Some` only when the signature's
+/// `this_class` is the method's own class, that class's layout is fixed,
+/// and main selected a `$pshape` body for it.
+#[derive(Debug, Clone)]
+pub(crate) struct TypedMethod {
+    pub class: String,
+    pub name: String,
+    pub plan: SpecFnPlan,
+    pub proven_this: Option<crate::collectors::PtrShapeLocal>,
+    /// Main published a `$pshape` capability for this method to importing
+    /// modules (`exported_proven_this_method_capabilities`): that symbol
+    /// stays, as an alias of the boxed entry, so an importer's guarded call
+    /// still links.
+    pub published_pshape: bool,
+}
+
+/// The typed methods of `hir` (T2), installed after every method selector
+/// ran as on main; their subsumed tiers (`$pshape`, `$pshape_args`, the
+/// index clones, typed_abi `typed_f64`/`typed_i32`) are dropped for them
+/// only (T3).
+pub(crate) fn select_methods(
+    hir: &perry_hir::Module,
+    cm: &mut CrossModuleCtx,
+    class_ids: &std::collections::HashMap<String, u32>,
+) {
+    let facts = cm.wpfacts.clone();
+    if facts.interp_guard || facts.signatures.is_empty() {
+        return;
+    }
+    let reached: HashSet<u32> = facts.typed_calls.values().copied().collect();
+    let mut typed: Vec<TypedMethod> = Vec::new();
+    for class in &hir.classes {
+        let Some(&class_id) = class_ids.get(&class.name) else {
+            continue;
+        };
+        for m in &class.methods {
+            if std::env::var("PERRY_P2_DEBUG").is_ok() {
+                eprintln!(
+                    "p2: method {}::{} #{} sig={:?} reached={}",
+                    class.name,
+                    m.name,
+                    m.id,
+                    facts.signatures.get(&m.id),
+                    reached.contains(&m.id)
+                );
+            }
+            if !reached.contains(&m.id) {
+                continue;
+            }
+            let Some(sig) = facts.signatures.get(&m.id) else {
+                continue;
+            };
+            if sig.params.len() != m.params.len()
+                || (sig.ret == FactsRep::Boxed
+                    && sig.params.iter().all(|r| *r == FactsRep::Boxed))
+                || m.is_async
+                || m.is_generator
+                || m.was_plain_async
+                || !m.captures.is_empty()
+                || m.params
+                    .iter()
+                    .any(|p| p.is_rest || p.arguments_object.is_some())
+            {
+                continue;
+            }
+            let key = (class.name.clone(), m.name.clone());
+            // Excluded tiers (§3.2.1).
+            if cm.typed_i1_methods.contains(&key)
+                || cm.typed_string_methods.contains(&key)
+                || cm.typed_f64_receiver_methods.contains_key(&key)
+                || cm.pshape_tower_routable.contains(&key)
+                || cm.guarded_undefined_method_params.contains_key(&key)
+                || cm.guarded_falsy_field_default_methods.contains_key(&key)
+                || crate::collectors::ptr_array_cached_method(class, m).is_some()
+                || super::arguments::method_supports_arguments_length_direct_abi(m)
+            {
+                continue;
+            }
+            let mut defaults = Vec::with_capacity(m.params.len());
+            let mut ok = true;
+            for (p, rep) in m.params.iter().zip(sig.params.iter()) {
+                defaults.push(match (&p.default, rep) {
+                    (Some(d), FactsRep::I32 | FactsRep::F64) => match literal_number(d) {
+                        Some(n) => Some(n),
+                        None => {
+                            ok = false;
+                            None
+                        }
+                    },
+                    _ => None,
+                });
+            }
+            if !ok {
+                continue;
+            }
+            let Some(body) = sig_function(m, &defaults) else {
+                continue;
+            };
+            let demoted = crate::collectors::callee_demoted_params(&body);
+            let reps = sig
+                .params
+                .iter()
+                .zip(demoted.iter())
+                .map(|(rep, demoted)| match (rep, demoted) {
+                    (FactsRep::I32, false) => SpecParamRep::I32,
+                    (FactsRep::F64, false) => SpecParamRep::F64,
+                    _ => SpecParamRep::Boxed,
+                })
+                .collect();
+            let fixed = facts
+                .classes
+                .get(&class_id)
+                .is_some_and(|c| c.fixed_layout);
+            let proven_this = (sig.this_class == Some(class_id) && fixed)
+                .then(|| cm.pshape_methods.get(&key).cloned())
+                .flatten();
+            typed.push(TypedMethod {
+                published_pshape: cm.pshape_methods.contains_key(&key),
+                class: class.name.clone(),
+                name: m.name.clone(),
+                plan: SpecFnPlan {
+                    reps,
+                    dispatch: SpecDispatch::Static,
+                    guards: vec![None; m.params.len()],
+                    signature: Some(sig.clone()),
+                    sig_defaults: defaults,
+                },
+                proven_this,
+            });
+        }
+    }
+    for tm in typed {
+        let key = (tm.class.clone(), tm.name.clone());
+        cm.typed_f64_methods.remove(&key);
+        cm.typed_i32_methods.remove(&key);
+        cm.nonnegative_index_methods.remove(&key);
+        cm.pshape_methods.remove(&key);
+        cm.pshape_arg_methods.remove(&key);
+        let id = hir
+            .classes
+            .iter()
+            .find(|c| c.name == tm.class)
+            .and_then(|c| c.methods.iter().find(|m| m.name == tm.name))
+            .map(|m| m.id)
+            .expect("a typed method of this module");
+        cm.typed_methods.insert(id, tm);
     }
 }
 
@@ -359,6 +521,99 @@ pub(crate) fn try_emit_typed_call(
     })
 }
 
+/// A typed method call site (§2): `typed_calls` names this call's offset
+/// (its member offset, or the call's own when that is 0, as gen keys it),
+/// its one body `M` is typed, and the facts prove the receiver a non-null
+/// instance of their classes. The receiver and the arguments are lowered in
+/// order under one rooted group; the call enters `M$sig` with the receiver
+/// unchanged and each argument in its signature representation.
+pub(crate) fn try_lower_typed_method_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> anyhow::Result<Option<String>> {
+    let Expr::PropertyGet {
+        object,
+        byte_offset,
+        ..
+    } = callee
+    else {
+        return Ok(None);
+    };
+    let offset = if *byte_offset != 0 {
+        *byte_offset
+    } else {
+        DIRECT_CALL.with(|s| s.get())
+    };
+    if offset == 0 || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+        return Ok(None);
+    }
+    let Some(&mid) = ctx.wpfacts.typed_calls.get(&offset) else {
+        return Ok(None);
+    };
+    let Some(tm) = ctx.typed_methods.get(&mid) else {
+        return Ok(None);
+    };
+    let Some(public) = ctx.methods.get(&(tm.class.clone(), tm.name.clone())).cloned() else {
+        return Ok(None);
+    };
+    if !matches!(
+        crate::expr::wpfacts_access::proven_receiver_classes(ctx, object),
+        Some((_, false))
+    ) {
+        return Ok(None);
+    }
+    let sig = tm.plan.signature.clone().expect("a typed plan");
+    let defaults = tm.plan.sig_defaults.clone();
+    crate::verify_facts::consumed(Fact::Signature, || serde_json::json!({ "call": offset }));
+    crate::facts_consumed::used();
+    let mut roots = crate::rooting::open_rooted_group(1 + args.len());
+    let recv_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+    let recv_idx = roots.lower(ctx, object, recv_collects)?;
+    let mut arg_idxs = Vec::with_capacity(args.len());
+    for (i, a) in args.iter().enumerate() {
+        let collects = crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        arg_idxs.push(roots.lower(ctx, a, collects)?);
+    }
+    let recv = roots.reread(ctx, recv_idx)?;
+    let mut raw: Vec<(LlvmType, String)> = Vec::with_capacity(sig.params.len() + 1);
+    raw.push((DOUBLE, recv));
+    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    for (i, rep) in sig.params.iter().enumerate() {
+        let passed = match arg_idxs.get(i) {
+            Some(&idx) => Some(roots.reread(ctx, idx)?),
+            None => None,
+        };
+        let value = match (defaults[i], passed) {
+            (Some(literal), None) => double_literal(literal),
+            (Some(literal), Some(v)) => emit_default_select(ctx.block(), &v, literal),
+            (None, Some(v)) => v,
+            (None, None) => undefined.clone(),
+        };
+        witness_value(
+            ctx,
+            *rep,
+            sig.ranges[i],
+            &value,
+            &format!("signature argument {i} @{offset}"),
+        );
+        raw.push(match rep {
+            FactsRep::I32 => (I32, ctx.block().fptosi(DOUBLE, &value, I32)),
+            FactsRep::F64 | FactsRep::Boxed => (DOUBLE, value),
+        });
+    }
+    let sig_name = format!("{public}$sig");
+    crate::expr::stack_guard::emit_stack_guard_before_clone_call(ctx, &sig_name);
+    let call_args: Vec<(LlvmType, &str)> = raw.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    let value = ctx.block().call(sig_llvm_ty(sig.ret), &sig_name, &call_args);
+    roots.release(ctx);
+    Ok(Some(if sig.ret == FactsRep::I32 {
+        ctx.block().sitofp(I32, &value, DOUBLE)
+    } else {
+        value
+    }))
+}
+
 /// The boxed entry: the public `F` of a typed function (§3.3). Each argument
 /// takes its literal default when it is `undefined` (§4.1), is decoded to
 /// its parameter's representation (§4.2: `emit_entry_number`, then one
@@ -370,12 +625,41 @@ pub(crate) fn emit_boxed_entry(
     public_name: &str,
     plan: &SpecFnPlan,
 ) {
+    emit_entry(llmod, f, public_name, plan, false);
+}
+
+/// The boxed entry of a typed method: `emit_boxed_entry` with the receiver
+/// passed through unchanged. A published `$pshape` capability becomes an
+/// alias of it.
+pub(crate) fn emit_boxed_method_entry(
+    llmod: &mut LlModule,
+    m: &Function,
+    public_name: &str,
+    tm: &TypedMethod,
+) {
+    emit_entry(llmod, m, public_name, &tm.plan, true);
+    if tm.published_pshape {
+        let tys = vec!["double"; m.params.len() + 1].join(", ");
+        llmod.add_raw_global(format!(
+            "@{} = alias double ({tys}), ptr @{public_name}",
+            crate::collectors::pshape_method_name(public_name)
+        ));
+    }
+}
+
+fn emit_entry(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    plan: &SpecFnPlan,
+    receiver: bool,
+) {
     let sig = plan.signature.as_ref().expect("a typed plan");
-    let params: Vec<(LlvmType, String)> = f
-        .params
-        .iter()
-        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
-        .collect();
+    let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(f.params.len() + 1);
+    if receiver {
+        params.push((DOUBLE, "%this_arg".to_string()));
+    }
+    params.extend(f.params.iter().map(|p| (DOUBLE, format!("%arg{}", p.id))));
     let sig_name = super::spec_entry_name(public_name, plan);
     let check = crate::verify_facts::enabled();
     let sites: Vec<Option<crate::verify_facts::SiteArg>> = sig
@@ -396,7 +680,10 @@ pub(crate) fn emit_boxed_entry(
     let wf = llmod.define_function(public_name, DOUBLE, params);
     let _ = wf.create_block("entry");
     let mut cur = 0usize;
-    let mut raw: Vec<(LlvmType, String)> = Vec::with_capacity(f.params.len());
+    let mut raw: Vec<(LlvmType, String)> = Vec::with_capacity(f.params.len() + 1);
+    if receiver {
+        raw.push((DOUBLE, "%this_arg".to_string()));
+    }
     for (i, p) in f.params.iter().enumerate() {
         let arg = format!("%arg{}", p.id);
         let rep = sig.params[i];
@@ -446,6 +733,31 @@ pub(crate) fn emit_boxed_entry(
         value
     };
     blk.ret(DOUBLE, &value);
+}
+
+/// The parameters `M$sig` receives as raw i32 registers: every I32 slot of
+/// the signature.
+pub(crate) fn raw_i32_params(f: &Function, plan: &SpecFnPlan) -> HashSet<u32> {
+    let Some(sig) = plan.signature.as_ref() else {
+        return HashSet::new();
+    };
+    f.params
+        .iter()
+        .zip(sig.params.iter())
+        .filter(|(_, rep)| **rep == FactsRep::I32)
+        .map(|(p, _)| p.id)
+        .collect()
+}
+
+/// The raw I32 parameters that also bind an i32 slot: those the body never
+/// writes (the plan's `reps`).
+pub(crate) fn slot_i32_params(f: &Function, plan: &SpecFnPlan) -> HashSet<u32> {
+    f.params
+        .iter()
+        .zip(plan.reps.iter())
+        .filter(|(_, rep)| matches!(rep, SpecParamRep::I32))
+        .map(|(p, _)| p.id)
+        .collect()
 }
 
 /// `F$sig`'s parameters that seed `nonnegative_integer_locals` (T1): an I32

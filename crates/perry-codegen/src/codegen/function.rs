@@ -1633,6 +1633,7 @@ pub(super) fn compile_function(
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
         sig_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,

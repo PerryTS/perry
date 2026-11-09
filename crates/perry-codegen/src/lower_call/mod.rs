@@ -600,6 +600,12 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);
     }
+    // P2: a typed method call enters `M$sig` (DESIGN-p2 §2).
+    if let Some(value) =
+        crate::codegen::signature_entry::try_lower_typed_method_call(ctx, callee, args)?
+    {
+        return Ok(value);
+    }
     // The call's site offset, for every route that consults the call-site
     // argument intervals (`index_split::with_call_site`).
     let value = index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))?;

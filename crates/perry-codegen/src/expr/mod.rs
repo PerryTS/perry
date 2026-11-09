@@ -1525,6 +1525,9 @@ pub(crate) struct FnCtx<'a> {
     /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
     /// mode witnesses every returned value against it (§5).
     pub sig_return: Option<crate::codegen::FactsRep>,
+    /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).
+    pub typed_methods:
+        &'a std::collections::HashMap<u32, crate::codegen::signature_entry::TypedMethod>,
     /// Bindings initialized from a declared typed-array element read
     /// (`typed_element::yields_element`). A selection hint for the relational
     /// lowering, which is exact for any value.
