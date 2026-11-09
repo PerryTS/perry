@@ -21,5 +21,9 @@ fn an_undeclared_class_reads_prototype_as_undefined() {
     let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
     let bits = crate::object::class_constructor_key_bits(cid);
     let value = super::get_field_by_name::class_value_get_field(std::ptr::null(), key, bits, cid);
-    assert_eq!(value.bits(), crate::value::TAG_UNDEFINED, "C.prototype of an undeclared id");
+    assert_eq!(
+        value.bits(),
+        crate::value::TAG_UNDEFINED,
+        "C.prototype of an undeclared id"
+    );
 }
