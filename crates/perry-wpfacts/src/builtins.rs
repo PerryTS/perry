@@ -32,7 +32,6 @@ pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
     declared_construct, declared_member, declared_static, run_construct, run_function, run_member,
-    run_native,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
