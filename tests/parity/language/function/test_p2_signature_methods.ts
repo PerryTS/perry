@@ -1,5 +1,8 @@
 // P2 typed signatures (DESIGN-p2 rev 2.3 §5): the method controls. Exact
 // against node with the fact on, off and in check mode.
+// A loop bound the compiler cannot fold keeps each call site one HIR call
+// (a static loop is unrolled, and its copies share the site's offset).
+const RUN = Math.random() < 2 ? 1 : 0;
 
 // S6: an override, so the site has two bodies (T0Set).
 class A6 {
@@ -14,7 +17,7 @@ class B6 extends A6 {
 }
 const objs6: A6[] = [new A6(), new B6()];
 let s6 = 0;
-for (let i = 0; i < 10; i++) s6 += objs6[i & 1].v(i);
+for (let i = 0; i < 10 * RUN; i++) s6 += objs6[i & 1].v(i);
 console.log("S6", s6);
 
 // S19: `.call` with another layout beside a typed `p.sum(i)` site; a
@@ -32,7 +35,7 @@ class P19 {
 }
 const p19 = new P19(1, 2);
 let s19 = 0;
-for (let i = 0; i < 1000; i++) s19 += p19.sum(i);
+for (let i = 0; i < 1000 * RUN; i++) s19 += p19.sum(i);
 const q19 = { x: 10, z: 100, y: 20 };
 console.log("S19", s19, P19.prototype.sum.call(q19, 3));
 class Q19 extends P19 {
@@ -61,7 +64,7 @@ class S24 extends R24 {
 }
 const r24 = new R24();
 let s24 = 0;
-for (let i = 0; i < 10; i++) s24 += r24.calc(i);
+for (let i = 0; i < 10 * RUN; i++) s24 += r24.calc(i);
 console.log("S24", s24, new S24().calc(1));
 
 // T4c: layout breakers beside a typed `pp.sum(i)` site.
@@ -78,7 +81,7 @@ class P4c {
 }
 const pp = new P4c(1, 2);
 let t4c = 0;
-for (let i = 0; i < 100; i++) t4c += pp.sum(i);
+for (let i = 0; i < 100 * RUN; i++) t4c += pp.sum(i);
 const other = new P4c(3, 4);
 delete (other as any).y;
 console.log(
