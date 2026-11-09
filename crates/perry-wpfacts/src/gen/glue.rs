@@ -173,6 +173,15 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+        if self.m.arr_lazy_sabotage {
+            // Negative control (`arrlazy`): a plain Array of Numbers, where
+            // the runtime may return a lazy JSON array header.
+            let arr = self.new_arr_birth(mi, "json", false, true);
+            let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+            let afa = self.m.field_any(at);
+            self.m.add_prim(afa, prim::NUM);
+            return self.tok_node(at);
+        }
         let (t, n) = self.bobj(mi, "json");
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);

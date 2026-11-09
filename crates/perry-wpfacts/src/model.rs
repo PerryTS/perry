@@ -1294,7 +1294,7 @@ pub struct Model {
     /// element representation counts only its Numbers (`bindings::arr_rep`).
     pub arr_elem_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlazy`): `JSON.parse`
-    /// returns a plain Array of Numbers, a wrong claim the witness must
+    /// (`Gen::json_value`) returns a plain Array of Numbers, a wrong claim the witness must
     /// catch at a lazy JSON array header.
     pub arr_lazy_sabotage: bool,
     pub max_work: u64,

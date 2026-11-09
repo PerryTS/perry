@@ -1958,14 +1958,6 @@ fn ns_method_inner(
             }
             ret_prim(m, call, prim::STR | prim::UNDEF);
         }
-        (BuiltinNs::Json, "parse") if m.arr_lazy_sabotage => {
-            // Negative control (`arrlazy`): a plain Array of Numbers, where
-            // the runtime may return a lazy JSON array header.
-            let ja = site_tmpl_born(m, call, "Array", false, true);
-            let fa = m.field_any(ja);
-            m.add_prim(fa, prim::NUM);
-            ret_tok(m, call, ja);
-        }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
             // Its objects are ordinary objects, its arrays arrays
