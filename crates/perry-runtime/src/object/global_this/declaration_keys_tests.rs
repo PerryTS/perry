@@ -39,10 +39,12 @@ fn live_builtin_prototype_own_keys_equal_the_realm_declaration() {
         if decl["kind"] != "prototype" || ctor.contains(['%', '.']) {
             continue;
         }
-        // The ReadableStream families' members are the stdlib's (installed
-        // by its streams init, not linked here): perry-stdlib's
+        // External families' members are their provider's (the stdlib's
+        // streams install, not linked here): perry-stdlib's
         // `stream_prototypes_hold_the_declared_keys` checks them.
-        if crate::web_stream_prototypes::members_from_stdlib(ctor) {
+        if crate::object::BuiltinConstructorIdentity::for_name(ctor)
+            .is_some_and(|identity| identity.declaration().external)
+        {
             continue;
         }
         let proto = builtin_prototype_value(ctor);

@@ -48,16 +48,19 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// `prototype` are the ordinary not-yet-materialized intrinsic slots, and
     /// whatever needs the bag or the prototype births the family first.
     pub lazy: bool,
+    /// The family's members are provided outside the runtime: its birth
+    /// calls the registered provider hook (`external_family.rs`). Always `lazy`.
+    pub external: bool,
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)? $(; external $external:expr)?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         #[allow(dead_code)] // `None` is the zero encoding
-        pub(crate) enum BuiltinConstructorIdentity { None = 0, $($name,)* }
+        pub enum BuiltinConstructorIdentity { None = 0, $($name,)* }
         impl BuiltinConstructorIdentity {
             #[inline(always)]
             pub(crate) fn from_header(word: u32) -> Option<Self> {
@@ -93,6 +96,7 @@ macro_rules! builtin_constructors {
                 named_serial: builtin_constructors!(@optional $($named)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
                 lazy: builtin_constructors!(@callable $($lazy)?),
+                external: builtin_constructors!(@callable $($external)?),
             },)*
         ];
     };
@@ -167,10 +171,10 @@ builtin_constructors! {
     // "undefined" ? … : …`) when deciding how to consume a `fetch()` body.
     // RSTREAM: the three ReadableStream families are born on first
     // observation; their members come from the program's streams install
-    // (`web_stream_prototypes.rs`).
-    ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060); lazy true,
-    ReadableStreamDefaultController => NOOP_CONSTRUCTOR_INFO; lazy true,
-    ReadableStreamDefaultReader => NOOP_CONSTRUCTOR_INFO; lazy true,
+    // (an `external` family: `external_family.rs`).
+    ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060); lazy true; external true,
+    ReadableStreamDefaultController => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
+    ReadableStreamDefaultReader => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
     WritableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0061),
     TransformStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0062),
     Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID); lazy true,

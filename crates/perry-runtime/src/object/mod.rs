@@ -359,6 +359,7 @@ pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
 pub(crate) use global_this_tables::*;
+pub use global_this_tables::BuiltinConstructorIdentity;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{

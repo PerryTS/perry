@@ -26,7 +26,6 @@ mod statics;
 use errors::{stream_range_error_with_code, stream_type_error, stream_type_error_with_code};
 use perry_runtime::closure::{JsFunctionInfo, JsThis};
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
-pub(crate) use statics::install_readable_stream_from_static;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 // Calls that allocate or mutate runtime-owned values must cross the stable C ABI. A shared stdlib still contains fallback Rust runtime glue for generic

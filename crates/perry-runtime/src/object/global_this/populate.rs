@@ -863,6 +863,9 @@ fn birth_family(
         // `this` and dispatch to the corresponding native entry
         // point — works in tandem with `.call`/`.apply` since those
         // arms (#970) pass the explicit receiver when forwarding.
+        if declaration.external {
+            crate::external_family::birth(declaration.identity, proto_obj);
+        }
         populate_builtin_prototype_methods(name, proto_obj);
         #[cfg(feature = "regex-engine")]
         if name == "RegExp" {

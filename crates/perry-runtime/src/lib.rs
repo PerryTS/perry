@@ -203,7 +203,7 @@ pub mod native_payload_stream_abi;
 mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;
-pub mod web_stream_prototypes;
+pub mod external_family;
 pub mod net_validate;
 pub mod node_api_host;
 mod param_type_guard;

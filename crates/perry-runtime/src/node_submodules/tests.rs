@@ -1111,7 +1111,7 @@ extern "C" fn statics2_readable_from_fixture(
 fn statics2_readable_from_installed_on_constructor_shapes() {
     unsafe {
         js_node_submod_install_stream_web();
-        crate::web_stream_prototypes::js_install_readable_stream_from(
+        crate::external_family::provide_from_for_tests(
             crate::fn_info!(statics2_readable_from_fixture, 1; with_declared(1)),
         );
         let ctor = js_node_submodule_export_as_function(

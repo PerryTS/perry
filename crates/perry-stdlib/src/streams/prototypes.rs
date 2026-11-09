@@ -3,58 +3,103 @@
 //! `ReadableStreamDefaultReader.prototype` are real functions. Each probes
 //! `this` through the stream registry: the right kind runs the stream
 //! operation, any other receiver gets Node's error (operations that return a
-//! promise reject, the rest throw). The runtime births the prototypes lazily
-//! and calls [`install`] for them (`perry_runtime::web_stream_prototypes`).
+//! promise reject, the rest throw). The three families are the runtime's
+//! `external` families: the runtime births each prototype on first
+//! observation and calls [`install`], the provider hook this module registers.
 
 use super::*;
-use perry_runtime::web_stream_prototypes::StreamFamily;
+use perry_runtime::object::BuiltinConstructorIdentity as Family;
 
-// The runtime's prototype install crosses the stable C ABI, like
-// `js_install_readable_stream_from`: this archive carries its own copy of the
-// runtime's Rust items, so a direct call would fill that copy's hook and
-// allocate in that copy (see `streams.rs`).
+const READABLE_STREAM: u8 = Family::ReadableStream as u8;
+const DEFAULT_CONTROLLER: u8 = Family::ReadableStreamDefaultController as u8;
+const DEFAULT_READER: u8 = Family::ReadableStreamDefaultReader as u8;
+
+// The runtime's generic define primitives, through the stable C ABI: this
+// archive carries its own copy of the runtime's Rust items, so a direct call
+// would set that copy's hook and allocate in that copy (see `streams.rs`).
 #[allow(improper_ctypes)]
 extern "C" {
-    fn js_stream_prototypes_install(
-        install: extern "C" fn(u8, *mut ObjectHeader),
-        reader_construct: extern "C" fn(f64) -> f64,
+    fn js_runtime_provide_external_families(
+        birth: extern "C" fn(u8, *mut ObjectHeader),
+        construct: extern "C" fn(u8, f64) -> f64,
     );
-    fn js_stream_prototype_method(
-        proto: *mut ObjectHeader,
+    fn js_builtin_define_method(
+        target: *mut ObjectHeader,
         name_ptr: *const u8,
         name_len: usize,
         info: *const JsFunctionInfo,
         arity: u32,
+        attr_bits: u8,
     ) -> f64;
-    fn js_stream_prototype_getter(
-        proto: *mut ObjectHeader,
+    fn js_builtin_define_getter(
+        target: *mut ObjectHeader,
         name_ptr: *const u8,
         name_len: usize,
         info: *const JsFunctionInfo,
+        enumerable: bool,
     );
-    fn js_stream_prototype_async_iterator(proto: *mut ObjectHeader, value: f64);
-    fn js_stream_family_member(family: u8, name_ptr: *const u8, name_len: usize) -> f64;
+    fn js_builtin_define_symbol_method(
+        target: *mut ObjectHeader,
+        symbol_ptr: *const u8,
+        symbol_len: usize,
+        value: f64,
+    );
+    fn js_builtin_prototype_method_value(
+        builtin_ptr: *const u8,
+        builtin_len: usize,
+        method_ptr: *const u8,
+        method_len: usize,
+    ) -> f64;
 }
 
 mod protos {
     use super::*;
+    /// `{ writable, enumerable, configurable }`: WebIDL operations and
+    /// `ReadableStream.from` are enumerable.
+    const OPERATION: u8 = 0x07;
+    /// A prototype method; returns the installed function.
     pub(super) fn method(
-        proto: *mut ObjectHeader,
+        target: *mut ObjectHeader,
         name: &str,
         info: *const JsFunctionInfo,
         arity: u32,
     ) -> f64 {
-        unsafe { js_stream_prototype_method(proto, name.as_ptr(), name.len(), info, arity) }
+        unsafe {
+            js_builtin_define_method(target, name.as_ptr(), name.len(), info, arity, OPERATION)
+        }
     }
+    /// A prototype getter: `{ get, enumerable, configurable }`.
     pub(super) fn getter(proto: *mut ObjectHeader, name: &str, info: *const JsFunctionInfo) {
-        unsafe { js_stream_prototype_getter(proto, name.as_ptr(), name.len(), info) }
+        unsafe { js_builtin_define_getter(proto, name.as_ptr(), name.len(), info, true) }
     }
+    /// `[Symbol.asyncIterator]`: the same function object as `value`.
     pub(super) fn async_iterator(proto: *mut ObjectHeader, value: f64) {
-        unsafe { js_stream_prototype_async_iterator(proto, value) }
+        let symbol = "asyncIterator";
+        unsafe { js_builtin_define_symbol_method(proto, symbol.as_ptr(), symbol.len(), value) }
+    }
+    /// The constructor of a family prototype being born.
+    pub(super) fn constructor(proto: *mut ObjectHeader) -> *mut ObjectHeader {
+        let key = js_string_from_bytes(b"constructor".as_ptr(), 11);
+        let ctor = js_object_get_field_by_name(proto, key);
+        perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(ctor.bits()))
+            as *mut ObjectHeader
     }
     /// `name` read off `family`'s prototype (births it), when it holds one.
-    pub(super) fn family_member(family: StreamFamily, name: &str) -> Option<f64> {
-        let value = unsafe { js_stream_family_member(family as u8, name.as_ptr(), name.len()) };
+    pub(super) fn family_member(family: u8, name: &str) -> Option<f64> {
+        let interface = match family {
+            READABLE_STREAM => "ReadableStream",
+            DEFAULT_CONTROLLER => "ReadableStreamDefaultController",
+            DEFAULT_READER => "ReadableStreamDefaultReader",
+            _ => return None,
+        };
+        let value = unsafe {
+            js_builtin_prototype_method_value(
+                interface.as_ptr(),
+                interface.len(),
+                name.as_ptr(),
+                name.len(),
+            )
+        };
         (value.to_bits() != TAG_UNDEFINED).then_some(value)
     }
 }
@@ -180,7 +225,7 @@ extern "C" fn reader_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 
 /// The runtime's lazy birth of one family prototype, in Node's key order.
 extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
     match family {
-        f if f == StreamFamily::ReadableStream as u8 => {
+        READABLE_STREAM => {
             protos::getter(proto, "locked", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.locked.<get>")] export crate::streams::prototypes::rs_locked, 0; with_declared(0)));
             protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.cancel")] export crate::streams::prototypes::rs_cancel, 1; with_declared(1)), 0);
             protos::method(proto, "getReader", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.getReader")] export crate::streams::prototypes::rs_get_reader, 1; with_declared(1)), 0);
@@ -189,14 +234,16 @@ extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
             protos::method(proto, "tee", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.tee")] export crate::streams::prototypes::rs_tee, 0; with_declared(0)), 0);
             let values = protos::method(proto, "values", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.values")] export crate::streams::prototypes::rs_values, 0; with_declared(0)), 0);
             protos::async_iterator(proto, values);
+            // Node's own key order on the constructor: length, name, prototype, from.
+            protos::method(protos::constructor(proto), "from", perry_runtime::fn_info!(#[realm(ReadableStream.from)] export crate::streams::statics::readable_stream_from_static, 1; with_declared(1)), 1);
         }
-        f if f == StreamFamily::DefaultController as u8 => {
+        DEFAULT_CONTROLLER => {
             protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.desiredSize.<get>")] export crate::streams::prototypes::ctl_desired_size, 0; with_declared(0)));
             protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.close")] export crate::streams::prototypes::ctl_close, 0; with_declared(0)), 0);
             protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.enqueue")] export crate::streams::prototypes::ctl_enqueue, 1; with_declared(1)), 0);
             protos::method(proto, "error", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.error")] export crate::streams::prototypes::ctl_error, 1; with_declared(1)), 0);
         }
-        f if f == StreamFamily::DefaultReader as u8 => {
+        DEFAULT_READER => {
             protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.read")] export crate::streams::prototypes::reader_read, 0; with_declared(0)), 0);
             protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.releaseLock")] export crate::streams::prototypes::reader_release_lock, 0; with_declared(0)), 0);
             protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.closed.<get>")] export crate::streams::prototypes::reader_closed, 0; with_declared(0)));
@@ -206,8 +253,8 @@ extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
     }
 }
 
-/// `new ReadableStreamDefaultReader(stream)`.
-extern "C" fn construct_reader(stream: f64) -> f64 {
+/// `new ReadableStreamDefaultReader(stream)` (the one constructible family).
+extern "C" fn construct_reader(_family: u8, stream: f64) -> f64 {
     unsafe {
         if kind_of(stream) != KIND_READABLE {
             throw_invalid_arg_type(
@@ -219,7 +266,7 @@ extern "C" fn construct_reader(stream: f64) -> f64 {
 }
 
 pub(crate) fn install_stream_prototypes() {
-    unsafe { js_stream_prototypes_install(install, construct_reader) };
+    unsafe { js_runtime_provide_external_families(install, construct_reader) };
 }
 
 /// The member a stream handle reads off its interface's prototype
@@ -227,9 +274,9 @@ pub(crate) fn install_stream_prototypes() {
 /// without a prototype family here or names it does not hold.
 pub(crate) fn prototype_member(kind: u8, name: &str) -> Option<f64> {
     let family = match kind {
-        KIND_READABLE => StreamFamily::ReadableStream,
-        KIND_READER => StreamFamily::DefaultReader,
-        KIND_DEFAULT_CONTROLLER => StreamFamily::DefaultController,
+        KIND_READABLE => READABLE_STREAM,
+        KIND_READER => DEFAULT_READER,
+        KIND_DEFAULT_CONTROLLER => DEFAULT_CONTROLLER,
         _ => return None,
     };
     protos::family_member(family, name)
@@ -238,7 +285,7 @@ pub(crate) fn prototype_member(kind: u8, name: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::protos::family_member;
-    use super::StreamFamily::*;
+    use super::{DEFAULT_CONTROLLER, DEFAULT_READER, READABLE_STREAM};
 
     /// After the streams install, each family prototype holds its own
     /// methods (the realm declaration's rows) and nothing of the others.
@@ -248,7 +295,7 @@ mod tests {
         super::install_stream_prototypes();
         let rows = [
             (
-                ReadableStream,
+                READABLE_STREAM,
                 &[
                     "cancel",
                     "getReader",
@@ -258,14 +305,14 @@ mod tests {
                     "values",
                 ][..],
             ),
-            (DefaultController, &["close", "enqueue", "error"][..]),
-            (DefaultReader, &["cancel", "read", "releaseLock"][..]),
+            (DEFAULT_CONTROLLER, &["close", "enqueue", "error"][..]),
+            (DEFAULT_READER, &["cancel", "read", "releaseLock"][..]),
         ];
         for (family, keys) in rows {
             for key in keys {
                 assert!(family_member(family, key).is_some(), "{family:?}.{key}");
             }
-            let owns_enqueue = family == DefaultController;
+            let owns_enqueue = family == DEFAULT_CONTROLLER;
             assert_eq!(
                 family_member(family, "enqueue").is_some(),
                 owns_enqueue,

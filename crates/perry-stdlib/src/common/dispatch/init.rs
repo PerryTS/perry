@@ -504,7 +504,6 @@ pub(super) unsafe fn install_streams_registrations() {
     // RSTREAM R5: the ReadableStream families' prototype members and
     // `ReadableStream.from`, both installed by the family's lazy birth.
     crate::streams::install_stream_prototypes();
-    crate::streams::install_readable_stream_from_static();
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream
     // dispatch arms in `js_handle_method_dispatch`.
