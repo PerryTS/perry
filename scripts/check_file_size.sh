@@ -53,8 +53,6 @@ crates/perry-stdlib/src/streams.rs	2409
 crates/perry-runtime/src/gc/policy.rs	2860
 # Shape registry table and publication invariants require a coordinated split.
 crates/perry-runtime/src/object/shapes.rs	4926
-# Qualified Turnloop snapshot; preserve upstream layout (third_party/turnloop/VENDORED.md).
-third_party/turnloop/turnloop/src/driver.rs	2287
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.

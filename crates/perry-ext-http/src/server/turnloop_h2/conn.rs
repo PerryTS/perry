@@ -429,7 +429,9 @@ pub(super) fn start_core(c: &mut H2Conn) -> bool {
         named.set(id, value);
     }
     match http2::Connection::with_settings(c.role, limits, &named) {
-        Ok(core) => {
+        Ok(mut core) => {
+            // Node fails the session on a PING ack it never asked for.
+            core.set_reject_unsolicited_ping_ack(true);
             c.core = Some(core);
             // Only a server reads a client preface; a client goes straight to
             // frames, so the pre-scan may start immediately.
