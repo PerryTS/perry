@@ -542,6 +542,20 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     (c, e)
 }
 
+/// The realm's `navigator` (runtime navigator.rs: `realm { navigator, kind =
+/// namespace, extends = Navigator.prototype }`), the one object the global
+/// getter returns: an object of `Navigator.prototype`, as a declaration's
+/// `fresh(Navigator.prototype)` makes, whose loads read the getters'
+/// declared results (`effects::declared_getter`).
+pub(super) fn navigator_object(m: &mut Model) -> Tok {
+    if let Some(t) = m.navigator {
+        return t;
+    }
+    let t = anon_tmpl(m, "Navigator.prototype");
+    m.navigator = Some(t);
+    t
+}
+
 pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
     let site = m.anon_birth_site(what);
     let tm = m.tmpls.len() as TmplId;
