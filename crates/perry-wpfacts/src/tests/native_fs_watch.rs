@@ -233,16 +233,12 @@ fn a_watcher_method_called_on_another_receiver_acts_on_its_watcher() {
 
 /// The runtime hands every watcher it makes to `init` of each enabled
 /// async hook as the resource (`async_hook_slots::init_resource`, inside
-/// `fs.watch` and `fs.watchFile`). `createHook` is undeclared: its hook is
-/// unknown code, so a program that may enable one gives the watcher to
-/// unknown code, which may store into it (`res.foo = {...}`): a value read
-/// back off the watcher (and off the listener's `this`) is unknown.
-#[test]
-fn a_watcher_reaches_an_async_hook_init_as_its_resource() {
-    let pf = facts(
-        r#"
-        const ah: any = require("async_hooks");
-        ah.createHook({ init(id: any, type: any, tid: any, res: any) { res.foo = { zz: 1 }; } }).enable();
+/// `fs.watch` and `fs.watchFile`). A reached call of the native
+/// `createHook` may enable a hook whose `init` is unknown code, which may
+/// store into the watcher (`res.foo = {...}`): a value read back off the
+/// watcher (and off the listener's `this`) is unknown. The watcher is made
+/// in a function the solve reaches before or after the createHook call.
+const WATCHERS: &str = r#"
         function sys(p: string) {
             const _fs: typeof import("fs") = require("fs");
             const w: any = _fs.watch(p, { persistent: false } as any, function (this: any) { console.log(this.foo.z3); });
@@ -251,11 +247,69 @@ fn a_watcher_reaches_an_async_hook_init_as_its_resource() {
             w.close();
         }
         sys(process.argv[1]);
-    "#,
-    );
+"#;
+
+fn watchers_escape(pf: &ProgramFacts) {
     for key in ["z1", "z2", "z3", "z4"] {
-        assert!(site(&pf, key).top, "{key}\n{}", pf.dump_text());
+        assert!(site(pf, key).top, "{key}\n{}", pf.dump_text());
     }
+}
+
+fn watchers_proven(pf: &ProgramFacts) {
+    for key in ["z1", "z2", "z3", "z4"] {
+        assert!(!site(pf, key).top, "{key}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn a_watcher_reaches_an_async_hook_init_as_its_resource() {
+    let pf = facts(&format!(
+        r#"
+        const ah: any = require("async_hooks");
+        ah.createHook({{ init(id: any, type: any, tid: any, res: any) {{ res.foo = {{ zz: 1 }}; }} }}).enable();
+        {WATCHERS}"#
+    ));
+    watchers_escape(&pf);
+}
+
+/// The same through `require("async_hooks").createHook(...)` in one
+/// expression, after the watchers are made.
+#[test]
+fn a_hook_enabled_after_the_watcher_still_gets_it() {
+    let pf = facts(&format!(
+        r#"
+        {WATCHERS}
+        require("async_hooks").createHook({{ init(id: any, type: any, tid: any, res: any) {{ res.foo = {{ zz: 1 }}; }} }}).enable();
+    "#
+    ));
+    watchers_escape(&pf);
+}
+
+/// A computed specifier whose value is the module's name: the callee of
+/// `.createHook(...)` is the native createHook.
+#[test]
+fn a_hook_through_a_computed_specifier_gets_the_watcher() {
+    let pf = facts(&format!(
+        r#"
+        function load(n: string): any {{ return require(n); }}
+        load(["async", "hooks"].join("_")).createHook({{ init(id: any, type: any, tid: any, res: any) {{ res.foo = {{ zz: 1 }}; }} }}).enable();
+        {WATCHERS}"#
+    ));
+    watchers_escape(&pf);
+}
+
+/// Control: a computed `require(x)` whose result is used, with no call of
+/// createHook anywhere: the watchers keep their facts.
+#[test]
+fn a_computed_require_without_create_hook_keeps_the_watcher() {
+    let pf = facts(&format!(
+        r#"
+        function load(n: string): any {{ return require(n); }}
+        const os: any = load(["o", "s"].join(""));
+        console.log(os.platform());
+        {WATCHERS}"#
+    ));
+    watchers_proven(&pf);
 }
 
 /// Named control: with no async hook anywhere the watcher is the program's
@@ -274,4 +328,30 @@ fn without_an_async_hook_the_watcher_stays_proven() {
     );
     assert!(!site(&pf, "z1").top, "{}", pf.dump_text());
     assert!(on_the_watcher(&pf, "gg"), "{}", pf.dump_text());
+}
+
+/// Control: async_hooks used without createHook (executionAsyncId): no
+/// hook is enabled, the watchers keep their facts.
+#[test]
+fn async_hooks_without_create_hook_keeps_the_watcher() {
+    let pf = facts(&format!(
+        r#"
+        const ah: any = require("async_hooks");
+        console.log(ah.executionAsyncId());
+        {WATCHERS}"#
+    ));
+    watchers_proven(&pf);
+}
+
+/// A direct import of `createHook` (the HIR calls the native by name) is a
+/// call of the same native token: the watchers escape.
+#[test]
+fn an_imported_create_hook_gets_the_watcher() {
+    let pf = facts(&format!(
+        r#"
+        import {{ createHook }} from "async_hooks";
+        createHook({{ init(id: any, type: any, tid: any, res: any) {{ res.foo = {{ zz: 1 }}; }} }}).enable();
+        {WATCHERS}"#
+    ));
+    watchers_escape(&pf);
 }

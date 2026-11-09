@@ -79,6 +79,15 @@ impl<'a> Gen<'a> {
         Some(ret)
     }
 
+    /// The token of module member `module.method` when the solver models a
+    /// call of it by that token (`builtins::solved_namespace_call`), so a
+    /// direct HIR call of it runs the same arm a call through the namespace
+    /// runs.
+    pub(crate) fn namespace_member_callee(&mut self, module: &str, method: &str) -> Option<Tok> {
+        let identity = crate::builtins::solved_namespace_call(module, method)?;
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+    }
+
     /// Operands only ever read as primitives by the runtime: objects get the
     /// protocol touch (ToPrimitive / toString …), functions escape (the
     /// runtime may call them back).

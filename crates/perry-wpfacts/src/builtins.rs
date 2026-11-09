@@ -148,7 +148,7 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
     interpreted_code_runs(m);
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
-        // Interpreted code may load async_hooks itself.
+        // Interpreted code may call async_hooks.createHook itself.
         async_hook_may_run(m, why);
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
         if m.explain {
@@ -160,9 +160,10 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
     }
 }
 
-/// An async_hooks hook may be enabled: the module is reached by name or
-/// through a module loader that may return it. Each resource declared
-/// `async_resource`, made before or after, goes to the hook's `init`.
+/// An async_hooks hook may be enabled: a reached call may be the native
+/// `createHook` (its token is a callee there), or interpreted code may run
+/// (DECISIONS 150). Each value declared `async_resource`, made before or
+/// after in the solve, goes to the hook's `init`.
 pub fn async_hook_may_run(m: &mut Model, why: &str) {
     if m.async_hooks.is_some() {
         return;
@@ -2079,6 +2080,19 @@ fn ns_method_inner(
         // declares absent is no method (TypeError); one the program added
         // is the receiver's own field or chain value (`method_on`).
         (_, n) if members::ns_member(ns, n) == Some(None) => {}
+        // A reached call of the native `createHook`: the hook it makes may
+        // be enabled, and its `init` (unknown code: createHook is otherwise
+        // undeclared) gets every value declared `async_resource`.
+        (BuiltinNs::Module("node:async_hooks"), "createHook") => {
+            async_hook_may_run(m, "a reached call of async_hooks.createHook");
+            unknown_method_proto(
+                m,
+                call,
+                "argument of builtin node:async_hooks.createHook",
+                None,
+                true,
+            )
+        }
         (_, n) => unknown_method_proto(
             m,
             call,
@@ -2087,6 +2101,20 @@ fn ns_method_inner(
             true,
         ),
     }
+}
+
+/// The realm identity of module member `module.method` (`async_hooks`,
+/// `createHook`) whose call `ns_method_inner` models by name in the solve:
+/// a direct HIR call of it is a call of that token.
+pub(crate) fn solved_namespace_call(module: &str, method: &str) -> Option<&'static str> {
+    let bare = module.strip_prefix("node:").unwrap_or(module);
+    if (bare, method) != ("async_hooks", "createHook") {
+        return None;
+    }
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == "node:async_hooks.createHook")
+        .map(|e| e.name)
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
@@ -2141,13 +2169,6 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     m.add_prim(ret, prim::UNDEF);
                 }
                 None => {
-                    // A computed specifier, or `async_hooks` by name, may
-                    // load the async_hooks namespace.
-                    if m.call_lit.get(&call).is_none_or(|a| {
-                        matches!(m.atoms[*a as usize].as_str(), "async_hooks" | "node:async_hooks")
-                    }) {
-                        async_hook_may_run(m, "a module loaded by require may be async_hooks");
-                    }
                     // The runtime loader never interprets code: a computed
                     // specifier resolves to a registered record (its live
                     // exports or a raw publication), a native module
