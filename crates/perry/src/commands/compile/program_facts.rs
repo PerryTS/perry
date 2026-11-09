@@ -143,6 +143,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_reps: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -543,11 +547,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.number_element_reads
             .extend(mb.number_element_reads.iter().copied());
         out.element_floors.extend(mb.element_floors.iter().copied());
-        let rep = |r: &perry_wpfacts::Rep| match r {
-            perry_wpfacts::Rep::Boxed => perry_codegen::FactsRep::Boxed,
-            perry_wpfacts::Rep::F64 => perry_codegen::FactsRep::F64,
-            perry_wpfacts::Rep::I32 => perry_codegen::FactsRep::I32,
-        };
+        let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
             out.signatures.insert(
                 *id,
@@ -622,14 +622,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     }
                 }
             }
-            out.local_reps.insert(
-                *id,
-                match b.rep {
-                    perry_wpfacts::Rep::Boxed => perry_codegen::FactsRep::Boxed,
-                    perry_wpfacts::Rep::F64 => perry_codegen::FactsRep::F64,
-                    perry_wpfacts::Rep::I32 => perry_codegen::FactsRep::I32,
-                },
-            );
+            out.local_reps.insert(*id, facts_rep(b.rep));
             if b.length_number {
                 out.length_number_inputs.insert(*id);
             }
@@ -883,6 +876,10 @@ pub(crate) fn activation(
             std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_reps: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -1006,4 +1003,25 @@ fn element_reads_enabled() -> bool {
         std::env::var("PERRY_WP_ELEMENT_READS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// wpfacts `Rep` as codegen's `FactsRep`, one to one.
+fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
+    use perry_codegen::{FactsArrRep, FactsElemRep, FactsRep};
+    use perry_wpfacts::{ElemRep, Rep};
+    match r {
+        Rep::Boxed => FactsRep::Boxed,
+        Rep::F64 => FactsRep::F64,
+        Rep::I32 => FactsRep::I32,
+        Rep::Arr(a) => FactsRep::Arr(FactsArrRep {
+            elem: match a.elem {
+                ElemRep::Boxed => FactsElemRep::Boxed,
+                ElemRep::F64 => FactsElemRep::F64,
+                ElemRep::I32 => FactsElemRep::I32,
+            },
+            floor: a.floor,
+            dense: a.dense,
+            fixed: a.fixed,
+        }),
+    }
 }

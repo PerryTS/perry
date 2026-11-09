@@ -359,6 +359,9 @@ pub struct Gen<'a> {
     /// Array literals record their birth length (`solve::arr_len`;
     /// `FactsConfig::no_array_lengths`).
     pub arr_lengths: bool,
+    /// The source site of the last `new Array(...)` of the builtin
+    /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
+    pub new_array_site: Option<SiteId>,
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
@@ -688,6 +691,7 @@ impl<'a> Gen<'a> {
             dynimport_sabotage: false,
             int_ranges: true,
             arr_lengths: true,
+            new_array_site: None,
             guard_ranges: true,
             guard_presence: true,
             dynimport_seen: Default::default(),
@@ -2147,17 +2151,25 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
-        self.new_arr_birth(mi, what, false)
+        self.new_arr_birth(mi, what, false, false)
     }
 
     /// An array born with every index below its length (`TmplKind::Arr`
-    /// `hole_free`) or not.
-    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
+    /// `hole_free`) or not. `plain`: a program literal or spread literal
+    /// (`TmplKind::Arr::plain`), set only with `Model::array_reps` on.
+    pub(crate) fn new_arr_birth(
+        &mut self,
+        mi: u32,
+        what: &str,
+        hole_free: bool,
+        plain: bool,
+    ) -> TmplId {
         let site = self.next_site(mi);
         let kind = TmplKind::Arr {
             module: mi,
             site,
             hole_free,
+            plain: plain && self.m.array_reps,
         };
         self.new_indexed_template(mi, kind, what, site)
     }

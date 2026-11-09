@@ -504,6 +504,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
                     m.sink_node(f, r);
                 }
+                NativeMiss::Store(src, site) => {
+                    let prev = m.store_at.take();
+                    m.store_into(np, Key::Named(a), src, site);
+                    m.store_at = prev;
+                }
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
                     let name = m.atoms[a as usize].clone();
@@ -549,6 +554,20 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     m.add_tok(cache, c);
     m.add_tok(ext, e);
     (c, e)
+}
+
+/// The realm's `navigator` (runtime navigator.rs: `realm { navigator, kind =
+/// namespace, extends = Navigator.prototype }`), the one object the global
+/// getter returns: an object of `Navigator.prototype`, as a declaration's
+/// `fresh(Navigator.prototype)` makes, whose loads read the getters'
+/// declared results (`effects::declared_getter`).
+pub(super) fn navigator_object(m: &mut Model) -> Tok {
+    if let Some(t) = m.navigator {
+        return t;
+    }
+    let t = anon_tmpl(m, "Navigator.prototype");
+    m.navigator = Some(t);
+    t
 }
 
 pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {

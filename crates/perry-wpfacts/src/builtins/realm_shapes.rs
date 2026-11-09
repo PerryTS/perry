@@ -16,10 +16,11 @@ pub(crate) struct Property {
     /// The realm declares the key's value another node module object
     /// (`node:inspector` `default`: `node:inspector.default`): its name.
     pub object: Option<&'static str>,
-    /// The realm declares the key an accessor of a declared host object,
-    /// own or on its chain (`performance` `timeOrigin`): its getter's name
-    /// (`Performance.prototype.timeOrigin.<get>`).
-    pub getter: Option<&'static str>,
+    /// The realm declares the key an accessor (`accessor` row): its getter
+    /// and setter. A getter and no setter: a [[Set]] of the key runs no
+    /// setter and writes nothing (`builtins::getter_only`).
+    pub get: Option<&'static str>,
+    pub set: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -107,6 +108,7 @@ impl Default for Declarations {
                 continue;
             };
             let value = row.next();
+            let accessor = (kind == "accessor").then(|| (value.filter(|&g| g != "-"), row.next()));
             let property = holders
                 .entry(owner)
                 .or_default()
@@ -141,7 +143,7 @@ impl Default for Declarations {
                 "ns" => property.own_namespace = true,
                 "strings" => property.strings = value,
                 "object" => property.object = value,
-                "getter" => property.getter = value,
+                "accessor" => (property.get, property.set) = accessor.unwrap(),
                 _ => {}
             }
             if let Some(ns) = ns_by_name(owner) {
@@ -166,8 +168,8 @@ impl Default for Declarations {
                 if kind == "object" {
                     p.object = value;
                 }
-                if kind == "getter" {
-                    p.getter = value;
+                if let Some((get, set)) = accessor {
+                    (p.get, p.set) = (get, set);
                 }
             }
         }

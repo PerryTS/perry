@@ -40,6 +40,7 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
+mod array_rep;
 mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
@@ -412,6 +413,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     else {
         return Ok(None);
     };
+    array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
@@ -632,6 +634,7 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::LocalGet(id) = object.as_ref() else {
         return Ok(None);
     };
+    array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // #6750 follow-up: an active masked-window fact wins over the guarded
     // inline-TA probe — the fact's entry guard already proved storage + the
@@ -845,6 +848,7 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, false)? {

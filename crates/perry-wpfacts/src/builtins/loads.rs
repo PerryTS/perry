@@ -220,10 +220,10 @@ fn module_object(m: &Model, t: Tok, key: &str) -> Option<BuiltinNs> {
 }
 
 /// The declared getter (`declared_getter`) of the accessor host object token
-/// `t` holds or inherits under `key` (the realm's `getter` rows: ordinary
+/// `t` holds or inherits under `key` (the realm's `accessor` rows: ordinary
 /// lookup on the object's chain).
 fn module_getter(m: &Model, t: Tok, key: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
-    let getter = m.native_property(t, key)?.getter?;
+    let getter = m.native_property(t, key)?.get?;
     let (proto, k) = getter.strip_suffix(".<get>")?.rsplit_once('.')?;
     super::effects::declared_getter(proto, k)
 }
@@ -344,8 +344,9 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     }
 }
 
-/// Global `n`, which the realm declares as namespace `ns` (`Error`, `Math`),
-/// read off the global object `t` (`globalThis.Error`, or the bare name off
+/// Global `n`, whose value the realm declares (`birth`: namespace `Error`,
+/// `Math`; the object Node's `get navigator` returns), read off the
+/// global object `t` (`globalThis.Error`, or the bare name off
 /// the HIR sentinel, the same object): what the program stored under the
 /// key (the global's field, as for a program-owned global), and the
 /// realm's value. A key some other writer may have written
@@ -353,7 +354,7 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
 /// key) also reads ⊤, and what the program stored there reaches unmodeled
 /// code; a later such write replays the read (`NativeMiss::Global`) to the
 /// same result.
-fn declared_global_load(m: &mut Model, t: Tok, ns: BuiltinNs, n: &str, dst: NodeId) {
+fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId) {
     if !m.unit_mode {
         let a = m.atom(n);
         let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -368,8 +369,16 @@ fn declared_global_load(m: &mut Model, t: Tok, ns: BuiltinNs, n: &str, dst: Node
             m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
         }
     }
-    let bt = m.tok(TokKind::Builtin(ns));
-    m.add_tok(dst, bt);
+    m.add_tok(dst, birth);
+}
+
+/// The value the realm declares for global `n` other than a namespace
+/// (`ns_by_name`) or a function (`global_function`): `navigator`, a
+/// getter-only accessor (Node 26: `get navigator`, no setter,
+/// configurable), whose getter returns the realm's one navigator object.
+/// Whole-program only: a unit does not see the other units' writes.
+fn realm_global_object(m: &Model, n: &str) -> bool {
+    n == "navigator" && !m.unit_mode
 }
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
@@ -381,7 +390,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
             Some(n) => {
                 if let Some(ns) = ns_by_name(n) {
-                    declared_global_load(m, t, ns, n, dst);
+                    let birth = m.tok(TokKind::Builtin(ns));
+                    declared_global_load(m, t, birth, n, dst);
+                } else if realm_global_object(m, n) {
+                    let birth = super::native_protocol::navigator_object(m);
+                    declared_global_load(m, t, birth, n, dst);
                 } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
@@ -440,7 +453,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     tok_load(m, op, key, dst);
                 }
                 Some(n) if ns_by_name(n).is_some() => {
-                    declared_global_load(m, t, ns_by_name(n).unwrap(), n, dst);
+                    let birth = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
+                    declared_global_load(m, t, birth, n, dst);
+                }
+                Some(n) if realm_global_object(m, n) => {
+                    let birth = super::native_protocol::navigator_object(m);
+                    declared_global_load(m, t, birth, n, dst);
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
