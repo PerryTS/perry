@@ -6,6 +6,12 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct FinallyTarget {
+    pub(super) depth: u32,
+    pub(super) id: usize,
+}
+
 /// Context for emitting a single function body
 pub(super) struct FuncEmitCtx<'a> {
     pub(super) emitter: &'a WasmModuleEmitter,
@@ -25,10 +31,7 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) current_class: Option<String>,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,
-    /// Index of a temp i32 local (for mem_call base address)
-    // #854: reserved temp-local slot for the mem_call base-address path;
-    // assigned in `new()` but not consumed by the current emitter.
-    #[allow(dead_code)]
+    /// Completion kind while transferring to a shared finalizer.
     pub(super) temp_local_i32: u32,
     /// Index of a second temp i64 local for emit_store_arg
     pub(super) temp_store_local: u32,
@@ -39,6 +42,10 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) current_frame_size: u32,
     /// Stack of saved frame sizes for nested frame support
     pub(super) frame_stack: Vec<u32>,
+    /// Catch targets: absolute block depth and outstanding bridge-frame bytes.
+    pub(super) exception_handlers: Vec<(u32, u32, Option<FinallyTarget>)>,
+    pub(super) returns_value: bool,
+    pub(super) finalizer_jumps: Vec<Vec<u32>>,
 }
 
 impl<'a> FuncEmitCtx<'a> {
@@ -64,6 +71,9 @@ impl<'a> FuncEmitCtx<'a> {
             temp_result_local: temp_local + 2,
             current_frame_size: 0,
             frame_stack: Vec::new(),
+            exception_handlers: Vec::new(),
+            returns_value: true,
+            finalizer_jumps: Vec::new(),
         }
     }
 }

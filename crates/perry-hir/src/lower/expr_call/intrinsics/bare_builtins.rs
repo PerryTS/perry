@@ -55,8 +55,7 @@ pub(crate) fn try_function_return_this(
                         }
                         if let ast::Expr::Ident(ident) = inner_target {
                             if ident.sym.as_ref() == "Function"
-                                && ctx.lookup_local("Function").is_none()
-                                && ctx.lookup_func("Function").is_none()
+                                && !ctx.shadows_unqualified_global("Function")
                             {
                                 if let ast::Expr::Lit(ast::Lit::Str(s)) =
                                     inner_call.args[0].expr.as_ref()
@@ -104,10 +103,7 @@ pub(crate) fn try_bare_regexp_call(
                 callee_inner = p.expr.as_ref();
             }
             if let ast::Expr::Ident(ident) = callee_inner {
-                if ident.sym.as_ref() == "RegExp"
-                    && ctx.lookup_local("RegExp").is_none()
-                    && ctx.lookup_func("RegExp").is_none()
-                {
+                if ident.sym.as_ref() == "RegExp" && !ctx.shadows_unqualified_global("RegExp") {
                     // Zero-arg `RegExp()` is `RegExp(undefined)` → an empty
                     // source `/(?:)/`. Without an explicit `Expr::Undefined`
                     // pattern the call fell through to the bare-ident dispatch

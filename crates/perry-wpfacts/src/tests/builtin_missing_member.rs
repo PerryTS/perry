@@ -301,10 +301,10 @@ fn namespace_symbol_iterator_program_added_is_called() {
 }
 
 /// Control: a namespace whose own keys are undescribed (the statics of
-/// the `Date` constructor) keeps the any-key path.
+/// the `RegExp` constructor) keeps the any-key path.
 #[test]
 fn undescribed_namespace_symbol_iterator_stays_open() {
-    sym_iter("", "Date", false);
+    sym_iter("", "RegExp", false);
 }
 
 /// The callees of the iteration call of `for (const v of N)`, as the solve
@@ -352,16 +352,16 @@ fn iteration_callees(iterated: &str) -> Vec<String> {
 
 /// Fact level: the iteration call of a described namespace has no callee
 /// (GetIterator throws: no unknown callee, no opaque summary); an
-/// undescribed namespace's (`Date`'s statics) keeps the any-key callee.
+/// undescribed namespace's (`RegExp`'s statics) keeps the any-key callee.
 #[test]
 fn namespace_iteration_call_callee_set() {
     for ns in ["Object", "Function", "Object.prototype.hasOwnProperty"] {
         let c = iteration_callees(ns);
         assert!(c.is_empty(), "{ns}: {c:?}");
     }
-    let c = iteration_callees("Date");
+    let c = iteration_callees("RegExp");
     assert!(
-        c.iter().any(|c| c.contains("builtin Date[computed]")),
-        "Date: {c:?}"
+        c.iter().any(|c| c.contains("builtin RegExp[computed]")),
+        "RegExp: {c:?}"
     );
 }

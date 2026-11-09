@@ -907,7 +907,9 @@ impl Model {
     pub fn ret_objects(&mut self, ret: NodeId, dst: NodeId) {
         // Object tokens only (a primitive return is ignored by `new`).
         let filt = self.node_named("objret", || format!("objret({ret})"));
-        self.edge(ret, filt);
+        // A body that completes returns `undefined` (`narrow::may_complete`),
+        // which `new` never yields.
+        self.cons(ret, Cons::NotNullish { dst: filt });
         // `filt` keeps prims; dst gets them too, which is a harmless
         // over-approximation for kinds only when the ctor returns
         // primitives — but it would pollute `new` results, so relay

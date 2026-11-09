@@ -39,6 +39,17 @@ impl Model {
         if builtins::native_namespace_call(self, t, call, this_tok) {
             return true;
         }
+        // A static of a realm constructor whose effects the runtime
+        // declares without naming `this` (`AbortSignal.any`): the
+        // declaration runs, whatever `this`.
+        if let Some(e) = builtins::declared_static(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_function(m, e, call));
+            }
+            return true;
+        }
+
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
             return false;
         };

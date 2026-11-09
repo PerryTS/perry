@@ -65,6 +65,7 @@ impl AgentJob for PostedRequest {
                         .to_string(),
                     syscall: None,
                     aborted: false,
+                    abort_reason: 0,
                 }),
             );
         }

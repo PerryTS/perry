@@ -41,6 +41,7 @@ use super::{
 };
 
 mod foreign_counter;
+pub(crate) mod descriptor_read;
 pub(super) mod guarded_array;
 mod proven_array;
 #[cfg(test)]
@@ -410,6 +411,10 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     else {
         return Ok(None);
     };
+    // b2: a loop's descriptor read (`descriptor_read`).
+    if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
+        return Ok(Some(v));
+    }
     // A planned-bare region read lowers through the value path's hook.
 
     // Masked-window fast path first: the dense range guard proved the whole
@@ -837,6 +842,10 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    // b2: a loop's descriptor read (`descriptor_read`).
+    if let Some(v) = descriptor_read::try_lower(ctx, expr, false)? {
+        return Ok(v);
+    }
     // Step 4b / array S3: a planned-bare element read inside a loop region.
 
     match expr {
