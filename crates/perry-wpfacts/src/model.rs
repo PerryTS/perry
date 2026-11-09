@@ -736,6 +736,10 @@ pub enum NativeMiss {
     New(CallId),
     /// Descriptor metadata, without reading or calling the property.
     Lookup(NodeId),
+    /// A store of this node at this site that met a declared getter-only
+    /// accessor (`builtins::getter_only`) and wrote nothing: once the key
+    /// may be written natively (the accessor replaced), it is stored again.
+    Store(NodeId, SiteId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

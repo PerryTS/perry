@@ -1998,3 +1998,4 @@ mod given_proto_census;
 mod spread_from_census;
 mod accessor_from_census;
 mod navigator_decl;
+mod navigator_store;
