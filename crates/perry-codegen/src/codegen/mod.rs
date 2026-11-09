@@ -3108,6 +3108,7 @@ fn lower_module(
         // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
         // pass (mutual exclusion), below; start empty here.
         spec_abi_functions: std::collections::HashMap::new(),
+        typed_methods: std::collections::HashMap::new(),
         spec_return_proofs: std::collections::HashMap::new(),
         spec_ta_bindings: std::collections::HashMap::new(),
         typed_f64_functions,
@@ -3972,6 +3973,7 @@ fn lower_module(
             &func_synthetic_arguments,
             &llmod.target_triple,
         );
+        signature_entry::select_methods(hir, &mut cross_module, &class_ids);
 
         // The descriptor is immutable rodata, not a GC object. Emit in HIR
         // order (never HashMap order) so cache/object bytes stay deterministic.
