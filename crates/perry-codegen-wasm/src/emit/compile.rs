@@ -1675,3 +1675,7 @@ impl WasmModuleEmitter {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
