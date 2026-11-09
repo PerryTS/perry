@@ -515,7 +515,7 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const padded = __padBigintArgs(fn, c.captures.length + 1, [f64ToU64(a0)]);
+        const padded = __padBigintArgs(fn, c.captures.length, [f64ToU64(a0)]);
         return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_2: (handle, a0, a1) => {
@@ -523,7 +523,7 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const padded = __padBigintArgs(fn, c.captures.length + 2, [f64ToU64(a0), f64ToU64(a1)]);
+        const padded = __padBigintArgs(fn, c.captures.length, [f64ToU64(a0), f64ToU64(a1)]);
         return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_3: (handle, a0, a1, a2) => {
@@ -531,7 +531,7 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const padded = __padBigintArgs(fn, c.captures.length + 3, [f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)]);
+        const padded = __padBigintArgs(fn, c.captures.length, [f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)]);
         return u64ToF64(fn(...c.captures, ...padded));
       },
       // closure_call_spread(handle, args_array_handle) -> result
@@ -1830,7 +1830,7 @@ const __memDispatch = {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    const padded = __padBigintArgs(fn, closure.captures.length + 1, [__jsValueToBits(a0)]);
+    const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_2: (closure, a0, a1) => {
@@ -1838,7 +1838,7 @@ const __memDispatch = {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    const padded = __padBigintArgs(fn, closure.captures.length + 2, [__jsValueToBits(a0), __jsValueToBits(a1)]);
+    const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0), __jsValueToBits(a1)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_3: (closure, a0, a1, a2) => {
@@ -1846,7 +1846,7 @@ const __memDispatch = {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    const padded = __padBigintArgs(fn, closure.captures.length + 3, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
+    const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_spread: (closure, args) => {
