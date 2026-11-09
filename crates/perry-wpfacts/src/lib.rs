@@ -27,6 +27,7 @@ pub mod derive;
 mod diagnostics;
 mod dump;
 mod element_floors;
+mod element_keys;
 pub mod field_read_calls;
 mod gen;
 mod gen_call;
@@ -474,6 +475,7 @@ fn generate<'a>(
     g.m.arr_dense_sabotage = cfg.sabotage.as_deref() == Some("arrdense");
     g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
     g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
+    g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
@@ -906,6 +908,7 @@ fn compute_act<'a>(
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }
+    element_keys::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,

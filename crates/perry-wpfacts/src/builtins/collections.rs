@@ -993,7 +993,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if name == Some("push") {
         m.arr_len_append(t);
     } else if !keeps_length {
-        m.arr_len_top(t);
+        if !(m.arr_front_sabotage && name == Some("shift")) {
+            m.arr_len_top(t);
+        }
     } else if matches!(name, Some("reverse" | "copyWithin")) {
         m.arr_len_permuted(t);
     }
