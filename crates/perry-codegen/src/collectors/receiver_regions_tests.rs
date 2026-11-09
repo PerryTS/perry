@@ -35,6 +35,19 @@ fn stub_inert(e: &Expr) -> bool {
         Expr::Compare { left, right, .. } | Expr::Binary { left, right, .. } => {
             stub_inert(left) && stub_inert(right)
         }
+        // c1: mirrors `expr_is_inert_primitive`'s Math-intrinsic and
+        // conditional arms (a stub-inert operand stands for a proven Number).
+        e if crate::expr::math_intrinsic_operands(e).is_some() => {
+            crate::expr::math_intrinsic_operands(e)
+                .unwrap()
+                .iter()
+                .all(stub_inert)
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => stub_inert(condition) && stub_inert(then_expr) && stub_inert(else_expr),
         _ => false,
     }
 }
@@ -795,6 +808,47 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
                 right: Box::new(Expr::Null),
             })],
         ),
+        (
+            "c1: Math.max over proven numbers",
+            vec![Stmt::Expr(Expr::MathMax(vec![num(NUM), num(NUM2)]))],
+        ),
+        (
+            "c1: Math.abs inside proven arithmetic",
+            vec![Stmt::Expr(add(
+                num(NUM),
+                Expr::MathAbs(Box::new(num(NUM2))),
+            ))],
+        ),
+        (
+            "c1: a conditional of primitives under +",
+            vec![Stmt::Expr(add(
+                num(NUM),
+                Expr::Conditional {
+                    condition: Box::new(lt(num(NUM), num(NUM2))),
+                    then_expr: Box::new(Expr::Integer(1)),
+                    else_expr: Box::new(Expr::Integer(-1)),
+                },
+            ))],
+        ),
+        (
+            "c1: Math.abs over an object",
+            vec![Stmt::Expr(Expr::MathAbs(Box::new(num(OBJ))))],
+        ),
+        (
+            "c1: Math.round calls the runtime",
+            vec![Stmt::Expr(Expr::MathRound(Box::new(num(NUM))))],
+        ),
+        (
+            "c1: a conditional with an object arm under +",
+            vec![Stmt::Expr(add(
+                num(NUM),
+                Expr::Conditional {
+                    condition: Box::new(lt(num(NUM), num(NUM2))),
+                    then_expr: Box::new(num(OBJ)),
+                    else_expr: Box::new(Expr::Integer(1)),
+                },
+            ))],
+        ),
         ("a call", vec![Stmt::Expr(call(vec![]))]),
         (
             "coercion over an unproven operand",
@@ -1409,4 +1463,27 @@ fn a_cold_arm_read_is_allocating_in_loop_purity_terms() {
         vec![RegionEnder::CollectingCall, RegionEnder::ColdArmCall]
     );
     assert!(!region_enders_in_expr(&call(vec![]), &stub_inert).is_empty());
+}
+
+/// c1: the Math intrinsics and the conditional are clean exactly when their
+/// operands are proven; every other Math form stays `Unmodelled`.
+#[test]
+fn c1_math_intrinsics_and_conditionals_end_regions_only_when_unproven() {
+    let clean = |e: Expr| enders(&[Stmt::Expr(e)]).is_empty();
+    assert!(clean(Expr::MathMin(vec![num(NUM), Expr::Integer(7)])));
+    assert!(clean(Expr::MathMax(vec![])));
+    assert!(clean(Expr::MathFloor(Box::new(num(NUM)))));
+    assert!(!clean(Expr::MathMax(vec![num(NUM), num(OBJ)])));
+    assert!(has(
+        &[Stmt::Expr(Expr::MathSign(Box::new(num(NUM))))],
+        RegionEnder::Unmodelled
+    ));
+    assert!(has(
+        &[Stmt::Expr(Expr::MathMinSpread(Box::new(num(NUM))))],
+        RegionEnder::Unmodelled
+    ));
+    assert!(has(
+        &[Stmt::Expr(lt(num(NUM), Expr::MathAbs(Box::new(num(OBJ)))))],
+        RegionEnder::Coercion
+    ));
 }
