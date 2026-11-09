@@ -285,13 +285,13 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
             let methods: [(&str, *const crate::closure::JsFunctionInfo, u32, bool); 14] = [
                 (
                     "clearMarks",
-                    crate::fn_info!(#[realm(Performance.prototype.clearMarks, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::clear_marks, 1; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.clearMarks, constructible = true, effects = { coerce(arg(0), ToPrimitive); returns(prim(undefined)) })] export crate::perf_hooks::prototypes::performance_methods::clear_marks, 1; with_declared(0)),
                     0,
                     true,
                 ),
                 (
                     "clearMeasures",
-                    crate::fn_info!(#[realm(Performance.prototype.clearMeasures, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::clear_measures, 1; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.clearMeasures, constructible = true, effects = { coerce(arg(0), ToPrimitive); returns(prim(undefined)) })] export crate::perf_hooks::prototypes::performance_methods::clear_measures, 1; with_declared(0)),
                     0,
                     true,
                 ),
@@ -321,17 +321,17 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 ),
                 (
                     "mark",
-                    crate::fn_info!(#[realm(Performance.prototype.mark, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::mark, 2; with_declared(1)),
+                    crate::fn_info!(#[realm(Performance.prototype.mark, constructible = true, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), detail), field(arg(1), startTime)); coerce(field(arg(1), startTime), ToPrimitive); escapes(field(arg(1), detail)); stores(fresh); returns(fresh(PerformanceMark.prototype)) })] export crate::perf_hooks::prototypes::performance_methods::mark, 2; with_declared(1)),
                     1,
                     true,
                 ),
                 (
                     "measure",
-                    crate::fn_info!(#[realm(Performance.prototype.measure, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::measure, 3; with_declared(1)),
+                    crate::fn_info!(#[realm(Performance.prototype.measure, constructible = true, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), start), field(arg(1), end), field(arg(1), duration), field(arg(1), detail)); coerce(arg(1), ToPrimitive); coerce(field(arg(1), start), ToPrimitive); coerce(field(arg(1), end), ToPrimitive); coerce(field(arg(1), duration), ToPrimitive); coerce(arg(2), ToPrimitive); escapes(field(arg(1), detail)); stores(fresh); returns(fresh(PerformanceMeasure.prototype)) })] export crate::perf_hooks::prototypes::performance_methods::measure, 3; with_declared(1)),
                     1,
                     true,
                 ),
-                ("now", crate::fn_info!(#[realm(Performance.prototype.now, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::now, 0; with_declared(0)), 0, true),
+                ("now", crate::fn_info!(#[realm(Performance.prototype.now, constructible = true, effects = { returns(prim(num)) })] export crate::perf_hooks::prototypes::performance_methods::now, 0; with_declared(0)), 0, true),
                 (
                     "setResourceTimingBufferSize",
                     crate::fn_info!(#[realm(Performance.prototype.setResourceTimingBufferSize, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::set_resource_timing_buffer_size, 1; with_declared(1)),
@@ -365,7 +365,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 install_perf_method(proto, method, value, enumerable);
             }
             let getter = perf_method_value(
-                crate::fn_info!(#[realm("Performance.prototype.timeOrigin.<get>", constructible = true)] export crate::perf_hooks::prototypes::perf_time_origin_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("Performance.prototype.timeOrigin.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::perf_hooks::prototypes::perf_time_origin_getter_thunk, 0; with_declared(0)),
                 "get timeOrigin",
                 0,
             );

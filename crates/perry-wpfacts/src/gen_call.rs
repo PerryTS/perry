@@ -1199,6 +1199,25 @@ impl<'a> Gen<'a> {
                 let key = Key::Named(self.m.atom(&k));
                 self.load(recv, key)
             }
+            // A named ESM import of a node module read as a value
+            // (`import { performance } from "perf_hooks"`, or a destructured
+            // `require` HIR binds the same way): node's builtin ESM export
+            // cell holds `module.exports[k]` at load and changes only by
+            // `syncBuiltinESMExports()`, which copies `module.exports[k]`. So
+            // it holds what key `k` of the module object reads: the realm's
+            // declaration, or what the program stored there.
+            "js_native_module_named_esm_export_value" if !self.m.unit_mode => {
+                let (Some(module), Some(k)) = (lit(0), lit(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let Some(ns) = crate::builtins::node_module_ns(&module) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(ns));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.load(recv, key)
+            }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
                 self.extern_fail(name, &args, &spread)

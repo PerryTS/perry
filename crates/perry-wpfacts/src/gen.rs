@@ -1754,7 +1754,15 @@ impl<'a> Gen<'a> {
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
-            self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.to_string()));
+            // The binding's module when HIR resolved it to an import of a
+            // node module (`import { EventEmitter } from "events"`), else
+            // the global object's built-in.
+            let module = c
+                .native_extends
+                .as_ref()
+                .filter(|(_, name)| name == n)
+                .map_or("builtin", |(m, _)| m.as_str());
+            self.m.tmpls[tm as usize].native_parent = Some((module.into(), n.to_string()));
         } else if c.extends_name.as_deref() == Some("Object") && c.extends_expr.is_none() {
             // `extends Object`: the ordinary chain.
         } else if c.extends_expr.is_some()
