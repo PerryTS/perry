@@ -30,8 +30,24 @@ ASSERTIONS = [
     # S1: encode is (i32, i32, i32, i32) -> i32, entered from the top level.
     ("functions", "signature", "encode$sig", "i32 (i32, i32, i32, i32)"),
     ("functions", "calls", "main", "encode$sig"),
-    # S8: recursion enters the typed body.
-    ("functions", "calls", "deep$sig", "deep$sig"),
+    # S8b: recursion enters the typed body.
+    ("functions", "calls", "down$sig", "down$sig"),
+    # S2: every caller passes a fraction: F64, and the sites enter `$sig`.
+    ("functions", "signature", "twice$sig", "double (double)"),
+    ("functions", "calls", "main", "twice$sig"),
+    # S21 (precision selector): an F64 signature does not subsume main's
+    # I32 spec tier; `half` keeps it.
+    ("functions", "no-define", "half$sig", None),
+    ("functions", "define", "half$spec_i32", None),
+    # E3a / E3b: N/A as join controls (refused via Boxed params): the String
+    # makes the parameter Boxed, so there is no signature to refuse.
+    ("functions", "no-define", "e3a$sig", None),
+    ("functions", "no-define", "e3bInner$sig", None),
+    # E3c: `e3cSmall` is inlined into main (its second site), so its call of
+    # `e3cInner` has copies in main and in its own body; they join, and both
+    # enter `e3cInner$sig`.
+    ("functions", "calls", "main", "e3cInner$sig"),
+    ("functions", "calls", "e3cSmall", "e3cInner$sig"),
     # T4d: typed_i1 is an excluded tier.
     ("functions", "no-define", "isOdd$sig", None),
     # S6: the site holds two bodies (T0Set): neither is typed.
@@ -46,6 +62,9 @@ ASSERTIONS = [
     ("methods", "no-call", "mixed25", "C25__m$sig"),
     ("methods", "no-call", "mixed25", "D25__m$sig"),
     ("methods", "calls", "mixed25", "D25__m"),
+    # E3j: both arms of a for…of over a plain array enter `M$sig`.
+    ("methods", "define", "Q3__f$sig", None),
+    ("methods", "calls", "main", "Q3__f$sig"),
 ]
 
 
