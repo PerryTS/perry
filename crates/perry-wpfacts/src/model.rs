@@ -1543,6 +1543,13 @@ pub struct Model {
     pub escaped_classes: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// An async_hooks hook may be enabled (why): its `init` is unknown code
+    /// (`createHook` is undeclared) that gets every resource the runtime
+    /// makes, as the declarations say (`async_resource`).
+    pub async_hooks: Option<String>,
+    /// The values declared `async_resource` while no hook may be enabled:
+    /// they escape once one may.
+    pub async_resources: Vec<(NodeId, &'static str)>,
     /// The dyn-eval interpreter is linked (the driver's link decision): a
     /// solved call or construct that may be the Function constructor then
     /// runs interpreted code (DECISIONS 235).

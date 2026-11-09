@@ -148,6 +148,8 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
     interpreted_code_runs(m);
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
+        // Interpreted code may load async_hooks itself.
+        async_hook_may_run(m, why);
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
         if m.explain {
             eprintln!("perry: wpfacts explain: dynamic code reachable: {why}");
@@ -156,6 +158,32 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
         // interpreter, whose global reads and writes `compute` records up
         // front; without one the Function constructor throws.
     }
+}
+
+/// An async_hooks hook may be enabled: the module is reached by name or
+/// through a module loader that may return it. Each resource declared
+/// `async_resource`, made before or after, goes to the hook's `init`.
+pub fn async_hook_may_run(m: &mut Model, why: &str) {
+    if m.async_hooks.is_some() {
+        return;
+    }
+    m.async_hooks = Some(why.to_string());
+    m.rel(|| format!("asynchook {}", why.replace(' ', "\\s")));
+    for (n, name) in std::mem::take(&mut m.async_resources) {
+        async_resource(m, n, name);
+    }
+}
+
+/// `async_resource(slot)` of native `name`: the runtime gives the slot's
+/// values to `init` of every enabled hook (unknown code), so they escape
+/// while a hook may be enabled; until then they wait for one.
+pub fn async_resource(m: &mut Model, n: NodeId, name: &'static str) {
+    let Some(why) = m.async_hooks.clone() else {
+        m.async_resources.push((n, name));
+        return;
+    };
+    let r = m.reason(&format!("{name} hands its resource to async_hooks init ({why})"));
+    m.sink_node(n, r);
 }
 
 /// DECISIONS 235: interpreted code may run, from a real eval-like source
@@ -2113,6 +2141,13 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     m.add_prim(ret, prim::UNDEF);
                 }
                 None => {
+                    // A computed specifier, or `async_hooks` by name, may
+                    // load the async_hooks namespace.
+                    if m.call_lit.get(&call).is_none_or(|a| {
+                        matches!(m.atoms[*a as usize].as_str(), "async_hooks" | "node:async_hooks")
+                    }) {
+                        async_hook_may_run(m, "a module loaded by require may be async_hooks");
+                    }
                     // The runtime loader never interprets code: a computed
                     // specifier resolves to a registered record (its live
                     // exports or a raw publication), a native module

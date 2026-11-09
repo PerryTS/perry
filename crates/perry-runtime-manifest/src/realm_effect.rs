@@ -164,6 +164,10 @@ pub enum RealmEffect {
     /// `init.body`: node iterates an async-iterable body, which calls the
     /// program's methods): they escape, and what they reach.
     Escapes(RealmSlot),
+    /// The body hands the slot's values to `init` of every enabled
+    /// async_hooks hook as the resource (`async_hook_slots::init_resource`):
+    /// code no declaration describes gets them while a hook may be enabled.
+    AsyncResource(RealmSlot),
     /// `stores(fresh)`: the body stores only into objects it creates itself
     /// (a ToObject wrapper, a temporary, its fresh result); it keeps nothing
     /// in an object the program already holds.
@@ -368,6 +372,8 @@ pub fn validate_effects(
             }
             RealmEffect::Returns(value) => operand(value)?,
             RealmEffect::Escapes(slot) => not_result(slot)?,
+            // The runtime hands over the object it made and returns.
+            RealmEffect::AsyncResource(slot) => slot.validate(at)?,
             RealmEffect::StoresFresh | RealmEffect::Open => {}
         }
     }
@@ -481,6 +487,9 @@ pub mod emit {
                     ),
                     RealmEffect::Returns(o) => format!("{p}RealmEffect::Returns({})", operand(p, o)),
                     RealmEffect::Escapes(s) => format!("{p}RealmEffect::Escapes({})", slot(p, s)),
+                    RealmEffect::AsyncResource(s) => {
+                        format!("{p}RealmEffect::AsyncResource({})", slot(p, s))
+                    }
                     RealmEffect::StoresFresh => format!("{p}RealmEffect::StoresFresh"),
 
                     RealmEffect::Open => format!("{p}RealmEffect::Open"),

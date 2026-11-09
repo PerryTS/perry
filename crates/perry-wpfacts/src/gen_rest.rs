@@ -106,6 +106,9 @@ impl<'a> Gen<'a> {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
                 }
+                if name == "async_hooks" {
+                    crate::builtins::async_hook_may_run(&mut self.m, "node:async_hooks namespace");
+                }
                 // A module the realm declares is its namespace object.
                 if let Some(ns) = crate::builtins::node_module_ns(m) {
                     let t = self.m.tok(TokKind::Builtin(ns));
@@ -123,6 +126,9 @@ impl<'a> Gen<'a> {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
+                if m0 == "async_hooks" {
+                    crate::builtins::async_hook_may_run(&mut self.m, "node:async_hooks call");
+                }
                 if module == "__perry_borrowed_proof" {
                     self.prim_node(prim::BOOL)
                 } else if module == "__perry_runtime" {

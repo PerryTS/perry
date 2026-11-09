@@ -198,7 +198,7 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
             slot(callee) || operand(this) || args.iter().any(operand)
         }
         RealmEffect::Stores { src, dst } => slot(src) || slot(dst),
-        RealmEffect::Escapes(s) => slot(s),
+        RealmEffect::Escapes(s) | RealmEffect::AsyncResource(s) => slot(s),
         RealmEffect::Returns(o) => operand(o),
         RealmEffect::StoresFresh | RealmEffect::Open => false,
     })
@@ -402,6 +402,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
             RealmEffect::Escapes(s) => slot(s),
+            RealmEffect::AsyncResource(s) => slot(s),
             RealmEffect::Returns(RealmOperand::Bound) => true,
             RealmEffect::Returns(RealmOperand::Species { of, args, elems }) => {
                 of.root == RealmSlotRoot::This
@@ -1006,6 +1007,11 @@ fn run(
                 }
             }
             RealmEffect::StoresFresh => {}
+            RealmEffect::AsyncResource(s) => {
+                if let Some(n) = run.node(m, s) {
+                    super::async_resource(m, n, entry.name);
+                }
+            }
             RealmEffect::Escapes(s) => {
                 if let Some(n) = run.node(m, s) {
                     let reason = m.reason(&format!(
