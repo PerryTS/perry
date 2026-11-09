@@ -315,7 +315,6 @@ pub(crate) fn select_methods(
             if cm.typed_i1_methods.contains(&key)
                 || cm.typed_string_methods.contains(&key)
                 || cm.typed_f64_receiver_methods.contains_key(&key)
-                || cm.pshape_tower_routable.contains(&key)
                 || cm.guarded_undefined_method_params.contains_key(&key)
                 || cm.guarded_falsy_field_default_methods.contains_key(&key)
                 || crate::collectors::ptr_array_cached_method(class, m).is_some()
@@ -358,6 +357,16 @@ pub(crate) fn select_methods(
             let proven_this = (sig.this_class == Some(class_id) && fixed)
                 .then(|| cm.pshape_methods.get(&key).cloned())
                 .flatten();
+            // §3.2.1 tower: composes (CWN 11-09). A tower-routable method is
+            // typed only with its proven-`this` layout: the signature's one
+            // `this` class is its own fixed-layout class, the body the tower
+            // would route that class to. Its `typed_calls` sites resolve to
+            // this one body; every other site keeps the tower, which then
+            // routes to the boxed entry.
+            let tower = cm.pshape_tower_routable.contains(&key);
+            if tower && proven_this.is_none() {
+                continue;
+            }
             // A signature whose every slot is Boxed changes the body only
             // through its `this` layout: without one, `M$sig` would be the
             // public body again.
@@ -389,6 +398,7 @@ pub(crate) fn select_methods(
         cm.nonnegative_index_methods.remove(&key);
         cm.pshape_methods.remove(&key);
         cm.pshape_arg_methods.remove(&key);
+        cm.pshape_tower_routable.remove(&key);
         let id = hir
             .classes
             .iter()
