@@ -45,7 +45,9 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
+pub use bindings::{
+    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, Rep,
+};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 pub use signatures::Signature;
 pub use derive::{
@@ -79,6 +81,9 @@ pub struct FactsConfig {
     /// No length floor: growth makes an Array's `length` ⊤ instead of
     /// raising its upper bound (`solve::arr_len`; `PERRY_FACTS_ARRAY_FLOOR=0`).
     pub no_array_floor: bool,
+    /// No plain Array births, fused-fill birth or `Rep::Arr`
+    /// (`PERRY_FACTS_ARRAY_REPS=0`, DESIGN-p4l1 PR-B).
+    pub no_array_reps: bool,
     /// No guard narrowing, predicate summaries or String code intervals
     /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
     pub no_guard_ranges: bool,
@@ -459,6 +464,10 @@ fn generate<'a>(
     g.m.arr_append_sabotage = cfg.sabotage.as_deref() == Some("arrappend");
     g.m.arr_fwd_sabotage = cfg.sabotage.as_deref() == Some("arrfwd");
     g.m.arr_floor_off = cfg.no_array_floor;
+    g.m.array_reps = !cfg.no_array_reps;
+    g.m.arr_dense_sabotage = cfg.sabotage.as_deref() == Some("arrdense");
+    g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
+    g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;

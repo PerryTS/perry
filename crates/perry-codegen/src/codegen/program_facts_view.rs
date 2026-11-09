@@ -181,12 +181,56 @@ impl FactsNumericExpr {
         }
     }
 }
-/// A value's one representation (wpfacts `Rep`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A value's one representation (wpfacts `Rep`). It has no order (the
+/// derived one is not the lattice); every encoding decision goes through
+/// `FactsRep::encoding`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FactsRep {
     Boxed,
     F64,
     I32,
+    /// Only plain program Arrays (wpfacts `Rep::Arr`, DESIGN-p4l1 §2.1):
+    /// the slot holds the NaN-boxed pointer word, as a Boxed one does.
+    Arr(FactsArrRep),
+}
+
+/// wpfacts `ArrRep`: what every Array the value may hold has for its whole
+/// life (`length >= floor` and `capacity >= floor`; `dense`: no hole below
+/// `floor`; `fixed`: never grows, so never forwarded), and the
+/// representation of its elements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactsArrRep {
+    pub elem: FactsElemRep,
+    pub floor: u32,
+    pub dense: bool,
+    pub fixed: bool,
+}
+
+/// wpfacts `ElemRep`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsElemRep {
+    Boxed,
+    F64,
+    I32,
+}
+
+/// wpfacts `Enc`: how a slot's word is stored and passed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsEnc {
+    Boxed,
+    F64,
+    I32,
+}
+
+impl FactsRep {
+    /// The slot encoding: an `Arr` slot holds the Boxed word.
+    pub fn encoding(self) -> FactsEnc {
+        match self {
+            FactsRep::Boxed | FactsRep::Arr(_) => FactsEnc::Boxed,
+            FactsRep::F64 => FactsEnc::F64,
+            FactsRep::I32 => FactsEnc::I32,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
