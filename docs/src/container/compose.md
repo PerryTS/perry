@@ -153,8 +153,10 @@ service key no longer exists in the spec.
 `down()` discovers labelled container IDs from one snapshot after session
 rollback and reuses it for the orphan sweep. Containers appearing after that
 snapshot are not rediscovered during the same call; legacy name-based cleanup
-remains best-effort. Serialize deployment and teardown, or repeat teardown after
-a concurrent deployment has finished. This is not an atomic reconciliation.
+remains best-effort. Serialize deployment and teardown, or run teardown again
+from a fresh compose handle once the concurrent deployment has finished:
+`down()` consumes its handle, so a second call on the same handle rejects with
+`Invalid compose handle`. This is not an atomic reconciliation.
 
 ## Status / logs / exec
 
