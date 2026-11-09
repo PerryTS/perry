@@ -696,7 +696,11 @@ impl<'a> Deserializer<'a> {
         let b = self.read_raw(8)?;
         let mut arr = [0u8; 8];
         arr.copy_from_slice(b);
-        Some(f64::from_bits(u64::from_le_bytes(arr)))
+        // External bytes become a JS Number here: every NaN read from them is
+        // just NaN, as in node, so no payload can spell a NaN-box tag.
+        Some(crate::array::canonical_raw_f64(f64::from_bits(
+            u64::from_le_bytes(arr),
+        )))
     }
 
     fn read_raw(&mut self, len: usize) -> Option<&'a [u8]> {

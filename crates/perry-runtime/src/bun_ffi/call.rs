@@ -581,11 +581,11 @@ unsafe fn call_and_convert_mode(
     let result = match ret_type {
         T_F64 => {
             let r = raw::call_f64(fn_ptr, image);
-            super::number_value(r)
+            super::float_value(r)
         }
         T_F32 => {
             let r = raw::call_f32(fn_ptr, image);
-            super::number_value(r as f64)
+            super::float_value(r as f64)
         }
         T_PTR | T_FUNCTION if pointer_bigint => {
             let r = raw::call_int(fn_ptr, image);
