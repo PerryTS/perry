@@ -1,7 +1,7 @@
 //! #6602: Web Streams handle-id allocation with recycling.
 //!
 //! Ids for streams, readers, writers and transform streams all come from the
-//! fixed band `[STREAM_HANDLE_ID_START, STREAM_HANDLE_ID_END)` owned by
+//! fixed band `[STREAM_HANDLE_ID_START, STREAM_ALLOC_END)` owned by
 //! `perry_runtime::value::addr_class`. The band is only `0x100000` wide and
 //! the runtime stops recognizing a stream handle past its end, so the old monotonic never-reused counter exhausted it after ~21k
 //! requests on a server that mints ~48 stream-family ids per request.
@@ -34,7 +34,7 @@
 use super::transform::TRANSFORM_PAIRS;
 use super::{
     byob, expando, tee, ReadableState, WritableState, READABLE_STREAMS, READERS,
-    STREAM_HANDLE_ID_END, STREAM_HANDLE_ID_START, TRANSFORM_STREAMS, WRITABLE_STREAMS, WRITERS,
+    STREAM_ALLOC_END, STREAM_HANDLE_ID_START, TRANSFORM_STREAMS, WRITABLE_STREAMS, WRITERS,
 };
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -87,7 +87,7 @@ fn quarantine_limit() -> usize {
         .and_then(|v| v.parse::<usize>().ok())
         // Below 2 the reuse distance vanishes; above half the band the
         // allocator can never recycle enough to matter.
-        .map(|v| v.clamp(2, (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 2))
+        .map(|v| v.clamp(2, (STREAM_ALLOC_END - STREAM_HANDLE_ID_START) / 2))
         .unwrap_or(DEFAULT_QUARANTINE);
     QUARANTINE.store(q, Ordering::Relaxed);
     q
@@ -128,11 +128,11 @@ fn alloc_locked(a: &mut IdAlloc) -> usize {
         a.pipe_ids.remove(&id);
         return id;
     }
-    if a.next >= STREAM_HANDLE_ID_END {
+    if a.next >= STREAM_ALLOC_END {
         panic!(
             "Web Streams handle id band exhausted: {} ids live or quarantined \
              (see PERRY_STREAM_ID_QUARANTINE)",
-            STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START
+            STREAM_ALLOC_END - STREAM_HANDLE_ID_START
         );
     }
     let id = a.next;
@@ -184,7 +184,7 @@ fn finish_eviction(evicted: Option<Vec<usize>>) {
 /// its registry footprint and hand the id to the free list. Callers must hold
 /// NO streams locks and must have verified the id's terminal state.
 fn retire(id: usize) {
-    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
+    if !(STREAM_HANDLE_ID_START..STREAM_ALLOC_END).contains(&id) {
         return;
     }
     let evicted = {
@@ -367,7 +367,7 @@ pub(super) fn retire_writer_if_released(writer_id: usize) {
 /// so a stale duplicate release is a no-op and can never retire the id's
 /// next life, however far allocation has moved on.
 pub(super) fn retire_pipe_lock_id(id: usize) {
-    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
+    if !(STREAM_HANDLE_ID_START..STREAM_ALLOC_END).contains(&id) {
         return;
     }
     let evicted = {

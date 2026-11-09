@@ -248,7 +248,7 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         let rejection = Rejection::for_declined(declined, &url, &method);
         queue_deferred_resolution(promise_ptr, false, move || rejection.into_js_bits());
         unsafe {
-            crate::streams::js_readable_stream_controller_close(crate::streams::stream_value(
+            crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
                 stream,
             ));
         }
@@ -309,7 +309,7 @@ fn response_done(stream: usize, outcome: Outcome) {
             Outcome::Ok(_) => unreachable!("success requires a final head"),
         }
         unsafe {
-            crate::streams::js_readable_stream_controller_close(crate::streams::stream_value(
+            crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
                 stream,
             ));
         }
@@ -318,7 +318,7 @@ fn response_done(stream: usize, outcome: Outcome) {
     unsafe {
         match outcome {
             Outcome::Ok(_) => {
-                crate::streams::js_readable_stream_controller_close(crate::streams::stream_value(
+                crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
                     stream,
                 ));
             }
@@ -329,7 +329,7 @@ fn response_done(stream: usize, outcome: Outcome) {
                     failure_for(error).into_body_error_bits()
                 };
                 crate::streams::js_readable_stream_controller_error(
-                    crate::streams::stream_value(stream),
+                    crate::streams::controller_value(stream),
                     f64::from_bits(bits),
                 );
             }

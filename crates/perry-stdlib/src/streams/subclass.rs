@@ -125,11 +125,20 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
 /// #1545: classify a Web Streams registry id for `instanceof`, dispatch,
 /// and `Object.prototype.toString` tags.
 /// 0 = not a stream, 1 = ReadableStream, 2 = WritableStream, 3 = reader,
-/// 4 = writer, 5 = TransformStream.
+/// 4 = writer, 5 = TransformStream, 6 = a readable stream's controller
+/// (RSTREAM R2: `stream id | STREAM_CONTROLLER_BIT`, live while the stream is).
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return 0;
+    }
+    let controlled = controller_id_stream(id);
+    if controlled != 0 {
+        let live = READABLE_STREAMS
+            .lock()
+            .map(|m| m.contains_key(&controlled))
+            .unwrap_or(false);
+        return if live { 6 } else { 0 };
     }
     if READABLE_STREAMS
         .lock()
@@ -159,6 +168,29 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
         return 5;
     }
     0
+}
+
+/// The interface of controller id `id` (kind 6), read off the stream it
+/// controls: 1 = ReadableStreamDefaultController, 2 =
+/// TransformStreamDefaultController (the readable side of a TransformStream),
+/// 3 = ReadableByteStreamController; 0 = not a live controller.
+#[no_mangle]
+pub extern "C" fn js_stream_controller_family(id: usize) -> u8 {
+    let stream = controller_id_stream(id);
+    if stream == 0 {
+        return 0;
+    }
+    let is_byte_stream = match READABLE_STREAMS.lock().unwrap().get(&stream) {
+        Some(s) => s.is_byte_stream,
+        None => return 0,
+    };
+    if transform_writable_for_readable(stream).is_some() {
+        2
+    } else if is_byte_stream {
+        3
+    } else {
+        1
+    }
 }
 
 /// #1545: runtime method dispatch for Web Streams handles whose static type
@@ -236,10 +268,6 @@ pub(crate) unsafe fn dispatch_stream_method(
             | "tee"
             | "pipeTo"
             | "pipeThrough"
-            | "enqueue"
-            | "close"
-            | "terminate"
-            | "error"
     ) && READABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_readable {
         match method {
@@ -264,15 +292,20 @@ pub(crate) unsafe fn dispatch_stream_method(
                 }
                 return Some(js_readable_stream_pipe_through_pair(handle, arg0, arg1));
             }
-            // #1644: a readable handle is also its own controller. The
-            // start/transform/flush callbacks receive it as `controller`, so
-            // `controller.enqueue/close/error/terminate` dispatch here when the
-            // controller param is generically typed.
+            _ => return None,
+        }
+    }
+    // RSTREAM R3: a controller (start/pull/transform/flush callbacks receive
+    // it) is its own handle; its methods never answer on the stream itself.
+    let controlled = controller_id_stream(id);
+    if controlled != 0 && READABLE_STREAMS.lock().unwrap().contains_key(&controlled) {
+        let family = js_stream_controller_family(id);
+        match method {
             "enqueue" => return Some(js_readable_stream_controller_enqueue(handle, arg0)),
-            "close" => return Some(js_readable_stream_controller_close(handle)),
-            "terminate" => {
+            "close" if family != 2 => return Some(js_readable_stream_controller_close(handle)),
+            "terminate" if family == 2 => {
                 let result = js_readable_stream_controller_close(handle);
-                if let Some(writable_id) = transform_writable_for_readable(id) {
+                if let Some(writable_id) = transform_writable_for_readable(controlled) {
                     let reason = f64::from_bits(make_type_error_with_message(
                         "Invalid state: TransformStream has been terminated",
                     ));
@@ -318,9 +351,9 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     // undefined). `locked` is the one #1670 exercises (`res.body.locked`).
     match (kind, name) {
         (1, "locked") => return js_readable_stream_locked(handle),
-        (1, "desiredSize") => return js_readable_stream_controller_desired_size(handle),
+        (6, "desiredSize") => return js_readable_stream_controller_desired_size(handle),
         // Non-null only while a BYOB read is parked on this byte stream (#4915).
-        (1, "byobRequest") => {
+        (6, "byobRequest") if js_stream_controller_family(id) == 3 => {
             return super::byob::js_readable_stream_controller_byob_request(handle)
         }
         (2, "locked") => return js_writable_stream_locked(handle),
@@ -358,6 +391,10 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
         (4, "close") => Some(b"close"),
         (4, "abort") => Some(b"abort"),
         (4, "releaseLock") => Some(b"releaseLock"),
+        (6, "enqueue") => Some(b"enqueue"),
+        (6, "error") => Some(b"error"),
+        (6, "close") if js_stream_controller_family(id) != 2 => Some(b"close"),
+        (6, "terminate") if js_stream_controller_family(id) == 2 => Some(b"terminate"),
         _ => None,
     };
     if let Some(name_bytes) = method {
