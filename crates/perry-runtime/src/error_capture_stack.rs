@@ -32,6 +32,8 @@ extern "C" fn error_stack_lazy_getter(
     }
 }
 
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn install_lazy_stack_accessor(target: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(target);

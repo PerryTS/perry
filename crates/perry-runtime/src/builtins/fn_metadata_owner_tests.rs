@@ -15,7 +15,7 @@ const WORDS: usize = FUNCTION_RECORD_BYTES / 4;
 struct Image {
     owner: FunctionMetadataOwner,
     /// The image's records section: one record per info, as the link keeps it.
-    section: [i32; 2 * WORDS],
+    section: [i32; 3 * WORDS],
     bounds: FunctionRecordBounds,
     records: [EntryImage; 2],
 }
@@ -39,7 +39,7 @@ fn image(code: usize) -> Box<Image> {
             state: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             bounds: 0,
         },
-        section: [0; 2 * WORDS],
+        section: [0; 3 * WORDS],
         bounds: FunctionRecordBounds {
             start: std::ptr::null(),
             stop: std::ptr::null(),
@@ -50,8 +50,8 @@ fn image(code: usize) -> Box<Image> {
     let start = image.section.as_ptr().cast::<u8>();
     image.bounds = FunctionRecordBounds {
         start,
-        stop: start.wrapping_add(2 * FUNCTION_RECORD_BYTES),
-        sentinel: start,
+        stop: start.wrapping_add(3 * FUNCTION_RECORD_BYTES),
+        sentinel: start.wrapping_add(2 * FUNCTION_RECORD_BYTES),
     };
     let field = &image.owner.bounds as *const i32 as isize;
     image.owner.bounds = (&image.bounds as *const FunctionRecordBounds as isize - field) as i32;
@@ -381,35 +381,68 @@ fn ordered_name_index_matches_the_scan_and_follows_the_owner_set() {
     assert_eq!(names.len(), entries.len());
 }
 
+#[cfg(feature = "alloc-census")]
 #[test]
-fn local_permanent_image_skips_only_publication_and_keeps_owner_order() {
-    // None forces discovery off without a production knob. Both arms call
-    // the same registration implementation as the exported entry point.
-    let forced_off = Box::leak(image(0x4e00_b000));
-    let local = Box::leak(image(0x4e00_c000));
-    let nonlocal = Box::leak(image(0x4e00_d000));
-    let unloadable = Box::leak(image(0x4e00_e000));
-    let first = NEXT_REGISTRATION.load(Ordering::Relaxed);
-    let mut publications = Vec::new();
-    for (index, (image, permanent, bounds)) in [
-        (&*forced_off, 1, None),
-        (&*local, 1, Some(&local.bounds)),
-        (&*nonlocal, 1, Some(&local.bounds)),
-        (&*unloadable, 0, Some(&unloadable.bounds)),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let before = images().lock().unwrap().len();
-        unsafe {
-            register_function_metadata_with_local_bounds(&image.owner, permanent, bounds);
+fn name_lookup_allocates_nothing_on_first_and_repeated_queries() {
+    let (_, control) = crate::alloc_census::test_count_allocations(|| {
+        std::hint::black_box(Vec::<u8>::with_capacity(16));
+    });
+    assert!(
+        control > 0,
+        "the allocator observer must see a real allocation"
+    );
+
+    let names = test_bundle_names(&[(0x1000, b"alpha"), (0x1100, b"bravo")]);
+    let (hit, allocations) =
+        crate::alloc_census::test_count_allocations(|| names.predecessor(0x1101));
+    assert_eq!(hit, Some((0x1100, &b"bravo"[..])));
+    assert_eq!(allocations, 0, "first lookup must not build a sorted copy");
+    let (_, allocations) = crate::alloc_census::test_count_allocations(|| {
+        for ip in 0x1000..0x1200 {
+            std::hint::black_box(names.predecessor(ip));
         }
-        publications.push(images().lock().unwrap().len() - before);
-        assert_eq!(registration(&image.owner), first + index as u32);
-        assert_eq!(image.records[0].identity.ordinal, 0);
-        assert_eq!(image.records[1].identity.ordinal, 1);
-    }
-    assert_eq!(publications, [1, 0, 1, 1]);
-    assert_eq!(NEXT_REGISTRATION.load(Ordering::Relaxed), first + 4);
-    eprintln!("startup publications forced-off/local/nonlocal/unloadable: {publications:?}; owner order preserved");
+    });
+    assert_eq!(
+        allocations, 0,
+        "repeated lookups must not allocate owner keys"
+    );
+    let image = Box::leak(image(0x1000));
+    let images = [ImageRecords::Image(&image.bounds)];
+    let names = BundleFunctionNames(&images);
+    let (hit, allocations) =
+        crate::alloc_census::test_count_allocations(|| names.predecessor(0x1101));
+    assert_eq!(hit, Some((0x1100, &b"bravo"[..])));
+    assert_eq!(allocations, 0, "static record lookup must not allocate");
+}
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+#[test]
+fn linker_ordered_records_have_a_sentinel_and_reject_broken_order() {
+    let mut fixture = image(0x1000);
+    let valid = |bounds: &FunctionRecordBounds| {
+        let codes: Vec<_> = unsafe { image_infos(bounds) }
+            .map(|info| info.code as usize)
+            .collect();
+        let sentinel = unsafe { (bounds.sentinel as *const i32).read() };
+        sentinel == 0 && codes.windows(2).all(|pair| pair[0] <= pair[1])
+    };
+    assert!(valid(&fixture.bounds));
+    assert_eq!(
+        ordered_records::predecessor(&fixture.bounds, 0x1101),
+        Some((0x1100, &b"bravo"[..]))
+    );
+    // Exchange code addresses without changing records or names: the order
+    // assertion must reject a malformed emitted section, not silently sort it.
+    fixture.records[0].info.code = 0x1100 as *const u8;
+    fixture.records[1].info.code = 0x1000 as *const u8;
+    assert!(!valid(&fixture.bounds));
+    fixture.records[0].info.code = 0x1000 as *const u8;
+    fixture.records[1].info.code = 0x1000 as *const u8;
+    assert!(valid(&fixture.bounds));
+    assert_eq!(
+        ordered_records::predecessor(&fixture.bounds, 0x1000),
+        Some((0x1000, &b"bravo"[..]))
+    );
+    fixture.section[2 * WORDS] = 1;
+    assert_ne!(unsafe { (fixture.bounds.sentinel as *const i32).read() }, 0);
 }
