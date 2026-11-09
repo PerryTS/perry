@@ -1981,6 +1981,7 @@ mod native_fs_effects;
 mod native_module_ref;
 mod host_browser_effects;
 mod host_fs_effects;
+mod native_fs_watch;
 mod host_inspector_effects;
 mod host_fs_read_effects;
 mod native_process;
@@ -1990,3 +1991,4 @@ mod error_namespaces;
 
 mod given_proto_census;
 mod spread_from_census;
+mod accessor_from_census;

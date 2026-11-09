@@ -547,7 +547,7 @@ fn typed_feedback_array_get_fallback_reads_an_object_backed_array_subclass_dense
 
     let actual = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, 1.0);
     assert_eq!(actual.to_bits(), 22.0f64.to_bits());
-    let boxed_index = f64::from_bits(crate::value::JSValue::int32(2).bits());
+    let boxed_index = f64::from(2);
     let actual = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, boxed_index);
     assert_eq!(actual.to_bits(), 33.0f64.to_bits());
 

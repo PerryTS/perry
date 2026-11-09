@@ -120,12 +120,6 @@ pub(crate) fn is_perf_observer_list_value(value: f64) -> bool {
         .get()
         .map_or_else(|| false, |run| run(value))
 }
-static IS_PERFORMANCE_NAMESPACE_VALUE: Hook<fn(f64) -> bool> = Hook::empty();
-pub(crate) fn is_performance_namespace_value(value: f64) -> bool {
-    IS_PERFORMANCE_NAMESPACE_VALUE
-        .get()
-        .map_or_else(|| false, |run| run(value))
-}
 static JS_PERF_CLEAR_MARKS: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
 pub(crate) fn js_perf_clear_marks(name_val: f64) -> f64 {
     JS_PERF_CLEAR_MARKS.get().map_or_else(
@@ -298,12 +292,6 @@ pub(crate) fn performance_namespace() -> f64 {
         .get()
         .map_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED), |run| run())
 }
-static PERFORMANCE_PROTOTYPE_METHOD_VALUE: Hook<fn(&str) -> Option<f64>> = Hook::empty();
-pub(crate) fn performance_prototype_method_value(name: &str) -> Option<f64> {
-    PERFORMANCE_PROTOTYPE_METHOD_VALUE
-        .get()
-        .map_or_else(|| None, |run| run(name))
-}
 static VALIDATE_PERF_LIST_FILTER_ARG: Hook<fn(f64, &str, bool) -> ()> = Hook::empty();
 pub(crate) fn validate_perf_list_filter_arg(value: f64, name: &str, missing: bool) -> () {
     VALIDATE_PERF_LIST_FILTER_ARG
@@ -345,7 +333,6 @@ pub(crate) fn install() {
         IS_PERF_ENTRY_OBJECT_INSTANCE_OF.set(crate::perf_hooks::is_perf_entry_object_instance_of);
         IS_PERF_HOOKS_SHAPE_INSTANCE_OF.set(crate::perf_hooks::is_perf_hooks_shape_instance_of);
         IS_PERF_OBSERVER_LIST_VALUE.set(crate::perf_hooks::is_perf_observer_list_value);
-        IS_PERFORMANCE_NAMESPACE_VALUE.set(crate::perf_hooks::is_performance_namespace_value);
         JS_PERF_CLEAR_MARKS.set(crate::perf_hooks::js_perf_clear_marks);
         JS_PERF_CLEAR_MEASURES.set(crate::perf_hooks::js_perf_clear_measures);
         JS_PERF_CLEAR_RESOURCE_TIMINGS.set(crate::perf_hooks::js_perf_clear_resource_timings);
@@ -370,8 +357,6 @@ pub(crate) fn install() {
         PERF_ENTRY_TO_JSON.set(crate::perf_hooks::perf_entry_to_json);
         PERF_SUPPORTED_ENTRY_TYPES_VALUE.set(crate::perf_hooks::perf_supported_entry_types_value);
         PERFORMANCE_NAMESPACE.set(crate::perf_hooks::performance_namespace);
-        PERFORMANCE_PROTOTYPE_METHOD_VALUE
-            .set(crate::perf_hooks::performance_prototype_method_value);
         VALIDATE_PERF_LIST_FILTER_ARG.set(crate::perf_hooks::validate_perf_list_filter_arg);
         REGISTER_ROOTS.set(register_roots);
     });

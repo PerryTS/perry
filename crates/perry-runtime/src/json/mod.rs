@@ -1638,9 +1638,9 @@ mod tests {
         // Same INT32_TAG funnel for array elements (drizzle raw-mode rows,
         // integer arrays over IPC).
         let mut arr = crate::array::js_array_alloc(3);
-        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(1).bits()));
-        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(2).bits()));
-        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(-9).bits()));
+        arr = crate::array::js_array_push_f64(arr, f64::from(1));
+        arr = crate::array::js_array_push_f64(arr, f64::from(2));
+        arr = crate::array::js_array_push_f64(arr, f64::from(-9));
         let boxed = crate::value::js_nanbox_pointer(arr as i64);
         let output = unsafe { js_json_stringify(boxed, TYPE_ARRAY) };
         assert_eq!(unsafe { str_from_header(output).unwrap() }, "[1,2,-9]");

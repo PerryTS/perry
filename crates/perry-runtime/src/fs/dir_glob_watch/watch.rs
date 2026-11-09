@@ -1343,150 +1343,59 @@ fn poll_closure_value(
     closure
 }
 
+// The watcher objects: own fields holding closures over (id, the watcher),
+// which read their captured watcher (`islot(callee, self)`), never `this`:
+// `const on = w.on; on("change", cb)` registers on `w`. `on`/`once`/
+// `addListener` keep the listener for the watcher's events (`listeners`,
+// one internal slot for every event name: the declaring call runs them
+// with the union of the events' arguments); `close` runs the `close`
+// listeners with the watcher as `this`. Each object holds its own closures
+// (one value per holder in the facts as in the runtime).
 fn build_fs_watcher_object(id: usize) -> f64 {
     let obj = crate::object::js_object_alloc(0, 8);
     let self_value = boxed_ptr(obj as *const u8);
-    set_named_field(
-        obj,
-        b"close",
-        method_value(
-            crate::fn_info!(fs_watcher_close_impl, 0; with_declared(0)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"ref",
-        method_value(
-            crate::fn_info!(fs_watcher_ref_impl, 0; with_declared(0)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"unref",
-        method_value(
-            crate::fn_info!(fs_watcher_unref_impl, 0; with_declared(0)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"on",
-        method_value(
-            crate::fn_info!(fs_watcher_on_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"once",
-        method_value(
-            crate::fn_info!(fs_watcher_once_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"addListener",
-        method_value(
-            crate::fn_info!(fs_watcher_on_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"removeListener",
-        method_value(
-            crate::fn_info!(fs_watcher_off_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"off",
-        method_value(
-            crate::fn_info!(fs_watcher_off_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
+    let close = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherClose%", provider = closure, effects = { calls(islot(islot(callee, self), listeners), this = islot(callee, self), args = []); stores(fresh); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_close_impl, 0; with_declared(0));
+    let ref_ = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherRef%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_ref_impl, 0; with_declared(0));
+    let unref = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherUnref%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_unref_impl, 0; with_declared(0));
+    let on = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOn%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_on_impl, 2; with_declared(2));
+    let once = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOnce%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_once_impl, 2; with_declared(2));
+    let off = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOff%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_off_impl, 2; with_declared(2));
+    let fields: [(&[u8], _); 8] = [
+        (b"close", close),
+        (b"ref", ref_),
+        (b"unref", unref),
+        (b"on", on),
+        (b"once", once),
+        (b"addListener", on),
+        (b"removeListener", off),
+        (b"off", off),
+    ];
+    for (name, func) in fields {
+        set_named_field(obj, name, method_value(func, id, self_value));
+    }
     self_value
 }
 
 fn build_stat_watcher_object(id: usize) -> f64 {
     let obj = crate::object::js_object_alloc(0, 7);
     let self_value = boxed_ptr(obj as *const u8);
-    set_named_field(
-        obj,
-        b"ref",
-        method_value(
-            crate::fn_info!(stat_watcher_ref_impl, 0; with_declared(0)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"unref",
-        method_value(
-            crate::fn_info!(stat_watcher_unref_impl, 0; with_declared(0)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"on",
-        method_value(
-            crate::fn_info!(stat_watcher_on_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"once",
-        method_value(
-            crate::fn_info!(stat_watcher_once_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"addListener",
-        method_value(
-            crate::fn_info!(stat_watcher_on_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"removeListener",
-        method_value(
-            crate::fn_info!(stat_watcher_off_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
-    set_named_field(
-        obj,
-        b"off",
-        method_value(
-            crate::fn_info!(stat_watcher_off_impl, 2; with_declared(2)),
-            id,
-            self_value,
-        ),
-    );
+    let ref_ = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherRef%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_ref_impl, 0; with_declared(0));
+    let unref = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherUnref%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_unref_impl, 0; with_declared(0));
+    let on = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOn%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_on_impl, 2; with_declared(2));
+    let once = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOnce%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_once_impl, 2; with_declared(2));
+    let off = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOff%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_off_impl, 2; with_declared(2));
+    let fields: [(&[u8], _); 7] = [
+        (b"ref", ref_),
+        (b"unref", unref),
+        (b"on", on),
+        (b"once", once),
+        (b"addListener", on),
+        (b"removeListener", off),
+        (b"off", off),
+    ];
+    for (name, func) in fields {
+        set_named_field(obj, name, method_value(func, id, self_value));
+    }
     self_value
 }
 
@@ -1673,6 +1582,16 @@ fn normalized_watch_args(arg1: f64, arg2: f64) -> (f64, Option<f64>) {
     }
 }
 
+// What it does to the program's values: the path, the options' four keys
+// ([[Get]]; a string options is the encoding), the listener (arg(1) when
+// callable, else arg(2)) kept on the watcher it returns; every listener the
+// watcher holds runs later with the watcher as `this`: 'change' with
+// (eventType string, filename string or Buffer), 'error' with an fs Error,
+// 'close' with none (the union per position). The abort listener it adds to
+// `options.signal` is its own closure, whose only effect is that close.
+// The watcher it makes is the resource `init_resource("FSEVENTWRAP")` hands to
+// `init` of every enabled async hook.
+crate::realm_decl! { "node:fs.watch", effects = { path(arg(0)); reads(field(arg(1), encoding)); reads(field(arg(1), persistent)); reads(field(arg(1), recursive)); reads(field(arg(1), signal)); stores(arg(1) -> islot(result, listeners)); stores(arg(2) -> islot(result, listeners)); stores(fresh); async_resource(result); returns(fresh(Object.prototype, fields = {close: native("%FsWatcherClose%"), ref: native("%FsWatcherRef%"), unref: native("%FsWatcherUnref%"), on: native("%FsWatcherOn%"), once: native("%FsWatcherOnce%"), addListener: native("%FsWatcherOn%"), removeListener: native("%FsWatcherOff%"), off: native("%FsWatcherOff%")})); calls(islot(result, listeners), this = result, args = [prim(str | undefined) | fresh(Error.prototype), prim(str | undefined) | fresh(Buffer.prototype)]) } }
 /// `fs.watch(path[, options][, listener])` — OS-event-backed watcher (#9591);
 /// see `watch_backend`.
 #[no_mangle]
@@ -1734,6 +1653,16 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     object_value
 }
 
+// One StatWatcher per path, kept by the runtime (`WATCH_FILE_PATHS`): a
+// second call on a watched path adds its listener to that watcher and
+// returns it. The facts keep every watcher it returned in an internal slot
+// of the function (`islot(callee, watchers)`), so a result is a fresh
+// watcher or one an earlier call returned. Every listener a watcher holds
+// runs later with it as `this` and two Stats objects (curr, prev) as
+// statSync makes them.
+// The watcher it makes is the resource `init_resource("STATWATCHER")` hands to
+// `init` of every enabled async hook.
+crate::realm_decl! { "node:fs.watchFile", effects = { path(arg(0)); reads(field(arg(1), interval)); reads(field(arg(1), persistent)); reads(field(arg(1), bigint)); stores(fresh); async_resource(result); returns(fresh(Object.prototype, fields = {ref: native("%StatWatcherRef%"), unref: native("%StatWatcherUnref%"), on: native("%StatWatcherOn%"), once: native("%StatWatcherOnce%"), addListener: native("%StatWatcherOn%"), removeListener: native("%StatWatcherOff%"), off: native("%StatWatcherOff%")})); returns(islot(callee, watchers)); stores(result -> islot(callee, watchers)); stores(arg(1) -> islot(result, listeners)); stores(arg(2) -> islot(result, listeners)); calls(islot(result, listeners), this = result, args = [fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)}), fresh(Object.prototype, fields = {isFile: native("%FsStatsPredicate%"), isDirectory: native("%FsStatsPredicate%"), isSymbolicLink: native("%FsStatsPredicate%"), isBlockDevice: native("%FsStatsPredicate%"), isCharacterDevice: native("%FsStatsPredicate%"), isFIFO: native("%FsStatsPredicate%"), isSocket: native("%FsStatsPredicate%"), size: prim(num | bigint), atimeMs: prim(num | bigint), mtimeMs: prim(num | bigint), ctimeMs: prim(num | bigint), birthtimeMs: prim(num | bigint), mode: prim(num | bigint), uid: prim(num | bigint), gid: prim(num | bigint), nlink: prim(num | bigint), dev: prim(num | bigint), rdev: prim(num | bigint), blksize: prim(num | bigint), ino: prim(num | bigint), blocks: prim(num | bigint), atimeNs: prim(bigint | undefined), mtimeNs: prim(bigint | undefined), ctimeNs: prim(bigint | undefined), birthtimeNs: prim(bigint | undefined), atime: fresh(Date.prototype), mtime: fresh(Date.prototype), ctime: fresh(Date.prototype), birthtime: fresh(Date.prototype)})]) } }
 /// `fs.watchFile(path[, options], listener)` — stat-polling watcher.
 #[no_mangle]
 pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64 {
@@ -1800,6 +1729,8 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
     object_value
 }
 
+// The listener is compared, never called or kept.
+crate::realm_decl! { "node:fs.unwatchFile", effects = { path(arg(0)); stores(fresh); returns(prim(undefined)) } }
 /// `fs.unwatchFile(path[, listener])`.
 #[no_mangle]
 pub extern "C" fn js_fs_unwatch_file(path_value: f64, listener: f64) -> f64 {
