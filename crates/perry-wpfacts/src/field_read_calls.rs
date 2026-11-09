@@ -160,13 +160,12 @@ pub(crate) fn collect(
     }
     // 4: F's field read, by (module, byte offset, key).
     let field_ok = |mi: u32, offset: u32, key: &str| {
-        sites.iter().any(|s| {
-            s.module == mi
-                && s.byte_offset == offset
-                && !s.is_call
-                && s.key == key
-                && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)
-        })
+        let mut copies = sites
+            .iter()
+            .filter(|s| s.module == mi && s.byte_offset == offset && !s.is_call && s.key == key)
+            .peekable();
+        copies.peek().is_some()
+            && copies.all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
     };
     // 5b, 5d: every copy of F's element read.
     let elements_ok = |mi: u32, offset: u32| {

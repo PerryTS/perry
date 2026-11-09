@@ -66,7 +66,28 @@ console.log(s);
 }
 
 fn assert_no_fact(name: &str, src: &str) {
-    assert!(calls(src).is_empty(), "{name}: the call must stay a call");
+    let pf = facts(src);
+    let found: Vec<_> = pf
+        .bindings
+        .iter()
+        .flat_map(|b| b.field_read_calls.iter())
+        .collect();
+    let board: Vec<String> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "board" || s.key == "at")
+        .map(|s| {
+            format!(
+                "{}@{} call={} {:?} recv={:?}",
+                s.key, s.byte_offset, s.is_call, s.verdict, s.receivers
+            )
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "{name}: the call must stay a call: {found:?}\n{}",
+        board.join("\n")
+    );
 }
 
 #[test]
