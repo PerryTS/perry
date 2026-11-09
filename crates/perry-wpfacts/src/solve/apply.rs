@@ -1559,15 +1559,22 @@ impl Model {
                     }
                 }
                 for &s in toks {
-                    self.cons(into, Cons::SpreadFrom { src: s, site });
+                    self.cons(
+                        into,
+                        Cons::SpreadFrom {
+                            src: s,
+                            site,
+                            from: n,
+                        },
+                    );
                 }
             }
-            Cons::SpreadFrom { src, site } => {
+            Cons::SpreadFrom { src, site, from } => {
                 for &d in toks {
                     // A copy into an Array (`Object.assign`) may write any
                     // index, past its end too.
                     self.arr_len_top(d);
-                    self.spread_into(src, d, site);
+                    self.spread_into(src, d, site, from);
                 }
             }
             Cons::NativeThis { call, f } => self.native_this(call, f, toks, prim),

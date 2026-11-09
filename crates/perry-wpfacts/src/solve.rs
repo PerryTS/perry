@@ -1744,7 +1744,7 @@ impl Model {
             Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),
             Cons::ArgInto { call, run, i } => format!("arginto {n} {call} {run} {i}"),
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
-            Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
+            Cons::SpreadFrom { src, site, .. } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
             Cons::NativeThis { call, f } => format!("nativethis {n} {call} {f}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
