@@ -1536,3 +1536,5 @@ export function make(k: number) {
         "wrapper captures k and n only (visit's parameters are {own:?})"
     );
 }
+
+mod imported_class_new_spread;
