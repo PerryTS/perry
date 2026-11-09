@@ -1675,20 +1675,30 @@ pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> 
 /// rather than recursing.
 #[optimize(size)]
 pub(crate) unsafe fn call_unknown_collection_method(recv: f64, name: &[u8], args: &[f64]) -> f64 {
+    // The guard is per (receiver, name): a builtin body that dispatches the
+    // SAME name on the same receiver by name again answers `undefined`, while
+    // a different name it invokes (`Object.prototype.toLocaleString` ->
+    // `Invoke(this, "toString")`) is a fresh, ordinary lookup.
     thread_local! {
-        static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static ACTIVE: std::cell::Cell<Option<(u64, u64)>> = const { std::cell::Cell::new(None) };
     }
-    if ACTIVE.with(|a| a.get()) {
+    let mut name_hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name {
+        name_hash = (name_hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let key = (recv.to_bits(), name_hash);
+    let prev = ACTIVE.with(|a| a.get());
+    if prev == Some(key) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    struct Reset;
+    struct Reset(Option<(u64, u64)>);
     impl Drop for Reset {
         fn drop(&mut self) {
-            ACTIVE.with(|a| a.set(false));
+            ACTIVE.with(|a| a.set(self.0));
         }
     }
-    ACTIVE.with(|a| a.set(true));
-    let _reset = Reset;
+    ACTIVE.with(|a| a.set(Some(key)));
+    let _reset = Reset(prev);
     select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }
