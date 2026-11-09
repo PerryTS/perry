@@ -354,10 +354,7 @@ pub(crate) fn select_methods(
                     _ => SpecParamRep::Boxed,
                 })
                 .collect();
-            let fixed = facts
-                .classes
-                .get(&class_id)
-                .is_some_and(|c| c.fixed_layout);
+            let fixed = facts.classes.get(&class_id).is_some_and(|c| c.fixed_layout);
             let proven_this = (sig.this_class == Some(class_id) && fixed)
                 .then(|| cm.pshape_methods.get(&key).cloned())
                 .flatten();
@@ -578,7 +575,11 @@ pub(crate) fn try_lower_typed_method_call(
     let Some(tm) = ctx.typed_methods.get(&mid) else {
         return Ok(None);
     };
-    let Some(public) = ctx.methods.get(&(tm.class.clone(), tm.name.clone())).cloned() else {
+    let Some(public) = ctx
+        .methods
+        .get(&(tm.class.clone(), tm.name.clone()))
+        .cloned()
+    else {
         return Ok(None);
     };
     if !matches!(
@@ -629,7 +630,9 @@ pub(crate) fn try_lower_typed_method_call(
     let sig_name = format!("{public}$sig");
     crate::expr::stack_guard::emit_stack_guard_before_clone_call(ctx, &sig_name);
     let call_args: Vec<(LlvmType, &str)> = raw.iter().map(|(t, v)| (*t, v.as_str())).collect();
-    let value = ctx.block().call(sig_llvm_ty(sig.ret), &sig_name, &call_args);
+    let value = ctx
+        .block()
+        .call(sig_llvm_ty(sig.ret), &sig_name, &call_args);
     roots.release(ctx);
     Ok(Some(if sig.ret == FactsRep::I32 {
         ctx.block().sitofp(I32, &value, DOUBLE)
@@ -722,9 +725,10 @@ fn emit_entry(
         }
         let value = super::facts_number_locals::emit_entry_number(blk, &value);
         if let Some(site) = &sites[i] {
-            crate::verify_facts::covered(Fact::Signature, || {
-                serde_json::json!({ "entry": public_name, "argument": i })
-            });
+            crate::verify_facts::covered(
+                Fact::Signature,
+                || serde_json::json!({ "entry": public_name, "argument": i }),
+            );
             let ok = emit_rep_test(blk, rep, sig.ranges[i], &value).unwrap();
             blk.call_void("perry_verify_facts_tick", &[]);
             let miss = wf.blocks().len();

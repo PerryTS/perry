@@ -263,7 +263,6 @@ pub(crate) mod facts_number_locals;
 #[cfg(test)]
 mod facts_number_locals_tests;
 pub(crate) mod facts_rep;
-pub(crate) mod signature_entry;
 pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
@@ -284,6 +283,7 @@ mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+pub(crate) mod signature_entry;
 pub mod split_regions;
 #[cfg(test)]
 mod split_regions_literal_tests;
@@ -312,8 +312,8 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsElementRead, FactsField, FactsFieldReadCall, FactsSignature,
-    FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep,
+    ElisionFacts, FactsBody, FactsClass, FactsElementRead, FactsField, FactsFieldReadCall,
+    FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep, FactsSignature,
     ProgramFactsView,
 };
 #[cfg(test)]
