@@ -51,6 +51,9 @@ fn finish_builtin_prototype(
 #[cfg(test)]
 #[path = "declaration_tests.rs"]
 mod declaration_tests;
+#[cfg(test)]
+#[path = "declaration_keys_tests.rs"]
+mod declaration_keys_tests;
 
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
