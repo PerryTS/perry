@@ -1,4 +1,4 @@
-// `A[i & 127]` reads A[127], one past the end of A's 127 elements, at
+// `A[k]` with `k = i & 127` reads A[127], one past the end of A's 127 elements, at
 // every 128th step. Under PERRY_FACTS_SABOTAGE=arrundef the solve's
 // `ElemUndef` takes a key that reaches the length's lower bound as below
 // it: the facts drop the read's `undefined` and claim the key is below the
@@ -15,7 +15,8 @@ const A = [
 function sum(): number {
   let s = 0;
   for (let i = 0; i < 1000; i++) {
-    const x = A[i & 127];
+    const k = i & 127;
+    const x = A[k];
     s = s + (x === undefined ? 1000 : x);
   }
   return s;
