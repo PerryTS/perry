@@ -283,8 +283,6 @@ pub(crate) fn select_methods(
                 continue;
             };
             if sig.params.len() != m.params.len()
-                || (sig.ret == FactsRep::Boxed
-                    && sig.params.iter().all(|r| *r == FactsRep::Boxed))
                 || m.is_async
                 || m.is_generator
                 || m.was_plain_async
@@ -296,6 +294,23 @@ pub(crate) fn select_methods(
                 continue;
             }
             let key = (class.name.clone(), m.name.clone());
+            if std::env::var("PERRY_P2_DEBUG").is_ok() {
+                eprintln!(
+                    "p2: method {}::{} tiers i1={} str={} f64recv={} tower={} undef={} falsy={} ptrarr={} arglen={} pshape={} class={}",
+                    class.name,
+                    m.name,
+                    cm.typed_i1_methods.contains(&key),
+                    cm.typed_string_methods.contains(&key),
+                    cm.typed_f64_receiver_methods.contains_key(&key),
+                    cm.pshape_tower_routable.contains(&key),
+                    cm.guarded_undefined_method_params.contains_key(&key),
+                    cm.guarded_falsy_field_default_methods.contains_key(&key),
+                    crate::collectors::ptr_array_cached_method(class, m).is_some(),
+                    super::arguments::method_supports_arguments_length_direct_abi(m),
+                    cm.pshape_methods.contains_key(&key),
+                    class_id,
+                );
+            }
             // Excluded tiers (§3.2.1).
             if cm.typed_i1_methods.contains(&key)
                 || cm.typed_string_methods.contains(&key)
@@ -346,6 +361,15 @@ pub(crate) fn select_methods(
             let proven_this = (sig.this_class == Some(class_id) && fixed)
                 .then(|| cm.pshape_methods.get(&key).cloned())
                 .flatten();
+            // A signature whose every slot is Boxed changes the body only
+            // through its `this` layout: without one, `M$sig` would be the
+            // public body again.
+            if proven_this.is_none()
+                && sig.ret == FactsRep::Boxed
+                && sig.params.iter().all(|r| *r == FactsRep::Boxed)
+            {
+                continue;
+            }
             typed.push(TypedMethod {
                 published_pshape: cm.pshape_methods.contains_key(&key),
                 class: class.name.clone(),
