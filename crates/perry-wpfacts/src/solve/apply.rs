@@ -43,6 +43,7 @@ impl Model {
                     self.arr_len_index(t, Iv { lo, hi });
                 }
             }
+            Cons::LenPermuted { t } => self.arr_len_permuted_check(n, t),
             Cons::IndexHole => {
                 for &t in toks {
                     self.mark_hole(t);

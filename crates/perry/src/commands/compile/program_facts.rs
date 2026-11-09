@@ -139,6 +139,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_floor: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -873,6 +877,10 @@ pub(crate) fn activation(
         ),
         no_array_lengths: matches!(
             std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_floor: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_elem_undef: matches!(

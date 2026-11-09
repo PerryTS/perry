@@ -589,14 +589,23 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
-        // `new Array(k)` of an integer literal: the length its birth has.
+        // `new Array(k)` of an integer literal: the length its birth has,
+        // when the runtime backs it densely (`capacity >= k`, every slot a
+        // hole: `js_array_constructor_single`). A longer one has length `k`
+        // over an empty store, so no birth length: its capacity says
+        // nothing about its length (`solve::arr_len`).
+        let dense = if self.m.arr_cap_sabotage {
+            u32::MAX
+        } else {
+            perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
+        };
         let birth_len = match args.as_slice() {
             [a] if self.arr_lengths && name == "Array" && spread.is_empty() => self
                 .num_lits
                 .iter()
                 .find(|(_, &n)| n == *a)
                 .map(|(&k, _)| k)
-                .filter(|k| (0..=i64::from(u32::MAX)).contains(k)),
+                .filter(|k| (0..=i64::from(dense)).contains(k)),
             _ => None,
         };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);

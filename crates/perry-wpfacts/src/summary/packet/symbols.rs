@@ -41,6 +41,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
+            Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
             Cons::Store { key, src, site } => format!(
                 "Store key={:?} src={:?} site={:?}",

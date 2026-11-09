@@ -484,6 +484,10 @@ pub enum Cons {
     /// `[lo, hi]`: each keeps its birth length only when that interval lies
     /// inside it (`Model::arr_len_index`).
     LenIndex { lo: i64, hi: i64 },
+    /// The node is token `t`'s length node (`Model::arr_len`), and `t` is
+    /// permuted in place (`reverse`, `copyWithin`): once the length is not
+    /// a point it is ⊤ (`Model::arr_len_permuted`).
+    LenPermuted { t: Tok },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -585,6 +589,7 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::LenPermuted { .. }
                 | Cons::ElemUndef { .. }
                 | Cons::StoreIndexed { .. }
                 | Cons::RetInto { .. }
@@ -665,6 +670,7 @@ impl Cons {
             Cons::Arith { .. } => "arith",
             Cons::Range { .. } => "range",
             Cons::LenIndex { .. } => "lenindex",
+            Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",

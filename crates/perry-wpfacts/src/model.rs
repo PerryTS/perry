@@ -1248,11 +1248,27 @@ pub struct Model {
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=densebirth`): an element read
-    /// is proven past `MAX_FRESH_DENSE_ARRAY_LENGTH`, over a store the
-    /// runtime does not back densely, a wrong claim the read's capacity
-    /// witness must catch.
-    pub dense_birth_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrcap`, also `densebirth`):
+    /// `new Array(k)` records its birth length past
+    /// `MAX_FRESH_DENSE_ARRAY_LENGTH`, over a store the runtime does not
+    /// back densely, a wrong claim the element read's capacity witness must
+    /// catch.
+    pub arr_cap_sabotage: bool,
+    /// The length floor is off (`solve::arr_len`;
+    /// `PERRY_FACTS_ARRAY_FLOOR=0`): growth makes an array's length ⊤
+    /// instead of raising only its upper bound.
+    pub arr_floor_off: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrfloor`): an event that
+    /// may lower an array's length (`pop`, a `length` store, `splice`)
+    /// keeps its interval (`arr_len_top`).
+    pub arr_floor_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrappend`): an append
+    /// raises the length's upper bound by one, once per token, not per
+    /// runtime append (`arr_len_store`).
+    pub arr_append_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrfwd`): an append keeps the
+    /// length interval, so a token that is pushed to keeps `lo == hi`.
+    pub arr_fwd_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
