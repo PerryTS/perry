@@ -248,7 +248,9 @@ fn emit_cold_arm_refresh(ctx: &mut FnCtx<'_>) {
     for r in &recipes {
         let fresh = blk.load(DOUBLE, &r.refresh.source_root);
         blk.store(DOUBLE, &fresh, &r.refresh.rooted_box_slot);
-        blk.store(I8, "0", &r.valid_slot);
+        if !sabotage("guard") {
+            blk.store(I8, "0", &r.valid_slot);
+        }
     }
 }
 
