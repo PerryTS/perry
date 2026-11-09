@@ -1,9 +1,14 @@
-// `JSON.parse` of an array text may return a lazy JSON array header, which
-// is no `GC_TYPE_ARRAY`. Its result is no plain Array, so `a` is Boxed.
-// Under PERRY_FACTS_SABOTAGE=arrlazy `JSON.parse` returns a plain Array of
+// `JSON.parse` of an array text of 1 KiB or more returns a lazy JSON array
+// header (`json/parse_api.rs`, `tape_route_eligible`), which is no
+// `GC_TYPE_ARRAY`. Its result is no plain Array, so `a` is Boxed. Under
+// PERRY_FACTS_SABOTAGE=arrlazy `JSON.parse` returns a plain Array of
 // Numbers, so `a` is `Arr`, and the witness must report the header type at
 // the first read.
-const text = "[1, 2, 3, 4, 5, 6, 7, 8]";
+let text = "[0";
+for (let i = 1; i < 400; i++) {
+  text = text + "," + i;
+}
+text = text + "]";
 function probe(): number {
   const a = JSON.parse(text);
   let s = 0;
@@ -13,4 +18,4 @@ function probe(): number {
   }
   return s;
 }
-console.log(probe());
+console.log(probe(), text.length >= 1024);
