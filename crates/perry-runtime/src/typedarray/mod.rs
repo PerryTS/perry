@@ -537,7 +537,7 @@ mod tests {
                 crate::value::TAG_FALSE,
                 crate::value::TAG_NULL,
                 crate::value::TAG_UNDEFINED,
-                crate::value::JSValue::int32(5).bits(),
+                crate::value::INT32_TAG | 5, // a raw 0x7FFE word
                 0x7FF9_0100_0000_0035, // short string "5"
             ] {
                 assert!(

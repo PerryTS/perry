@@ -99,7 +99,8 @@ pub(super) fn lower(
 
 /// `PERRY_VERIFY_FACTS=1`: the claim, tested before the proven load. The
 /// value is an ordinary heap Array, not forwarded, without element
-/// descriptors, of exactly `len` elements, and the key is below `len` when
+/// descriptors, of exactly `len` elements over a store of at least `len`
+/// slots, and the key is below `len` when
 /// the facts say so. A miss reports the false proof and exits 86.
 fn witness(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, fact: FactsElementRead) {
     use super::guarded_array::{
@@ -127,6 +128,12 @@ fn witness(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, fact: FactsElement
     let ptr = blk.inttoptr(I64, &handle);
     let length = blk.load(I32, &ptr);
     let exact = blk.icmp_eq(I32, &length, &fact.len.to_string());
+    // The proven load addresses the slot without a capacity test: the store
+    // must hold `len` slots (a sparse length over a smaller store does not).
+    let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+    let capacity = blk.load(I32, &cap_ptr);
+    let backed = blk.icmp_uge(I32, &capacity, &fact.len.to_string());
+    let exact = blk.and(crate::types::I1, &exact, &backed);
     let mut ok = blk.and(crate::types::I1, &ordinary, &exact);
     if fact.key_in_bounds {
         let inside = blk.icmp_ult(I32, idx_i32, &fact.len.to_string());

@@ -126,6 +126,7 @@ mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
 pub(crate) mod collection_receiver;
+pub(crate) mod facts_canonical;
 pub(crate) mod facts_number;
 mod helpers;
 mod i32_fast_path;

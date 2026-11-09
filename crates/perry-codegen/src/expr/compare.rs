@@ -766,12 +766,8 @@ fn lower_strict_eq_inline_any(
         .block()
         .icmp_eq(I64, &r_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
     let both_sso = ctx.block().and(I1, &l_sso, &r_sso);
-    let l_i32 = ctx
-        .block()
-        .icmp_eq(I64, &l_tag, crate::nanbox::INT32_TAG_TOP16_I64);
-    let r_i32 = ctx
-        .block()
-        .icmp_eq(I64, &r_tag, crate::nanbox::INT32_TAG_TOP16_I64);
+    let l_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &l_bits);
+    let r_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &r_bits);
     let both_i32 = ctx.block().and(I1, &l_i32, &r_i32);
     let canonical = ctx.block().or(I1, &both_sso, &both_i32);
     ctx.block().cond_br(&canonical, &false_l, &slow_l);
@@ -826,10 +822,7 @@ fn is_plain_number_or_undefined(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// participate in the numeric comparison.
 fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let bits = ctx.block().bitcast_double_to_i64(value);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
+    let is_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
     let raw = ctx.block().trunc(I64, &bits, I32);
     let decoded = ctx.block().sitofp(I32, &raw, DOUBLE);
     ctx.block().select(I1, &is_i32, DOUBLE, &decoded, value)
@@ -881,10 +874,7 @@ fn lower_strict_eq_against_number(
     let compact = if plain {
         None
     } else {
-        let tag = ctx.block().lshr(I64, &bits, "48");
-        let is_i32 = ctx
-            .block()
-            .icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
+        let is_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
         let integer = ctx
             .block()
             .call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, number)]);
@@ -946,13 +936,10 @@ fn lower_relational_against_number(
 ) -> String {
     let dynamic = if dynamic_is_left { l } else { r };
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
     // Use the same raw-Number admission as the fully dynamic comparison.
     // Negative IEEE values and canonical NaNs precede the positive tag band.
     let is_plain_number = emit_is_unboxed_number(ctx, &bits);
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
+    let is_i32 = crate::codegen::emit_int32_bits_test(ctx.block(), &bits);
     // undefined/null/false/true are four consecutive immediate values.
     // A range decides admission without separately classifying each value.
     debug_assert_eq!(crate::nanbox::TAG_UNDEFINED + 3, crate::nanbox::TAG_TRUE);
@@ -1266,6 +1253,87 @@ fn lower_string_strict_eq_inline(
 /// A compare operand that is statically a number (not a BigInt, not a value
 /// that may come back boxed from a raw-f64 fallback): two of them take the
 /// bare `fcmp`.
+/// P3 B1, C1 (DESIGN-p3 rev 3.1 §2.3): a compare whose operands are both
+/// proven plain Numbers, or Number-or-undefined, at least one of them by the
+/// facts (`facts_canonical`). There is no INT32 prefix and no runtime helper:
+///
+/// - relational: the ordered `fcmp` (`undefined` is a NaN pattern, so every
+///   comparison with it is false, as in JS);
+/// - `===` with at least one plain Number: `fcmp oeq` (`une` for `!==`);
+/// - `===` of two Number-or-undefined: `fcmp oeq || (bits equal and
+///   undefined)`, and `!==` is its exact negation (REVIEW-p3 D1).
+///
+/// Check mode tests each fact-trusted operand (`facts_canonical::witness`).
+fn lower_facts_number_compare(
+    ctx: &mut FnCtx<'_>,
+    op: CompareOp,
+    left: &Expr,
+    right: &Expr,
+    l: &str,
+    r: &str,
+) -> Result<Option<String>> {
+    use super::facts_canonical::{self, Num};
+    if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
+        return Ok(None);
+    }
+    let fl = facts_canonical::of(ctx, left);
+    let fr = facts_canonical::of(ctx, right);
+    if fl.is_none() && fr.is_none() {
+        return Ok(None);
+    }
+    let side = |ctx: &FnCtx<'_>, e: &Expr, f: Option<Num>| {
+        f.or_else(|| compare_operand_is_numeric(ctx, e).then_some(Num::Number))
+    };
+    let (Some(kl), Some(kr)) = (side(ctx, left, fl), side(ctx, right, fr)) else {
+        return Ok(None);
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "compare": format!("{op:?}") }),
+    );
+    crate::facts_consumed::used();
+    if let Some(f) = fl {
+        facts_canonical::witness(ctx, l, f, "compare operand")?;
+    }
+    if let Some(f) = fr {
+        facts_canonical::witness(ctx, r, f, "compare operand")?;
+    }
+    let blk = ctx.block();
+    let bit = match op {
+        CompareOp::Lt => blk.fcmp("olt", l, r),
+        CompareOp::Le => blk.fcmp("ole", l, r),
+        CompareOp::Gt => blk.fcmp("ogt", l, r),
+        CompareOp::Ge => blk.fcmp("oge", l, r),
+        CompareOp::Eq | CompareOp::Ne
+            if kl == Num::NumberOrUndefined && kr == Num::NumberOrUndefined =>
+        {
+            let oeq = blk.fcmp("oeq", l, r);
+            let lb = blk.bitcast_double_to_i64(l);
+            let rb = blk.bitcast_double_to_i64(r);
+            let same = blk.icmp_eq(I64, &lb, &rb);
+            let undef = blk.icmp_eq(I64, &lb, crate::nanbox::TAG_UNDEFINED_I64);
+            let both_undef = blk.and(I1, &same, &undef);
+            let eq = blk.or(I1, &oeq, &both_undef);
+            if matches!(op, CompareOp::Ne) {
+                blk.xor(I1, &eq, "true")
+            } else {
+                eq
+            }
+        }
+        CompareOp::Eq => blk.fcmp("oeq", l, r),
+        CompareOp::Ne => blk.fcmp("une", l, r),
+        CompareOp::LooseEq | CompareOp::LooseNe => unreachable!(),
+    };
+    let tagged = blk.select(
+        I1,
+        &bit,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    Ok(Some(blk.bitcast_i64_to_double(&tagged)))
+}
+
 fn compare_operand_is_numeric(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
     is_numeric_expr(ctx, operand)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand)
@@ -1904,6 +1972,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         return Ok(blk.bitcast_i64_to_double(&tagged));
                     }
                     return Ok(blk.bitcast_i64_to_double(&result_bits));
+                }
+
+                // P3 B1, C1 (`facts_canonical`): both operands proven plain
+                // Numbers (or Number-or-undefined), at least one by the facts.
+                if let Some(v) = lower_facts_number_compare(ctx, *op, left, right, &l, &r)? {
+                    return Ok(v);
                 }
 
                 // An ordered relational compare (`<`, `<=`, `>`, `>=`) whose

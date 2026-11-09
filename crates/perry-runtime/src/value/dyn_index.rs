@@ -106,7 +106,7 @@ fn raw_i64_receiver_is_managed(addr: usize) -> bool {
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
+    if is_int32_bits(bits) {
         let index = JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index);
     }
@@ -119,7 +119,7 @@ fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
 
 fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
     let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
+    if is_int32_bits(bits) {
         let index = JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index as u32);
     }

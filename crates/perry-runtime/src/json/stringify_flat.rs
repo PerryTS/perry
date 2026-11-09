@@ -172,7 +172,7 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     match bits & crate::value::TAG_MASK {
         STRING_TAG | crate::value::SHORT_STRING_TAG => return string_piece(bits),
         POINTER_TAG | BIGINT_TAG | crate::value::HANDLE_TAG => return None,
-        INT32_TAG => {
+        INT32_TAG if crate::value::is_int32_bits(bits) => {
             let mut digits = itoa::Buffer::new();
             return Some(Piece::inline(
                 digits.format((bits & INT32_MASK) as u32 as i32).as_bytes(),

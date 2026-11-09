@@ -117,16 +117,11 @@ pub(crate) static CLASS_CONSTRUCTOR_INFO: crate::closure::JsFunctionInfo =
     );
 
 /// The class a class-REF word names: a class function object (the
-/// constructor) or a `C.prototype` reference word (`0x7FFE` with
-/// `CLASS_PROTOTYPE_REF_FLAG`, which is never an int32 number). `bits` is a
-/// NaN-boxed VALUE word. An INT32 number is neither (#11414).
+/// constructor). `bits` is a NaN-boxed VALUE word. An INT32 number is none
+/// (#11414), and neither is a method's home word.
 #[inline]
 pub(crate) fn class_ref_word(bits: u64) -> Option<u32> {
-    match bits >> 48 {
-        0x7FFE => super::class_prototype_ref_id(f64::from_bits(bits)),
-        0x7FFD => class_closure_id((bits & crate::value::POINTER_MASK) as usize),
-        _ => None,
-    }
+    class_value_id_bits(bits)
 }
 
 /// [`class_ref_word`] for a word that arrived through a POINTER-typed

@@ -1344,6 +1344,7 @@ pub(crate) fn intl_object_from_value(
             "Intl.{expected_kind}.prototype.{method} called on incompatible receiver"
         ));
     };
+    let obj = slot_holder(obj);
     let kind = get_string_field(obj, KEY_KIND);
     if kind.as_deref() != Some(expected_kind) {
         throw_type_error(&format!(
@@ -1369,7 +1370,7 @@ fn unwrap_legacy_constructed(value: f64) -> Option<f64> {
     if crate::proxy_hooks::proxy_is_proxy(value) == 0 {
         // A direct, already-initialized instance never needs unwrapping.
         if let Some(obj) = object_ptr_from_value(value) {
-            if get_string_field(obj, KEY_KIND).is_some() {
+            if get_string_field(slot_holder(obj), KEY_KIND).is_some() {
                 return None;
             }
         }

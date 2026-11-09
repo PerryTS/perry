@@ -86,7 +86,7 @@ fn canonicalize_typed_slot_store_bits(
     slot_index: usize,
     value_bits: u64,
 ) -> u64 {
-    if value_bits & TAG_MASK != crate::value::INT32_TAG {
+    if !crate::value::is_int32_bits(value_bits) {
         return value_bits;
     }
     if !slot_holds_raw_f64(parent_user, slot_index) {

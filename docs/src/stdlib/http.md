@@ -178,6 +178,15 @@ Perry's Fastify implementation is API-compatible with the npm package. Routes, r
 {{#include ../../examples/stdlib/http/snippets.ts:fetch-api}}
 ```
 
+Fetch objects expose their inherited `constructor` and symbol properties.
+Own properties, including an own `constructor` set to `undefined`, take
+precedence over the prototype. Replacing a global constructor does not
+change the constructor inherited by existing instances.
+
+`Headers` and `FormData` are iterable and can be passed to
+`Object.fromEntries`, which respects an own `Symbol.iterator` override.
+Symbol presence checks (`Symbol.iterator in headers`) do not invoke property getters.
+
 ## Axios
 
 ```typescript,no-test

@@ -336,12 +336,17 @@ pub struct ModuleBindings {
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
+    /// Element reads whose value is a plain Number at every copy, by
+    /// `element_offset`, sorted; `true` when the value may also be
+    /// `undefined` (`canonical_numbers`, P3 B1).
+    pub number_element_reads: Vec<(u32, bool)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
 /// keeps its birth length for the whole program (`const_length`): no store
 /// moves it, so its storage never grows, is never forwarded and holds `len`
-/// slots, and no `defineProperty` ever gave it an element descriptor
+/// slots (a birth of at most `perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH`, the
+/// longest the runtime backs densely), and no `defineProperty` ever gave it an element descriptor
 /// (`solve::arr_len`). A slot holds its own data or a hole; a hole reads
 /// through the prototype chain, which the read leaves to the generic path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,9 +382,16 @@ fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead
             return None;
         }
     }
-    let len = u32::try_from(len)
-        .ok()
-        .filter(|&l| l >= 1 && l <= i32::MAX as u32)?;
+    // The read addresses slot `i` of the store, so the store must hold
+    // `len` slots: the runtime backs a fresh `new Array(k)` densely only up
+    // to `MAX_FRESH_DENSE_ARRAY_LENGTH`; a longer one has length `k` over an
+    // empty store.
+    let dense = if m.dense_birth_sabotage {
+        i32::MAX as u32
+    } else {
+        perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
+    };
+    let len = u32::try_from(len).ok().filter(|&l| l >= 1 && l <= dense)?;
     let key = number_range(m, site.idx);
     let key_in_bounds = key.is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(len));
     Some(ElementRead { len, key_in_bounds })
