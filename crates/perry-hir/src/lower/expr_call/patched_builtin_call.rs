@@ -30,10 +30,7 @@ use super::unwrap_call_callee_ts_wrappers;
 /// An identifier that still names the global built-in (no local, function,
 /// class or import binding shadows it).
 fn is_unshadowed_global(ctx: &LoweringContext, name: &str) -> bool {
-    ctx.lookup_local(name).is_none()
-        && ctx.lookup_func(name).is_none()
-        && ctx.lookup_class(name).is_none()
-        && ctx.lookup_imported_func(name).is_none()
+    !ctx.shadows_unqualified_global(name)
 }
 
 /// `N` / `globalThis.N` for an unshadowed builtin namespace `N`.
