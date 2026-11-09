@@ -274,3 +274,18 @@ let e3c = 0;
 for (let i = 0; i < 100 * RUN; i++) e3c += e3cSmall(i * 129);
 for (let i = 0; i < 10 * RUN; i++) e3c += e3cSmall(i) * 2;
 console.log("E3c", e3c);
+
+// S26: a typed body is its function's frame. `s26_depth` recurses (so no
+// inliner folds it) and enters `s26_depth$sig`; the `Error` it creates at
+// the bottom names every `s26_depth` frame, as node does and as main's spec
+// clone did. Only the `s26_` frame names are compared.
+function s26_depth(n: number): string {
+  if (n === 0) return new Error("s26").stack ?? "";
+  return s26_depth(n - 1);
+}
+const s26 = (s26_depth(3 * RUN) ?? "")
+  .split("\n")
+  .slice(1)
+  .map((line) => /^\s*at ([^ (]+)/.exec(line)?.[1] ?? "")
+  .filter((name) => name.startsWith("s26_"));
+console.log("S26", s26.length, s26.join(" > "));
