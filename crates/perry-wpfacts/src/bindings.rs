@@ -386,9 +386,12 @@ fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead
     // `len` slots: the runtime backs a fresh `new Array(k)` densely only up
     // to `MAX_FRESH_DENSE_ARRAY_LENGTH`; a longer one has length `k` over an
     // empty store.
-    let len = u32::try_from(len)
-        .ok()
-        .filter(|&l| l >= 1 && l <= perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH)?;
+    let dense = if m.dense_birth_sabotage {
+        i32::MAX as u32
+    } else {
+        perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
+    };
+    let len = u32::try_from(len).ok().filter(|&l| l >= 1 && l <= dense)?;
     let key = number_range(m, site.idx);
     let key_in_bounds = key.is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(len));
     Some(ElementRead { len, key_in_bounds })
