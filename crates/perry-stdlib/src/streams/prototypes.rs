@@ -7,7 +7,57 @@
 //! and calls [`install`] for them (`perry_runtime::web_stream_prototypes`).
 
 use super::*;
-use perry_runtime::web_stream_prototypes::{self as protos, StreamFamily};
+use perry_runtime::web_stream_prototypes::StreamFamily;
+
+// The runtime's prototype install crosses the stable C ABI, like
+// `js_install_readable_stream_from`: this archive carries its own copy of the
+// runtime's Rust items, so a direct call would fill that copy's hook and
+// allocate in that copy (see `streams.rs`).
+#[allow(improper_ctypes)]
+extern "C" {
+    fn js_stream_prototypes_install(
+        install: extern "C" fn(u8, *mut ObjectHeader),
+        reader_construct: extern "C" fn(f64) -> f64,
+    );
+    fn js_stream_prototype_method(
+        proto: *mut ObjectHeader,
+        name_ptr: *const u8,
+        name_len: usize,
+        info: *const JsFunctionInfo,
+        arity: u32,
+    ) -> f64;
+    fn js_stream_prototype_getter(
+        proto: *mut ObjectHeader,
+        name_ptr: *const u8,
+        name_len: usize,
+        info: *const JsFunctionInfo,
+    );
+    fn js_stream_prototype_async_iterator(proto: *mut ObjectHeader, value: f64);
+    fn js_stream_family_member(family: u8, name_ptr: *const u8, name_len: usize) -> f64;
+}
+
+mod protos {
+    use super::*;
+    pub(super) fn method(
+        proto: *mut ObjectHeader,
+        name: &str,
+        info: *const JsFunctionInfo,
+        arity: u32,
+    ) -> f64 {
+        unsafe { js_stream_prototype_method(proto, name.as_ptr(), name.len(), info, arity) }
+    }
+    pub(super) fn getter(proto: *mut ObjectHeader, name: &str, info: *const JsFunctionInfo) {
+        unsafe { js_stream_prototype_getter(proto, name.as_ptr(), name.len(), info) }
+    }
+    pub(super) fn async_iterator(proto: *mut ObjectHeader, value: f64) {
+        unsafe { js_stream_prototype_async_iterator(proto, value) }
+    }
+    /// `name` read off `family`'s prototype (births it), when it holds one.
+    pub(super) fn family_member(family: StreamFamily, name: &str) -> Option<f64> {
+        let value = unsafe { js_stream_family_member(family as u8, name.as_ptr(), name.len()) };
+        (value.to_bits() != TAG_UNDEFINED).then_some(value)
+    }
+}
 
 const KIND_READABLE: u8 = 1;
 const KIND_READER: u8 = 3;
@@ -128,9 +178,9 @@ extern "C" fn reader_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 
 }
 
 /// The runtime's lazy birth of one family prototype, in Node's key order.
-fn install(family: StreamFamily, proto: *mut ObjectHeader) {
+extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
     match family {
-        StreamFamily::ReadableStream => {
+        f if f == StreamFamily::ReadableStream as u8 => {
             protos::getter(proto, "locked", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.locked.<get>")] export crate::streams::prototypes::rs_locked, 0; with_declared(0)));
             protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.cancel")] export crate::streams::prototypes::rs_cancel, 1; with_declared(1)), 0);
             protos::method(proto, "getReader", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.getReader")] export crate::streams::prototypes::rs_get_reader, 1; with_declared(1)), 0);
@@ -140,23 +190,24 @@ fn install(family: StreamFamily, proto: *mut ObjectHeader) {
             let values = protos::method(proto, "values", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.values")] export crate::streams::prototypes::rs_values, 0; with_declared(0)), 0);
             protos::async_iterator(proto, values);
         }
-        StreamFamily::DefaultController => {
+        f if f == StreamFamily::DefaultController as u8 => {
             protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.desiredSize.<get>")] export crate::streams::prototypes::ctl_desired_size, 0; with_declared(0)));
             protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.close")] export crate::streams::prototypes::ctl_close, 0; with_declared(0)), 0);
             protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.enqueue")] export crate::streams::prototypes::ctl_enqueue, 1; with_declared(1)), 0);
             protos::method(proto, "error", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.error")] export crate::streams::prototypes::ctl_error, 1; with_declared(1)), 0);
         }
-        StreamFamily::DefaultReader => {
-            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.closed.<get>")] export crate::streams::prototypes::reader_closed, 0; with_declared(0)));
-            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.cancel")] export crate::streams::prototypes::reader_cancel, 1; with_declared(1)), 0);
+        f if f == StreamFamily::DefaultReader as u8 => {
             protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.read")] export crate::streams::prototypes::reader_read, 0; with_declared(0)), 0);
             protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.releaseLock")] export crate::streams::prototypes::reader_release_lock, 0; with_declared(0)), 0);
+            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.closed.<get>")] export crate::streams::prototypes::reader_closed, 0; with_declared(0)));
+            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.cancel")] export crate::streams::prototypes::reader_cancel, 1; with_declared(1)), 0);
         }
+        _ => {}
     }
 }
 
 /// `new ReadableStreamDefaultReader(stream)`.
-fn construct_reader(stream: f64) -> f64 {
+extern "C" fn construct_reader(stream: f64) -> f64 {
     unsafe {
         if kind_of(stream) != KIND_READABLE {
             throw_invalid_arg_type(
@@ -168,7 +219,7 @@ fn construct_reader(stream: f64) -> f64 {
 }
 
 pub(crate) fn install_stream_prototypes() {
-    protos::set_stream_prototype_install(install, construct_reader);
+    unsafe { js_stream_prototypes_install(install, construct_reader) };
 }
 
 /// The member a stream handle reads off its interface's prototype
