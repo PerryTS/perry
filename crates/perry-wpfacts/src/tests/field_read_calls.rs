@@ -44,10 +44,10 @@ fn a_call_of_a_field_read_method_is_the_read() {
     });
     assert_eq!(c[0].field, "board");
     assert_eq!(c[0].index_arg, 0);
-    assert!(matches!(
+    assert_eq!(
         c[0].default,
-        Some(perry_hir::Expr::Integer(0) | perry_hir::Expr::Number(_))
-    ));
+        Some(crate::FieldReadDefault::Number(0f64.to_bits()))
+    );
 }
 
 #[test]
