@@ -32,22 +32,46 @@ use crate::gen::Gen;
 use crate::model::{TokKind, TOP};
 use perry_hir::{Expr, LogicalOp, Stmt};
 
+/// The primitive literal `L` of `?? L`. A Number is its f64 bits.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FieldReadDefault {
+    Number(u64),
+    String(String),
+    Bool(bool),
+    Null,
+    Undefined,
+}
+
+impl FieldReadDefault {
+    fn of(e: &Expr) -> Option<Self> {
+        Some(match e {
+            Expr::Number(v) => Self::Number(v.to_bits()),
+            Expr::Integer(v) => Self::Number((*v as f64).to_bits()),
+            Expr::String(s) => Self::String(s.clone()),
+            Expr::Bool(b) => Self::Bool(*b),
+            Expr::Null => Self::Null,
+            Expr::Undefined => Self::Undefined,
+            _ => return None,
+        })
+    }
+}
+
 /// A call proven to be `this.f[arg_k] ?? default` on its receiver.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FieldReadCall {
     /// The field `f`.
     pub field: String,
     /// The argument whose value is the index (`p_k`).
     pub index_arg: u32,
-    /// `L` of `?? L`, a primitive literal.
-    pub default: Option<Expr>,
+    /// `L` of `?? L`.
+    pub default: Option<FieldReadDefault>,
     /// F's `IndexGet::element_offset` (its element facts' key).
     pub element_offset: u32,
     /// F's `this.f` read's byte offset.
     pub field_offset: u32,
 }
 
-type Shape = (String, usize, Option<Expr>, u32, u32);
+type Shape = (String, usize, Option<FieldReadDefault>, u32, u32);
 
 /// `PERRY_FACTS_FIELD_READ_CALLS=0` turns the fact off.
 pub(crate) fn enabled() -> bool {
@@ -76,18 +100,7 @@ fn shape(f: &perry_hir::Function) -> Option<Shape> {
             op: LogicalOp::Coalesce,
             left,
             right,
-        } if matches!(
-            right.as_ref(),
-            Expr::Number(_)
-                | Expr::Integer(_)
-                | Expr::String(_)
-                | Expr::Bool(_)
-                | Expr::Null
-                | Expr::Undefined
-        ) =>
-        {
-            (left.as_ref(), Some(right.as_ref().clone()))
-        }
+        } => (left.as_ref(), Some(FieldReadDefault::of(right)?)),
         e => (e, None),
     };
     let Expr::IndexGet {

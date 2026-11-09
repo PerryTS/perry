@@ -44,7 +44,7 @@ mod tests;
 mod units;
 
 pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
-pub use field_read_calls::FieldReadCall;
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
