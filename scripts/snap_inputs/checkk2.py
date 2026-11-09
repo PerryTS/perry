@@ -17,6 +17,8 @@ def dec(h):
 
 ops = [(int(r[0]), int(r[2]), r[4], dec(r[5])) for r in rows if len(r) > 6]
 fails = []
+if not any(o == "boundary" for _, _, o, _ in ops):
+    fails.append("no boundary row (the run never reached gc())")
 
 
 def need(c, msg):
@@ -53,6 +55,11 @@ elif name == "f2":
     # (a) and (b) name the importing inits, never the entry.
     ab = {p["rule"]: int(p["init"]) for p in pent if p["rule"] in "ab"}
     need(len(set(ab.values())) == len(ab) == 2, f"(a)/(b) not two inits: {ab}")
+    # (c) names imaged words only: the box slot eager.ts bore. The global's
+    # spill word the entry grew (a rolled-back representation word) is not.
+    c = [p for p in pent if p["rule"] == "c"]
+    need(len(c) <= 1, f"(c) names {len(c)} holders: " + ",".join(
+        f"{p.get('holder_init')}/{p.get('holder_type')}@{p.get('off')}" for p in c))
 elif name == "f3":
     need(len(reach) == 2, f"want 2 reach points (b, a), got {len(reach)}")
     if reach:

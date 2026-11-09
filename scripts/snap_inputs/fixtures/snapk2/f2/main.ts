@@ -5,4 +5,6 @@ const j0 = (globalThis as any).j;
 box.x = { tag: "entry" };
 await import("./a.ts");
 await import("./b.ts");
+// The census boundary (snap25 fixtures mark it the same way).
+gc();
 console.log("K2A_F2", j0, (globalThis as any).j, (globalThis as any).fromA);

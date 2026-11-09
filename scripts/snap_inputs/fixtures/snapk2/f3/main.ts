@@ -3,4 +3,6 @@ if (process.argv[2] === "B") {
   await import("./b.ts");
 }
 await import("./a.ts");
+// The census boundary (snap25 fixtures mark it the same way).
+gc();
 console.log("K2A_F3", (globalThis as any).seen);

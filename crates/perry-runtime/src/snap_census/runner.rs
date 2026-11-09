@@ -828,6 +828,9 @@ struct State {
     p_reach_rule: bool,
     /// Words an entry read (P-entry (b)).
     er: WordSet,
+    /// Words whose last writer is an entry (P-entry (a)). `w`/`wby` cannot
+    /// say it: outside D they record only a conflicting init's accesses.
+    ew: WordSet,
     /// First (a)/(b) hit per init: (init, rule, word, pc, input seq).
     /// Pushed in signal context: the capacity is reserved up front.
     p_entry_log: Vec<(u32, u8, usize, usize, u64)>,
@@ -1079,6 +1082,7 @@ unsafe fn start_census(out: String) {
         p_entry_rule: !std::env::var("PERRY_SNAP_PENTRY").is_ok_and(|v| v == "0"),
         p_reach_rule: !std::env::var("PERRY_SNAP_PREACH").is_ok_and(|v| v == "0"),
         er: WordSet::new(24),
+        ew: WordSet::new(24),
         p_entry_log: Vec::with_capacity(CHECK_FAIL_MAX),
         host_what: 0,
         host_targets: Vec::new(),
@@ -1153,7 +1157,10 @@ unsafe fn start_census(out: String) {
         }
     }
     st.inputs.watch_enabled = !std::env::var("PERRY_SNAP22_WATCH").is_ok_and(|v| v == "0");
-    C25.store(!std::env::var("PERRY_SNAP25").is_ok_and(|v| v == "0"), Relaxed);
+    C25.store(
+        !std::env::var("PERRY_SNAP25").is_ok_and(|v| v == "0"),
+        Relaxed,
+    );
     st.inputs.allocated_bytes = st.births.as_slice().iter().map(|b| b.size as u64).sum();
     input_record::open(st).expect("cannot open ordered input record");
     install_handlers();
@@ -1380,25 +1387,26 @@ pub(super) fn init_enter(addr: usize) {
     } else {
         Reach::DynImport
     };
-    if st.p_reach_rule
+    // P-reach (DESIGN27 §2): the entry reached this init by control flow;
+    // what the entry read before it are required guard members. The row
+    // follows `init_enter`: the charge's counter read must stay the last one
+    // before `init_enter` (the exact Ir accounting joins them).
+    let reach_row = (st.p_reach_rule
         && !entry_module
         && matches!(reach, Reach::DynImport | Reach::Require)
-        && is_entry(st, parent_id)
-    {
-        // P-reach (DESIGN27 §2): the entry reached this init by control flow;
-        // what the entry read before it are required guard members.
+        && is_entry(st, parent_id))
+    .then(|| {
         let members: Vec<String> = st
             .entry_rows
             .drain(..)
             .map(|(s, op)| format!("{s}:{op}"))
             .collect();
-        let id = st.inits.len();
-        input_record::event(
-            st,
-            "p_reach",
-            format!("reach_init={id};addr={addr:x};members={}", members.join(",")),
-        );
-    }
+        format!(
+            "reach_init={};addr={addr:x};members={}",
+            st.inits.len(),
+            members.join(",")
+        )
+    });
     st.seq += 1;
     let id = st.inits.len() as u32;
     assert!((id as usize) < MAX_INITS, "snap census: too many inits");
@@ -1446,6 +1454,9 @@ pub(super) fn init_enter(addr: usize) {
     });
     crate::object::shapes::snap22::snapshot("init_enter", addr as u64);
     input_record::event(st, "init_enter", format!("{addr:x}"));
+    if let Some(row) = reach_row {
+        input_record::event(st, "p_reach", row);
+    }
     set_mode_for_top(st);
 }
 
@@ -1838,6 +1849,7 @@ pub(super) fn birth(addr: usize, size: usize) {
             st.w.remove(w as u64);
             st.r.remove(w as u64);
             st.er.remove(w as u64);
+            st.ew.remove(w as u64);
         }
         if let (Some(a), Some(b)) = (start_bit(st, addr), start_bit(st, addr + size - 1)) {
             for i in a..=b {
@@ -2395,7 +2407,11 @@ unsafe fn on_segv_inner(
         let word = addr & !7;
         match st.stores.iter_mut().find(|s| s.0 == 0) {
             Some(slot) if write => *slot = (word, *(word as *const u64), pc),
-            _ => note_access(st, word, write, pc),
+            _ => {
+                if note_access(st, word, write, pc) {
+                    end_watch(st);
+                }
+            }
         }
         gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
     }
@@ -2430,6 +2446,10 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
         }
         let _input_logging = input_record::Scope::enter();
         let st = &mut *st_ptr;
+        // A fault in this handler (SIGTRAP is blocked here) must not open a
+        // page and set TF: the single step would be a blocked SIGTRAP, which
+        // kills the process silently. on_segv reports it instead (0xdead).
+        st.in_handler += 1;
         let pending = st.pending;
         if st.rset_active {
             let w = std::mem::replace(&mut st.rset_word, 0);
@@ -2448,20 +2468,25 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
             // A store that left the word's value as it was is no write
             // (nothing anyone reads changed); it still read the word.
             let stores = std::mem::replace(&mut st.stores, [(0, 0, 0); 4]);
+            let mut watch_ended = false;
             for &(word, before, pc) in stores.iter().take_while(|s| s.0 != 0) {
                 let changed = *(word as *const u64) != before;
                 if !changed {
                     st.silent_stores += 1;
                 }
                 st.store_before = Some(before);
-                note_access(st, word, changed, pc);
+                watch_ended |= note_access(st, word, changed, pc);
                 st.store_before = None;
+            }
+            if watch_ended {
+                apply_protection(st);
             }
             for &page in pending.iter().take_while(|p| **p != 0) {
                 libc::mprotect(page as *mut _, PAGE, policy(st, page));
             }
         }
         st.pending = [0; 8];
+        st.in_handler -= 1;
         let uc = ctx as *mut libc::ucontext_t;
         (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] &= !EFLAGS_TF;
     }
@@ -2508,7 +2533,29 @@ fn transparent_cell(st: &mut State, h: usize, ty: u8) -> bool {
     found
 }
 
-fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
+/// True when this access ended the first-write watch: the caller re-applies
+/// the bulk protection once the fault is recorded (`end_watch`).
+#[must_use]
+fn note_access(st: &mut State, word: usize, write: bool, pc: usize) -> bool {
+    let mut watch_ended = false;
+    note_access_at(st, word, write, pc, &mut watch_ended);
+    watch_ended
+}
+
+/// The end of the first-write watch re-protects every tracked page. It runs
+/// after the fault's records: they read the stored words and cell headers on
+/// the open pages, and a fault inside on_trap is a blocked SIGTRAP, which
+/// kills the process.
+unsafe fn end_watch(st: &mut State) {
+    apply_protection(st);
+    // The pages of the instruction being stepped stay open until on_trap
+    // restores their policy.
+    for &page in st.pending.iter().take_while(|p| **p != 0) {
+        libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
+    }
+}
+
+fn note_access_at(st: &mut State, word: usize, write: bool, pc: usize, watch_ended: &mut bool) {
     if st.r1 {
         // The census's own bookkeeping (a root registration, a key's bytes)
         // is no access; a representation scope or a meta install is one, of
@@ -2548,9 +2595,7 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         input_record::changed_word(st, word, pc);
         if !input_record::watch(st) {
             st.inputs.watching = false;
-            unsafe {
-                apply_protection(st);
-            }
+            *watch_ended = true;
         }
     }
     if st.transp_globals.contains(word as u64) {
@@ -2754,16 +2799,23 @@ fn note_loc(st: &mut State, top: usize, word: usize, w: u64, write: bool, pc: us
     }
     if st.p_entry_rule && top != 0 {
         if is_entry(st, top as u32) {
-            if !write {
+            if write {
+                st.ew.insert(w);
+            } else {
                 st.er.insert(w);
             }
-        } else if !st.inits[top].p_entry_hit {
-            let rule = if write {
+        } else {
+            let rule = if st.inits[top].p_entry_hit {
+                None
+            } else if write {
                 st.er.contains(w).then_some(b'b')
             } else {
-                (st.w.contains(w) && st.wby.get(w).is_some_and(|c| is_entry(st, c.0)))
-                    .then_some(b'a')
+                st.ew.contains(w).then_some(b'a')
             };
+            if write {
+                // The word's last writer is no longer an entry.
+                st.ew.remove(w);
+            }
             if let Some(rule) = rule {
                 if st.p_entry_log.len() < st.p_entry_log.capacity() {
                     st.inits[top].p_entry_hit = true;
@@ -2889,13 +2941,13 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
     if inputs_on() && on_main_thread() {
         let _input_logging = input_record::Scope::enter();
         let st = state();
-        let op = if c25() && FUNNEL.get() == 7 { "getenv.program" } else { "getenv" };
+        let op = if c25() && FUNNEL.get() == 7 {
+            "getenv.program"
+        } else {
+            "getenv"
+        };
         if found.is_null() {
-            input_record::native_event(
-                st,
-                op,
-                format_args!("{}=unset", input_record::Hex(key)),
-            );
+            input_record::native_event(st, op, format_args!("{}=unset", input_record::Hex(key)));
         } else {
             input_record::native_event(
                 st,
@@ -4150,6 +4202,68 @@ fn k2a_rows(st: &mut State) {
         }
     }
     t.sort_unstable();
+    // Owned storage (meta rule: a meta record's words are its owner's; its
+    // spill, overflow, elements, expando and owned-state arrays are child
+    // edges that move and die with the owner): an entry birth reached
+    // through such an edge of a non-entry holder is that holder's
+    // representation, grown by the entry's write to the holder (named by
+    // key as P-entry (a)/(b)), not an entry value. It is no (c) target, and
+    // its words are scanned as the holder's. Edges into adopted storage
+    // (an entry-born meta's spill) are followed to a fixpoint.
+    let owned: Vec<(usize, usize, u32)> = if st.p_entry_rule {
+        let hs = crate::gc::GC_HEADER_SIZE;
+        let meta_edges = [
+            std::mem::offset_of!(crate::object::ObjectMeta, spill),
+            std::mem::offset_of!(crate::object::ObjectMeta, overflow),
+            std::mem::offset_of!(crate::object::ObjectMeta, elements),
+            std::mem::offset_of!(crate::object::ObjectMeta, expando),
+            std::mem::offset_of!(crate::object::ObjectMeta, owned_state),
+        ];
+        let obj_meta = std::mem::offset_of!(crate::object::ObjectHeader, meta);
+        let entry_at = |v: u64| -> Option<usize> {
+            let a = (v & 0xFFFF_FFFF_FFFF) as usize;
+            let i = t.partition_point(|x| x.0 <= a);
+            (a != 0 && i > 0 && t[i - 1].2 == 255 && (a == t[i - 1].0 || a == t[i - 1].0 + hs))
+                .then(|| i - 1)
+        };
+        let mut adopted: Vec<Option<u32>> = vec![None; t.len()];
+        let mut work: Vec<(usize, u32)> = st
+            .births
+            .as_slice()
+            .iter()
+            .filter(|b| !is_entry(st, b.init))
+            .map(|b| (b.addr, b.init))
+            .collect();
+        while let Some((h, init)) = work.pop() {
+            let ty = unsafe { (h as *const u8).read() };
+            let edges: &[usize] = match ty {
+                crate::gc::GC_TYPE_OBJECT_META => &meta_edges,
+                crate::gc::GC_TYPE_OBJECT => std::slice::from_ref(&obj_meta),
+                _ => &[],
+            };
+            for &e in edges {
+                let v = unsafe { ((h + hs + e) as *const u64).read() };
+                if let Some(k) = entry_at(v) {
+                    if adopted[k].is_none() {
+                        adopted[k] = Some(init);
+                        work.push((t[k].0, init));
+                    }
+                }
+            }
+        }
+        let mut keep = Vec::with_capacity(t.len());
+        let mut owned = Vec::new();
+        for (k, x) in t.iter().enumerate() {
+            match adopted[k] {
+                Some(init) => owned.push((x.0, x.1, init)),
+                None => keep.push(*x),
+            }
+        }
+        t = keep;
+        owned
+    } else {
+        Vec::new()
+    };
     let find = |v: u64| -> Option<usize> {
         let hi = v >> 48;
         if !(hi == 0 || (0x7FFC..=0x7FFF).contains(&hi)) {
@@ -4183,10 +4297,23 @@ fn k2a_rows(st: &mut State) {
         ));
     };
     if !t.is_empty() {
-        for b in st.births.as_slice() {
-            if is_entry(st, b.init) || is_target(b.addr) {
+        let holders = st
+            .births
+            .as_slice()
+            .iter()
+            .filter(|b| !is_entry(st, b.init))
+            .map(|b| (b.addr, b.size as usize, b.init, b.seq))
+            .chain(owned.iter().map(|&(a, e, init)| (a, e - a, init, 0)));
+        for (addr, size, init, seq) in holders {
+            if is_target(addr) {
                 continue;
             }
+            let b = Birth {
+                addr,
+                size: size as u32,
+                init,
+                seq,
+            };
             for off in (8..b.size as usize).step_by(8) {
                 let v = unsafe { ((b.addr + off) as *const u64).read() };
                 if let Some(k) = find(v) {
@@ -4196,8 +4323,11 @@ fn k2a_rows(st: &mut State) {
                             &mut rows,
                             k,
                             format!(
-                                "holder=birth;holder_init={};holder_addr={:x};off={off}",
-                                b.init, b.addr
+                                "holder=birth;holder_init={};holder_type={};holder_seq={};holder_addr={:x};off={off}",
+                                b.init,
+                                unsafe { (b.addr as *const u8).read() },
+                                b.seq,
+                                b.addr
                             ),
                             b.seq.max(t[k].3),
                         );
@@ -4828,7 +4958,11 @@ pub unsafe extern "C" fn unsetenv(name: *const libc::c_char) -> libc::c_int {
             std::ffi::CStr::from_ptr(name).to_bytes()
         };
         let was = if c25() {
-            if name.is_null() || getenv(name).is_null() { ";was=unset" } else { ";was=set" }
+            if name.is_null() || getenv(name).is_null() {
+                ";was=unset"
+            } else {
+                ";was=set"
+            }
         } else {
             ""
         };
