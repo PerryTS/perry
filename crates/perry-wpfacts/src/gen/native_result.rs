@@ -14,7 +14,7 @@ impl<'a> Gen<'a> {
         }
         let ns = crate::builtins::node_module_ns(module)?;
         let identity = self.m.namespace_property(ns, method)?.native?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity })))
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
     }
 
     pub(crate) fn native_success_result(

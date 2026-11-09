@@ -36,7 +36,7 @@ pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader)
         std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len)).ok()?;
     let receiver = js_closure_get_capture_f64(closure, 0);
 
-    if let Some(class_id) = crate::object::class_prototype_ref_id(receiver) {
+    if let Some(class_id) = crate::object::class_prototype_object_id(receiver) {
         return crate::object::class_method_slot_target(class_id, name)
             .map(|(func_ptr, ..)| func_ptr);
     }
@@ -123,8 +123,13 @@ pub unsafe fn dispatch_bound_method(
     // name-based interpretation of the captures below (slots 3/4 are not part
     // of the name layout).
     if method_name_ptr == crate::object::SYMBOL_BOUND_METHOD_NAME.as_ptr() as *const i8 {
-        return dispatch_symbol_bound_method(closure, namespace_obj, this, args);
+        return dispatch_symbol_bound_method(closure, namespace_obj, args);
     }
+
+    // A receiver that is a class's prototype object names the method's OWNER
+    // (`C.prototype.m` read as a value, an evaluation's by-name method), not
+    // its `this`: the call-time `this` is the receiver.
+    let owner_prototype_id = crate::object::class_prototype_object_id(namespace_obj);
 
     // Private-method value (`const f = this.#m; f.call(o)`): a `#`-named method
     // read off an instance yields the OWNER class's method function. Unlike a
@@ -135,14 +140,14 @@ pub unsafe fn dispatch_bound_method(
     // simply bind the owner's body to whatever `this` the call supplies (spec:
     // `PrivateMethodOrAccessorAdd` installs the shared function; calling it does
     // no brand check). The canonical closure captures the owner class's
-    // prototype-ref in slot 0, which carries the owner id.
+    // prototype object in slot 0, which names the owner id.
     if method_name_len > 0 && !method_name_ptr.is_null() {
         if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(
             method_name_ptr as *const u8,
             method_name_len,
         )) {
             if name.starts_with('#') {
-                if let Some(owner_id) = crate::object::class_prototype_ref_id(namespace_obj) {
+                if let Some(owner_id) = owner_prototype_id {
                     if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
                         crate::object::class_method_slot_target(owner_id, name)
                     {
@@ -174,7 +179,7 @@ pub unsafe fn dispatch_bound_method(
                         };
                     }
                 }
-                if crate::object::class_prototype_ref_id(namespace_obj).is_none() {
+                if owner_prototype_id.is_none() {
                     if let (Some(owner_id), Some(brand)) =
                         (crate::object::class_ref_id(namespace_obj), private_brand)
                     {
@@ -218,10 +223,13 @@ pub unsafe fn dispatch_bound_method(
     // object — user-visible as `[object Object]` instead of the method's result,
     // exactly the failure the comment below describes for the self-shadowing `bind`
     // case.
-    let owner_proto_ref = namespace_obj;
-    let call_receiver = crate::object::canonical_bound_method_receiver(owner_proto_ref, this);
+    let call_receiver = if owner_prototype_id.is_some() {
+        this.as_f64()
+    } else {
+        namespace_obj
+    };
     if method_name_len > 0 && !method_name_ptr.is_null() {
-        if let Some(owner_id) = crate::object::class_prototype_ref_id(owner_proto_ref) {
+        if let Some(owner_id) = owner_prototype_id {
             if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(
                 method_name_ptr as *const u8,
                 method_name_len,
@@ -290,14 +298,13 @@ pub unsafe fn dispatch_bound_method(
 }
 
 /// #6173: invoke a symbol-bound class-method closure. `receiver` is capture
-/// slot 0 (a NaN-boxed instance/prototype-ref, or the INT32 class ref for a
-/// static method); the resolved func_ptr and packed param_count/has_rest/
+/// slot 0 (a NaN-boxed instance, or the class constructor for a static
+/// method); the resolved func_ptr and packed param_count/has_rest/
 /// is_static meta live in slots 3/4 (see `SYMBOL_BOUND_METHOD_NAME`).
 /// Mirrors the direct-call symbol dispatch in `js_native_call_method_value`.
 unsafe fn dispatch_symbol_bound_method(
     closure: *const ClosureHeader,
-    captured_receiver: f64,
-    this: crate::closure::JsThis,
+    receiver: f64,
     args: &[f64],
 ) -> f64 {
     let func_ptr = js_closure_get_capture_ptr(closure, 3) as usize;
@@ -311,7 +318,6 @@ unsafe fn dispatch_symbol_bound_method(
     let param_count = (meta & 0xFFFF_FFFF) as u32;
     let has_rest = (meta >> 32) & 1 == 1;
     let is_static = (meta >> 33) & 1 == 1;
-    let receiver = crate::object::canonical_bound_method_receiver(captured_receiver, this);
     if is_static {
         // The static method runs with the class ref as `this`, exactly like
         // the direct-call path. The one-shot static-`this` override (armed by
@@ -658,17 +664,8 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
         if !target_closure.is_null() && is_closure_ptr(target_closure as usize) {
             return crate::builtins::function_name_for_closure(target_closure).unwrap_or_default();
         }
-        return String::new();
     }
-    let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
-        crate::object::class_prototype_ref_id(target_value)
-            .is_none()
-            .then(|| crate::object::class_value::class_ref_word(target_value.to_bits()))
-            .flatten()
-    });
-    target_class_id
-        .and_then(crate::object::class_name_for_id)
-        .unwrap_or_default()
+    String::new()
 }
 
 /// Lazily synthesize and cache a bound function's `.name`. `ptr` must be a
@@ -887,41 +884,20 @@ unsafe fn function_bind_observable(
         let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
         crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
-    // A pointer target is a closure (a class function object is one) or a
-    // callable native handle; only a non-pointer target can be the legacy
-    // INT32 class form, so only it pays the class probe.
-    let target_is_closure = if closure_target {
-        true
-    } else if target_jv.is_pointer() {
-        // Callable handles and proxies retain the existing conservative
-        // pass-through until they use the bound-closure representation.
+    // A target that is not a closure (a class function object is one) is a
+    // callable native handle or a proxy: they retain the existing
+    // conservative pass-through until they use the bound-closure
+    // representation. A class is always its function object (P3 B4a: no
+    // 0x7FFE class word reaches `bind`).
+    if !closure_target {
         return target_value;
-    } else if crate::object::class_ref_id(target_value)
-        .or_else(|| {
-            crate::object::class_prototype_ref_id(target_value)
-                .is_none()
-                .then(|| crate::object::class_value::class_ref_word(target_value.to_bits()))
-                .flatten()
-        })
-        .is_some()
-    {
-        // ClassRefs are callable/constructable INT32-tagged values rather
-        // than heap closures. They still need a real BoundFunction wrapper
-        // so `new C.bind(_, ...args)()` prepends its captured arguments.
-        false
-    } else {
-        return target_value;
-    };
+    }
 
     // Body metadata is immutable image data, so this descriptor survives
     // every moving collection below. Share it across metadata reads and
     // native-adapter admission; ordinary compiled and bound-method bodies
     // do not need to read a second receiver operand for resolution.
-    let target_info = if target_is_closure {
-        (*target_jv.as_pointer::<ClosureHeader>()).info
-    } else {
-        std::ptr::null()
-    };
+    let target_info = (*target_jv.as_pointer::<ClosureHeader>()).info;
 
     // Root the bind target across every allocating call below (`this`
     // boxing, `Get(Target, "name")` — which may run a user getter — the
@@ -966,7 +942,7 @@ unsafe fn function_bind_observable(
     // The birth shape proves name and length are untouched own data
     // properties. For a compiled body their values are immutable body facts;
     // use those facts instead of probing its property bag and metadata readers.
-    let declared_metadata = target_is_closure && {
+    let declared_metadata = {
         let target =
             JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
         (*target).shape_id == crate::closure::shape::birth_shape_for_body(target_info)
@@ -995,7 +971,7 @@ unsafe fn function_bind_observable(
         crate::closure::info_length(&*target_info)
             .or_else(|| crate::closure::info_arity(&*target_info))
             .unwrap_or(0) as f64
-    } else if target_is_closure {
+    } else {
         let target =
             JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
         if crate::object::has_own_helpers::closure_own_key_present(target as usize, "length") {
@@ -1011,8 +987,6 @@ unsafe fn function_bind_observable(
         } else {
             0.0
         }
-    } else {
-        0.0
     };
 
     // Spec step 12-13: `Get(Target, "name")` must run now, synchronously — a
@@ -1026,14 +1000,14 @@ unsafe fn function_bind_observable(
     // An untouched base Function shape proves its intrinsic name has no
     // override, accessor or deletion. Its immutable body name can keep the
     // existing lazy snapshot; an actual own name still runs Get now.
-    let declared_name = target_is_closure && {
+    let declared_name = {
         let target =
             JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
         (*target).shape_id == crate::closure::shape::birth_shape_for_body(target_info)
             && target_info.as_ref().map(|info| info.code)
                 != Some(crate::closure::BOUND_FUNCTION_FUNC_PTR)
     };
-    let name_hint = if target_is_closure && !declared_name {
+    let name_hint = if !declared_name {
         target_h
             .across_nanbox(|| {
                 let tclosure =
@@ -1050,10 +1024,7 @@ unsafe fn function_bind_observable(
     // dangling capture slot 3 (exactly the "lazily-derived name retains a
     // stale address" failure mode this fix must avoid).
     // Get(Target, name) yields an empty bound-name suffix for a non-string.
-    let name_hint = if target_is_closure
-        && !declared_name
-        && !JSValue::from_bits(name_hint.to_bits()).is_any_string()
-    {
+    let name_hint = if !declared_name && !JSValue::from_bits(name_hint.to_bits()).is_any_string() {
         let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
         f64::from_bits(JSValue::string_ptr(empty).bits())
     } else {

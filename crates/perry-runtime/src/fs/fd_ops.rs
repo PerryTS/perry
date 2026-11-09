@@ -186,6 +186,9 @@ pub(crate) fn fs_open_path_str_result(path_str: &str, flags: &str) -> Result<i32
     Ok(register_opened_file(file, path_str, append_mode))
 }
 
+// The path; the flags are a number or a flag string read as it is (no
+// coercion); the fd is a number.
+crate::realm_decl! { "node:fs.openSync", effects = { path(arg(0)); stores(fresh); returns(prim(num)) } }
 /// `fs.openSync(path, flags)` — small fd registry for deterministic tests.
 #[no_mangle]
 pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
@@ -321,6 +324,13 @@ pub extern "C" fn js_fs_read_sync_options(
     }
 }
 
+// Every arity's arm (`js_fs_write_buffer_sync`, `js_fs_write_sync_args`,
+// `js_fs_write_sync_options_dispatch`, this): the data is a string's or a
+// Buffer/TypedArray's bytes, read as they are (anything else writes no
+// bytes; no ToString); a third argument that is an object is the options,
+// whose `offset`, `length` and `position` are [[Get]]; numbers and a bigint
+// position are read as they are. The result is the byte count.
+crate::realm_decl! { "node:fs.writeSync", effects = { reads(field(arg(2), offset)); reads(field(arg(2), length)); reads(field(arg(2), position)); stores(fresh); returns(prim(num)) } }
 /// `fs.writeSync(fd, string)` — string subset.
 #[no_mangle]
 pub extern "C" fn js_fs_write_sync(fd_value: f64, data_value: f64) -> f64 {

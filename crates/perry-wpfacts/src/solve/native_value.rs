@@ -24,7 +24,7 @@ impl Model {
     /// call's own `this`). `false`: not a named native, or a receiver its
     /// model does not cover: the caller runs the unknown callee's arm.
     pub(super) fn native_call(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
-        let TokKind::BuiltinFn(Native::Member { identity }) = self.toks[t as usize] else {
+        let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
             return false;
         };
         // A module member whose effects the runtime declares at the body
@@ -32,7 +32,7 @@ impl Model {
         if let Some(e) = builtins::declared_member(identity) {
             if self.bind_done.insert((call, t, u32::MAX - 7)) {
                 self.diagnostic_callee(call, t);
-                self.with_b(|m| builtins::run_native(m, e, t, call));
+                self.with_b(|m| builtins::run_member(m, e, t, call));
             }
             return true;
         }
