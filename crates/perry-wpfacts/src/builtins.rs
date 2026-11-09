@@ -26,7 +26,9 @@ mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
-pub use undeclared::{builtin_function, native_may_be, realm_reads_store, undeclared};
+pub use undeclared::{
+    builtin_function, global_object, native_may_be, realm_reads_store, undeclared,
+};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
@@ -1289,7 +1291,7 @@ mod accessor_lookup;
 mod methods;
 pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
-pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
+pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// Whether the generated global object declares a callable under this key.
 pub(crate) fn global_function(m: &Model, name: &str) -> bool {
     m.namespace_property(BuiltinNs::GlobalThis, name)

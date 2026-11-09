@@ -158,10 +158,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // its value is in the global's field.
     let stored = |t: Tok| {
         field_carries_stores
-            && matches!(
-                m.toks[t as usize],
-                TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
-            )
+            && super::global_object(m, t)
             && !m.accessors.contains_key(&(t, a))
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
@@ -178,10 +175,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // The HIR global sentinel (`Other`, what a bare global name is read
     // off) is the global object: a write through either token is a write
     // of the one object.
-    let is_global = matches!(
-        m.toks[np as usize],
-        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
-    );
+    let is_global = super::global_object(m, np);
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
         _ => is_global,
@@ -257,8 +251,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         _ => None,
     };
     if k.is_none() && !m.shared_replay && t != TOP {
-        m.global_written_own |=
-            matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+        m.global_written_own |= super::global_object(m, t);
     }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
@@ -310,13 +303,26 @@ pub fn settle_native_given(m: &mut Model) -> bool {
                 continue;
             }
             more = true;
-            // The census names the given prototype `src` as the write's
-            // source (no call runs it): a ⊤ there makes it derived.
+            // The census attributes the write to the operation that gave the
+            // prototype (its receiver node, or its call), and keeps the given
+            // value as `proto`: a ⊤ on either side makes the write derived.
+            let (by_node, by_call) = match m.census_given_by(t, src) {
+                Some((n, c)) => (
+                    if n == NO_NODE { src } else { n },
+                    (c != u32::MAX).then_some(c),
+                ),
+                None => (src, None),
+            };
             let saved = m
                 .diagnostic
                 .as_mut()
-                .map(|d| (d.cur_call.take(), d.cause_node.replace(src)));
+                .map(|d| (d.cur_call.take(), d.cause_node.replace(by_node)));
+            if let Some(d) = m.diagnostic.as_mut() {
+                d.cur_call = by_call;
+            }
+            m.census_settling(Some(src));
             note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            m.census_settling(None);
             if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
                 (d.cur_call, d.cause_node) = saved;
             }
@@ -731,7 +737,6 @@ pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
 pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
     match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
-        _ => false,
+        _ => super::global_object(m, np),
     }
 }
