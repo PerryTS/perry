@@ -1643,12 +1643,13 @@ impl<'a> Gen<'a> {
                 callee,
                 args,
                 byte_offset,
+                byte_end,
                 ..
-            } => self.call_expr(fx, callee, args, &[], *byte_offset),
+            } => self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end),
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);
-                self.call_with(fx, callee, a, s, 0)
+                self.call_with(fx, callee, a, s, (0, 0))
             }
             Expr::FuncRef(id) if self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) => {
                 let name = &self.view.expect("view").foreign_funcs[id];

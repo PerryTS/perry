@@ -15,8 +15,16 @@
 //! `typed_calls` are the call sites a typed entry serves (§2, E3): at every
 //! copy of the caller the callee is exactly one body F (a direct call whose
 //! callee node holds only F's function tokens, or a method call whose verdict
-//! is T0 with `target_fns == [F]`), the call does not spread, its offset is
-//! not 0 and names exactly one HIR call.
+//! is T0 with `target_fns == [F]`), the call does not spread, and its offset
+//! is not 0.
+//!
+//! E3 (CWN 11-09): the HIR calls gen walks under one key are copies of one
+//! source call when they share its span (`offset..end`): the body walked
+//! twice (a for…of's counted and IteratorRecord arms), or a callee the
+//! inliner copied into several callers. The site is joined over them: every
+//! copy must resolve to F, and every copy's arguments must hold F's
+//! signature (`admits`). Calls of different spans under one key are distinct
+//! calls and refuse.
 
 use crate::bindings::{ModuleBindings, Rep};
 use crate::derive::{SiteFacts, Verdict};
@@ -28,8 +36,11 @@ use crate::model::{NodeId, TokKind, TOP};
 pub(crate) struct CallSiteRec {
     pub module: u32,
     pub offset: u32,
-    /// The HIR identity of the call (its callee expression's address).
-    pub hir: usize,
+    /// The end of the span the key names (a method call's member, else the
+    /// call): with `offset`, the source call this HIR call is a copy of.
+    pub end: u32,
+    /// The argument nodes of this copy.
+    pub args: Vec<NodeId>,
     pub spread: bool,
     /// A direct call's callee node; `None` for a method call.
     pub callee: Option<NodeId>,
@@ -147,6 +158,8 @@ pub(crate) fn collect(
     };
     // The function token's body index of every function.
     let mut sigs: std::collections::BTreeMap<(u32, u32), Signature> = Default::default();
+    // Each typed body's literal defaults (§4.1): the caller applies them.
+    let mut defaults: std::collections::HashMap<(u32, u32), Vec<Option<f64>>> = Default::default();
     for (fx, f) in m.funcs.iter().enumerate() {
         if f.func_id == u32::MAX {
             continue;
@@ -199,6 +212,7 @@ pub(crate) fn collect(
             this_class,
         };
         if !sig.is_boxed() {
+            defaults.insert((f.module, f.func_id), literal_defaults(hir));
             sigs.insert((f.module, f.func_id), sig);
         }
     }
@@ -225,33 +239,41 @@ pub(crate) fn collect(
         if offset == 0 || recs.iter().any(|r| r.spread) {
             continue;
         }
-        // E3: one HIR call per key.
-        let first = recs[0].hir;
-        if recs.iter().any(|r| r.hir != first) {
+        // E3: the key names one source call; its copies share its span.
+        let end = recs[0].end;
+        if recs.iter().any(|r| r.end != end) {
             continue;
         }
-        let target = match recs[0].callee {
-            Some(_) => {
-                let mut one: Option<(u32, u32)> = None;
-                let mut ok = true;
-                for r in recs {
-                    for c in all(r.callee.unwrap()).into_iter().filter(|&c| live(c)) {
-                        match single_body(g, c) {
-                            Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
-                            _ => ok = false,
-                        }
+        // Every copy is a call of the same kind.
+        let direct = recs[0].callee.is_some();
+        if recs.iter().any(|r| r.callee.is_some() != direct) {
+            continue;
+        }
+        let target = if direct {
+            // Every copy (and every instance copy of its callee node)
+            // holds exactly one body, the same one; a missing node refuses.
+            let mut one: Option<(u32, u32)> = None;
+            let mut ok = true;
+            for r in recs {
+                for c in all(r.callee.expect("a direct call")) {
+                    match live(c).then(|| single_body(g, c)).flatten() {
+                        Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
+                        _ => ok = false,
                     }
                 }
-                if ok {
-                    one
-                } else {
-                    None
-                }
             }
-            None => method_target.get(&(mi, offset)).copied().flatten(),
+            if ok {
+                one
+            } else {
+                None
+            }
+        } else {
+            method_target.get(&(mi, offset)).copied().flatten()
         };
         let Some(t) = target else { continue };
-        if sigs.contains_key(&t) {
+        let Some(sig) = sigs.get(&t) else { continue };
+        let lits = &defaults[&t];
+        if recs.iter().all(|r| admits(g, &all, sig, lits, &r.args)) {
             typed.push(((mi, offset), t));
         }
     }
@@ -293,6 +315,91 @@ pub(crate) fn collect(
         mb.signatures.sort_by_key(|(id, _)| *id);
         mb.typed_calls.sort_by_key(|(o, _)| *o);
     }
+}
+
+/// Each parameter's literal default when the caller applies it (§4.1, E1):
+/// a literal default with no earlier non-literal one.
+fn literal_defaults(f: &perry_hir::Function) -> Vec<Option<f64>> {
+    let mut earlier_nonliteral = false;
+    f.params
+        .iter()
+        .map(|p| match &p.default {
+            Some(d) if !is_literal(d) || earlier_nonliteral => {
+                earlier_nonliteral |= !is_literal(d);
+                None
+            }
+            Some(perry_hir::Expr::Number(n)) => Some(*n),
+            Some(perry_hir::Expr::Integer(i)) => Some(*i as f64),
+            _ => None,
+        })
+        .collect()
+}
+
+/// E3: one copy's arguments hold `sig` (what the codegen site witness
+/// checks): each argument the caller passes in an F64 slot holds only
+/// Numbers, and in an I32 slot only integers inside the parameter's
+/// interval, joined over the argument node's instance copies; an omitted or
+/// `undefined` argument of a literal-defaulted parameter is that literal.
+/// An omitted argument of any other non-Boxed parameter refuses.
+fn admits(
+    g: &Gen<'_>,
+    all: &dyn Fn(NodeId) -> Vec<NodeId>,
+    sig: &Signature,
+    lits: &[Option<f64>],
+    args: &[NodeId],
+) -> bool {
+    use crate::model::prim;
+    // The int interval of the values joined so far: `None` before the
+    // first value, `Some(None)` once one value is no int.
+    fn join_range(acc: &mut Option<Option<(i64, i64)>>, r: Option<(i64, i64)>) {
+        *acc = Some(match (*acc, r) {
+            (None, r) => r,
+            (Some(Some((a, b))), Some((c, d))) => Some((a.min(c), b.max(d))),
+            _ => None,
+        });
+    }
+    let lit_range = |v: f64| {
+        (v.fract() == 0.0 && !(v == 0.0 && v.is_sign_negative())).then_some((v as i64, v as i64))
+    };
+    sig.params.iter().enumerate().all(|(i, &rep)| {
+        if rep == Rep::Boxed {
+            return true;
+        }
+        let lit = lits.get(i).copied().flatten();
+        let mut acc: Option<Option<(i64, i64)>> = None;
+        match args.get(i) {
+            None => match lit {
+                Some(v) => join_range(&mut acc, lit_range(v)),
+                None => return false,
+            },
+            Some(&a) => {
+                for n in all(a) {
+                    if (n as usize) >= g.m.nodes.len() {
+                        return false;
+                    }
+                    let b = crate::bindings::facts_of_node(g, n);
+                    let mut prims = b.prims;
+                    if let Some(v) = lit.filter(|_| prims & prim::UNDEF != 0) {
+                        prims &= !prim::UNDEF;
+                        join_range(&mut acc, lit_range(v));
+                    }
+                    if b.other || !b.class_ids.is_empty() || prims & !prim::NUM != 0 {
+                        return false;
+                    }
+                    if prims != 0 {
+                        join_range(&mut acc, b.int_range);
+                    }
+                }
+            }
+        }
+        match (rep, acc) {
+            (Rep::I32, Some(r)) => {
+                let (lo, hi) = sig.ranges[i].unwrap_or((i64::from(i32::MIN), i64::from(i32::MAX)));
+                r.is_some_and(|(a, b)| a >= lo && b <= hi)
+            }
+            _ => true,
+        }
+    })
 }
 
 /// The one body `(module, func_id)` node `n` holds when it holds only
