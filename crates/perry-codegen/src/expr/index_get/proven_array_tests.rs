@@ -191,9 +191,14 @@ fn a_number_context_keeps_its_number_test_without_the_number_fact() {
     // The value read needs nothing; the number-context read tests the slot.
     let at = body(&ir, "__at").join("\n");
     assert!(!at.contains("arep.cold"), "{at}");
+    // The arithmetic that consumes the load keeps its own number test
+    // (P3 B1 removes it with the number fact), so the read adds none.
     let twice = body(&ir, "__twice").join("\n");
-    assert!(twice.contains("arep.number"), "number test\n{twice}");
-    assert!(twice.contains("perry_array_read_cold_shared"), "{twice}");
+    assert!(!twice.contains("arep.cold"), "{twice}");
+    assert!(twice.contains("guarded_arith.dynamic"), "{twice}");
+    let proven = rep_ir(BOARD, Some((0, 127)), true);
+    let twice = body(&proven, "__twice").join("\n");
+    assert!(!twice.contains("guarded_arith.dynamic"), "{twice}");
 }
 
 #[test]
@@ -270,7 +275,7 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
     // no heap header, whatever the facts say of its binding.
     let src = "export function pick(i: number): number {\n\
                const d = [5, 4, 3, 2];\n\
-               return d[i & 3];\n\
+               return d[0] + d[3] + i;\n\
                }\n";
     let ir = |fact: bool| {
         let m = lower(src);
@@ -293,9 +298,10 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
                     fixed: true,
                 }),
             );
-            let read = src.find("d[i").expect("read") as u32 + 1;
-            elision.element_keys.insert(read, (0, 3));
-            elision.number_element_reads.insert(read, false);
+            for (at, _) in src.match_indices("d[") {
+                elision.element_keys.insert(at as u32 + 1, (0, 3));
+                elision.number_element_reads.insert(at as u32 + 1, false);
+            }
         }
         let opts = CompileOptions {
             emit_ir_only: true,
@@ -309,7 +315,10 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
     };
     let with = ir(true);
     let f = body(&with, "__pick").join("\n");
-    assert!(!f.contains("js_array_alloc"), "scalar-replaced\n{f}");
+    assert!(
+        !f.contains("js_array_alloc") && !f.contains("perry_array_read_cold_shared"),
+        "scalar-replaced\n{f}"
+    );
     // The tier would mask the local's word to a pointer and load behind a
     // header; the read stays the scalar slots' own.
     assert_eq!(with, ir(false), "the rep changes nothing\n{f}");
