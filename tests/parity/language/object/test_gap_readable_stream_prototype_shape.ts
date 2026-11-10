@@ -72,4 +72,8 @@ try { new G.ReadableStreamDefaultController(); console.log("RSDC new: no throw")
   const w = ts.writable.getWriter(); w.write(21); w.close();
   const tr = ts.readable.getReader();
   console.log("transform", (await tr.read()).value, (await tr.read()).done);
+  console.log("from in", "from" in ReadableStream, Object.keys(ReadableStream), typeof ReadableStream.from, Object.getOwnPropertyNames(ReadableStream).sort().join());
+  const fr = ReadableStream.from([1, 2]).getReader();
+  const f1 = await fr.read(); const f2 = await fr.read(); const f3 = await fr.read();
+  console.log("from read", f1.value, f1.done, f2.value, f2.done, f3.done);
 })();

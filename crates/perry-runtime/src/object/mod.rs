@@ -454,6 +454,7 @@ pub(crate) use to_string_tag::fetch_handle_constructor_value;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
 pub(crate) use to_string_tag::web_stream_interface_name;
+pub use to_string_tag::web_stream_prototype_value;
 pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///

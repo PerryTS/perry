@@ -2,7 +2,7 @@
 //! numeric normalizer otherwise. Rejected keys keep their original JS value.
 use super::FnCtx;
 use crate::function::LlFunction;
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I32};
 use perry_hir::Expr;
 
 const NORMALIZE: &str = "perry_array_index_normalize_i32";
@@ -114,21 +114,10 @@ fn publish(ctx: &mut FnCtx<'_>) {
     f.linkage = "linkonce_odr".into();
     f.no_inline = true;
     let b = f.create_block("entry");
-    let bits = b.bitcast_double_to_i64("%key");
-    let boxed = crate::codegen::emit_int32_bits_test(b, &bits);
-    b.cond_br(&boxed, "boxed.1", "raw.2");
-
-    let b = f.create_block("boxed");
-    let payload = b.trunc(I64, &bits, I32);
-    let nonnegative = b.icmp_sge(I32, &payload, "0");
-    let index = b.select(I1, &nonnegative, I32, &payload, "-1");
-    b.ret(I32, &index);
-
-    let b = f.create_block("raw");
     let ge = b.fcmp("oge", "%key", "0.0");
     let le = b.fcmp("ole", "%key", "2147483647.0");
     let range = b.and(I1, &ge, &le);
-    b.cond_br(&range, "convert.3", "reject.4");
+    b.cond_br(&range, "convert.1", "reject.2");
 
     // The ordered range branch dominates conversion. No speculative fptosi
     // can see NaN, a tag, an infinity, or an out-of-range Number.

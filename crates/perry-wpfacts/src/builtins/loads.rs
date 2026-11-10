@@ -66,13 +66,17 @@ pub(super) fn family_load(
 ) {
     let name = m.atoms[a as usize].clone();
     // An internal slot (`effects::internal_atom`) is no property: no chain
-    // has it and no program store, even one under an unknown key, writes it.
+    // has it. Its storage is an ordinary own field of the object, read by
+    // `load_from` (an unknown-key store reaches it through `field_any`, and
+    // an escape of the object sinks ⊤ into it); only the chain read stops.
     if super::effects::is_internal_key(&name) {
         return;
     }
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
         if buffer_member_absent(m, what, &name) {
             m.add_prim(dst, prim::UNDEF);
+        } else if realm_accessor(m, fam, what, &name) {
+            undeclared_getter_result(m, dst);
         } else {
             undescribed_member(m, dst);
         }
@@ -82,6 +86,9 @@ pub(super) fn family_load(
         return;
     }
     match members::member(fam, &name) {
+        // An accessor of the realm (a getter the model lists as a method):
+        // the getter's result, never the getter or a method.
+        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => undeclared_getter_result(m, dst),
         Some(Mem::Fn) => {
             let bf = match member_native(m, fam, what, &name) {
                 Some(n) => {
@@ -219,6 +226,15 @@ fn module_object(m: &Model, t: Tok, key: &str) -> Option<BuiltinNs> {
         .and_then(super::node_module)
 }
 
+/// The declared getter (`declared_getter`) of the accessor host object token
+/// `t` holds or inherits under `key` (the realm's `accessor` rows: ordinary
+/// lookup on the object's chain).
+fn module_getter(m: &Model, t: Tok, key: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let getter = m.native_property(t, key)?.get?;
+    let (proto, k) = getter.strip_suffix(".<get>")?.rsplit_once('.')?;
+    super::effects::declared_getter(proto, k)
+}
+
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
     m.census_native_read(t, a, NativeMiss::Load(dst));
     let name = m.atoms[a as usize].clone();
@@ -335,8 +351,9 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     }
 }
 
-/// Global `n`, which the realm declares as namespace `ns` (`Error`, `Math`),
-/// read off the global object `t` (`globalThis.Error`, or the bare name off
+/// Global `n`, whose value the realm declares (`birth`: namespace `Error`,
+/// `Math`; the object Node's `get navigator` returns), read off the
+/// global object `t` (`globalThis.Error`, or the bare name off
 /// the HIR sentinel, the same object): what the program stored under the
 /// key (the global's field, as for a program-owned global), and the
 /// realm's value. A key some other writer may have written
@@ -344,7 +361,7 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
 /// key) also reads ⊤, and what the program stored there reaches unmodeled
 /// code; a later such write replays the read (`NativeMiss::Global`) to the
 /// same result.
-fn declared_global_load(m: &mut Model, t: Tok, ns: BuiltinNs, n: &str, dst: NodeId) {
+fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId) {
     if !m.unit_mode {
         let a = m.atom(n);
         let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -359,8 +376,16 @@ fn declared_global_load(m: &mut Model, t: Tok, ns: BuiltinNs, n: &str, dst: Node
             m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
         }
     }
-    let bt = m.tok(TokKind::Builtin(ns));
-    m.add_tok(dst, bt);
+    m.add_tok(dst, birth);
+}
+
+/// The value the realm declares for global `n` other than a namespace
+/// (`ns_by_name`) or a function (`global_function`): `navigator`, a
+/// getter-only accessor (Node 26: `get navigator`, no setter,
+/// configurable), whose getter returns the realm's one navigator object.
+/// Whole-program only: a unit does not see the other units' writes.
+fn realm_global_object(m: &Model, n: &str) -> bool {
+    n == "navigator" && !m.unit_mode
 }
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
@@ -372,7 +397,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
             Some(n) => {
                 if let Some(ns) = ns_by_name(n) {
-                    declared_global_load(m, t, ns, n, dst);
+                    let birth = m.tok(TokKind::Builtin(ns));
+                    declared_global_load(m, t, birth, n, dst);
+                } else if realm_global_object(m, n) {
+                    let birth = super::native_protocol::navigator_object(m);
+                    declared_global_load(m, t, birth, n, dst);
                 } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
@@ -431,7 +460,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     tok_load(m, op, key, dst);
                 }
                 Some(n) if ns_by_name(n).is_some() => {
-                    declared_global_load(m, t, ns_by_name(n).unwrap(), n, dst);
+                    let birth = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
+                    declared_global_load(m, t, birth, n, dst);
+                }
+                Some(n) if realm_global_object(m, n) => {
+                    let birth = super::native_protocol::navigator_object(m);
+                    declared_global_load(m, t, birth, n, dst);
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
@@ -538,6 +572,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.native_missing.push((t, a, NativeMiss::Load(dst)));
                 let o = m.tok(TokKind::Builtin(ns));
                 m.add_tok(dst, o);
+            }
+            // An accessor the object holds or inherits (`performance
+            // .timeOrigin`, on `Performance.prototype`) with a declared
+            // getter: its declared result on this object.
+            Some(n) if !m.unit_mode && module_getter(m, t, n).is_some() => {
+                let Key::Named(a) = key else { unreachable!() };
+                let e = module_getter(m, t, n).expect("guarded");
+                if native_written(m, t, a) {
+                    return opaque_member(m, dst);
+                }
+                m.native_missing.push((t, a, NativeMiss::Load(dst)));
+                super::effects::getter_load(m, e, t, a, dst);
             }
             _ => {
                 m.add_top(dst, |_| {
@@ -755,15 +801,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     // A getter the realm declares on the prototype of an
                     // object a declaration made (`AbortController.prototype
-                    // .signal`) that returns primitives and the receiver's
-                    // slots: its value; a write of the key onto the chain
-                    // (now, or later: the replay) reads what was stored.
+                    // .signal`): its declared result, never the getter
+                    // function; a write of the key onto the chain (now, or
+                    // later: the replay) reads what was stored.
                     (Key::Named(a), Some(n))
                         if what.ends_with(".prototype")
                             && super::effects::declared_getter(what, n).is_some() =>
                     {
                         let e = super::effects::declared_getter(what, n).expect("declared");
-                        super::effects::getter_value(m, e, t, dst);
+                        super::effects::getter_load(m, e, t, a, dst);
                         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                             opaque_member(m, dst);
                         }

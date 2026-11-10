@@ -995,6 +995,19 @@ impl Model {
                 let p = self.tok(TokKind::Builtin(crate::builtins::ns_parent(ns).unwrap()));
                 self.add_tok(n, p);
             }
+            // A realm constructor whose declared [[Prototype]] is another
+            // realm constructor (`Readable` -> `Stream` -> `EventEmitter`,
+            // node's legacy stream chain): that constructor's value, so a
+            // lookup on it reaches what the program gave or stored up the
+            // chain (`Object.setPrototypeOf(EventEmitter, p)` then
+            // `Readable.apply`).
+            TokKind::BuiltinFn(Native::Member { identity, holder: None })
+                if crate::builtins::realm_parent_constructor(identity).is_some() =>
+            {
+                let parent = crate::builtins::realm_parent_constructor(identity).unwrap();
+                let p = self.tok(TokKind::BuiltinFn(Native::Member { identity: parent, holder: None }));
+                self.add_tok(n, p);
+            }
             TokKind::Func(_, _)
             | TokKind::Bound(_)
             | TokKind::BuiltinFn(_)
@@ -1007,7 +1020,26 @@ impl Model {
                 None => match self.tmpls[tm as usize].parent_value {
                     // `S.__proto__` is the value of the `extends` expression.
                     Some((pv, _)) => self.edge(pv, n),
-                    None => self.add_tok(n, objproto),
+                    None => match self.tmpls[tm as usize].native_parent.clone() {
+                        // `class C extends EventEmitter` over a named import
+                        // of a node module: the heritage reads the import's
+                        // binding, which holds what key `EventEmitter` of the
+                        // module object reads (the named ESM export value,
+                        // `js_native_module_named_esm_export_value`).
+                        Some((module, name)) if !self.unit_mode => {
+                            match crate::builtins::node_module_ns(&module) {
+                                Some(ns) => {
+                                    let mt = self.tok(TokKind::Builtin(ns));
+                                    let mn = self.node_l("native-parent-module");
+                                    self.add_tok(mn, mt);
+                                    let key = Key::Named(self.atom(&name));
+                                    self.cons(mn, Cons::Load { key, dst: n });
+                                }
+                                None => self.add_tok(n, objproto),
+                            }
+                        }
+                        _ => self.add_tok(n, objproto),
+                    },
                 },
             },
             _ => {}
@@ -1536,6 +1568,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::LenIndex { lo, hi } => format!("lenindex {n} {lo} {hi}"),
+            Cons::LenPermuted { t } => format!("lenpermuted {n} {t}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
@@ -1717,6 +1750,7 @@ impl Model {
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
+            Cons::ElemUndef { obj, key, dst } => format!("elemundef {n} {obj} {key} {dst}"),
             Cons::IdxOwnLoad { idx, dst, .. } => format!("idxownload {n} {idx} {dst}"),
             Cons::IdxOwnKey { obj, dst, .. } => format!("idxownkey {n} {obj} {dst}"),
             Cons::OwnTest { dst, at } => format!("owntest {n} {dst} {at:?}"),

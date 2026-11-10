@@ -55,8 +55,9 @@ const S1: &str = r#"
 /// what it enqueues is what the default reader's read() fulfills with. The
 /// stream may be a byte stream (no value-conditional form), whose queue also
 /// holds the Uint8Array remainders the runtime makes, and getReader() may
-/// be a BYOB reader whose read fulfills with typed arrays: `x` sees C and
-/// typed arrays, nothing else.
+/// be a BYOB reader whose read fulfills with a view of the caller's class
+/// (any typed array, DataView or Buffer): `x` sees C and those views,
+/// nothing else.
 #[test]
 fn s1_start_controller_is_declared() {
     let pf = facts(&format!("{S1}\nexport const keep = 1;\n"));
@@ -66,7 +67,10 @@ fn s1_start_controller_is_declared() {
     assert!(
         !x.top
             && x.receivers.iter().any(|r| r.contains('C'))
-            && x.receivers.iter().all(|r| r.contains('C') || r.contains("Array.prototype")),
+            && x.receivers.iter().all(|r| r.contains('C')
+                    || r.contains("Array.prototype")
+                    || r.contains("DataView.prototype")
+                    || r.contains("Buffer.prototype")),
         "{:?}\n{}",
         x.receivers,
         pf.dump_text()

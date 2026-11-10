@@ -81,4 +81,29 @@ console.log("released", s2.locked);
   const v4 = await r.read(new Uint8Array(2));
   console.log("read4", v4.done, v4.value && v4.value.byteLength);
   console.log("closed", await Object.getOwnPropertyDescriptor(RP, "closed")!.get!.call(r));
+  await viewKinds();
 })();
+
+// A BYOB read fulfills with a view of the caller's view class (node), over
+// a buffer that is not the caller's original one.
+async function viewKind(label: string, mk: () => any) {
+  const rs = new ReadableStream({ type: "bytes", pull(c: any) { c.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])); } } as any);
+  const r: any = rs.getReader({ mode: "byob" } as any);
+  const v = mk();
+  const ob = v.buffer;
+  const { value, done } = await r.read(v);
+  console.log("view", label, value.constructor.name, Buffer.isBuffer(value), value instanceof Uint8Array,
+    ArrayBuffer.isView(value), value.byteLength, value.byteOffset, value.buffer === ob, done);
+}
+async function viewKinds() {
+  await viewKind("Int8Array", () => new Int8Array(4));
+  await viewKind("Buffer", () => Buffer.alloc(4));
+  await viewKind("DataView", () => new DataView(new ArrayBuffer(4)));
+  await viewKind("Float64Array", () => new Float64Array(1));
+  await viewKind("Uint8Array", () => new Uint8Array(4));
+  for (const [label, C] of [["RBSC", ReadableByteStreamController], ["BYOBRequest", ReadableStreamBYOBRequest], ["AbortSignal", AbortSignal]] as any[]) {
+    try { new C(); console.log("illegal", label, "no throw"); } catch (e: any) {
+      console.log("illegal", label, e instanceof TypeError, e.name, e.message, e.code);
+    }
+  }
+}

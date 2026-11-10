@@ -1033,6 +1033,14 @@ fn lower_numeric_logical_for_number_context(
         {
             return lower_expr(ctx, left);
         }
+        // An element read below a dense floor that is a proven Number
+        // (`proven_array`, PR-C2): never nullish, and its number-context
+        // lowering is the double.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_operand_as_number(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();

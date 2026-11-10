@@ -109,16 +109,32 @@ def main():
         ("arrlen-negative", "arrlen", "array constant length"),
         ("element-read-negative", "arrlen", "proven element read"),
         ("element-read-sparse-birth", "densebirth", "proven element read"),
+        ("array-floor-negative", "arrfloor", "proven element read"),
+        ("array-append-negative", "arrappend", "int32 input"),
+        ("array-cap-negative", "arrcap", "proven element read"),
+        ("array-fwd-negative", "arrfwd", "proven element read"),
+        ("array-dense-negative", "arrdense", "array rep"),
+        ("array-elem-negative", "arrelem", "array rep"),
+        ("array-lazy-negative", "arrlazy", "array rep"),
+        ("array-front-negative", "arrfront", "array rep"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
+        ("array-undef-negative", "arrundef", "element floor"),
+        ("const-number-negative", "constnum", "constant number"),
         ("signature-negative", "signature", "signature"),
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),
     ]:
         source = fixtures / (name + ".ts")
+        # The array arms written before PR-B (DESIGN-p4l1) test the
+        # element-read and int32 witnesses. With `Rep::Arr` on, the array
+        # rep witness reports the same false length first, so these arms
+        # run with it off to reach the witness each was written for.
+        older_array_arm = wrong_claim in ("arrlen", "densebirth", "arrfloor", "arrappend", "arrcap", "arrfwd")
+        extra = {"PERRY_FACTS_ARRAY_REPS": "0"} if older_array_arm else {}
         for claim in ["", wrong_claim]:
             arm = name + ("-false" if claim else "-correct")
-            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim)
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim, **extra)
             observed = observe(exe, e)
             if claim:
                 value = report(observed)
