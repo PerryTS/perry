@@ -84,7 +84,7 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
         ),
         (
             "protocol",
-            crate::fn_info!(#[realm("URL.prototype.protocol.<get>")] export crate::url::prototype::get_protocol, 0; with_declared(0)),
+            crate::fn_info!(#[realm("URL.prototype.protocol.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_protocol, 0; with_declared(0)),
             Some(crate::fn_info!(#[realm("URL.prototype.protocol.<set>")] export crate::url::prototype::set_protocol, 1; with_declared(1))),
         ),
         (
