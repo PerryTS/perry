@@ -39,7 +39,9 @@
 //! `PERRY_FACTS_ARRAY_BASE=0` turns the installer off (C3's build).
 //! Negative controls: `PERRY_FACTS_SABOTAGE=arrbase` installs the stub's
 //! handle without resolving forwarding; `arrbaseadm` admits a loop whatever
-//! else ends its region (`stmt::field_base`).
+//! else ends its region (`stmt::field_base`); `arrbasepoll` skips the
+//! poll's refresh (exposed only by a moving collection at the poll:
+//! `PERRY_GC_SCHEDULE_SEED` with the instrumented runtime).
 
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
@@ -178,6 +180,9 @@ pub(crate) fn emit_poll_refresh(ctx: &mut FnCtx<'_>) -> Result<()> {
         .receiver_descriptors
         .field_base_refreshes()
         .expect("every held field base must admit a back-edge poll");
+    if sabotaged("arrbasepoll") {
+        return Ok(());
+    }
     for base in &bases {
         emit_install(ctx, base)?;
     }
