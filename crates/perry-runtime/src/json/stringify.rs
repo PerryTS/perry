@@ -1021,6 +1021,8 @@ pub(crate) unsafe fn stringify_array(ptr: *const u8, buf: &mut String) {
 /// Depth-aware variant of stringify_array for recursive calls.
 pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, depth: u32) {
     check_stringify_nesting_depth(depth as usize);
+    // I32 at rest: no at-rest Array reaches a generic reader (check mode).
+    crate::layout_slot::generic_reader(crate::array::clean_arr_ptr(ptr as *const _));
     // Issue #2021: an array that has grown past its initial inline capacity
     // (16) was reallocated to a new block, leaving a GC_FLAG_FORWARDED stub
     // at the old address. Callers (and element decoders) hand us whatever

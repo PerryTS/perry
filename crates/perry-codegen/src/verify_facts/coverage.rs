@@ -47,6 +47,7 @@ pub(crate) enum Fact {
     RecordIdentity,
     FieldRep,
     UnsignedBound,
+    ZeroSign,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -93,6 +94,7 @@ impl Fact {
             Self::RecordIdentity => "value record identity",
             Self::FieldRep => "field rep",
             Self::UnsignedBound => "unsigned bound",
+            Self::ZeroSign => "zero sign",
         }
     }
 }

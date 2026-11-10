@@ -556,6 +556,7 @@ pub extern "C" fn perry_verify_facts_entry(site: i64, site_len: i64) {
 /// nor register process callbacks on the passing path.
 #[no_mangle]
 pub extern "C" fn perry_verify_facts_init() {
+    crate::layout_slot::set_verify();
     REPORT.call_once(|| {
         if std::env::var_os("PERRY_CONTRACTS_REPORT").is_some() {
             unsafe {

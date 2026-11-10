@@ -42,6 +42,7 @@ pub mod model;
 pub mod native_effects;
 pub mod pts;
 pub mod records;
+mod rest_elems;
 pub mod signatures;
 mod rooted;
 mod solve;
@@ -49,6 +50,7 @@ mod summary;
 #[cfg(test)]
 mod tests;
 mod units;
+mod zero_sign;
 
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
@@ -102,6 +104,9 @@ pub struct FactsConfig {
     /// `WIDEN_STEPS` growths (`PERRY_FACTS_EXACT_RULES=0`;
     /// `solve::grow_rule_range`).
     pub no_exact_rules: bool,
+    /// −0 tolerance off (`PERRY_FACTS_ZERO_SIGN=0`, PR D, `zero_sign`): the
+    /// strict interval rules, a possible `-0` makes the result ⊤.
+    pub no_zero_sign: bool,
     /// R1: a write of a narrowed local in a branch that always leaves ends
     /// the narrowed reads after the branch again (`PERRY_FACTS_LEAVING_WRITES=0`;
     /// `gen::narrow`, "Writes on a leaving path").
@@ -322,6 +327,12 @@ pub struct ProgramFacts {
     /// The dump's `# rep` probe lines (`bindings::rep_probe`), with the
     /// dump only.
     pub rep_probe: Vec<String>,
+    /// −0 tolerance (PR D, `zero_sign`): Number nodes that keep an integer
+    /// interval although they may hold `-0`, which no use can observe.
+    /// Check mode's int32 witnesses admit `-0` when it is nonzero (a
+    /// tolerated value computed as a double is `-0`, and that is no false
+    /// proof); the sign witness is codegen's.
+    pub zero_sign_tolerated: u32,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
@@ -514,8 +525,13 @@ fn generate<'a>(
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
+    g.m.rest_elems = rest_elems::enabled();
+    g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
+    g.m.zero_sign =
+        !cfg.no_zero_sign && !cfg.no_int_ranges && !cfg.unit && demand::at_rest_demand();
+    g.m.zero_sign_sabotage = cfg.sabotage.as_deref() == Some("zerosign");
     g.leaving_writes = !cfg.no_leaving_writes;
     g.leaving_write_sabotage = cfg.sabotage.as_deref() == Some("leavingwrite");
     g.int_ranges = !cfg.no_int_ranges;
@@ -926,6 +942,13 @@ fn compute_act<'a>(
     // I32 at rest (PR A): a field's representation (`FieldFacts::rep`, a
     // Number field's I32 or an `Arr` field's `elem`) reads int demand, so
     // demand is solved before the derive. It reads only the solved graph.
+    // −0 tolerance (PR D): settle every interval that may hold `-0` before
+    // anything reads one (demand, the derive, the bindings).
+    let zero_sign_tolerated = if g.m.aborted {
+        0
+    } else {
+        zero_sign::solve(&mut g.m)
+    };
     let demand_first = demand::at_rest_demand();
     if demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
         demand::solve(&mut g.m);
@@ -962,9 +985,20 @@ fn compute_act<'a>(
     if !demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
         demand::solve(&mut g.m);
     }
+    // I32 at rest (PR B): the at-rest templates, which `ArrRep::at_rest`
+    // (`bindings::collect`) reads. After demand: an element rep reads it.
+    if !g.m.aborted {
+        let (rest, refused) = rest_elems::admit(&g, interp_guard.is_some());
+        (g.m.rest_tmpls, g.m.rest_refused) = (rest, refused);
+    }
     let mut bindings = bindings::collect(&g);
+    rest_elems::export(&g, &mut bindings);
     let rep_probe = if cfg.diagnostics && !g.m.aborted {
-        bindings::rep_probe(&g)
+        let mut p = bindings::rep_probe(&g);
+        if g.m.zero_sign {
+            p.push(format!("# zero-sign tolerated={zero_sign_tolerated}"));
+        }
+        p
     } else {
         Vec::new()
     };
@@ -2218,6 +2252,7 @@ fn compute_act<'a>(
         sabotage: cfg.sabotage.clone(),
         relations: g.m.relations.take(),
         rep_probe,
+        zero_sign_tolerated,
         tok_names,
         bindings,
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),

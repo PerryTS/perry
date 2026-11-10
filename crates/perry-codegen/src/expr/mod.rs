@@ -106,6 +106,7 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
+pub(crate) mod rest_elems;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -419,6 +420,9 @@ pub(crate) struct FnCtx<'a> {
     /// Set while lowering the generic arm of a guarded proof (decision 150):
     /// that arm is the site's complete operation without the facts.
     pub wpfacts_off: bool,
+    /// While a b1 call lowers its body's read here: that read's offset (the
+    /// body module's) and its at-rest floor (`expr::rest_elems`).
+    pub rest_b1: Option<(u32, Option<u32>)>,
     pub program_has_worker: bool,
     pub program_has_tla: bool,
     pub program_has_thread_agents: bool,

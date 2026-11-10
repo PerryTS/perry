@@ -1145,6 +1145,21 @@ pub struct Node {
     pub int_use: bool,
     /// One of its values can reach an int consumer (`demand::solve`).
     pub int_demand: bool,
+    /// −0 tolerance (`zero_sign`): every use of the node's value is one the
+    /// solve sees (an expression the generator classified, a copy, a rule, a
+    /// field or element slot, a function's result). A node without it is
+    /// used by code the solve does not see, so the sign of a zero it holds
+    /// counts as observed.
+    pub zs_known: bool,
+    /// −0 tolerance: a use observes the sign of a zero the node holds (a
+    /// division, `Object.is`, a native argument, any unclassified use).
+    pub zs_use: bool,
+    /// −0 tolerance: one of its values can reach a use that observes the
+    /// sign of a zero (`zero_sign::solve`).
+    pub zsign: bool,
+    /// −0 tolerance: the node keeps its integer interval although it may
+    /// hold `-0`, which no use observes (`zero_sign::solve`).
+    pub zs_tol: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -1265,6 +1280,28 @@ pub struct Model {
     /// without widening (`solve::grow_rule_range`); only copy targets widen.
     /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
     pub exact_rules: bool,
+    /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
+    /// rules give `0 * negative`, `-x` and `%` their integer hull with the
+    /// `-0` bit, and a node may keep an integer interval while it may hold
+    /// `-0` when no use observes the sign. `PERRY_FACTS_ZERO_SIGN=0`: the
+    /// strict rules (such a result is ⊤).
+    pub zero_sign: bool,
+    /// −0 tolerance: the builtin running in `with_native` declared its
+    /// arguments absorbing (ToString'd / ToIntegerOrInfinity'd only).
+    pub zs_absorbing: bool,
+    /// −0 tolerance: calls a builtin declared absorbing (`with_native`).
+    pub zs_absorbed: crate::pts::FxHashSet<CallId>,
+    /// PR D: `"lit".indexOf(..)` / `"lit".lastIndexOf(..)` calls on a String
+    /// literal receiver, with the literal's length in code units: the
+    /// native's result is in `[-1, len]` (`string_methods`).
+    pub str_index_len: FxHashMap<CallId, i64>,
+    /// −0 tolerance: spread argument arrays of calls whose callee observes
+    /// its arguments: every element of every token they hold is observed.
+    pub zs_spread: Vec<NodeId>,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=zerosign`): a division's
+    /// operands are no sign-observing uses, a wrong classification the
+    /// sign witness must catch.
+    pub zero_sign_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): with the exact
     /// rule results, a sum is the hull of its operands instead of their
     /// sum, a claim too narrow that the witnesses must catch.
@@ -1361,6 +1398,24 @@ pub struct Model {
     /// field's representation is I32 whatever its interval (I32 at rest,
     /// PR A), a wrong claim the witness at the field read must catch.
     pub rest_field_sabotage: bool,
+    /// I32 at rest, PR B (`rest_elems`; `PERRY_REST_ELEMS=0` turns it off).
+    pub rest_elems: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restelem`): a builtin
+    /// method's use of an Array is not recorded (`Model::rest_used`), so an
+    /// Array a native writes may be admitted at rest, a wrong claim the
+    /// at-rest load witness must catch.
+    pub rest_elem_sabotage: bool,
+    /// Array tokens a generic reader may touch (`Model::rest_used`): never
+    /// at rest.
+    pub arr_used: crate::pts::FxHashSet<Tok>,
+    /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
+    pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
+    /// The receiver relays `array_method` makes for a fused fill's call.
+    pub rest_fill_relays: Vec<NodeId>,
+    /// The templates admitted at rest (`rest_elems::admit`), and why each
+    /// other candidate was not (`rest_elems::probe`).
+    pub rest_tmpls: crate::pts::FxHashSet<TmplId>,
+    pub rest_refused: FxHashMap<TmplId, String>,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,

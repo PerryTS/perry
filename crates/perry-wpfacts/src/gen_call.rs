@@ -89,7 +89,8 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // Call arguments: the callee classifies them (`zero_sign`).
+        let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
         if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
             self.call_args_at.push((fx.module, byte_offset, a.clone()));
         }
@@ -119,6 +120,7 @@ impl<'a> Gen<'a> {
                         _ => None,
                     })
                     .collect();
+                self.zs_observe(&a);
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
@@ -180,6 +182,18 @@ impl<'a> Gen<'a> {
                     // its arguments were generated before its own call.
                     if let Some(site) = self.new_array_site.take() {
                         self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                        // I32 at rest (PR B): a birth an at-rest template
+                        // may have, keyed as codegen keys the call.
+                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let (module, recv) = (fx.module, o);
+                        let fill = crate::rest_elems::RestFill {
+                            module,
+                            offset,
+                            recv,
+                            site,
+                            fill_site: u32::MAX,
+                        };
+                        self.m.rest_fills.push(fill);
                     }
                 }
                 self.own_test_recv = Some(o);
@@ -214,12 +228,21 @@ impl<'a> Gen<'a> {
                     });
                 }
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(f) = self
+                    .m
+                    .rest_fills
+                    .last_mut()
+                    .filter(|f| fused_fill && f.recv == o)
+                {
+                    f.fill_site = self.m.calls[call as usize].site;
+                }
                 if let Some(i) = rec {
                     self.call_sites_at[i].call = call;
                 }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
+                self.str_index_bound(object, property, call);
                 match private {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => self.m.cons(
@@ -293,6 +316,7 @@ impl<'a> Gen<'a> {
                 self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
+                self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {

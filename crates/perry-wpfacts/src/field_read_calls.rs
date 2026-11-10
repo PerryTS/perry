@@ -84,6 +84,10 @@ pub struct FieldReadCall {
     /// This call's index is an integer in `[0, array.floor)` and the arrays
     /// are dense below the floor: the slot is a present own element.
     pub in_floor: bool,
+    /// F's element read is at rest (I32 at rest, PR B;
+    /// `rest_elems::site_floor`): every copy's receiver holds only Arrays of
+    /// at-rest templates, the least floor of which this is.
+    pub rest: Option<u32>,
 }
 
 type Shape = (String, usize, Option<FieldReadDefault>, u32, u32);
@@ -218,18 +222,15 @@ pub(crate) fn collect(
     // (`Inst::fresh`), as `element_keys` reads a key's.
     let mut inst_copies: std::collections::HashMap<crate::model::NodeId, Vec<_>> =
         Default::default();
-    if m.array_fields {
+    if m.array_fields || !m.rest_tmpls.is_empty() {
         for inst in 0..m.sum.insts.len() as u32 {
             m.inst_copies(inst, |orig, copy| {
                 inst_copies.entry(orig).or_default().push(copy)
             });
         }
     }
-    // What F's element read reads from: every copy of its receiver.
-    let array_of = |mi: u32, offset: u32| -> Option<ArrRep> {
-        if !m.array_fields {
-            return None;
-        }
+    // Every copy of F's element read's receiver.
+    let recvs_of = |mi: u32, offset: u32| -> Vec<crate::model::NodeId> {
         let mut nodes = Vec::new();
         for e in &g.element_sites {
             if e.module == mi && e.byte_offset == offset && e.op == crate::derive::ElementOp::Read {
@@ -237,7 +238,13 @@ pub(crate) fn collect(
                 nodes.extend(inst_copies.get(&e.recv).into_iter().flatten().copied());
             }
         }
-        arr_rep(m, &nodes)
+        nodes
+    };
+    // What F's element read reads from.
+    let array_of = |mi: u32, offset: u32| -> Option<ArrRep> {
+        m.array_fields
+            .then(|| arr_rep(m, &recvs_of(mi, offset)))
+            .flatten()
     };
     for s in sites {
         let one_body = s.target_fns.len() == 1 || sabotage && !s.target_fns.is_empty();
@@ -277,6 +284,7 @@ pub(crate) fn collect(
             continue;
         }
         let array = array_of(fm, element_offset);
+        let rest = crate::rest_elems::site_floor(m, &recvs_of(fm, element_offset));
         let in_floor = array.is_some_and(|r| {
             r.dense
                 && (floor_sabotage
@@ -296,6 +304,7 @@ pub(crate) fn collect(
                 field_offset,
                 array,
                 in_floor,
+                rest,
             },
         ));
     }

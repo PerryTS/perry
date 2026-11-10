@@ -329,6 +329,8 @@ enum Recv {
 }
 
 fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
+    // −0 tolerance: unknown code receives the arguments.
+    m.zs_call_args(call);
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
         let d = m.diagnostic.as_mut().unwrap();
         let c = d.census.as_mut().unwrap();
@@ -1580,7 +1582,7 @@ pub(crate) fn native_namespace_call(
     {
         m.diagnostic_callee(call, t);
         let prev = std::mem::replace(&mut m.cur_this, this_tok);
-        m.with_b(|m| ns_method_inner(m, ns, Some(name), call, true));
+        m.with_native(call, |m| ns_method_inner(m, ns, Some(name), call, true));
         m.cur_this = prev;
     }
     true

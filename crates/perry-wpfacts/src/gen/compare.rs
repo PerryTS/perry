@@ -17,8 +17,9 @@ impl<'a> Gen<'a> {
                 // `===` / `!==` (IsStrictlyEqual) runs no protocol; it
                 // compares objects by identity. Against a primitive
                 // literal it is a presence test, no identity.
-                let l = self.expr(fx, left);
-                let r = self.expr(fx, right);
+                // `-0 === 0`: the compare absorbs the sign (`zero_sign`).
+                let l = self.expr_zs(fx, left);
+                let r = self.expr_zs(fx, right);
                 self.raise_on(l);
                 self.raise_on(r);
                 if !primitive_literal(left) && !primitive_literal(right) {
@@ -41,7 +42,7 @@ impl<'a> Gen<'a> {
                     IdentityRoute::LooseEq,
                 )
             }
-            _ => self.prim_op(
+            _ => self.prim_op_zs(
                 fx,
                 &[left, right],
                 prim::BOOL,

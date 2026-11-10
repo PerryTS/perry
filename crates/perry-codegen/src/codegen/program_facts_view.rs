@@ -280,9 +280,22 @@ pub struct ElisionFacts {
     pub local_classes: std::collections::BTreeMap<u32, u32>,
     pub indexed_owners: std::collections::BTreeMap<u32, FactsIndexedOwner>,
     pub number_inputs: std::collections::BTreeSet<u32>,
-    /// Number bindings whose every value is an int32, never `-0` (the
-    /// wpfacts interval proof, `BindingFacts::int_range`).
+    /// Number bindings whose every value is an int32 (the wpfacts interval
+    /// proof, `BindingFacts::int_range`), never an observable `-0`.
     pub int32_inputs: std::collections::BTreeSet<u32>,
+    /// −0 tolerance (wpfacts PR D): the `int32_inputs` whose values may hold
+    /// a `-0` no use observes (`BindingFacts::zero_tol`). Check mode admits
+    /// `-0` entering their slot, and a sign-observing operation reading one
+    /// is a false proof (`verify_facts::zero_sign`).
+    pub zero_tolerant_locals: std::collections::BTreeSet<u32>,
+    /// Some Number node keeps its interval by −0 tolerance
+    /// (`ProgramFacts::zero_sign_tolerated`): check mode's int32 witnesses
+    /// of elements and signatures admit `-0`.
+    pub zero_sign_tolerated: bool,
+    /// (class id, key) of the fields whose nodes keep an int32 interval by
+    /// −0 tolerance (wpfacts `FieldFacts::zero_tol`): the field-rep witness
+    /// admits `-0` for them only.
+    pub zero_tolerant_fields: std::collections::BTreeSet<(u32, String)>,
     /// Local id → the representation the whole-program facts give it
     /// (representation RFC §10.3, wpfacts `BindingFacts::rep`). A local the
     /// facts cover takes exactly this one; codegen does not choose.
@@ -346,6 +359,14 @@ pub struct ElisionFacts {
     /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
     /// PR-C2; `expr::index_get::proven_array`).
     pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
+    /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
+    /// stores (by `element_offset`) whose every receiver is an at-rest
+    /// Array, with the least floor of those Arrays, and the `fill` call
+    /// offsets of at-rest births.
+    pub rest_reads: std::collections::BTreeMap<u32, u32>,
+    pub rest_writes: std::collections::BTreeMap<u32, u32>,
+    pub rest_births: std::collections::BTreeSet<u32>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -491,6 +512,9 @@ pub struct FactsSignature {
     pub ret: FactsRep,
     /// The class id of the one class every `this` holds (E2).
     pub this_class: Option<u32>,
+    /// −0 tolerance (wpfacts PR D): an I32 parameter may receive `-0` (no
+    /// use observes it); the check-mode entry witness admits it.
+    pub zero_ok: bool,
 }
 
 /// `field_read_calls`).
@@ -509,6 +533,10 @@ pub struct FactsFieldReadCall {
     /// elements with no hole below it (wpfacts `FieldReadCall::in_floor`,
     /// DESIGN-p4l1 §2.8): the slot is a present own element.
     pub in_floor: Option<u32>,
+    /// `Some(floor)`: the method's element read is at rest (wpfacts
+    /// `FieldReadCall::rest`, I32 at rest PR B): an I32 word, read through
+    /// `expr::rest_elems`, whatever module the call is in.
+    pub rest: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

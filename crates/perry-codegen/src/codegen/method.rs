@@ -725,6 +725,7 @@ pub(super) fn compile_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,

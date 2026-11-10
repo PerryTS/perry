@@ -664,6 +664,17 @@ pub(crate) unsafe fn layout_init_from_slots(
     any_pointer
 }
 
+/// I32 at rest (PR B, `layout_slot::js_array_rest_encode`): the payload of
+/// an array whose every slot is an I32 word holds no pointer.
+///
+/// # Safety
+/// `user_ptr` is a live array head.
+pub(crate) unsafe fn mark_payload_pointer_free(user_ptr: usize) {
+    if let Some(header) = layout_header_for_user(user_ptr) {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+    }
+}
+
 pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
     user_ptr: usize,
     slot_count: usize,
