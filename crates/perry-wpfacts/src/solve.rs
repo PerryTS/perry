@@ -1469,6 +1469,8 @@ impl Model {
     /// chain runs with `this` = `t` and unknown primitive arguments, or for
     /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
+        // I32 at rest (PR B): a protocol touch reads elements undecoded.
+        self.rest_used(t);
         // The touch looks up and calls the protocol's keys and reads its
         // values, nothing else.
         let keys: Option<Vec<Atom>> = proto

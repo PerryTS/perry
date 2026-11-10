@@ -180,6 +180,17 @@ impl<'a> Gen<'a> {
                     // its arguments were generated before its own call.
                     if let Some(site) = self.new_array_site.take() {
                         self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                        // I32 at rest (PR B): a birth an at-rest template
+                        // may have, keyed as codegen keys the call.
+                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let (module, recv) = (fx.module, o);
+                        let fill = crate::rest_elems::RestFill {
+                            module,
+                            offset,
+                            recv,
+                            site,
+                        };
+                        self.m.rest_fills.push(fill);
                     }
                 }
                 self.own_test_recv = Some(o);

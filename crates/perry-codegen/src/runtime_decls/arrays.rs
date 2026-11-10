@@ -99,6 +99,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // element carries, or 0.
     module.declare_function("js_array_ensure_element_shape_ordinary", I32, &[I64]);
     module.declare_function("js_array_get_index_or_string", DOUBLE, &[I64, DOUBLE]);
+    // I32 at rest (PR B, `expr::rest_elems`): the birth encoding and the
+    // cold arms of an at-rest element site (`perry-runtime` `layout_slot`).
+    module.declare_function("js_array_rest_encode", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_array_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_array_rest_set", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function(
         "perry_array_read_cold_shared",
         DOUBLE,

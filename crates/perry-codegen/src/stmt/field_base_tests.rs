@@ -169,6 +169,7 @@ fn ir(rep: FactsRep) -> String {
         element_offset: at("this.board[sq]"),
         field_offset: at("this.board[sq]"),
         in_floor: None,
+        rest: None,
     };
     for (call, key, floor) in [
         ("this.at(i & 127); if", (0, 127), Some(128)),

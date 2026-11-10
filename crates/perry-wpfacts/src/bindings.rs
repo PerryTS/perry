@@ -168,6 +168,10 @@ pub struct ArrRep {
     /// binding that may be read before it holds one: consumers ask
     /// `BindingFacts::immutable_array`.
     pub im: bool,
+    /// Every token's template is at rest (I32 at rest, PR B;
+    /// `rest_elems`): each element slot holds an I32 word
+    /// `INT32_TAG | (u32)v` for the Array's whole life.
+    pub at_rest: bool,
 }
 
 /// The encoding of a value's slot: how its word is stored and passed.
@@ -206,6 +210,7 @@ impl ArrRep {
             dense: a.dense && b.dense,
             fixed: a.fixed && b.fixed,
             im: a.im && b.im,
+            at_rest: a.at_rest && b.at_rest,
         }
     }
 }
@@ -241,12 +246,13 @@ impl Rep {
             Rep::F64 => "f64".into(),
             Rep::I32 => "i32".into(),
             Rep::Arr(r) => format!(
-                "arr<{},{}{}{}{}>",
+                "arr<{},{}{}{}{}{}>",
                 r.elem.name(),
                 r.floor,
                 if r.dense { ",dense" } else { "" },
                 if r.fixed { ",fixed" } else { "" },
-                if r.im { ",im" } else { "" }
+                if r.im { ",im" } else { "" },
+                if r.at_rest { ",rest" } else { "" }
             ),
         }
     }
@@ -480,6 +486,13 @@ pub struct ModuleBindings {
     /// Number at every copy, with the hull of its interval; sorted
     /// (`element_keys`).
     pub element_keys: Vec<(u32, (i64, i64))>,
+    /// I32 at rest, PR B (`rest_elems`): element reads and element stores
+    /// by `element_offset` whose every receiver holds only Arrays of at-rest
+    /// templates, with the least floor of those Arrays; the `fill` call
+    /// offsets of the at-rest births. Sorted.
+    pub rest_reads: Vec<(u32, u32)>,
+    pub rest_writes: Vec<(u32, u32)>,
+    pub rest_births: Vec<u32>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
@@ -686,7 +699,7 @@ pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Optio
 /// - `dense`: born hole-free with `floor > 0` (Invariant D);
 /// - `elem`: `rep_of` of its element node (`all_fields`), I32 for int32
 ///   Numbers with int demand, F64 for Numbers, else Boxed.
-fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
+pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
     let (lo, fixed) = match m.arr_len.get(&t) {
         Some(&ln) => {
             let r = m.nodes[ln as usize].range;
@@ -728,6 +741,7 @@ fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
         dense: hole_free && floor > 0,
         fixed,
         im: fixed && m.arr_immutable(t),
+        at_rest: m.rest_tmpls.contains(&tm),
     }
 }
 
@@ -818,6 +832,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
         }
     }
     out.extend(rest_probe(m));
+    out.extend(crate::rest_elems::probe(m));
     out
 }
 

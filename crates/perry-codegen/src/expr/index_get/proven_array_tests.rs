@@ -394,6 +394,7 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
         element_offset: at("this.board[sq]"),
         field_offset: at("this.board[sq]"),
         in_floor: None,
+        rest: None,
     };
     let inside = at("this.at(5)");
     let outside = at("this.at(200)");

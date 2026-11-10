@@ -184,6 +184,7 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
+pub mod layout_slot;
 pub mod loop_interrupt;
 pub mod macos_bundle;
 pub mod map;

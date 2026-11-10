@@ -571,6 +571,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.element_floors.extend(mb.element_floors.iter().copied());
         out.const_numbers.extend(mb.const_numbers.iter().copied());
         out.element_keys.extend(mb.element_keys.iter().copied());
+        out.rest_reads.extend(mb.rest_reads.iter().copied());
+        out.rest_writes.extend(mb.rest_writes.iter().copied());
+        out.rest_births.extend(mb.rest_births.iter().copied());
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
             out.signatures.insert(
@@ -606,6 +609,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     element_offset: c.element_offset,
                     field_offset: c.field_offset,
                     in_floor: c.array.filter(|_| c.in_floor).map(|r| r.floor),
+                    rest: c.rest,
                 },
             );
         }

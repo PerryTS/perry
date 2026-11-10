@@ -61,6 +61,7 @@ const SAMPLES: [Rep; 7] = [
         dense: true,
         fixed: true,
         im: false,
+        at_rest: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::F64,
@@ -68,6 +69,7 @@ const SAMPLES: [Rep; 7] = [
         dense: false,
         fixed: true,
         im: false,
+        at_rest: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::Boxed,
@@ -75,6 +77,7 @@ const SAMPLES: [Rep; 7] = [
         dense: false,
         fixed: false,
         im: false,
+        at_rest: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::I32,
@@ -82,6 +85,7 @@ const SAMPLES: [Rep; 7] = [
         dense: true,
         fixed: false,
         im: false,
+        at_rest: false,
     }),
 ];
 

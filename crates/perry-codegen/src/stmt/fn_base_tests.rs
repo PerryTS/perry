@@ -90,6 +90,7 @@ fn ir(rep: FactsRep) -> String {
         element_offset: at("this.board[sq]"),
         field_offset: at("this.board[sq]"),
         in_floor: Some(128),
+        rest: None,
     };
     let mut offset = 0;
     while let Some(k) = SRC[offset..].find("this.at(") {

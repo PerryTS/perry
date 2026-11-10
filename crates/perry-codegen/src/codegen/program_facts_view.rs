@@ -340,6 +340,14 @@ pub struct ElisionFacts {
     /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
     /// PR-C2; `expr::index_get::proven_array`).
     pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
+    /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
+    /// stores (by `element_offset`) whose every receiver is an at-rest
+    /// Array, with the least floor of those Arrays, and the `fill` call
+    /// offsets of at-rest births.
+    pub rest_reads: std::collections::BTreeMap<u32, u32>,
+    pub rest_writes: std::collections::BTreeMap<u32, u32>,
+    pub rest_births: std::collections::BTreeSet<u32>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -503,6 +511,10 @@ pub struct FactsFieldReadCall {
     /// elements with no hole below it (wpfacts `FieldReadCall::in_floor`,
     /// DESIGN-p4l1 §2.8): the slot is a present own element.
     pub in_floor: Option<u32>,
+    /// `Some(floor)`: the method's element read is at rest (wpfacts
+    /// `FieldReadCall::rest`, I32 at rest PR B): an I32 word, read through
+    /// `expr::rest_elems`, whatever module the call is in.
+    pub rest: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
