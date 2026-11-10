@@ -1163,10 +1163,8 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     ctx.current_block = fast_idx;
     let mut raw_locals = HashMap::new();
     for (id, value) in &guard_values {
-        raw_locals.insert(
-            *id,
-            crate::codegen::emit_typed_f64_to_raw_guarded(ctx.block(), value.as_str()),
-        );
+        // The guard admitted a plain double, the raw value itself.
+        raw_locals.insert(*id, value.clone());
     }
     let mut fast_args = Vec::with_capacity(args.len());
     for arg in args {
