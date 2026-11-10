@@ -195,6 +195,9 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         | Cons::Falsy { .. }
         | Cons::RetInto { .. }
         | Cons::ArgInto { .. } => true,
+        // A callee: calling or constructing an Array throws before any
+        // element is read (the `new Array` holder holds what it births).
+        Cons::Call { .. } | Cons::New { .. } | Cons::NewNamed { .. } => true,
         // The fused fill's receiver: the birth and its native fill.
         _ => fill_recv,
     };
