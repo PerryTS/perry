@@ -727,7 +727,7 @@ pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep
                 ElemRep::F64
             } else if !numbers {
                 ElemRep::Boxed
-            } else if int32 && node.int_demand {
+            } else if int32 && elem_demand(m, t, node) {
                 ElemRep::I32
             } else {
                 ElemRep::F64
@@ -743,6 +743,19 @@ pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep
         im: fixed && m.arr_immutable(t),
         at_rest: m.rest_tmpls.contains(&tm),
     }
+}
+
+/// Int demand on token `t`'s elements (`node`, its element node). A read
+/// `a[k]` takes its value from the fields a number key names
+/// (`Model::num_fields`), which feed the element node, so its demand lands
+/// there; with I32 at rest on (PR B, `rest_elems`) that demand counts too.
+pub(crate) fn elem_demand(m: &Model, t: Tok, node: &crate::model::Node) -> bool {
+    node.int_demand
+        || m.rest_elems
+            && m
+                .num_fields
+                .get(&t)
+                .is_some_and(|&n| m.nodes[n as usize].int_demand)
 }
 
 /// The Number representation of what `nodes` hold together (a field over

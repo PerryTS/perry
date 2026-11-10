@@ -132,7 +132,7 @@ fn tok_refusal(m: &Model, t: Tok, tm: TmplId) -> Option<&'static str> {
         let e = &m.nodes[e as usize];
         return Some(if e.prim != crate::model::prim::NUM || !e.pts.is_empty() {
             "elem not a number"
-        } else if !e.int_demand {
+        } else if !crate::bindings::elem_demand(m, t, e) {
             "elem without demand"
         } else {
             "elem not int32"
