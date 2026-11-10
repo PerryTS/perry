@@ -96,6 +96,8 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
