@@ -830,8 +830,16 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
     // The "integer-valued double in [0, 2^32)" test is the shared pure
     // normalizer (`memory(none)`, a GC leaf) and a sign test of its result.
+    // N10: the tier's unsigned bound declines the normalizer's `-1`, and the
+    // sign test sits on the tier's miss arm (`icmp slt`, `ubound.cold`); with
+    // `PERRY_UNSIGNED_BOUND=0` it is the split's `icmp sge` again.
+    let sign_test = if crate::expr::index_key::unsigned_bound() {
+        ir.contains("icmp slt i32 %") && ir.contains("ubound.cold")
+    } else {
+        ir.contains("icmp sge i32 %")
+    };
     assert!(
-        ir.contains("call i32 @perry_array_index_normalize_i32(") && ir.contains("icmp sge i32 %"),
+        ir.contains("call i32 @perry_array_index_normalize_i32(") && sign_test,
         "the dynamic key must be normalized by the shared index helper:\n{ir}"
     );
     assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
