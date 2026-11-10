@@ -1448,7 +1448,6 @@ impl<'a, 'g> Scan<'a, 'g> {
         linked: &FxHashMap<TmplId, TmplId>,
     ) -> Option<RecordReject> {
         use RecordReject::*;
-        let m = &self.g.m;
         for &(c, i) in self.arg_of.get(&n).into_iter().flatten() {
             // A method of a record array of this record (`played.push(u)`):
             // the array's R6 rules decide it.
