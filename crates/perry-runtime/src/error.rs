@@ -143,7 +143,7 @@ thread_local! {
     /// currently being dispatched, set by codegen-emitted
     /// `js_set_call_location` immediately before a dynamic method/call
     /// dispatch that can throw "X is not a function" / "is not a
-    /// constructor". `make_stack` reads it so the thrown TypeError's
+    /// constructor". Frame capture records it so the thrown TypeError's
     /// `.stack` shows `at <file>:<line>` instead of `at <anonymous>`.
     ///
     /// Only populated when the program was compiled with `--debug-symbols`
@@ -213,20 +213,6 @@ fn recorded_stack_frame() -> Option<String> {
             format!("    at {}:{}", String::from_utf8_lossy(bytes), line)
         })
     })
-}
-
-unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
-    // Build a simple "<name>: <message>\n    at <file>:<line>" string
-    // (or "<anonymous>" when no #5247 source location is recorded). Real
-    // multi-frame stack traces are not implemented; the test only checks
-    // `.includes(message)`.
-    let frame = current_stack_frame();
-    let s = if message.is_empty() {
-        format!("{}\n{}", name, frame)
-    } else {
-        format!("{}: {}\n{}", name, message, frame)
-    };
-    js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
 unsafe fn alloc_error(
@@ -1434,70 +1420,14 @@ fn error_prepare_stack_trace_override() -> Option<f64> {
     Some(val_f64)
 }
 
-/// Compute a `.stack` value honoring the current `Error.prepareStackTrace`.
-/// With a user override, returns `prepareStackTrace(receiver, [CallSite, …])`;
-/// otherwise the coarse string. Returning it (vs storing it) keeps the result
-/// GC-rooted by the reading caller — a Rust-side store of the nursery CallSite
-/// array gets reclaimed the moment this returns (V8 itself evaluates `.stack`
-/// lazily for exactly this reason).
-unsafe fn compute_stack_value(receiver: f64) -> f64 {
-    if let Some(prep) = error_prepare_stack_trace_override() {
-        let structured = build_structured_stack(10);
-        let prep_ptr =
-            crate::value::js_nanbox_get_pointer(prep) as *const crate::closure::ClosureHeader;
-        return crate::closure::js_closure_call2(
-            prep_ptr,
-            crate::closure::plain_call_receiver(),
-            receiver,
-            structured,
-        );
-    }
-    let s = make_stack("Error", "");
-    crate::value::js_nanbox_string(s as i64)
-}
-
-/// Lazy `stack` accessor installed by `Error.captureStackTrace`. Fires on read
-/// with `this` bound to the target object (V8 semantics: `prepareStackTrace` is
-/// consulted at access time, not capture time).
-extern "C" fn error_stack_lazy_getter(
-    _closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    let receiver = this.as_f64();
-    unsafe { compute_stack_value(receiver) }
-}
-
-/// Install the lazy `stack` getter accessor on `target`.
-unsafe fn install_lazy_stack_accessor(target_ptr: *mut crate::object::ObjectHeader) {
-    let fp = crate::fn_info!(error_stack_lazy_getter, 0; with_declared(0));
-    let closure = crate::closure::js_closure_alloc(fp, 0);
-    if closure.is_null() {
-        return;
-    }
-    let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
-    let key = js_string_from_bytes(b"stack".as_ptr(), 5);
-    crate::object::ensure_key_in_keys_array(target_ptr, key);
-    crate::object::install_builtin_getter(target_ptr, "stack", getter_bits);
-    crate::object::set_accessor_descriptor(
-        target_ptr as usize,
-        "stack".to_string(),
-        crate::object::AccessorDescriptor {
-            get: getter_bits,
-            set: 0,
-        },
-    );
-    crate::object::set_property_attrs(
-        target_ptr as usize,
-        "stack".to_string(),
-        crate::object::PropertyAttrs::new(true, false, true),
-    );
-}
+#[path = "error_capture_stack.rs"]
+mod capture_stack;
+use capture_stack::install_lazy_stack_accessor;
 
 /// `Error.captureStackTrace(target[, constructorOpt])`.
 ///
-/// Perry's stack strings are intentionally coarse today; this helper installs
-/// the same non-enumerable `stack` data property shape Node exposes and
-/// preserves the invalid-target TypeError contract.
+/// Capture the source frames at this call and install a non-enumerable lazy
+/// accessor. Formatting and `Error.prepareStackTrace` lookup happen on read.
 #[no_mangle]
 pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f64) -> f64 {
     #[cfg(perry_contract_checks)]
@@ -1525,7 +1455,7 @@ pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f6
         // or the coarse string when there is no override. A getter RETURNS the
         // value to its caller (GC-rooted), unlike a stored nursery array which a
         // minor GC would reclaim the instant `captureStackTrace` returns.
-        install_lazy_stack_accessor(target_ptr);
+        install_lazy_stack_accessor(target);
     }
 
     f64::from_bits(crate::value::TAG_UNDEFINED)
