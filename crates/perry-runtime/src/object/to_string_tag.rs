@@ -24,6 +24,9 @@ pub fn web_stream_prototype_value(id: usize) -> f64 {
 /// The Web Streams interface stream registry id `id` is an instance of: the
 /// one map behind its tag and its prototype. Kind 3 is a default reader
 /// (BYOB readers are a follow-up); 6/7/8 are the controller families.
+/// Inlined into its callers (the tag and prototype readers), as the per-site
+/// tag matches it replaced were: no function of its own in a program.
+#[inline(always)]
 pub(crate) fn web_stream_interface_name(id: usize) -> Option<&'static str> {
     let kind_probe = stream_handle_kind_probe()?;
     match unsafe { kind_probe(id) } {

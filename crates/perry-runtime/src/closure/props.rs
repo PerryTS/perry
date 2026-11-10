@@ -85,6 +85,28 @@ pub(crate) unsafe fn is_declared_static(ptr: usize, key: &[u8]) -> bool {
         .any(|declared| declared.as_bytes() == key)
 }
 
+/// The bag a value read of the closure at `ptr` sees while it has none: an
+/// unborn lazy constructor owns its declared statics (`key`: that one;
+/// `None`: any of them), so the read births its family and reads the bag the
+/// birth installed. Null for every other closure. The one out-of-line slow
+/// path of the bag readers; presence and listing never birth.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[cold]
+#[inline(never)]
+unsafe fn unborn_bag_for_read(ptr: usize, key: Option<&[u8]>) -> *mut ObjectHeader {
+    let declared = match key {
+        Some(key) => is_declared_static(ptr, key),
+        None => !crate::object::unborn_declared_statics_of(ptr).is_empty(),
+    };
+    if declared && crate::object::birth_unborn_family_of(ptr) {
+        bag_of(ptr)
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 /// Allocate the bag if absent and install it with the store barrier.
 pub(crate) unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
     let existing = bag_of(ptr);
@@ -361,10 +383,7 @@ pub(crate) unsafe fn bag_get(ptr: usize, key: &[u8]) -> Option<f64> {
     if bag.is_null() {
         // Reading a declared static of an unborn lazy constructor births its
         // family; the birth installs the static.
-        if !is_declared_static(ptr, key) || !crate::object::birth_unborn_family_of(ptr) {
-            return None;
-        }
-        bag = bag_of(ptr);
+        bag = unborn_bag_for_read(ptr, Some(key));
         if bag.is_null() {
             return None;
         }
@@ -613,22 +632,22 @@ pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
 }
 
 pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
     let bag = bag_of(ptr);
     if bag.is_null() {
         // An unborn lazy constructor's declared statics follow its intrinsic
         // slots; listing them births nothing.
-        return crate::object::unborn_declared_statics_of(ptr)
-            .iter()
-            .map(|key| key.as_bytes().to_vec())
-            .collect();
+        for key in crate::object::unborn_declared_statics_of(ptr) {
+            out.push(key.as_bytes().to_vec());
+        }
+        return out;
     }
     let keys = crate::object::object_keys(bag);
     let arr = keys.arr();
     if arr.is_null() {
-        return Vec::new();
+        return out;
     }
     let live = crate::object::object_live_slot_count(bag);
-    let mut out = Vec::new();
     for i in 0..keys.count() {
         if !crate::object::key_attrs::key_is_accessor_at(arr, i)
             && crate::object::object_key_field_at_with_keys(bag, arr, i, live).bits()
@@ -658,12 +677,7 @@ pub(crate) unsafe fn bag_snapshot(ptr: usize) -> Vec<(String, f64)> {
     if bag.is_null() {
         // The snapshot reads values: an unborn lazy constructor with declared
         // statics is born to read them.
-        if crate::object::unborn_declared_statics_of(ptr).is_empty()
-            || !crate::object::birth_unborn_family_of(ptr)
-        {
-            return Vec::new();
-        }
-        bag = bag_of(ptr);
+        bag = unborn_bag_for_read(ptr, None);
         if bag.is_null() {
             return Vec::new();
         }
