@@ -1,0 +1,1 @@
+JSON.stringify array replacers read properties in whitelist order without evaluating excluded getters or snapshotting later values. PropertyList membership is indexed separately while preserving first occurrence, lazy key coercion and repeated wrapper conversion effects.
