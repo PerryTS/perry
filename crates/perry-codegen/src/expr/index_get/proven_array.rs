@@ -222,7 +222,7 @@ pub(crate) fn lower_in_floor(
         number: rep.elem != crate::codegen::FactsElemRep::Boxed,
         receiver: Receiver::Field,
     };
-    lower_rep(ctx, arr_box, idx_i32, read, false)
+    lower_rep(ctx, arr_box, idx_i32, read, false, None)
 }
 
 /// `e` is an element read the tier loads below a dense floor and whose
@@ -287,9 +287,35 @@ pub(super) fn lower(
     fact: Proven,
     numeric: bool,
 ) -> String {
+    lower_bounded(ctx, arr_box, idx_i32, fact, numeric, None)
+}
+
+/// The read under `fact` has an unsigned bound in front of its load: the
+/// key is not proven below the floor (`idx <u capacity`) or below the fixed
+/// length (`idx <u len`). Such a read admits no negative key, so a caller
+/// may hand it one untested (N10, `guarded_array::unsigned_bound_covers`).
+pub(super) fn bounds_key(fact: Proven) -> bool {
     match fact {
-        Proven::Rep(read) => lower_rep(ctx, arr_box, idx_i32, read, numeric),
-        Proven::Fixed(fact) => lower_fixed(ctx, arr_box, idx_i32, fact, numeric),
+        Proven::Rep(read) => !read.in_floor,
+        Proven::Fixed(fact) => !fact.key_in_bounds,
+    }
+}
+
+/// [`lower`] whose key is not sign-tested when `negative_exit` is set
+/// (`bounds_key` holds): the miss arm sends a negative key there first
+/// (`guarded_array::emit_negative_exit`).
+pub(super) fn lower_bounded(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    fact: Proven,
+    numeric: bool,
+    negative_exit: Option<&str>,
+) -> String {
+    debug_assert!(negative_exit.is_none() || bounds_key(fact));
+    match fact {
+        Proven::Rep(read) => lower_rep(ctx, arr_box, idx_i32, read, numeric, negative_exit),
+        Proven::Fixed(fact) => lower_fixed(ctx, arr_box, idx_i32, fact, numeric, negative_exit),
     }
 }
 
@@ -300,6 +326,7 @@ fn lower_rep(
     idx_i32: &str,
     read: RepRead,
     numeric: bool,
+    negative_exit: Option<&str>,
 ) -> String {
     let r = read.rep;
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
@@ -374,6 +401,7 @@ fn lower_rep(
     ctx.block().br(&merge_label);
 
     ctx.current_block = cold_idx;
+    super::guarded_array::emit_negative_exit(ctx, idx_i32, negative_exit);
     let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
     // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
     let cold = super::guarded_array::emit_read_cold(
@@ -394,6 +422,7 @@ fn lower_fixed(
     idx_i32: &str,
     fact: FactsElementRead,
     numeric: bool,
+    negative_exit: Option<&str>,
 ) -> String {
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     crate::verify_facts::consumed(
@@ -438,6 +467,7 @@ fn lower_fixed(
     blk.cond_br(&hit, &merge_label, &cold_label);
 
     ctx.current_block = cold_idx;
+    super::guarded_array::emit_negative_exit(ctx, idx_i32, negative_exit);
     let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
     // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
     let cold = super::guarded_array::emit_read_cold(

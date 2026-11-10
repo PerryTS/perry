@@ -65,6 +65,35 @@ pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// another block. The cast's input dominates exactly the same uses as its
 /// output; signed negatives and unsigned values above i32::MAX decline.
 pub(super) fn normalize(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> String {
+    normalize_keyed(ctx, key, expr, false)
+}
+
+/// [`normalize`] for a consumer whose every element arm is behind an
+/// unsigned bound (`idx <u n`, `n < 2^31`) and whose every declined key
+/// takes one arm that reads the original key (N10, [`unsigned_bound`]):
+/// a widened native index is handed over as it is. A negative `i32` (or a
+/// `uitofp` source at or above 2^31) is at least 2^31 unsigned, so the bound
+/// declines it exactly as it declines `-1`; the select that maps it to `-1`
+/// is the sign test the bound already performs. Every other key keeps
+/// [`normalize`]'s admission (NaN, fractions, `-0`, tags and the
+/// `charCodeAt` alias are unchanged).
+pub(super) fn normalize_unsigned(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> String {
+    normalize_keyed(ctx, key, expr, unsigned_bound())
+}
+
+/// `PERRY_UNSIGNED_BOUND=0`: every element read and store keeps its sign
+/// test in front of the bound (N10 off).
+pub(crate) fn unsigned_bound() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_UNSIGNED_BOUND").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+fn normalize_keyed(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>, wrap: bool) -> String {
     let source = ctx
         .func
         .blocks()
@@ -72,6 +101,9 @@ pub(super) fn normalize(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> 
         .rev()
         .find_map(|b| b.widened_i32_source(key));
     if let Some(index) = source {
+        if wrap {
+            return index;
+        }
         let valid = ctx.block().icmp_sge(I32, &index, "0");
         return ctx.block().select(I1, &valid, I32, &index, "-1");
     }
@@ -515,5 +547,74 @@ mod tests {
                 "{ir}"
             );
         }
+    }
+
+    /// `key | 0`: a native i32 widened to the key's double.
+    fn int_key() -> Expr {
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
+            right: Box::new(Expr::Integer(0)),
+        }
+    }
+
+    /// N10: a widened native key enters the bounded tier as it is. No
+    /// select maps it to -1 and the split does not branch on its sign; the
+    /// tier's miss arm sends a negative key to the runtime-key arm.
+    #[test]
+    fn widened_key_read_has_its_sign_test_on_the_miss_arm_only() {
+        let ir = read_ir(int_key(), vec![]);
+        assert!(!ir.contains(", i32 -1"), "the -1 select is gone: {ir}");
+        let entry = ir
+            .split_once("define double @")
+            .and_then(|(_, f)| f.split("\naidx.canonical.").next())
+            .unwrap_or_else(|| panic!("no split: {ir}"));
+        assert!(!entry.contains("icmp sge i32"), "{entry}");
+        let miss = ir
+            .split_once("\nubound.cold.")
+            .map(|(head, _)| head.rsplit("\n\n").next().unwrap_or(head))
+            .unwrap_or_else(|| panic!("no negative exit: {ir}"));
+        assert!(
+            miss.contains("icmp slt i32") && miss.contains("aidx.runtime_key"),
+            "the miss arm tests the sign and leaves for the runtime key: {miss}"
+        );
+    }
+
+    /// N10, negative controls: a key the normalizer admits still declines
+    /// NaN, fractions and tags as -1 (now behind the unsigned bound), and
+    /// the runtime-key arm keeps the original double.
+    #[test]
+    fn number_key_keeps_its_normalizer_and_the_exact_runtime_arm() {
+        let ir = read_ir(Expr::LocalGet(2), vec![]);
+        assert!(
+            ir.contains("call i32 @perry_array_index_normalize_i32"),
+            "{ir}"
+        );
+        assert!(ir.contains("ubound.cold"), "{ir}");
+        let runtime_block = ir
+            .split_once("\naidx.runtime_key.")
+            .map(|(_, rest)| rest.split("\n\n").next().unwrap_or(rest))
+            .unwrap_or_else(|| panic!("no runtime-key block: {ir}"));
+        assert!(
+            runtime_block.contains("call double @perry_array_read_cold_shared(double %arg1"),
+            "{runtime_block}"
+        );
+    }
+
+    /// N10 on the store side: the guarded store's one bound is
+    /// `idx <u capacity`, so a widened key is handed over unselected.
+    #[test]
+    fn widened_key_store_has_no_sign_select() {
+        let store = Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(int_key()),
+            value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
+            element_offset: 0,
+        });
+        let ir = read_ir(Expr::Integer(0), vec![store]);
+        assert!(!ir.contains(", i32 -1"), "{ir}");
+        assert!(ir.contains("icmp ult i32"), "{ir}");
     }
 }
