@@ -3,7 +3,7 @@
 //! under each of them, so a store into a runtime object (`Object`, its
 //! prototype's methods) through such a key writes those keys alone and
 //! gives it no prototype. A key that may be any string (a written field, an
-//! escaped literal, a concatenation, more than `STRS_K` constants) keeps the
+//! escaped literal, a concatenation, a symbol) keeps the
 //! any-key store, and with it the prototype a `__proto__` key may give.
 //!
 //! The witness: `box` is the stored value. Given to a runtime object as its
@@ -115,10 +115,10 @@ fn a_concatenation_whose_shape_admits_proto_gives() {
 }
 
 #[test]
-fn more_constants_than_the_cap_are_any_string() {
-    // (c5) nine constants joined in one return node: any string, whose
-    // any-key store may name `__proto__`.
-    assert!(!no_give(
+fn nine_constants_stay_names() {
+    // (c5) nine constants joined in one return node: exact names (the set
+    // is exact past eight), none of them `__proto__`.
+    assert!(no_give(
         r#"function pick(i: number): string {
             if (i == 1) return "k1"; if (i == 2) return "k2"; if (i == 3) return "k3";
             if (i == 4) return "k4"; if (i == 5) return "k5"; if (i == 6) return "k6";

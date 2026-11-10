@@ -142,7 +142,7 @@ impl KeyShape {
     }
 
     /// May a string of this shape be a Number key (`numeric_key`)?
-    fn may_be_numeric(&self) -> bool {
+    pub(crate) fn may_be_numeric(&self) -> bool {
         self.globs.iter().any(|g| glob_may_be_numeric(g))
     }
 }
@@ -205,17 +205,42 @@ impl Model {
         id
     }
 
+    /// The shape of a key that is any String (the glob `*`): it may spell
+    /// every name, a Number key among them, but no symbol.
+    pub fn any_string_shape(&mut self) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape { globs: Vec::new() });
+        }
+        let s = KeyShape {
+            globs: vec![vec![String::new(), String::new()]],
+        };
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
     /// May `key` name the member spelled `name`? The one question every
     /// lookup, builtin member and store asks of a computed key. A shaped key
-    /// is a String that is no Number key: never an element or numeric key.
-    /// The solver's other internal keys (`#...`, `\u{1}...`) stay possible.
+    /// is a String, or a well-known symbol spelled exactly (`KeyShape::of`):
+    /// a glob with a hole is a String and never names a symbol (HIR's
+    /// `@@__perry_wk_<name>`). Only the any-String shape may be a Number
+    /// key, an element or numeric key. The solver's other internal keys
+    /// (`#...`, `\u{1}...`) stay possible.
     pub fn key_may_name_str(&self, key: Key, name: &str) -> bool {
         match key {
             Key::Named(a) => self.atoms[a as usize] == name,
             Key::Any(0) => true,
             Key::Any(s) => match name {
-                ELEM | NUM_KEY => false,
+                ELEM | NUM_KEY => self.key_shapes[s as usize].may_be_numeric(),
                 n if n.starts_with('#') || n.starts_with('\u{1}') => true,
+                n if n.starts_with(crate::builtins::WK_PREFIX) => self.key_shapes[s as usize]
+                    .globs
+                    .iter()
+                    .any(|g| g.len() == 1 && g[0] == n),
                 n => self.key_shapes[s as usize].admits(n),
             },
         }

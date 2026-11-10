@@ -30,7 +30,7 @@ crates/perry-codegen/src/collectors/hir_facts.rs	2760
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
 crates/perry-codegen/src/expr/mod.rs	2832
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
-crates/perry-codegen/src/stmt/loops.rs	8290
+crates/perry-codegen/src/stmt/loops.rs	8320
 # Representation-aware map core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/map.rs	3040
 # Representation-aware set core; further decomposition is tracked in #1435.
