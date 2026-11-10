@@ -79,8 +79,14 @@ fn negative_controls_decline() {
     assert_eq!(concat_short_pair(inline(b"abc"), inline(b"def")), None);
     // Non-ASCII inline bytes ("é" is two UTF-8 bytes): the general path
     // allocates a heap string here, so must this arm's caller.
-    assert_eq!(concat_short_pair(inline("é".as_bytes()), inline(b"a")), None);
-    assert_eq!(concat_short_pair(inline(b"a"), inline("é".as_bytes())), None);
+    assert_eq!(
+        concat_short_pair(inline("é".as_bytes()), inline(b"a")),
+        None
+    );
+    assert_eq!(
+        concat_short_pair(inline(b"a"), inline("é".as_bytes())),
+        None
+    );
     // Lone surrogate bytes (WTF-8 ED A0 80) in an inline value.
     assert_eq!(
         concat_short_pair(inline(&[0xED, 0xA0, 0x80]), inline(b"a")),
