@@ -22,8 +22,8 @@ pub fn web_stream_prototype_value(id: usize) -> f64 {
 }
 
 /// The Web Streams interface stream registry id `id` is an instance of: the
-/// one map behind its tag and its prototype. Kind 3 is a default reader
-/// (BYOB readers are a follow-up); 6/7/8 are the controller families.
+/// one map behind its tag and its prototype. Kind 3 is a default reader,
+/// 9 a BYOB reader, 10 a BYOB request; 6/7/8 are the controller families.
 /// Inlined into its callers (the tag and prototype readers), as the per-site
 /// tag matches it replaced were: no function of its own in a program.
 #[inline(always)]
@@ -37,6 +37,8 @@ pub(crate) fn web_stream_interface_name(id: usize) -> Option<&'static str> {
         6 => Some("ReadableStreamDefaultController"),
         7 => Some("TransformStreamDefaultController"),
         8 => Some("ReadableByteStreamController"),
+        9 => Some("ReadableStreamBYOBReader"),
+        10 => Some("ReadableStreamBYOBRequest"),
         _ => None,
     }
 }

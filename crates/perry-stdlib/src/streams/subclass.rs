@@ -128,11 +128,20 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
 /// 4 = writer, 5 = TransformStream; a readable stream's controller (RSTREAM
 /// R2: `stream id | STREAM_CONTROLLER_BIT`, live while the stream is) is
 /// 6 = ReadableStreamDefaultController, 7 = TransformStreamDefaultController
-/// (the readable side of a TransformStream), 8 = ReadableByteStreamController.
+/// (the readable side of a TransformStream), 8 = ReadableByteStreamController;
+/// 9 = ReadableStreamBYOBReader; a byte stream's BYOB request (`stream id |
+/// STREAM_BYOB_REQUEST_BIT`) is 10 = ReadableStreamBYOBRequest.
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return 0;
+    }
+    let requested = byob_request_id_stream(id);
+    if requested != 0 {
+        return match READABLE_STREAMS.lock().unwrap().get(&requested) {
+            Some(s) if s.is_byte_stream => 10,
+            _ => 0,
+        };
     }
     let controlled = controller_id_stream(id);
     if controlled != 0 {
@@ -162,8 +171,10 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     {
         return 2;
     }
-    if READERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
-        return 3;
+    match READERS.lock().ok().and_then(|m| m.get(&id).map(|r| r.is_byob)) {
+        Some(true) => return 9,
+        Some(false) => return 3,
+        None => {}
     }
     if WRITERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
         return 4;
@@ -213,6 +224,17 @@ pub(crate) unsafe fn dispatch_stream_method(
         .copied()
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
 
+    // A byte stream's BYOB request handle answers its two operations.
+    let requested = byob_request_id_stream(id);
+    if requested != 0 {
+        return match method {
+            "respond" => Some(super::byob::byob_request_respond(requested, arg0)),
+            "respondWithNewView" => {
+                Some(super::byob::byob_request_respond_with_new_view(requested, arg0))
+            }
+            _ => None,
+        };
+    }
     // IDs have one registry owner; eviction clears every registry before reuse.
     // Skip registries that cannot handle this method, dropping each guard
     // before the FFI call re-locks it. Controllers alias only readable IDs.
@@ -340,7 +362,8 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
             return super::byob::js_readable_stream_controller_byob_request(handle)
         }
         (2, "locked") => return js_writable_stream_locked(handle),
-        (3, "closed") => return box_promise(js_reader_closed(handle)),
+        (3 | 9, "closed") => return box_promise(js_reader_closed(handle)),
+        (10, "view") => return super::byob::byob_request_view(handle),
         (4, "closed") => return box_promise(js_writer_closed(handle)),
         (4, "ready") => return box_promise(js_writer_ready(handle)),
         (4, "desiredSize") => return js_writer_desired_size(handle),
