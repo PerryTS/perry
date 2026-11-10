@@ -1368,6 +1368,17 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     }
 }
 
+/// An ordinary object a builtin makes (`members::box_chain` Object: a
+/// `JSON.parse` object, a property descriptor, an `Object.fromEntries`
+/// result): its chain is `Object.prototype`, or a prototype the program
+/// gave it, never another builtin prototype.
+pub(crate) fn ordinary_box(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what, .. }
+            if members::bobj_family(what) == Family::Box
+                && members::box_chain(what) == members::BoxChain::Object))
+}
+
 fn is_site_builtin(m: &Model, t: Tok) -> bool {
     matches!(m.toks[t as usize], TokKind::Obj(tm, _)
         if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
