@@ -107,6 +107,16 @@ pub(crate) fn at_rest_demand() -> bool {
     )
 }
 
+/// `PERRY_FACTS_FILTER_DEMAND=0`: with the at-rest facts on, demand still
+/// walks copy edges only (the filter and guard edges and a summarized run's
+/// result are left out). Measures the demand half of PR A on its own.
+pub(crate) fn filter_demand() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_FILTER_DEMAND").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 pub(crate) fn enabled() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_INT_DEMAND").as_deref(),
@@ -120,7 +130,7 @@ pub(crate) fn solve(m: &mut Model) {
     // The reverse graph, in compressed rows: `preds[start[d]..start[d + 1]]`
     // are the nodes demand on `d` reaches.
     let mut start = vec![0u32; n + 1];
-    let filters = at_rest_demand();
+    let filters = at_rest_demand() && filter_demand();
     let each_edge = |m: &Model, f: &mut dyn FnMut(NodeId, NodeId)| {
         for (src, node) in m.nodes.iter().enumerate() {
             let src = src as NodeId;

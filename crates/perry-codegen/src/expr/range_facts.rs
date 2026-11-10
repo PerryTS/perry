@@ -345,7 +345,7 @@ fn int_range_expr_inner(
         // the read runs no getter). Check mode tests it at the proven load.
         Expr::PropertyGet {
             object, property, ..
-        } if !ctx.wpfacts_off => {
+        } if !ctx.wpfacts_off && field_range_enabled() => {
             let p = super::wpfacts_access::prove(
                 ctx,
                 object,
@@ -468,6 +468,15 @@ fn int_range_expr_inner(
 
 pub(crate) fn int_range_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
     int_range_expr_inner(ctx, expr, &mut std::collections::HashSet::new())
+}
+
+/// `PERRY_FACTS_FIELD_RANGE=0`: a proven read of an I32 field gets no
+/// int32 range (I32 at rest, PR A; measures the consumer on its own).
+fn field_range_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_FIELD_RANGE").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
 }
 
 fn literal_selection_range(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
