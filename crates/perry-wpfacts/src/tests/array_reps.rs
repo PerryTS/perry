@@ -496,3 +496,195 @@ fn a_redefined_or_deleted_element_gives_no_array_rep() {
         assert_eq!(rep(&src, "K"), Rep::Boxed, "{stmt}");
     }
 }
+
+// ---- PR-C3 (DESIGN-p4l1 §3, §2.8): the field's rep and the in-floor call ----
+
+/// The chess shape: a board born dense with 128 elements, stored into at
+/// keys that leave it, and read behind `at` by calls with their own keys.
+const FIELD_BOARD: &str = r#"
+class Chess {
+  board: number[] = new Array(128).fill(0);
+  ep: number = -1;
+  at(square: number): number { return this.board[square] ?? 0; }
+  set(square: number, piece: number): void { this.board[square] = piece; }
+  ranks(): number {
+    let s = 0;
+    for (let r = 7; r >= 0; r--) s += this.at(r * 16);
+    return s;
+  }
+  masked(move: number): number { return this.at(move & 127); }
+  capture(move: number): number { return this.at((move & 127) - 16); }
+  past(): number { return this.at(this.ep + 16); }
+}
+const c = new Chess();
+for (let i = -16; i < 144; i++) c.set(i, i & 7);
+c.ep = process.argv.length > 100 ? 40 : 20;
+let t = 0;
+for (let i = 0; i < 1000; i++) t += c.masked(i) + c.capture(i);
+console.log(c.ranks(), t, c.past());
+"#;
+
+/// The field read calls of `src` by the source text of their call.
+fn b1(src: &str, cfg: FactsConfig) -> Vec<(String, crate::FieldReadCall)> {
+    let pf = facts_with(src, cfg);
+    pf.bindings
+        .iter()
+        .flat_map(|b| b.field_read_calls.iter())
+        .map(|(offset, c)| {
+            // Offsets are 1-based.
+            let rest = &src[*offset as usize - 1..];
+            let end = rest.find(')').map_or(rest.len(), |e| e + 1);
+            (rest[..end].to_string(), c.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn a_stored_into_board_field_keeps_its_dense_floor() {
+    let pf = facts(FIELD_BOARD);
+    let f = field(tmpl(&pf, "Chess"), "board");
+    // Growable: a store key reaches past the birth length.
+    assert!(
+        matches!(f.rep, Rep::Arr(a) if a.floor == 128 && a.dense && !a.fixed && a.elem != ElemRep::Boxed),
+        "{:?}",
+        f.rep
+    );
+}
+
+#[test]
+fn a_field_read_call_is_in_the_floor_by_its_own_key() {
+    let calls = b1(FIELD_BOARD, FactsConfig::default());
+    let of = |text: &str| {
+        calls
+            .iter()
+            .find(|(t, _)| t.starts_with(text))
+            .unwrap_or_else(|| panic!("no call {text}: {calls:?}"))
+            .1
+            .clone()
+    };
+    // Every call reads from the same arrays.
+    for (_, c) in &calls {
+        assert!(
+            matches!(c.array, Some(a) if a.floor == 128 && a.dense),
+            "{c:?}"
+        );
+    }
+    assert!(of("this.at(r * 16)").in_floor);
+    assert!(of("this.at(move & 127)").in_floor);
+    // `[-16, 111]` leaves the floor below; `[15, 56]` is inside.
+    assert!(!of("this.at((move & 127)").in_floor);
+    assert!(of("this.at(this.ep + 16").in_floor);
+}
+
+#[test]
+fn a_key_past_the_floor_is_not_in_it_unless_sabotaged() {
+    let src = FIELD_BOARD.replace("this.at(this.ep + 16)", "this.at(this.ep + 100)");
+    let past = |cfg| {
+        b1(&src, cfg)
+            .into_iter()
+            .find(|(t, _)| t.starts_with("this.at(this.ep + 100"))
+            .expect("the call is a field read")
+            .1
+            .in_floor
+    };
+    assert!(!past(FactsConfig::default()));
+    assert!(past(FactsConfig {
+        sabotage: Some("arrb1".into()),
+        ..Default::default()
+    }));
+}
+
+#[test]
+fn the_fields_switch_off_gives_no_field_rep_and_no_floor() {
+    let off = || FactsConfig {
+        no_array_fields: true,
+        ..Default::default()
+    };
+    let pf = facts_with(FIELD_BOARD, off());
+    assert_eq!(field(tmpl(&pf, "Chess"), "board").rep, Rep::Boxed);
+    let calls = b1(FIELD_BOARD, off());
+    assert!(!calls.is_empty());
+    for (_, c) in &calls {
+        assert!(c.array.is_none() && !c.in_floor, "{c:?}");
+    }
+    // A local keeps its rep: the switch is the field's.
+    let pf = facts_with("const K = [1, 2, 3];\nconsole.log(K[1]);", off());
+    assert!(pf
+        .bindings
+        .iter()
+        .flat_map(|b| b.locals.iter())
+        .any(|(_, b)| matches!(b.rep, Rep::Arr(_))));
+}
+
+#[test]
+fn a_call_into_a_holey_or_undefined_holding_field_is_not_in_the_floor() {
+    // No fused fill: holes below the length.
+    let holey = FIELD_BOARD.replace("new Array(128).fill(0)", "new Array(128)");
+    for (_, c) in b1(&holey, FactsConfig::default()) {
+        assert!(!c.in_floor, "{c:?}");
+    }
+    // A `delete` of an element makes the array hard: no rep at all.
+    let deleted = FIELD_BOARD.replace("c.ep = ", "delete c.board[3];\nc.ep = ");
+    for (_, c) in b1(&deleted, FactsConfig::default()) {
+        assert!(c.array.is_none() && !c.in_floor, "{c:?}");
+    }
+    // A length store takes the floor away.
+    let cut = FIELD_BOARD.replace("c.ep = ", "c.board.length = 4;\nc.ep = ");
+    for (_, c) in b1(&cut, FactsConfig::default()) {
+        assert!(!c.in_floor, "{c:?}");
+    }
+    // A stored `undefined` is a present element: the call stays in the
+    // floor, and the elements are Boxed (the `??` stays in codegen).
+    let undef = FIELD_BOARD.replace("c.ep = ", "(c.board as any)[5] = undefined;\nc.ep = ");
+    let calls = b1(&undef, FactsConfig::default());
+    assert!(calls.iter().any(|(_, c)| c.in_floor));
+    for (_, c) in &calls {
+        assert!(
+            matches!(c.array, Some(a) if a.elem == ElemRep::Boxed),
+            "{c:?}"
+        );
+    }
+}
+
+#[test]
+fn the_arrfield_control_ignores_a_null_in_the_field() {
+    let src = r#"class B {
+  items: number[] | null = null;
+  fill(): void { this.items = [1, 2, 3, 4]; }
+}
+const b = new B();
+b.fill();
+console.log(b.items);"#;
+    assert_eq!(field(tmpl(&facts(src), "B"), "items").rep, Rep::Boxed);
+    let pf = facts_with(
+        src,
+        FactsConfig {
+            sabotage: Some("arrfield".into()),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(field(tmpl(&pf, "B"), "items").rep, Rep::Arr(_)));
+}
+
+#[test]
+fn the_dump_prints_each_field_read_call_with_its_key_and_verdict() {
+    let pf = facts(FIELD_BOARD);
+    let dump = pf.dump_text();
+    let lines: Vec<&str> = dump
+        .lines()
+        .filter(|l| l.starts_with("# field_read_call "))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("key=[0,127]") && l.ends_with("in_floor=1")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("key=[-16,111]") && l.ends_with("in_floor=0")),
+        "{lines:#?}"
+    );
+    assert!(lines.iter().all(|l| l.contains("rep=arr<")), "{lines:#?}");
+}

@@ -88,6 +88,11 @@ pub struct FactsField {
     /// or when interpreted code can run.
     pub classes: Vec<u32>,
     pub nullable: bool,
+    /// The field's representation (wpfacts `FieldFacts::rep`, DESIGN-p4l1
+    /// §3): `Arr` when the field, on every object of the class, holds only
+    /// plain program Arrays for the object's whole life. A read of the
+    /// field is a value of this representation (`FieldProof::array`).
+    pub rep: FactsRep,
 }
 
 /// A plain compiled body of this module that a binding or a field holds
@@ -222,6 +227,24 @@ pub enum FactsEnc {
     Boxed,
     F64,
     I32,
+}
+
+impl FactsArrRep {
+    /// The join (says less) of two array reps, wpfacts `ArrRep::join`.
+    pub fn join(a: FactsArrRep, b: FactsArrRep) -> FactsArrRep {
+        use FactsElemRep::{Boxed, F64, I32};
+        FactsArrRep {
+            elem: match (a.elem, b.elem) {
+                (Boxed, _) | (_, Boxed) => Boxed,
+                (F64, _) | (_, F64) => F64,
+                (I32, I32) => I32,
+            },
+            floor: a.floor.min(b.floor),
+            dense: a.dense && b.dense,
+            fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
+        }
+    }
 }
 
 impl FactsRep {
@@ -475,6 +498,11 @@ pub struct FactsFieldReadCall {
     /// The method body's `IndexGet::element_offset` and `this.f` offset.
     pub element_offset: u32,
     pub field_offset: u32,
+    /// `Some(floor)`: this call's index is an integer in `[0, floor)`, and
+    /// every Array the method's read may read from has at least `floor`
+    /// elements with no hole below it (wpfacts `FieldReadCall::in_floor`,
+    /// DESIGN-p4l1 §2.8): the slot is a present own element.
+    pub in_floor: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

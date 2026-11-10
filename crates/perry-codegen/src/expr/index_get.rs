@@ -40,7 +40,7 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
-mod array_rep;
+pub(crate) mod array_rep;
 mod const_array;
 mod foreign_counter;
 pub(crate) mod descriptor_read;
