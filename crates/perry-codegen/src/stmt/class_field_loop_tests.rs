@@ -78,6 +78,8 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -255,6 +257,10 @@ fn emit(m: &Module) -> String {
 /// Runtime route/shape/store attribution is checked separately by the isolated
 /// executable. These IR assertions never certify retained-tier cost parity.
 fn assert_versioned_loop_lowered(ir: &str, what: &str) {
+    let blocks: Vec<_> = ir
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(':'))
+        .collect();
     for label in [
         "rloop.guard.",
         "rloop.fast",
@@ -262,7 +268,7 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "rloop.version.plain",
     ] {
         assert!(
-            ir.contains(label),
+            blocks.iter().any(|block| block.starts_with(label)),
             "{what}: missing generic replacement `{label}`"
         );
     }
@@ -273,7 +279,10 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "for.class_field_fast",
         "for.class_field_slow",
     ] {
-        assert!(!ir.contains(label), "{what}: legacy tier remains `{label}`");
+        assert!(
+            !blocks.iter().any(|block| block.starts_with(label)),
+            "{what}: legacy tier remains `{label}`"
+        );
     }
     let fast = ir
         .lines()
