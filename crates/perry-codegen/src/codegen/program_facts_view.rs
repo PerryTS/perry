@@ -299,6 +299,10 @@ pub struct ElisionFacts {
     /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
     /// `expr::index_get::elem_floor`).
     pub element_floors: std::collections::BTreeMap<u32, u32>,
+    /// Element reads (by `element_offset`) whose key is an integer Number at
+    /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
+    /// PR-C2; `expr::index_get::proven_array`).
+    pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
