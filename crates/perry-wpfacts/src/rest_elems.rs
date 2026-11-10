@@ -221,6 +221,7 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
                 m.stores.get(site as usize).map_or("", |s| s.desc.as_str())
             )
         }
+        Cons::MCall { key, .. } => format!("mcall {}", m.key_name(key)),
         _ => c.kind_name().to_string(),
     })
 }
