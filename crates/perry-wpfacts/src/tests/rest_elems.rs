@@ -80,9 +80,9 @@ fn a_generic_reader_keeps_the_array_double() {
 fn a_length_that_moves_or_a_non_int_element_keeps_the_array_double() {
     for (extra, why) in [
         ("a.push(1);", ""),
-        ("a[0] = 2147483648;", "elem_not_i32"),
-        ("a[1] = (s & 1) * -1;", "elem_not_i32"),
-        ("a[2] = s / 3;", "elem_not_i32"),
+        ("a[0] = 2147483648;", "elem_not"),
+        ("a[1] = (s & 1) * -1;", "elem_not"),
+        ("a[2] = s / 3;", "elem_not"),
     ] {
         let line = arr_line(&program(extra));
         assert!(

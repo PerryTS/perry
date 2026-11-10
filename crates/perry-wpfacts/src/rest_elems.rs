@@ -50,9 +50,10 @@
 //! carries its body read's own verdict (`site_floor`).
 //!
 //! `PERRY_REST_ELEMS=0` (also `off`, `false`) admits nothing: main's facts.
-//! Negative control `PERRY_FACTS_SABOTAGE=restelem`: a builtin method is no
-//! use (`builtins::collections::array_method`, `Cons::MCall`), so an Array a
-//! native `fill` writes with raw doubles may be admitted.
+//! Negative control `PERRY_FACTS_SABOTAGE=restelem`: a builtin method and the
+//! stores it makes are no use (`builtins::collections::array_method`,
+//! `Cons::MCall`, `Cons::Store`), so an Array a native `fill` writes with
+//! plain doubles may be admitted.
 
 use crate::bindings::{owner_metadata_written, tok_arr_rep, ElemRep, ModuleBindings};
 use crate::gen::Gen;
@@ -125,7 +126,17 @@ fn tok_refusal(m: &Model, t: Tok, tm: TmplId) -> Option<&'static str> {
     }
     let r = tok_arr_rep(m, t, tm, true);
     if r.elem != ElemRep::I32 {
-        return Some("elem not i32");
+        let Some(&e) = m.all_fields.get(&t) else {
+            return Some("no element node");
+        };
+        let e = &m.nodes[e as usize];
+        return Some(if e.prim != crate::model::prim::NUM || !e.pts.is_empty() {
+            "elem not a number"
+        } else if !e.int_demand {
+            "elem without demand"
+        } else {
+            "elem not int32"
+        });
     }
     if !r.fixed {
         return Some("length moves");
@@ -167,7 +178,7 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
                 || reads.contains(&dst)
         }
         Cons::IdxLoad { dst, .. } | Cons::IdxOwnLoad { dst, .. } => reads.contains(&dst),
-        Cons::Store { site, .. } => index_store(m, site),
+        Cons::Store { site, .. } => index_store(m, site) || m.rest_elem_sabotage,
         Cons::MCall { .. } => fill_recv || m.rest_elem_sabotage,
         Cons::Identity { .. }
         | Cons::Raise { .. }
@@ -241,16 +252,28 @@ pub(crate) fn admit(
     if !m.rest_elems || !m.array_reps || m.aborted || m.unit_mode || m.rest_fills.is_empty() {
         return (cand, refused);
     }
-    let fill_sites: FxHashSet<SiteId> = m.rest_fills.iter().map(|f| f.site).collect();
-    for (tm, tpl) in m.tmpls.iter().enumerate() {
-        let tm = tm as TmplId;
-        let TmplKind::Arr {
-            plain: true, site, ..
-        } = tpl.kind
-        else {
+    // The plain `new Array` template of each fill's site (`builtins::
+    // site_tmpl_born`); a fill without an offset codegen can key is none.
+    let mut births: Vec<TmplId> = m
+        .rest_fills
+        .iter()
+        .filter_map(|f| m.site_tmpls.get(&(f.site, "Array", true)))
+        .filter_map(|&t| m.tmpl_of(t))
+        .collect();
+    births.sort_unstable();
+    births.dedup();
+    for tm in births {
+        if !matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { plain: true, .. }) {
             continue;
-        };
-        if !fill_sites.contains(&site) {
+        }
+        if m.rest_fills.iter().any(|f| {
+            f.offset == 0
+                && m.site_tmpls
+                    .get(&(f.site, "Array", true))
+                    .and_then(|&t| m.tmpl_of(t))
+                    == Some(tm)
+        }) {
+            refused.insert(tm, "no offset");
             continue;
         }
         let toks = m.tmpl_toks(tm);
