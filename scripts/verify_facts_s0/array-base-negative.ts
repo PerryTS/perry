@@ -20,5 +20,5 @@ class Board {
   }
 }
 const b = new Board();
-b.board[process.argv.length > 100 ? 7 : 40] = 2;
+for (let k = 0; k < 100; k++) b.board.push(2);
 console.log(b.scan(), b.at(40), b.board.length);

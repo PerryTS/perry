@@ -130,19 +130,26 @@ pub(crate) fn begin(
         .iter()
         .filter(|r| install.contains(&r.field.as_str()) || held.contains(r.field.as_str()))
         .collect();
+    let is_inert = |e: &Expr| crate::rooting::expr_is_inert_primitive(ctx, e);
+    // A served read over Number elements yields a primitive (an element,
+    // `undefined` past the length, or a Number default): an operator over
+    // it and other inert operands runs no user code.
+    let primitive = |e: &Expr| {
+        let a = addr(e);
+        served
+            .iter()
+            .any(|r| r.call == a && r.rep.elem != crate::codegen::FactsElemRep::Boxed)
+    };
     let classified = |e: &Expr| -> Option<Option<RegionEnder>> {
         let a = addr(e);
-        served.iter().find_map(|r| {
-            if r.call == a {
-                Some((!r.in_floor).then_some(RegionEnder::ColdArmCall))
-            } else if r.callee == a {
-                Some(None)
-            } else {
-                None
-            }
-        })
+        if let Some(r) = served.iter().find(|r| r.call == a) {
+            return Some((!r.in_floor).then_some(RegionEnder::ColdArmCall));
+        }
+        if served.iter().any(|r| r.callee == a) {
+            return Some(None);
+        }
+        (!is_inert(e) && operator_over(e, &is_inert, &primitive)).then_some(None)
     };
-    let is_inert = |e: &Expr| crate::rooting::expr_is_inert_primitive(ctx, e);
     let enders = crate::collectors::region_enders_in_stmts_classified(
         body,
         controls,
@@ -223,6 +230,24 @@ pub(crate) fn begin(
 pub(crate) fn end(ctx: &mut FnCtx<'_>, installed: Installed) {
     for f in installed.0 {
         ctx.receiver_descriptors.dematerialize_field_base(&f);
+    }
+}
+
+/// `e` is a coercing operator (arithmetic, bitwise, relational, unary)
+/// whose operands are each inert, a served read of Number elements, or
+/// such an operator in turn: ToPrimitive meets no object.
+fn operator_over(
+    e: &Expr,
+    inert: &dyn Fn(&Expr) -> bool,
+    primitive: &dyn Fn(&Expr) -> bool,
+) -> bool {
+    let operand = |x: &Expr| inert(x) || primitive(x) || operator_over(x, inert, primitive);
+    match e {
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            operand(left) && operand(right)
+        }
+        Expr::Unary { operand: x, .. } => operand(x),
+        _ => false,
     }
 }
 

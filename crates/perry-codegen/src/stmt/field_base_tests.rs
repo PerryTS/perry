@@ -105,6 +105,7 @@ const IR_SRC: &str = "export class B {\n\
   ray(n: number): number { let s = 0; let i = 0; while (i < n) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
   pawn(n: number): number { let s = 0; for (let f = 0; f < n; f++) { if (this.at(f * 16) === 1) s += 1; } return s; }\n\
   some(n: number): number { let s = 0; for (let i = 0; i < n; i++) { if (i > 3) s += this.at(i & 127); } return s; }\n\
+  sum(n: number): number { let s = 0; for (let i = 0; i < n; i++) { s += this.at(i & 127) * 2; } return s; }\n\
   grows(n: number): number { let s = 0; for (let i = 0; i < n; i++) { s += this.at(i & 127); this.board.push(i); } return s; }\n\
 }\n";
 
@@ -167,6 +168,7 @@ fn ir(rep: FactsRep) -> String {
         ("this.at(f * 16)", (0, 255), None),
         ("this.at(i & 127); } return", (0, 127), Some(128)),
         ("this.at(i & 127); this.board", (0, 127), Some(128)),
+        ("this.at(i & 127) * 2", (0, 127), Some(128)),
     ] {
         let site = at(call);
         elision.field_read_calls.insert(
@@ -224,6 +226,9 @@ fn a_loop_whose_every_iteration_reads_the_board_holds_its_base() {
     assert!(f.contains("abase.follow"), "{f}");
     assert!(!f.contains("arep.live"), "no per-read forwarding test\n{f}");
     // The poll re-derives the base: a second resolution after the safepoint.
+    // Arithmetic over the read's Number is no coercion of an object.
+    let g = method(&ir, "sum");
+    assert!(g.contains("abase.install"), "{g}");
     let after_poll = f
         .split("call void @js_gc_loop_safepoint()")
         .skip(1)
