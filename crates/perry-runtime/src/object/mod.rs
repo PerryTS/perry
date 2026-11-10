@@ -156,7 +156,7 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
-pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of};
+pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -359,6 +359,7 @@ pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
 pub(crate) use global_this_tables::*;
+pub use global_this_tables::BuiltinConstructorIdentity;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
@@ -452,6 +453,8 @@ pub use this_binding::{
 pub(crate) use to_string_tag::fetch_handle_constructor_value;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
+pub(crate) use to_string_tag::web_stream_interface_name;
+pub use to_string_tag::web_stream_prototype_value;
 pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
