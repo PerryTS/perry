@@ -60,10 +60,13 @@ pub(crate) fn read_floor(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
     }
 }
 
-/// The floor of an at-rest element store `e`.
+/// The floor of an at-rest element store `e` (`a[k] = v` as an `IndexSet`
+/// or a `PutValueSet`).
 pub(crate) fn write_floor(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
     match e {
-        Expr::IndexSet { element_offset, .. } if *element_offset != 0 => {
+        Expr::IndexSet { element_offset, .. } | Expr::PutValueSet { element_offset, .. }
+            if *element_offset != 0 =>
+        {
             ctx.wpfacts.rest_writes.get(element_offset).copied()
         }
         _ => None,

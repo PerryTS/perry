@@ -23,7 +23,7 @@
 //!   node as the object it stores into, is one codegen lowers with the
 //!   encoding (an element read `a[k]`, whose result node is an `IndexGet`'s
 //!   own, `Gen::element_values`; an element store `a[k] = v`, whose store
-//!   site is an `IndexSet`'s, desc `[]=`; `length`; the fused fill on the
+//!   site is an `IndexSet`'s or a `PutValueSet`'s; `length`; the fused fill on the
 //!   birth's own receiver), or one that moves no element word (an identity
 //!   test, a filter, a guard, a result relay, a throw region, the hole and
 //!   length bookkeeping of an index store). Every other constraint is a use:
@@ -164,9 +164,13 @@ fn sites(g: &Gen<'_>, copies: &FxHashMap<NodeId, Vec<NodeId>>) -> Sites {
     out
 }
 
-/// An `IndexSet`'s element store (`Gen::store_elem` desc `[]=`).
+/// An element store codegen lowers at its site: an `IndexSet`'s
+/// (`Gen::store_elem` desc `[]=`) or a `PutValueSet`'s (into its target and
+/// its receiver, one evaluation of the same base).
 fn index_store(m: &Model, site: SiteId) -> bool {
-    m.stores.get(site as usize).is_some_and(|s| s.desc == "[]=")
+    m.stores
+        .get(site as usize)
+        .is_some_and(|s| matches!(s.desc.as_str(), "[]=" | "putvalue" | "putvalue-receiver"))
 }
 
 /// The constraint `c` on a node holding an Array, when it is a use
