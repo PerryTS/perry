@@ -968,6 +968,7 @@ impl<'a> Gen<'a> {
                     let r = self.expr(fx, right);
                     self.raise_on(l);
                     self.raise_on(r);
+                    self.equality_demand(left, right, l, r);
                     self.prim_node(prim::BOOL)
                 }
                 _ => self.prim_op(

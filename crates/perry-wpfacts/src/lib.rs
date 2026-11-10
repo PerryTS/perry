@@ -312,6 +312,9 @@ pub struct ProgramFacts {
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
+    /// The dump's `# rep` probe lines (`bindings::rep_probe`), with the
+    /// dump only.
+    pub rep_probe: Vec<String>,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
@@ -925,6 +928,11 @@ fn compute_act<'a>(
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);
+    let rep_probe = if cfg.diagnostics && !g.m.aborted {
+        bindings::rep_probe(&g)
+    } else {
+        Vec::new()
+    };
     if !g.m.aborted && field_read_calls::enabled() {
         field_read_calls::collect(
             &g,
@@ -2173,6 +2181,7 @@ fn compute_act<'a>(
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
         relations: g.m.relations.take(),
+        rep_probe,
         tok_names,
         bindings,
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
