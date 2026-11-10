@@ -230,8 +230,8 @@ impl Model {
             node.pts = self.sets.retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
             if node.pts.len() != before {
                 node.dropped = true;
+                self.charge_work(before as u64);
             }
-            self.charge_work(before as u64);
         }
         self.fresh = fresh;
         self.fresh_seen = seen;
