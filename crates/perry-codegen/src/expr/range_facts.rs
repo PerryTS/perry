@@ -339,6 +339,24 @@ fn int_range_expr_inner(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr).map(IntRange::exact),
         Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
+        // I32 at rest (PR A): a read of a data field the facts give I32 on
+        // every class of an unguarded proven receiver is an int32, however
+        // the read is lowered (the claim is about the field's values, and
+        // the read runs no getter). Check mode tests it at the proven load.
+        Expr::PropertyGet {
+            object, property, ..
+        } if !ctx.wpfacts_off => {
+            let p = super::wpfacts_access::prove(
+                ctx,
+                object,
+                property,
+                super::wpfacts_access::Access::Get,
+            )?;
+            (p.num_rep == Some(crate::codegen::FactsRep::I32)).then_some(IntRange {
+                min: i64::from(i32::MIN),
+                max: i64::from(i32::MAX),
+            })
+        }
         // The literal choices exposed by a private constant-array read retain
         // their integer range through selection. Only literal leaves qualify:
         // an arbitrary condition can write a local before selecting its value.
