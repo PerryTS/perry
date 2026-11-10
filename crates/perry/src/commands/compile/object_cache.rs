@@ -1091,6 +1091,14 @@ fn compute_object_cache_key_with_env(
             &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
         );
     }
+    {
+        let mut v: Vec<&String> = opts.imported_func_rest_and_arguments.iter().collect();
+        v.sort();
+        h.field(
+            "imported_rest_and_arguments",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
+        );
+    }
 
     // Imported return types (HashMap — MUST sort). Type can contain nested
     // HashMaps (ObjectType::properties), so never use Debug output here.

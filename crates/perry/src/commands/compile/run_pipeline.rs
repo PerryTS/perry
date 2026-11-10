@@ -2068,6 +2068,7 @@ pub fn run_with_parse_cache(
     // `arguments.length` spec semantics), not just the trailing ones — distinct
     // from a real `...rest`. effect's `pipe`/`dual` are the load-bearing case.
     let mut exported_func_synthetic_arguments: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut exported_func_rest_and_arguments: BTreeSet<(String, String)> = BTreeSet::new();
     // Build a map of all exported functions with their return types from all modules
     let mut exported_func_return_types: BTreeMap<(String, String), perry_hir::types::Type> =
         BTreeMap::new();
@@ -2117,6 +2118,10 @@ pub fn run_with_parse_cache(
                 {
                     exported_func_synthetic_arguments.insert((path_str.clone(), func.name.clone()));
                 }
+                if params_have_rest_and_arguments(&func.params) {
+                    exported_func_has_rest.insert((path_str.clone(), func.name.clone()), true);
+                    exported_func_rest_and_arguments.insert((path_str.clone(), func.name.clone()));
+                }
             }
         }
         // Also register exported_functions aliases (e.g., "default" → actual function)
@@ -2135,6 +2140,10 @@ pub fn run_with_parse_cache(
                 }
                 if func.params.last().is_some_and(|p| p.is_rest) {
                     exported_func_has_rest.entry(key.clone()).or_insert(true);
+                }
+                if params_have_rest_and_arguments(&func.params) {
+                    exported_func_has_rest.entry(key.clone()).or_insert(true);
+                    exported_func_rest_and_arguments.insert(key.clone());
                 }
                 if func
                     .params
@@ -4386,6 +4395,8 @@ pub fn run_with_parse_cache(
         // it, not just trailing. Built alongside `imported_has_rest`.
         let mut imported_synthetic_arguments: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        let mut imported_rest_and_arguments: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut imported_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Issue #629: register namespace imports BEFORE the main
@@ -4661,6 +4672,9 @@ pub fn run_with_parse_cache(
                             if exported_func_synthetic_arguments.contains(&key) {
                                 imported_synthetic_arguments.insert(local.clone());
                             }
+                            if exported_func_rest_and_arguments.contains(&key) {
+                                imported_rest_and_arguments.insert(local.clone());
+                            }
                             if let Some(return_type) = exported_func_return_types.get(&key) {
                                 imported_return_types.insert(local.clone(), return_type.clone());
                             }
@@ -4816,7 +4830,13 @@ pub fn run_with_parse_cache(
                                 if flat {
                                     imported_synthetic_arguments.insert(export_name.clone());
                                 }
-                                imported_synthetic_arguments.insert(scoped_func_key);
+                                imported_synthetic_arguments.insert(scoped_func_key.clone());
+                            }
+                            if exported_func_rest_and_arguments.contains(&key) {
+                                if flat {
+                                    imported_rest_and_arguments.insert(export_name.clone());
+                                }
+                                imported_rest_and_arguments.insert(scoped_func_key);
                             }
                             // Issue #636: namespace-imported vars must
                             // route through the zero-arg getter at
@@ -5380,7 +5400,13 @@ pub fn run_with_parse_cache(
                                     if flat {
                                         imported_synthetic_arguments.insert(export_name.clone());
                                     }
-                                    imported_synthetic_arguments.insert(scoped_func_key);
+                                    imported_synthetic_arguments.insert(scoped_func_key.clone());
+                                }
+                                if exported_func_rest_and_arguments.contains(&key) {
+                                    if flat {
+                                        imported_rest_and_arguments.insert(export_name.clone());
+                                    }
+                                    imported_rest_and_arguments.insert(scoped_func_key);
                                 }
                                 // Issue #321: NamespaceReExport members
                                 // that are var-shaped exports (the
@@ -5770,6 +5796,12 @@ pub fn run_with_parse_cache(
                     imported_synthetic_arguments.insert(exported_name.clone());
                     if local_name != exported_name {
                         imported_synthetic_arguments.insert(local_name.clone());
+                    }
+                }
+                if exported_func_rest_and_arguments.contains(&key) {
+                    imported_rest_and_arguments.insert(exported_name.clone());
+                    if local_name != exported_name {
+                        imported_rest_and_arguments.insert(local_name.clone());
                     }
                 }
 
@@ -6510,6 +6542,7 @@ pub fn run_with_parse_cache(
             imported_func_param_counts: imported_param_counts,
             imported_func_has_rest: imported_has_rest,
             imported_func_synthetic_arguments: imported_synthetic_arguments,
+            imported_func_rest_and_arguments: imported_rest_and_arguments,
             imported_func_return_types: imported_return_types,
             imported_vars,
 
@@ -9318,4 +9351,15 @@ pub fn run_with_parse_cache(
         link_cache_stats: Some(link_cache_status.stats()),
         build_cache_stats: Some(build_cache_stats),
     })
+}
+
+/// A real `...rest` followed by the synthesized `arguments` slot (which then
+/// is not `is_rest`): a cross-module call bundles two arrays.
+fn params_have_rest_and_arguments(params: &[perry_hir::Param]) -> bool {
+    params
+        .last()
+        .is_some_and(|p| p.arguments_object.is_some() && !p.is_rest)
+        && params
+            .iter()
+            .any(|p| p.is_rest && p.arguments_object.is_none())
 }
