@@ -1,0 +1,1 @@
+- Include module scope filenames in `Error.stack` and capture `Error.captureStackTrace` frames at the call site; resolve frame names from static records without runtime sorting (#14412).

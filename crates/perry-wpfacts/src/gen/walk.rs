@@ -326,6 +326,13 @@ impl<'a> Gen<'a> {
             self.name_enum_object(mi, s);
         }
         (self.order_ok, self.loop_depth) = saved;
+        // Codegen invokes this owned body when the module evaluates. Follow
+        // that explicit FuncId edge only after the owning init is activated.
+        if let Some(id) = self.modules[mi as usize].1.async_init_function {
+            if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
+                self.m.activate(f, "module-init");
+            }
+        }
         for f in self.functions_of(mi as usize) {
             if self.m.aborted {
                 return;

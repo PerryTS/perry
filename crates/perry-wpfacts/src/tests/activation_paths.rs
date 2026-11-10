@@ -300,3 +300,38 @@ fn leaving_out_the_construction_excludes_the_written_class_fields() {
         );
     }
 }
+
+#[test]
+fn owned_async_module_body_is_active_only_when_its_module_runs() {
+    let module = perry_parser::parse_typescript(
+        "async function body() { await import('./target.ts'); }",
+        "t.ts",
+    )
+    .expect("parses");
+    let mut hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let id = hir.functions[0].id;
+    // Collection normally resolves the literal before activation. This unit
+    // fixture starts at lowered HIR, so supply that existing execution edge.
+    let perry_hir::Stmt::Expr(perry_hir::Expr::Await(value)) = &mut hir.functions[0].body[0] else {
+        panic!("await expression");
+    };
+    let perry_hir::Expr::DynamicImport { paths, .. } = value.as_mut() else {
+        panic!("dynamic import");
+    };
+    paths.push("./target.ts".into());
+    let cfg = FactsConfig {
+        roots: vec!["t.ts".into()],
+        ..FactsConfig::default()
+    };
+    let inactive = crate::activation(&[("t.ts".into(), &hir)], &cfg);
+    assert!(inactive
+        .live_dynamic_imports()
+        .expect("complete")
+        .is_empty());
+    hir.async_init_function = Some(id);
+    let active = crate::activation(&[("t.ts".into(), &hir)], &cfg);
+    assert!(active
+        .live_dynamic_imports()
+        .expect("complete")
+        .contains(&("t.ts".into(), "./target.ts".into())));
+}

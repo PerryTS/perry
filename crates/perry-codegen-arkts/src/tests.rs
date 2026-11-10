@@ -46,6 +46,7 @@ pub(crate) fn empty_module() -> Module {
         init_was_unrolled: false,
         extern_funcs: vec![],
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
