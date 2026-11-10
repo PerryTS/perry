@@ -556,6 +556,15 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
         TokKind::ObjectProto => match name.as_str() {
             "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
+                if name == "isPrototypeOf" && m.value_records {
+                    // The receiver against each object on the argument's chain.
+                    let recv = m.node_l("isprototypeof-recv");
+                    m.add_tok(recv, origin);
+                    m.identity(recv, IdentityRoute::IsPrototypeOf);
+                    if let Some(&a) = m.calls[call as usize].args.first() {
+                        m.identity(a, IdentityRoute::IsPrototypeOf);
+                    }
+                }
                 ret_prim(m, call, prim::BOOL);
             }
             // 20.1.3.6 step 15: `Get(O, @@toStringTag)` runs a getter there;

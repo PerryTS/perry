@@ -710,8 +710,14 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::ObjectIs(..)
-            | Expr::ObjectHasOwn(..)
+            Expr::ObjectIs(a, b) => self.prim_op_identity(
+                fx,
+                &[a, b],
+                prim::BOOL,
+                "primitive builtin operand",
+                IdentityRoute::ObjectIs,
+            ),
+            Expr::ObjectHasOwn(..)
             | Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
             | Expr::IsNaN(..)

@@ -1325,11 +1325,12 @@ impl<'a> Gen<'a> {
                 cases,
             } => {
                 let d = self.expr(fx, discriminant);
-                // `===` against case values: no coercion.
-                let _ = d;
+                // `===` against case values: no coercion, identity.
+                self.m.identity(d, IdentityRoute::Switch);
                 for c in cases {
                     if let Some(t) = &c.test {
-                        let _ = self.expr(fx, t);
+                        let v = self.expr(fx, t);
+                        self.m.identity(v, IdentityRoute::Switch);
                     }
                     self.stmts(fx, &c.body);
                 }

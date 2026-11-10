@@ -91,6 +91,9 @@ pub struct FactsConfig {
     /// No immutable Arrays and no constant contents
     /// (`PERRY_FACTS_CONST_ARRAYS=0`, `const_arrays`).
     pub no_const_arrays: bool,
+    /// Value records (DESIGN-p4l4, `PERRY_FACTS_VALUE_RECORDS=1`; off unless
+    /// set until VR-6): identity observations become `Cons::Identity`.
+    pub value_records: bool,
     /// No `Rep::Arr` for a field and no in-floor field read call
     /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
     pub no_array_fields: bool,
@@ -492,6 +495,7 @@ fn generate<'a>(
     g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
     g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
+    g.m.value_records = cfg.value_records;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.int_ranges = !cfg.no_int_ranges;

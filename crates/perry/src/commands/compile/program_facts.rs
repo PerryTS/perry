@@ -151,6 +151,8 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
+        value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -906,6 +908,8 @@ pub(crate) fn activation(
             std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
+        value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

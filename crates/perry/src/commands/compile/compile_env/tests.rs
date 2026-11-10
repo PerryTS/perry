@@ -357,3 +357,13 @@ fn cold_path_switch_is_a_cache_input() {
         "PERRY_COLD_PATHS must key the compile caches"
     );
 }
+
+/// Value records (DESIGN-p4l4 §7): the switch changes the facts (and, from
+/// VR-3, emitted code), so `=1` must never reuse an object built without it.
+#[test]
+fn value_records_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_VALUE_RECORDS"),
+        "PERRY_FACTS_VALUE_RECORDS must key the compile caches"
+    );
+}

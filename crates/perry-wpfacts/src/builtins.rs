@@ -1889,7 +1889,15 @@ fn ns_method_inner(
                 m.edge(o, ret);
             }
         }
-        (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
+        (BuiltinNs::Object, "is") => {
+            for i in 0..2 {
+                if let Some(a) = arg(m, call, i) {
+                    m.identity(a, IdentityRoute::ObjectIs);
+                }
+            }
+            ret_prim(m, call, prim::BOOL);
+        }
+        (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Object, "create") => {

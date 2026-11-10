@@ -286,6 +286,7 @@ impl Model {
         !matches!(
             c,
             Cons::Raise { .. }
+                | Cons::Identity { .. }
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
@@ -674,7 +675,9 @@ impl Model {
         if self.relations.is_some()
             && !matches!(
                 c,
-                Cons::ThisTo { .. }
+                // No flow: the recomputation has nothing to check.
+                Cons::Identity { .. }
+                    | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }
                     | Cons::ArgInto { .. }
@@ -1607,6 +1610,7 @@ impl Model {
 
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
+            Cons::Identity { route } => format!("identity {n} {}", route.name()),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::ProtoKey { key, dst } => {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
