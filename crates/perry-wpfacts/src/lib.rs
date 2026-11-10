@@ -305,7 +305,7 @@ pub struct ProgramFacts {
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
     /// The dump's `# rep` probe lines (`bindings::rep_probe`), with the
-    /// relations only.
+    /// dump only.
     pub rep_probe: Vec<String>,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
@@ -916,7 +916,7 @@ fn compute_act<'a>(
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);
-    let rep_probe = if g.m.relations.is_some() && !g.m.aborted {
+    let rep_probe = if cfg.diagnostics && !g.m.aborted {
         bindings::rep_probe(&g)
     } else {
         Vec::new()

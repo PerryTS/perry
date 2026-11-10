@@ -750,8 +750,9 @@ fn rep_of(b: &BindingFacts) -> Rep {
 /// The dump's representation probe (N1, `PERRY_FACTS_DUMP` only): one
 /// `# rep` line per Number-holding local with what decides its
 /// representation (RFC §10.3): the prims, the interval, int demand and
-/// whether the binding is itself an int consumer's operand. Named only
-/// when the relations are recorded (the dump records them).
+/// whether the binding is itself an int consumer's operand. A local is
+/// named by its node, readable with `PERRY_FACTS_RELATIONS=1`; otherwise
+/// by its id (`local=`), the HIR local id codegen reports.
 pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let mut out = Vec::new();
