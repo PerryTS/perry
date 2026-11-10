@@ -1310,7 +1310,7 @@ fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
     ir_line_with(ir, &["icmp eq i64 %", ", 9222246136947933188"])
 }
 
-/// Int32 lane (`emit_typed_i32_guard_and_raw`): the INT32 identity test plus
+/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`): the INT32 identity test plus
 /// the plain-double range bounds that admit an integral double.
 /// Replaces `call i32 @js_typed_i32_arg_guard`.
 fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
