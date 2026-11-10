@@ -282,11 +282,7 @@ pub(super) fn native_event(st: &mut State, op: &str, value: std::fmt::Arguments<
         if super::funnel() != 0 && !op.starts_with("getenv") {
             let _ = write!(text, ";funnel={}", super::funnel_name(super::funnel()));
         }
-        let mut pcs = [0usize; crate::error::MAX_CAPTURED_FRAMES];
-        let n = crate::error::capture_ips(&mut pcs);
-        for (to, from) in six.iter_mut().zip(pcs[..n].iter().skip(1)) {
-            *to = *from;
-        }
+        row_pcs(&mut six);
     }
     let mut row = SignalRow {
         bytes: [0; 131072],
@@ -537,9 +533,47 @@ impl Value for *mut crate::ArrayHeader {
     }
 }
 
+/// The six return addresses above the native read, or none inside the
+/// walker funnel: this thread holds the walker's lock there, and a capture
+/// (which walks through the same walker) would wait on it forever (SNAPK3:
+/// js_throw -> find_handler -> decode_fde_row -> mimalloc arena free ->
+/// clock_gettime -> here). The row keeps `funnel=unwind`, its class.
+fn row_pcs(six: &mut [usize; 6]) {
+    if super::funnel() == crate::snap_census::Funnel::Unwind as u8 {
+        return;
+    }
+    let mut pcs = [0usize; crate::error::MAX_CAPTURED_FRAMES];
+    let n = crate::error::capture_ips(&mut pcs);
+    for (to, from) in six.iter_mut().zip(pcs[..n].iter().skip(1)) {
+        *to = *from;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A native read inside the walker funnel returns without walking.
+    /// Red (capture regardless of the funnel): the capture waits on the
+    /// walker lock this thread holds, and the receiver times out.
+    #[test]
+    fn row_pcs_inside_walker_lock_returns() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            crate::eh_walker::with_walker_locked(|| {
+                let unwind = crate::snap_census::Funnel::Unwind as u8;
+                let prev = super::super::funnel_set_for_test(unwind);
+                let mut six = [0usize; 6];
+                row_pcs(&mut six);
+                super::super::funnel_set_for_test(prev);
+                let _ = tx.send(six);
+            });
+        });
+        let six = rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("row_pcs re-entered the walker lock");
+        assert_eq!(six, [0; 6]);
+    }
     #[test]
     fn exact_scalar_and_absence_values() {
         assert_ne!(0.0f64.input_value(), (-0.0f64).input_value());

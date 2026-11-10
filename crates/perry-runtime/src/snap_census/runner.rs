@@ -5083,6 +5083,10 @@ static ARGV_SITE: std::cell::Cell<(i32, i64)> = std::cell::Cell::new((-1, 0));
 pub(super) fn funnel() -> u8 {
     FUNNEL.get()
 }
+#[cfg(test)]
+pub(super) fn funnel_set_for_test(id: u8) -> u8 {
+    FUNNEL.replace(id)
+}
 pub(super) fn funnel_name(id: u8) -> &'static str {
     match id {
         1 => "exec_path",
@@ -5093,6 +5097,7 @@ pub(super) fn funnel_name(id: u8) -> &'static str {
         6 => "gc",
         7 => "exec_argv",
         8 => "style_bit",
+        9 => "unwind",
         _ => "none",
     }
 }

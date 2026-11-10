@@ -657,7 +657,14 @@ pub(crate) enum Funnel {
     Gc = 6,
     ExecArgv = 7,
     StyleBit = 8,
+    /// The exception/stack walker holds its lock (`eh_walker::locked_walker`):
+    /// a native read here is the walker's own (its allocator's clock), and a
+    /// stack capture would take the lock this thread already holds.
+    Unwind = 9,
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use runner::FunnelScope;
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 #[inline(always)]

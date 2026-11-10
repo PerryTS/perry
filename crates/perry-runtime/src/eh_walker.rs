@@ -807,10 +807,45 @@ fn walker() -> Option<&'static Mutex<Walker>> {
 /// unloaded since the index was built, rebuild it (and drop every cached
 /// site, which referred to the old images) before any frame is read. A
 /// range of an unloaded object is never walked.
-fn locked_walker() -> Option<std::sync::MutexGuard<'static, Walker>> {
+fn locked_walker() -> Option<WalkerLock> {
     let mut guard = walker()?.lock().ok()?;
     guard.refresh();
-    Some(guard)
+    Some(WalkerLock {
+        guard,
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        _funnel: crate::snap_census::funnel_enter(crate::snap_census::Funnel::Unwind),
+    })
+}
+
+/// The walker held by this thread. In the instrumented cohort it also holds
+/// the census `Unwind` funnel, so a native read the walker itself causes (an
+/// allocation inside the walk reading the clock) is classed as the walker's
+/// and never walks the stack again under the lock. Fields drop in order: the
+/// lock is released before the funnel closes.
+struct WalkerLock {
+    guard: std::sync::MutexGuard<'static, Walker>,
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    _funnel: crate::snap_census::FunnelScope,
+}
+
+impl std::ops::Deref for WalkerLock {
+    type Target = Walker;
+    fn deref(&self) -> &Walker {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for WalkerLock {
+    fn deref_mut(&mut self) -> &mut Walker {
+        &mut self.guard
+    }
+}
+
+/// Run `f` while this thread holds the walker (census unit tests).
+#[cfg(all(test, perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn with_walker_locked<R>(f: impl FnOnce() -> R) -> R {
+    let _held = locked_walker().expect("walker");
+    f()
 }
 
 impl Walker {
