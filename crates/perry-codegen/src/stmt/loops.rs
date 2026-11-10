@@ -6721,8 +6721,7 @@ fn dynamic_bound_private_counter_is_safe(
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
-    // 0x7FFF_FFFF_FFFF_FFFF]. INT32 boxes are excluded too: their payload
-    // still needs unboxing before floating-point arithmetic.
+    // 0x7FFF_FFFF_FFFF_FFFF].
     //
     // The test ignores the sign bit, so it also rejects the MIRROR of the tag
     // band (negative NaNs whose magnitude lies in it). A value that passes

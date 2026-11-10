@@ -1273,6 +1273,16 @@ pub struct Model {
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
+    /// N6: bitwise operators over single int32 values and constant left
+    /// shifts take their exact interval (`range::eval_exact`), and module
+    /// bindings that hold one Number are exported (`const_numbers`;
+    /// `PERRY_FACTS_CONST_NUMBERS=0` turns both off).
+    pub const_numbers: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=constnum`): a module binding
+    /// with any bounded Number interval is exported as the constant at its
+    /// lower bound (`const_numbers`), a wrong claim the read's witness must
+    /// catch.
+    pub const_number_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrcap`, also `densebirth`):
     /// `new Array(k)` records its birth length past
     /// `MAX_FRESH_DENSE_ARRAY_LENGTH`, over a store the runtime does not
@@ -1308,6 +1318,12 @@ pub struct Model {
     /// (`Gen::json_value`) returns a plain Array of Numbers, a wrong claim the witness must
     /// catch at a lazy JSON array header.
     pub arr_lazy_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrfront`): `shift` keeps
+    /// the receiver's length interval, so an Array whose first slot was
+    /// removed (its elements no longer start at the front of its
+    /// allocation) keeps its floor, a wrong claim the element tier's
+    /// front-offset witness must catch.
+    pub arr_front_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,

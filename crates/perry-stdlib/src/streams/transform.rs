@@ -136,7 +136,7 @@ unsafe fn alloc_transform_stream_with_strategies(
         js_closure_call1(
             start_cb as *const ClosureHeader,
             perry_runtime::closure::plain_call_receiver(),
-            stream_value(readable_id),
+            controller_value(readable_id),
         );
     }
     stream_value(id)
@@ -240,7 +240,7 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
     if let Some(error_bits) = native_error {
         if readable_id != 0 {
             js_readable_stream_controller_error(
-                stream_value(readable_id),
+                controller_value(readable_id),
                 f64::from_bits(error_bits),
             );
         }
@@ -329,7 +329,7 @@ extern "C" fn transform_write_job2(
                 transform_cb as *const ClosureHeader,
                 perry_runtime::closure::plain_call_receiver(),
                 chunk,
-                stream_value(readable_id),
+                controller_value(readable_id),
             );
             // Spec PerformTransform: `Promise.resolve(transformer.transform(
             // chunk, controller))` — an async transform's returned promise
@@ -359,7 +359,7 @@ extern "C" fn transform_write_job2(
             }
         } else if readable_id != 0 {
             // Identity transform — pass-through.
-            js_readable_stream_controller_enqueue(stream_value(readable_id), chunk);
+            js_readable_stream_controller_enqueue(controller_value(readable_id), chunk);
         }
         // Spec backpressure (TransformStreamDefaultSinkWriteAlgorithm): the
         // readable side's default highWaterMark is 0, so any chunk sitting
@@ -573,7 +573,7 @@ extern "C" fn transform_write_settle_rejected(
             perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
         let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
         if readable_id != 0 {
-            js_readable_stream_controller_error(stream_value(readable_id), reason);
+            js_readable_stream_controller_error(controller_value(readable_id), reason);
         }
         js_promise_reject(promise, reason);
         transform_write_job_done(writable_id);
@@ -826,7 +826,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     if let Some(error_bits) = native_error {
         if readable_id != 0 {
             js_readable_stream_controller_error(
-                stream_value(readable_id),
+                controller_value(readable_id),
                 f64::from_bits(error_bits),
             );
         }
@@ -853,7 +853,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
         Some(js_closure_call1(
             flush_cb as *const ClosureHeader,
             perry_runtime::closure::plain_call_receiver(),
-            stream_value(readable_id),
+            controller_value(readable_id),
         ))
     } else {
         None
@@ -935,7 +935,7 @@ unsafe fn finish_transform_close(
     close_promise: *mut Promise,
 ) {
     if readable_id != 0 {
-        js_readable_stream_controller_close(stream_value(readable_id));
+        js_readable_stream_controller_close(controller_value(readable_id));
     }
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
         s.state = WritableState::Closed;
@@ -956,7 +956,10 @@ unsafe fn error_transform_close(
     reason_bits: u64,
 ) {
     if readable_id != 0 {
-        js_readable_stream_controller_error(stream_value(readable_id), f64::from_bits(reason_bits));
+        js_readable_stream_controller_error(
+            controller_value(readable_id),
+            f64::from_bits(reason_bits),
+        );
     }
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
         s.state = WritableState::Errored;
@@ -1020,7 +1023,7 @@ pub(super) fn split_utf8_prefix(bytes: &[u8]) -> Result<(usize, bool), ()> {
 unsafe fn enqueue_string(readable_id: usize, text: &str) {
     let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
     js_readable_stream_controller_enqueue(
-        stream_value(readable_id),
+        controller_value(readable_id),
         f64::from_bits(JSValue::string_ptr(ptr).bits()),
     );
 }
@@ -1144,7 +1147,10 @@ unsafe fn native_transform_write(
         NativeTransformKind::TextEncoder => {
             let text = js_string_value_to_string(chunk, true).unwrap_or_default();
             let bytes = alloc_uint8array_from_bytes(text.as_bytes());
-            js_readable_stream_controller_enqueue(stream_value(readable_id), f64::from_bits(bytes));
+            js_readable_stream_controller_enqueue(
+                controller_value(readable_id),
+                f64::from_bits(bytes),
+            );
             Ok(())
         }
         NativeTransformKind::TextDecoder { fatal, pending } => {
@@ -1187,7 +1193,7 @@ unsafe fn native_transform_close(
             Ok(out) => {
                 let chunk = alloc_uint8array_from_bytes(&out);
                 js_readable_stream_controller_enqueue(
-                    stream_value(readable_id),
+                    controller_value(readable_id),
                     f64::from_bits(chunk),
                 );
                 chunks.clear();

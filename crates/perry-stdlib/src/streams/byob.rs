@@ -401,7 +401,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
 /// outstanding on this byte stream.
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handle: f64) -> f64 {
-    let id = stream_id(js_stream_unwrap_handle(stream_handle));
+    let id = controller_stream_id(stream_handle);
     let view_bits = {
         let g = BYOB_PENDING.lock().unwrap();
         match g.get(&id).and_then(|q| q.front()) {

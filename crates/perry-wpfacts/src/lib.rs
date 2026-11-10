@@ -19,6 +19,7 @@
 pub mod bindings;
 mod builtins;
 pub mod canonical_numbers;
+mod const_numbers;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
@@ -27,6 +28,7 @@ pub mod derive;
 mod diagnostics;
 mod dump;
 mod element_floors;
+mod element_keys;
 pub mod field_read_calls;
 mod gen;
 mod gen_call;
@@ -88,6 +90,10 @@ pub struct FactsConfig {
     /// An element read's past-the-end `undefined` is unconditional again
     /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
     pub no_elem_undef: bool,
+    /// N6 off (`PERRY_FACTS_CONST_NUMBERS=0`): bitwise operators keep their
+    /// int32 hull and no module binding is exported as a constant Number
+    /// (`const_numbers`).
+    pub no_const_numbers: bool,
     /// No guard narrowing, predicate summaries or String code intervals
     /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
     pub no_guard_ranges: bool,
@@ -465,6 +471,8 @@ fn generate<'a>(
     g.m.elem_undef = !cfg.no_elem_undef;
     g.m.elem_undef_sabotage = cfg.sabotage.as_deref() == Some("arrundef");
     g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
+    g.m.const_numbers = !cfg.no_const_numbers;
+    g.m.const_number_sabotage = cfg.sabotage.as_deref() == Some("constnum");
     g.m.arr_cap_sabotage = matches!(cfg.sabotage.as_deref(), Some("arrcap" | "densebirth"));
     g.m.arr_floor_sabotage = cfg.sabotage.as_deref() == Some("arrfloor");
     g.m.arr_append_sabotage = cfg.sabotage.as_deref() == Some("arrappend");
@@ -474,6 +482,7 @@ fn generate<'a>(
     g.m.arr_dense_sabotage = cfg.sabotage.as_deref() == Some("arrdense");
     g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
     g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
+    g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
@@ -906,6 +915,10 @@ fn compute_act<'a>(
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }
+    if g.m.const_numbers {
+        const_numbers::collect(&g, &mut bindings);
+    }
+    element_keys::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
