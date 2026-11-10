@@ -12,6 +12,7 @@ function vals(): any[] {
 }
 function show(v: any): string {
   if (typeof v === "symbol") return "sym";
+  if (typeof v === "function") return "fn";
   if (typeof v === "bigint") return v + "n";
   if (typeof v === "object" && v !== null) return Array.isArray(v) ? "[" + v + "]" : "{obj}";
   return Object.is(v, -0) ? "-0" : String(v);
