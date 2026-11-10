@@ -41,6 +41,7 @@ use super::{
 };
 
 pub(crate) mod array_rep;
+mod const_array;
 mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
@@ -413,6 +414,9 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     else {
         return Ok(None);
     };
+    if let Some(v) = const_array::try_lower(ctx, expr)? {
+        return Ok(Some(v));
+    }
     array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
@@ -848,6 +852,9 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    if let Some(v) = const_array::try_lower(ctx, expr)? {
+        return Ok(v);
+    }
     array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
