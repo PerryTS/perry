@@ -1433,6 +1433,18 @@ impl CompilationContext {
             .collect()
     }
 
+    /// Perry C functions available to approved native addons.
+    ///
+    /// Export the full, currently small inventory whenever an addon is linked.
+    /// A shared library used by the addon can call these functions without
+    /// leaving an import in the top-level addon binary for our scanner to see.
+    /// Projects without native addons keep the exports out of the host binary.
+    pub fn perry_c_host_exports(&self) -> Vec<&'static str> {
+        perry_runtime_manifest::perry_c_host_symbols()
+            .filter(|_| !self.native_addons.is_empty())
+            .collect()
+    }
+
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),

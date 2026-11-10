@@ -227,7 +227,9 @@ impl Model {
             let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
-            node.pts = self.sets.retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
+            node.pts = self
+                .sets
+                .retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
             if node.pts.len() != before {
                 node.dropped = true;
                 self.charge_work(before as u64);
@@ -712,7 +714,11 @@ impl Model {
         self.nodes[n as usize].cons.push(c);
         if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
             let cs = &self.nodes[n as usize].cons;
-            let seen = cs.iter().rev().take(4).any(|x| matches!(x, Cons::Raise { region: r } if *r == region));
+            let seen = cs
+                .iter()
+                .rev()
+                .take(4)
+                .any(|x| matches!(x, Cons::Raise { region: r } if *r == region));
             if !seen {
                 self.cons(n, Cons::Raise { region });
             }
@@ -1050,11 +1056,15 @@ impl Model {
             // lookup on it reaches what the program gave or stored up the
             // chain (`Object.setPrototypeOf(EventEmitter, p)` then
             // `Readable.apply`).
-            TokKind::BuiltinFn(Native::Member { identity, holder: None })
-                if crate::builtins::realm_parent_constructor(identity).is_some() =>
-            {
+            TokKind::BuiltinFn(Native::Member {
+                identity,
+                holder: None,
+            }) if crate::builtins::realm_parent_constructor(identity).is_some() => {
                 let parent = crate::builtins::realm_parent_constructor(identity).unwrap();
-                let p = self.tok(TokKind::BuiltinFn(Native::Member { identity: parent, holder: None }));
+                let p = self.tok(TokKind::BuiltinFn(Native::Member {
+                    identity: parent,
+                    holder: None,
+                }));
                 self.add_tok(n, p);
             }
             TokKind::Func(_, _)
@@ -1066,30 +1076,26 @@ impl Model {
                     let pc = self.tok(TokKind::ClassObj(p));
                     self.add_tok(n, pc);
                 }
-                None => match self.tmpls[tm as usize].parent_value {
-                    // `S.__proto__` is the value of the `extends` expression.
-                    Some((pv, _)) => self.edge(pv, n),
-                    None => match self.tmpls[tm as usize].native_parent.clone() {
-                        // `class C extends EventEmitter` over a named import
-                        // of a node module: the heritage reads the import's
-                        // binding, which holds what key `EventEmitter` of the
-                        // module object reads (the named ESM export value,
-                        // `js_native_module_named_esm_export_value`).
-                        Some((module, name)) if !self.unit_mode => {
-                            match crate::builtins::node_module_ns(&module) {
-                                Some(ns) => {
-                                    let mt = self.tok(TokKind::Builtin(ns));
-                                    let mn = self.node_l("native-parent-module");
-                                    self.add_tok(mn, mt);
-                                    let key = Key::Named(self.atom(&name));
-                                    self.cons(mn, Cons::Load { key, dst: n });
-                                }
-                                None => self.add_tok(n, objproto),
-                            }
+                None => {
+                    // The class object's [[Prototype]] is the intrinsic
+                    // constructor when the native parent is realm-global.
+                    // Module-exported parents instead use the evaluated
+                    // `extends` value below.
+                    let native_parent = if self.tmpls[tm as usize].native_parent.is_some() {
+                        crate::builtins::native_parent_value(self, tm)
+                    } else {
+                        None
+                    };
+                    if let Some(parent) = native_parent {
+                        self.add_tok(n, parent);
+                    } else {
+                        match self.tmpls[tm as usize].parent_value {
+                            // `S.__proto__` is the value of the `extends` expression.
+                            Some((pv, _)) => self.edge(pv, n),
+                            None => self.add_tok(n, objproto),
                         }
-                        _ => self.add_tok(n, objproto),
-                    },
-                },
+                    }
+                }
             },
             _ => {}
         }
@@ -1423,7 +1429,11 @@ impl Model {
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
-            self.raise_top(region, n, "a native hands a value to unknown code, which may throw");
+            self.raise_top(
+                region,
+                n,
+                "a native hands a value to unknown code, which may throw",
+            );
         }
         if self.sunk_nodes.insert(n) {
             self.cons(n, Cons::TopSink { reason });

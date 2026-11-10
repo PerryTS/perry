@@ -692,7 +692,10 @@ fn constfn_lane_past_word_zero_is_learned_verified_and_generalized() {
         }
         assert!(super::shapes::learn_object_constfn_lanes(obj, |_, _| true));
         let record = super::shapes::object_shape_record(obj).unwrap();
-        assert!(record.constfn_info(40).is_some(), "slot 40 earns a ConstFn lane");
+        assert!(
+            record.constfn_info(40).is_some(),
+            "slot 40 earns a ConstFn lane"
+        );
         assert!(record.constfn_info(32).is_some());
         assert!(record.constfn_info(3).is_some());
         assert!(record.constfn_info(41).is_none());
@@ -700,7 +703,10 @@ fn constfn_lane_past_word_zero_is_learned_verified_and_generalized() {
         // A store of another body into slot 40 drops that lane and no other.
         crate::object::js_object_set_field_by_name(obj, key("m40"), bits(b));
         let after = super::shapes::object_shape_record(obj).unwrap();
-        assert!(after.constfn_info(40).is_none(), "the stored-over lane is gone");
+        assert!(
+            after.constfn_info(40).is_none(),
+            "the stored-over lane is gone"
+        );
         assert!(after.constfn_info(39).is_some());
         assert!(after.constfn_info(32).is_some());
         assert!(after.constfn_info(3).is_some());

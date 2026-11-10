@@ -20,12 +20,19 @@ fn stored(prelude: &str, read: &str) -> crate::derive::KindFact {
 
 #[test]
 fn navigator_user_agent_is_the_declared_string() {
-    for read in ["navigator.userAgent", "(globalThis as any).navigator.userAgent"] {
+    for read in [
+        "navigator.userAgent",
+        "(globalThis as any).navigator.userAgent",
+    ] {
         let k = stored("", read);
         assert!(!k.top, "{read}: {k:?}");
         // `H.v` starts as a number; the read adds a string (and `undefined`,
         // which the model keeps for the global read), nothing else.
-        assert_eq!(k.prims & !(prim::NUM | prim::UNDEF), prim::STR, "{read}: {k:?}");
+        assert_eq!(
+            k.prims & !(prim::NUM | prim::UNDEF),
+            prim::STR,
+            "{read}: {k:?}"
+        );
     }
     let k = stored("", "navigator.hardwareConcurrency");
     assert!(!k.top && k.prims & !prim::UNDEF == prim::NUM, "{k:?}");
@@ -44,7 +51,11 @@ fn navigator_user_agent_match_hands_nothing_to_unknown_code() {
          console.log(m, o.x);\n",
     );
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "x").collect();
-    assert!(!s.is_empty() && s.iter().all(|s| !matches!(s.verdict, Verdict::No(_))), "{}", pf.dump_text());
+    assert!(
+        !s.is_empty() && s.iter().all(|s| !matches!(s.verdict, Verdict::No(_))),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a write the program does not make as a store (here

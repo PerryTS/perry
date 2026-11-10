@@ -12271,6 +12271,7 @@ object	node:zlib	constants	node:zlib.constants
 object	node:zlib	default	node:zlib.default
 object	node:zlib.default	codes	node:zlib.codes
 object	node:zlib.default	constants	node:zlib.constants
+proto	Function.prototype	@@hasInstance
 proto	Function.prototype	apply
 proto	Function.prototype	arguments
 proto	Function.prototype	bind

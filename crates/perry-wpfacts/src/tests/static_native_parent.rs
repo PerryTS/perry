@@ -84,6 +84,29 @@ fn a_function_stored_on_a_builtin_parent_runs_through_a_subclass_chain() {
     }
 }
 
+#[test]
+fn a_module_parent_does_not_end_the_constructor_prototype_chain() {
+    let src = "import { EventEmitter } from 'node:events'; class X extends EventEmitter {}";
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let mut g = crate::gen::Gen::new(vec![("t.ts", &hir)], false, false);
+    g.register_all();
+    g.link_exports();
+    g.walk_all();
+    g.feed_parent_values();
+    g.m.summarize_and_replay();
+    g.m.solve();
+    let tm =
+        g.m.tmpls
+            .iter()
+            .position(|t| t.display.ends_with(":X"))
+            .expect("X") as u32;
+    let ctor = g.m.tok(crate::model::TokKind::ClassObj(tm));
+    let proto = g.m.proto_node(ctor);
+    g.m.solve();
+    assert!(!g.m.nodes[proto as usize].pts.to_sorted().is_empty());
+}
+
 /// Node: the parent is the value the global held when the class was
 /// evaluated, here a program class replacing `Error`.
 #[test]

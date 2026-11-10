@@ -2,7 +2,7 @@
 //! value lattice beside `prim`. A string literal is a source node holding
 //! its one atom (`Gen::str_literal`); copy edges and the filters that pass a
 //! string join sets; every other string birth is any string (`STRS_TOP`),
-//! the default of `add_prim`. A set past `STRS_K` atoms is any string.
+//! the default of `add_prim`. Finite sets remain exact up to `STRS_K` atoms.
 use crate::model::*;
 
 impl Model {
@@ -11,9 +11,6 @@ impl Model {
     pub(crate) fn str_set(&mut self, atoms: &[Atom]) -> StrSet {
         if atoms.is_empty() {
             return STRS_NONE;
-        }
-        if atoms.len() > STRS_K {
-            return STRS_TOP;
         }
         if let Some(&s) = self.str_set_index.get(atoms) {
             return s;
@@ -71,9 +68,6 @@ impl Model {
                 (None, None) => unreachable!(),
             };
             v.push(next);
-            if v.len() > STRS_K {
-                return STRS_TOP;
-            }
         }
         self.str_set(&v)
     }

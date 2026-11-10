@@ -92,18 +92,24 @@ fn negative_key_proof_survives_a_refused_object_prototype_named_add() {
     struct RestoreIntrinsic(*const crate::object::ObjectHeader);
     impl Drop for RestoreIntrinsic {
         fn drop(&mut self) {
-            crate::agent_ptrs::publish_intrinsic_proto(BuiltinProto::Object as usize, self.0.cast_mut());
+            crate::agent_ptrs::publish_intrinsic_proto(
+                BuiltinProto::Object as usize,
+                self.0.cast_mut(),
+            );
         }
     }
-    let _restore =
-        RestoreIntrinsic(crate::agent_ptrs::intrinsic_proto(BuiltinProto::Object as usize));
+    let _restore = RestoreIntrinsic(crate::agent_ptrs::intrinsic_proto(
+        BuiltinProto::Object as usize,
+    ));
     let proto = crate::object::js_object_alloc(0, 0);
     unsafe { builtin_proto::seal_object(proto, BuiltinProto::Object) };
     crate::agent_ptrs::publish_intrinsic_proto(BuiltinProto::Object as usize, proto);
     assert!(negative_integer_key_is_absent(arr));
     let key = crate::string::js_string_from_bytes(b"-1".as_ptr(), 2);
-    crate::exception::catch_js_throw(|| crate::object::js_object_set_field_by_name(proto, key, 47.0))
-        .expect_err("a program add on Object.prototype is refused");
+    crate::exception::catch_js_throw(|| {
+        crate::object::js_object_set_field_by_name(proto, key, 47.0)
+    })
+    .expect_err("a program add on Object.prototype is refused");
     assert!(builtin_proto::pristine(BuiltinProto::Object));
     assert!(negative_integer_key_is_absent(arr));
 }

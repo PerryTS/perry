@@ -98,7 +98,9 @@ pub(crate) fn constfn_mask(infos: &[ConstFnSlotInfo], live_inline: u32) -> Optio
 #[inline(never)]
 #[optimize(size)]
 pub(crate) fn tail_constfn_slot(infos: &[ConstFnSlotInfo], slot: u32) -> bool {
-    infos.binary_search_by_key(&slot, |entry| entry.slot).is_ok()
+    infos
+        .binary_search_by_key(&slot, |entry| entry.slot)
+        .is_ok()
 }
 
 /// Does the sorted body list reach a slot >= 32?
@@ -666,9 +668,10 @@ impl ShapeRecord {
         }
         // SAFETY: the extension is owned by this live record.
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
-        extras.tail_to_any.get(word).map_or(0, |w| {
-            w.load(std::sync::atomic::Ordering::Acquire)
-        })
+        extras
+            .tail_to_any
+            .get(word)
+            .map_or(0, |w| w.load(std::sync::atomic::Ordering::Acquire))
     }
 
     /// Any learned deprecation, word 0 or tail, is pending.

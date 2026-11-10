@@ -2512,7 +2512,8 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A cold runner builds both the normal and instrumented release graphs.
+    timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
         shell: bash

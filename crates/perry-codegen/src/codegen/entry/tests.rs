@@ -733,7 +733,9 @@ fn tla_program_emits_record_owned_dependency_visitor_in_source_order() {
     opts.program_has_tla = true;
     opts.module_init_deps = vec!["first".into(), "second".into()];
     let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
-    let start = ir.find("__async_dependencies(i64 %walk, i64 %parent)").unwrap();
+    let start = ir
+        .find("__async_dependencies(i64 %walk, i64 %parent)")
+        .unwrap();
     let body = &ir[start..];
     let first = body.find("call i64 @first__async_record()").unwrap();
     let second = body.find("call i64 @second__async_record()").unwrap();

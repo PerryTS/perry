@@ -85,7 +85,7 @@ def check_receipts(root: Path, result: subprocess.CompletedProcess[str]) -> None
         else:
             assert cell["result"] == "UNVER", "command probes must never certify moving GC"
         if cell["arm"] == "wb_off":
-            assert compile_env == {"PERRY_WRITE_BARRIERS": "0"}
+            assert compile_env == {"PERRY_WRITE_BARRIERS": "0", "PERRY_GC_DIAG": "1"}
             assert run_env["PERRY_WRITE_BARRIERS"] == "0"
 
 
@@ -163,6 +163,35 @@ def self_test() -> None:
         assert {c["arm"] for c in report["cells"]} == set(ARMS.split(",")), report["cells"]
         assert any(r["stage"] == "run" and r["compile_env"].get("PERRY_GC_SCHEDULE_SEED") == "10061"
                    for r in moved_receipts), moved_receipts
+        node_probe = root / "probes/node"
+        original_node_probe = node_probe.read_text()
+        node_probe.write_text(original_node_probe.replace("'routing-probe-only'", "'node-oracle-only'"))
+        expected = root / f"tests/parity/expected/node-suite/http/{TEST}.txt"
+        expected.parent.mkdir(parents=True)
+        expected.write_text("routing-probe-only\n")
+        check_receipts(root, run_probe(root, matrix))
+        receipts = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()]
+        assert len([r for r in receipts if r["stage"] == "oracle"]) == 1
+        expected.write_text("wrong committed output\n")
+        mismatch = run_probe(root, matrix)
+        assert mismatch.returncode == 1, mismatch.stdout
+        assert all(cell["result"] == "FAIL" for cell in json.loads((root / "report.json").read_text())["cells"])
+        expected.write_text("routing-probe-only\n")
+        expected_exit = root / f"tests/parity/expected-exit/node-suite/http/{TEST}.txt"
+        expected_exit.parent.mkdir(parents=True)
+        expected_exit.write_text("1\n")
+        unsupported_exit = run_probe(root, matrix)
+        assert unsupported_exit.returncode == 2, unsupported_exit.stdout
+        assert not (root / "receipts.jsonl").exists()
+        expected_exit.unlink()
+        node_probe.write_text(node_probe.read_text() +
+                              "\nif '--version' not in sys.argv: raise SystemExit(3)\n")
+        failed_oracle = run_probe(root, matrix)
+        assert failed_oracle.returncode == 2, failed_oracle.stdout
+        receipts = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()]
+        assert receipts and all(r["stage"] == "oracle" for r in receipts)
+        expected.unlink()
+        node_probe.write_text(original_node_probe)
         (root / "tests/parity/gc_repsel_corpus.txt").write_text(TEST + "\n" + TEST + "\n")
         repeated = run_probe(root, matrix)
         assert repeated.returncode == 0, repeated.stdout[-2000:]

@@ -26,7 +26,7 @@
 # (`moved_objects=` / `[gc-copy-minor] ran` -- evacuation evidence), and each
 # cell is reported as one of:
 #
-#   PASS   output byte-exact vs the pinned Node oracle AND the arm's liveness
+#   PASS   output byte-exact vs the parity oracle AND the arm's liveness
 #          requirement was met on this test
 #   UNVER  output byte-exact but the arm was INERT here (no collection, or
 #          nothing moved for an evacuating arm) -- NOT green, by design
@@ -544,6 +544,8 @@ for b in "${CORPUS[@]}"; do
     progress "oracle-start test=$b"
     node_argv=()
     source_path="${CORPUS_SOURCE_PATHS[$((oracle_i-1))]}"
+    expected_output="$(python3 "$SCRIPT_DIR/gc_corpus_sources.py" --root "$ROOT" \
+        --expected-output "$source_path")" || exit 2
     node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$source_path" | head -1)
     if [ -n "$node_argv_line" ]; then read -r -a node_argv <<< "$node_argv_line"; fi
     if ! node --experimental-strip-types ${node_argv[@]+"${node_argv[@]}"} "$source_path" > "$WORK/oracle/$b.out" 2>/dev/null; then
@@ -551,6 +553,10 @@ for b in "${CORPUS[@]}"; do
         oracle_fail=1
         progress "oracle-result test=$b result=FAIL"
     else
+        if [ -n "$expected_output" ]; then
+            echo "    committed parity oracle: $expected_output"
+            cp "$ROOT/$expected_output" "$WORK/oracle/$b.out" || exit 2
+        fi
         progress "oracle-result test=$b result=PASS"
     fi
 done
@@ -895,7 +901,7 @@ echo
 #     live. That is what PASS vs UNVER distinguishes.
 n_byte_exact=$((n_pass + n_unver))
 n_cells=$((n_pass + n_unver + n_xfail + n_fail))
-echo "byte-exact vs node $NODE_V: $n_byte_exact/$n_cells cells (the parity property)"
+echo "byte-exact vs parity oracle: $n_byte_exact/$n_cells cells (Node $NODE_V or committed expectation)"
 echo "summary: PASS=$n_pass UNVER=$n_unver XFAIL=$n_xfail FAIL=$n_fail"
 echo "  (pressure=${PRESSURE_MB}MB, node $NODE_V, $PERRY_BIN)"
 echo "  UNVER = output matched but the arm was inert here; see #6942 / #6946 / #6950."

@@ -82,6 +82,11 @@ under a subject root. Fixtures are not cases; unknown or duplicate source IDs
 fail before the oracle or compiler runs. This keeps GC report names and flat
 artifacts stable while the case itself moves with its subject.
 
+Every matrix fixture must run successfully in Node. When the fixture has
+committed parity output, the matrix uses the same path-first expectation as
+the parity runner, without changing output comparisons or GC liveness
+requirements. Nonzero expected exits are not valid GC witnesses.
+
 The root-dominance corpus and GC registration guards use the same source
 resolver's basename-pattern lookup across all roots. Pattern order and repeated
 matches remain intact; fixtures never become corpus inputs. Strict corpus

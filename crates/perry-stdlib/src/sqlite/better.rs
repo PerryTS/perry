@@ -284,11 +284,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                 sqlite_params.iter().map(|p| p.as_ref()).collect();
 
             if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                let column_names: Vec<String> = prepared
-                    .column_names()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
+                let column_names: Vec<String> =
+                    prepared.column_names().map(|s| s.to_string()).collect();
 
                 let mut rows = prepared.query(param_refs.as_slice());
                 if let Ok(ref mut rows) = rows {
@@ -346,11 +343,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                 sqlite_params.iter().map(|p| p.as_ref()).collect();
 
             if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                let column_names: Vec<String> = prepared
-                    .column_names()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
+                let column_names: Vec<String> =
+                    prepared.column_names().map(|s| s.to_string()).collect();
 
                 // Only build the per-row object shape in non-raw
                 // mode. In raw mode each row is its own array of

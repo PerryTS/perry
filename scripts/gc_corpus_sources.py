@@ -117,11 +117,29 @@ def main() -> int:
     parser.add_argument("ids", nargs="*")
     parser.add_argument("--pattern", action="append", default=[], help="basename glob; repeat in corpus order")
     parser.add_argument("--allow-empty-patterns", action="store_true", help="allow empty optional registration globs")
+    parser.add_argument("--expected-output", type=Path, help="print the committed parity oracle for a source")
     args = parser.parse_args()
     if args.pattern and args.ids:
         parser.error("choose witness ids or --pattern, not both")
     if args.allow_empty_patterns and not args.pattern:
         parser.error("--allow-empty-patterns requires --pattern")
+    if args.expected_output is not None:
+        if args.ids or args.pattern:
+            parser.error("--expected-output cannot be combined with source selectors")
+        source = args.expected_output
+        if not source.is_absolute():
+            source = args.root / source
+        if not source.is_file() or not parity.is_case(args.root, source):
+            parser.error(f"not a runnable parity source: {source}")
+        try:
+            expected, exit_code = parity.expected_for(args.root, parity.case_id(args.root, source))
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        if expected is not None:
+            if exit_code != 0:
+                parser.error(f"GC witnesses must exit successfully: {expected} expects exit {exit_code}")
+            print(expected.relative_to(args.root).as_posix())
+        return 0
     try:
         sources = (resolve_patterns(args.root, args.pattern, require_each=not args.allow_empty_patterns)
                    if args.pattern else resolve_sources(args.root, args.ids))

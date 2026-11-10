@@ -781,8 +781,10 @@ fn object_array_numeric_write_slots(
         // A finite Number preserves Any/F64, but contradicts a ConstFn body
         // fact. The clone writes without the checked slot funnel, so SPECIAL
         // targets must take the ordinary loop before any slot is published.
-        if crate::object::field_rep_store::object_slot_rep_of(LayoutWord(shared_shape_id), slot as u32)
-            == crate::object::field_rep::REP_SPECIAL
+        if crate::object::field_rep_store::object_slot_rep_of(
+            LayoutWord(shared_shape_id),
+            slot as u32,
+        ) == crate::object::field_rep::REP_SPECIAL
         {
             trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");
             return None;

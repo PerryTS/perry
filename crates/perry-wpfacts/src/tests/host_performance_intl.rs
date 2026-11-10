@@ -16,7 +16,11 @@ fn site_top(pf: &ProgramFacts, key: &str) -> bool {
 
 fn no_host_top(pf: &ProgramFacts) {
     let d = pf.dump_text();
-    for t in ["global Intl", "global performance", "native module ref node:perf_hooks.performance"] {
+    for t in [
+        "global Intl",
+        "global performance",
+        "native module ref node:perf_hooks.performance",
+    ] {
         assert!(!d.contains(t), "`{t}` still read as ⊤:\n{d}");
     }
 }

@@ -351,8 +351,8 @@ mod pipe;
 pub(crate) use native::{
     alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,
 };
-mod strategy;
 mod prototypes;
+mod strategy;
 mod subclass;
 mod tee;
 #[cfg(test)]
@@ -384,13 +384,12 @@ pub(crate) use self::expando::stream_expando_get;
 #[cfg(test)]
 pub(crate) use self::expando::stream_expando_set_hook;
 use self::pipe::js_readable_stream_pipe_to;
-use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::prototypes::install_stream_prototypes;
+use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
-    drain_readable_into_bytes, js_readable_stream_subclass_init,
-    js_stream_handle_is_registered, js_stream_handle_kind, js_transform_stream_subclass_init,
-    js_writable_stream_subclass_init,
+    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_handle_is_registered,
+    js_stream_handle_kind, js_transform_stream_subclass_init, js_writable_stream_subclass_init,
 };
 #[cfg(test)]
 pub(crate) use self::transform::transform_side_tables_hold_for_test;
@@ -596,9 +595,16 @@ pub(crate) const STREAM_BYOB_REQUEST_BIT: usize =
 pub(crate) const STREAM_ALLOC_END: usize = STREAM_HANDLE_ID_START + STREAM_BYOB_REQUEST_BIT;
 const _: () = assert!(STREAM_CONTROLLER_BIT.is_power_of_two());
 const _: () = assert!(STREAM_BYOB_REQUEST_BIT.is_power_of_two());
-const _: () = assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
-const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1);
-const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1);
+const _: () =
+    assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
+const _: () = assert!(
+    (STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT
+        == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1
+);
+const _: () = assert!(
+    (STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT
+        == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1
+);
 
 /// The controller value of readable stream `id`.
 #[inline]

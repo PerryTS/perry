@@ -22,9 +22,9 @@ use super::opts::CrossModuleCtx;
 mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
+mod async_module;
 mod module_frame;
 mod module_init;
-mod async_module;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
 
@@ -876,7 +876,7 @@ pub(super) fn compile_module_entry(
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
-        program_has_tla: cross_module.program_has_tla,
+            program_has_tla: cross_module.program_has_tla,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1204,10 +1204,14 @@ pub(super) fn compile_module_entry(
                 if entry_evaluates_as_esm(hir, cross_module) {
                     ctx.block().call_void("js_mark_entry_module_esm", &[]);
                 }
-                let record = ctx.block().call(I64, &format!("{}__async_record", module_prefix), &[]);
-                ctx.block().call_void("js_async_module_entry", &[(I64, &record)]);
+                let record =
+                    ctx.block()
+                        .call(I64, &format!("{}__async_record", module_prefix), &[]);
+                ctx.block()
+                    .call_void("js_async_module_entry", &[(I64, &record)]);
             } else {
-                ctx.block().call_void(&format!("{}__init", module_prefix), &[]);
+                ctx.block()
+                    .call_void(&format!("{}__init", module_prefix), &[]);
             }
         } else {
             // Register every module-level global's ADDRESS as a GC root so

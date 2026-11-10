@@ -134,7 +134,6 @@ pub extern "C" fn js_array_destructure_needs_iterator(value: f64) -> i32 {
     i32::from(dense_spread_source(value).is_none())
 }
 
-
 /// Element-copy an array [`dense_spread_source`] has already proven ordinary.
 ///
 /// `value` is the NaN-boxed receiver rather than a raw pointer because

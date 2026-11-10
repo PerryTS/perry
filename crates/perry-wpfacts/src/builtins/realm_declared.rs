@@ -159,7 +159,10 @@ fn missing(list: &str) -> Vec<String> {
             "ns" | "accessor" => {
                 ns_by_name(holder).is_none_or(|ns| members::ns_member(ns, key) != Some(None))
             }
-            "proto" | "fn" => members::member(Family::Function, key).is_some(),
+            "proto" | "fn" => {
+                let key = key.replace("@@", WK_PREFIX);
+                members::member(Family::Function, &key).is_some()
+            }
             // The global object is no R1 holder (`undeclared`); its own keys
             // decide which globals the program owns (`global_user_key`).
             "global" => true,
