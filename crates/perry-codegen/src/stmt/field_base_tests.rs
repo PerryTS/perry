@@ -42,10 +42,16 @@ fn loop_body<'m>(m: &'m Module, name: &str) -> &'m [Stmt] {
                 Some(body.as_slice())
             }
             Stmt::Labeled { body, .. } => find(std::slice::from_ref(body.as_ref())),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => find(then_branch).or_else(|| else_branch.as_deref().and_then(find)),
+            Stmt::Try { body, .. } => find(body),
             _ => None,
         })
     }
-    find(&f.body).unwrap_or_else(|| panic!("a loop in {name}"))
+    find(&f.body).unwrap_or_else(|| panic!("a loop in {name}: {:.600?}", f.body))
 }
 
 /// A call `this.at(...)`.
@@ -102,11 +108,11 @@ fn a_read_some_iteration_skips_does_not() {
 const IR_SRC: &str = "export class B {\n\
   board: number[] = [];\n\
   at(sq: number): number { return this.board[sq] ?? 0; }\n\
-  ray(n: number): number { let s = 0; let i = 0; while (i < n) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
-  pawn(n: number): number { let s = 0; for (let f = 0; f < n; f++) { if (this.at(f * 16) === 1) s += 1; } return s; }\n\
-  some(n: number): number { let s = 0; for (let i = 0; i < n; i++) { if (i > 3) s += this.at(i & 127); } return s; }\n\
-  sum(n: number): number { let s = 0; for (let i = 0; i < n; i++) { s += this.at(i & 127) * 2; } return s; }\n\
-  grows(n: number): number { let s = 0; for (let i = 0; i < n; i++) { s += this.at(i & 127); this.board.push(i); } return s; }\n\
+  ray(n: number): number { let s = 0; let i = 0; while (i < 100) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
+  pawn(n: number): number { let s = 0; for (let f = 0; f < 100; f++) { if (this.at(f * 16) === 1) s += 1; } return s; }\n\
+  some(n: number): number { let s = 0; for (let i = 0; i < 100; i++) { if (i > 3) s += this.at(i & 127); } return s; }\n\
+  sum(n: number): number { let s = 0; for (let i = 0; i < 100; i++) { s += this.at(i & 127) * 2; } return s; }\n\
+  grows(n: number): number { let s = 0; for (let i = 0; i < 100; i++) { s += this.at(i & 127); this.board.push(i); } return s; }\n\
 }\n";
 
 const GROWABLE: FactsArrRep = FactsArrRep {
