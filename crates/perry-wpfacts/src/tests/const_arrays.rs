@@ -150,10 +150,17 @@ fn a_callback_that_writes_its_receiver_makes_it_mutable() {
 }
 
 #[test]
-fn an_escape_makes_it_mutable() {
-    let src = "const K = [1, 2, 3];\nconst f: (a: number[]) => void = (globalThis as any).hook;\nf(K);\nconsole.log(K[0]);\n";
+fn a_write_through_a_function_value_makes_it_mutable() {
+    let src = "const K = [1, 2, 3];\nconst fns = [(a: number[]) => { a[0] = 9; }];\nfns[0](K);\nconsole.log(K[0]);\n";
     assert!(!im(src, "K"));
     assert_eq!(elems(src, "K"), None);
+}
+
+#[test]
+fn a_native_that_only_reads_keeps_it_immutable() {
+    let src = "const K = [1, 2, 3];\nconsole.log(JSON.stringify(K), K);\n";
+    assert!(im(src, "K"));
+    assert_eq!(elems(src, "K"), Some(vec![1.0, 2.0, 3.0]));
 }
 
 #[test]
