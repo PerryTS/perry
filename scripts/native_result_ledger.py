@@ -37,10 +37,11 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # npm binding was removed (#466) — its six pointer-kind rows
 # (`js_fastify_app_server`/`create_with_opts`/`reply_header`/`reply_status`/
 # `reply_type`/`req_headers`) and their `native_table/fastify.rs` rows are
-# gone. The npm `typescript` binding is NOT removed in this PR (see #10765):
-# real `typescript.js` hits a compiler defect, so the binding stays until
-# that is fixed, and `js_typescript_*` plus Bun's `js_bun_transpiler_new`/
-# `js_bun_build` all remain classified.
+# gone. The npm `typescript` binding was NOT removed in that PR (see #10765);
+# it went later with the other pure-JS bindings, and Bun's
+# `js_bun_transpiler_new` / `js_bun_build` stay classified under the renamed
+# crate (perry-ext-typescript -> perry-ext-bun; its `js_typescript_*` rows
+# were never pointer-kind, so neither count moved).
 #
 # -13 rows / -13 providers (#10708 + #10712, same campaign): removing the
 # `lru-cache` binding dropped 2 pointer-kind rows / 2 providers
@@ -157,8 +158,40 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # (empty for a dead handle), so NR_GCPTR; `js_sqlite_stmt_safe_integers`
 # returns its `stmt_handle` argument unchanged so the call chains, a registry
 # id, so NR_HANDLE_ID. 180 -> 182 rows, 168 -> 170 providers.
-EXPECTED_ROWS = 182
-EXPECTED_PROVIDERS = 170
+# -2 rows / -2 providers (native nodemailer binding removal): deleting
+# `perry-ext-nodemailer` dropped the `module: "nodemailer"` rows from
+# native_table/utils_crypto.rs; `sendMail` / `verify` were NR_GCPTR promises
+# (`createTransport` was NR_F64 and never counted). 182 -> 180 rows,
+# 170 -> 168 providers, as the script reports on the resolved tree.
+# -8 rows / -8 providers (native cheerio binding removal): deleting
+# `perry-ext-cheerio` dropped the `module: "cheerio"` rows from
+# native_table/media.rs; `load` and the seven selection-returning methods were
+# NR_HANDLE_ID (the string/number/bool readers never counted). 180 -> 172
+# rows, 168 -> 160 providers, as the script reports on the resolved tree.
+# -10 rows / -10 providers (native lodash shim removal): deleting
+# perry-stdlib's `lodash.rs` dropped the `module: "lodash"` rows from
+# native_table/thread_lodash.rs; the ten array-returning helpers (`chunk`,
+# `compact`, `drop`, `flatten`, `uniq`, `reverse`, `take`, `range`, `times`,
+# `tail`) were NR_GCPTR (the number/string ones never counted). 172 -> 162
+# rows, 160 -> 150 providers, as the script reports on the resolved tree.
+# -1 row / -1 provider (native ethers binding removal): deleting
+# `perry-ext-ethers` dropped the `module: "ethers"` rows from
+# native_table/extras.rs; `Wallet.createRandom` was its only classified row
+# (NR_JS_VALUE -- the string-returning utilities never counted). 162 -> 161
+# rows, 150 -> 149 providers, as the script reports on the resolved tree.
+# -3 rows / -3 providers (native undici binding removal): deleting
+# `perry-ext-undici` dropped native_table/undici.rs; `ProxyAgent`, `Agent`
+# and `getGlobalDispatcher` were NR_HANDLE_ID (the promise and void rows
+# never counted). 161 -> 158 rows, 149 -> 146 providers, as the script
+# reports on the resolved tree.
+# -1 row / -1 provider (npm `ws` mapping removal): npm `ws` compiles from
+# source, so the `WebSocketServer` rows left native_table/ws_events.rs (the
+# global `WebSocket` client rows stay, under the internal `__websocket__`
+# key); `js_ws_server_new` was the only classified one (the rest returned
+# NR_F64 / NR_VOID / NR_BOOL_I32). 158 -> 157 rows, 146 -> 145 providers, as
+# the script reports on the resolved tree.
+EXPECTED_ROWS = 157
+EXPECTED_PROVIDERS = 145
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

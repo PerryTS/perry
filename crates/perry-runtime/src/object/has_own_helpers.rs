@@ -55,8 +55,7 @@ pub extern "C" fn js_require_object_coercible(value: f64) -> f64 {
 pub(crate) fn throw_to_object_nullish_type_error() -> ! {
     let message = "Cannot convert undefined or null to object";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// #3655: borrow a `StringHeader` key as `&str` (UTF-8 validated). Public

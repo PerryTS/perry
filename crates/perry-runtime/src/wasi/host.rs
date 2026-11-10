@@ -272,17 +272,21 @@ pub(crate) fn call_import(
     // A JS lifecycle/memory error must return through the interpreter before
     // it is surfaced, rather than longjmp across wasmi's live store borrow.
     Some(
-        match crate::exception::catch_js_throw(|| call(import.get_nanbox_f64(), syscall, args)) {
+        match crate::exception::catch_thrown(|| call(import.get_nanbox_f64(), syscall, args)) {
             Ok(result) => {
                 if result == perry_abi::wasi::IMPORT_EXIT {
-                    crate::webassembly::record_import_exception(exit_marker(
-                        import.get_nanbox_f64(),
-                    ));
+                    crate::webassembly::record_import_exception(
+                        crate::webassembly::ImportException::Open(exit_marker(
+                            import.get_nanbox_f64(),
+                        )),
+                    );
                 }
                 result
             }
             Err(error) => {
-                crate::webassembly::record_import_exception(error);
+                crate::webassembly::record_import_exception(
+                    crate::webassembly::ImportException::Caught(error),
+                );
                 perry_abi::wasi::IMPORT_TRAP
             }
         },

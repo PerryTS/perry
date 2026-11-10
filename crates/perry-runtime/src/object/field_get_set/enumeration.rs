@@ -132,6 +132,7 @@ pub(super) unsafe fn native_module_enum(
 /// dereferenced as an `ObjectHeader` → SIGSEGV.
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
+    let value = crate::process::refresh_process_env(value);
     if let Some(result) = super::super::deferred_namespace::enumerable_keys(value) {
         return result;
     }
@@ -174,33 +175,31 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             )
         };
     }
-    // A class constructor ref `C` is an INT32-tagged value (not a pointer), so it
-    // would otherwise fall through to the empty-array tail below. Its enumerable
+    // A class constructor `C` is a class function object (not an ObjectHeader),
+    // so it would otherwise fall through to the empty-array tail below. Its enumerable
     // own keys are the static fields registered in CLASS_DYNAMIC_PROPS — built-in
     // `length`/`name`/`prototype` and static methods are non-enumerable. Backs
     // `Object.keys(C)` / `for (k in C)` (test262 class/elements static-field-*).
     if let Some(class_id) = super::super::class_ref_id(value) {
-        if super::super::class_prototype_ref_id(value).is_none() {
-            // Static accessors are defined before static fields, so an
-            // enumerable one (#10480) precedes them.
-            let mut names: Vec<String> =
-                crate::object::class_value::class_static_accessor_names(class_id)
-                    .into_iter()
-                    .filter(|name| {
-                        crate::object::class_value::class_static_own_accessor(class_id, name)
-                            .is_some_and(|(_, enumerable, _)| enumerable)
-                    })
-                    .collect();
-            names.extend(super::super::class_registry::class_own_enumerable_field_names(class_id));
-            super::super::descriptors::sort_property_names_ecma(&mut names);
-            let arr = crate::array::js_array_alloc(names.len().max(1) as u32);
-            let mut out = arr;
-            for name in names {
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                out = crate::array::js_array_push(out, JSValue::string_ptr(key));
-            }
-            return out;
+        // Static accessors are defined before static fields, so an
+        // enumerable one (#10480) precedes them.
+        let mut names: Vec<String> =
+            crate::object::class_value::class_static_accessor_names(class_id)
+                .into_iter()
+                .filter(|name| {
+                    crate::object::class_value::class_static_own_accessor(class_id, name)
+                        .is_some_and(|(_, enumerable, _)| enumerable)
+                })
+                .collect();
+        names.extend(super::super::class_registry::class_own_enumerable_field_names(class_id));
+        super::super::descriptors::sort_property_names_ecma(&mut names);
+        let arr = crate::array::js_array_alloc(names.len().max(1) as u32);
+        let mut out = arr;
+        for name in names {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            out = crate::array::js_array_push(out, JSValue::string_ptr(key));
         }
+        return out;
     }
     if jv.is_reference() {
         let ptr = jv.reference_payload();
@@ -1180,6 +1179,7 @@ pub(crate) use buffers::registered_buffer_own_keys;
 /// Ordinary shapes bulk-copy their bounded key list into a fresh result.
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    let obj = refresh_env_receiver(obj);
     if let Some(result) = super::super::deferred_namespace::enumerable_keys(
         crate::value::js_nanbox_pointer(obj as i64),
     ) {
@@ -1209,6 +1209,16 @@ fn object_keys_fallback(obj: *const ObjectHeader) -> *mut ArrayHeader {
         return shape_keys;
     }
     js_object_keys_shape(obj)
+}
+
+fn refresh_env_receiver(obj: *const ObjectHeader) -> *const ObjectHeader {
+    if crate::process::is_process_env_ptr(obj as usize) {
+        let value =
+            crate::process::refresh_process_env(crate::value::js_nanbox_pointer(obj as i64));
+        crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader
+    } else {
+        obj
+    }
 }
 
 /// [`js_object_keys`] over the shape alone.
@@ -1687,6 +1697,7 @@ pub(crate) unsafe fn descriptor_marks_non_enumerable(
 /// Returns an array of the object's field values
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    let obj = refresh_env_receiver(obj);
     // An elements-backed Array-subclass instance: its present elements come
     // first (ascending), then the shape's own enumerable properties.
     if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {
@@ -1883,6 +1894,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
 /// Returns an array where each element is a 2-element array [key, value]
 #[no_mangle]
 pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    let obj = refresh_env_receiver(obj);
     // An elements-backed Array-subclass instance: its present elements come
     // first (ascending), then the shape's own enumerable properties.
     if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {

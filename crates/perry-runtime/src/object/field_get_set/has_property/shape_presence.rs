@@ -342,11 +342,11 @@ mod tests {
         let key = crate::string::js_string_from_bytes(b"presence10497".as_ptr(), 13);
         let receiver = crate::value::js_nanbox_pointer(obj as i64);
         let boxed_key = crate::value::js_nanbox_string(key as i64);
-        crate::object::js_object_set_field_by_name(
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(
             proto,
             key,
             f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
+        ));
         assert_ne!(
             crate::value::js_is_truthy(js_object_has_property(receiver, boxed_key)),
             0
@@ -363,7 +363,7 @@ mod tests {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         let get = crate::closure::js_closure_alloc(crate::fn_info!(getter, 0), 0);
-        crate::object::set_builtin_accessor_descriptor(
+        crate::object::own_override::as_builtin_definition(|| crate::object::set_builtin_accessor_descriptor(
             proto as usize,
             "presence10497".to_string(),
             crate::object::AccessorDescriptor {
@@ -371,14 +371,14 @@ mod tests {
                 set: 0,
             },
             crate::object::PropertyAttrs::new(true, false, true),
-        );
+        ));
         GETS.store(0, std::sync::atomic::Ordering::Relaxed);
         assert_ne!(
             crate::value::js_is_truthy(js_in_operator(receiver, boxed_key)),
             0
         );
         assert_eq!(GETS.load(std::sync::atomic::Ordering::Relaxed), 0);
-        crate::object::js_object_delete_field(proto, key);
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_delete_field(proto, key));
         assert_eq!(
             crate::value::js_is_truthy(js_object_has_property(receiver, boxed_key)),
             0

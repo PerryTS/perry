@@ -70,7 +70,7 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     } = e
     {
         if let Some(mask) = read_kinds(ctx, object, property) {
-            if wpfacts_access::proves_raw_f64(ctx, e) {
+            if wpfacts_access::proves_number(ctx, e) {
                 return Some(Operand::Number);
             }
             if mask & !K_PRIMS == 0 {
@@ -173,6 +173,9 @@ pub(crate) fn closed_number_call(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     };
     if ctx.wpfacts_off {
         return false;
+    }
+    if crate::codegen::facts_rep::number_call(ctx, callee) {
+        return true;
     }
     let Some((cids, _nullable)) = wpfacts_access::proven_receiver_classes(ctx, object) else {
         return false;
@@ -280,6 +283,10 @@ fn this_kinds(ctx: &FnCtx<'_>, cids: &[u32], key: &str) -> Option<u16> {
     let mut mask = 0u16;
     for &cid in cids {
         let f = ctx.wpfacts.field(cid, key)?;
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::NumericResult,
+            || serde_json::json!({"class":cid,"key":key,"mask":f.kind_mask}),
+        );
         crate::facts_consumed::used();
         if f.declared || f.reserved {
             return None;

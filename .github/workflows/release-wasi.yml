@@ -89,7 +89,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.checkout-sha }}
         run: |
-          python3 scripts/test_wasi_release.py
+          python3 tests/tooling/infrastructure/test_wasi_release.py
           python3 scripts/wasi_build_runtime.py
           python3 scripts/wasi_release.py package --revision "$EXPECTED_SHA" \
             --runtime target/wasm32-wasip2/release/libperry_runtime.a --output wasi-release

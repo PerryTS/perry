@@ -79,9 +79,18 @@ const NAMED_MISS: &str = r#"export function mk(n: number, _k: string) {
   const o = { a: n, b: 2 };
   return o.a + o.b + String(o.hasOwnProperty("a")).length;
 }"#;
+/// `constructor` is the one key a program may define on `Object.prototype`
+/// (DEC 250: the lock exempts it, every other add or member write there is
+/// a TypeError): a named miss under it still meets the accessor.
+const CTOR_MISS: &str = r#"export function mk(n: number, _k: string) {
+  const o = { a: n, b: 2 };
+  return o.a + o.b + String((o as any).constructor).length;
+}"#;
+/// A [[Set]] under a key no constant names: a constant other than
+/// `constructor` is final on `Object.prototype` (DEC 250).
 const SET_MISS: &str = r#"export function mk(n: number, k: string) {
   const o = { a: n, b: 2 };
-  (o as any)[k] = 1;
+  (o as any)[k + process.argv[2]] = 1;
   return o.a + o.b;
 }"#;
 
@@ -116,18 +125,25 @@ fn birth_keys_of_a_literal_do_not_depend_on_an_any_key_accessor() {
     }
 }
 
-/// A read, call or [[Set]] of a key the literal does not own may run the
-/// accessor with the literal as `this`: it escapes, in both modes alike
-/// (per unit missed the accessor when the define was another unit's).
+/// A computed or constructor miss may run the accessor with the literal
+/// as this. DEC 250 keeps the named image member hasOwnProperty final, so
+/// that call alone keeps the birth facts in both modes.
 #[test]
 fn a_miss_site_escapes_the_literal_in_both_modes() {
     for (name, b) in [
         ("computed", COMPUTED_MISS),
         ("named", NAMED_MISS),
+        ("constructor", CTOR_MISS),
         ("set", SET_MISS),
     ] {
         for (how, a, main) in HOW {
             let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
+            if name == "named" {
+                assert!(birth_safe(&w), "{how} named whole {:?}", lit(&w));
+                assert!(birth_safe(&u), "{how} named per unit {:?}", lit(&u));
+                assert_eq!(lit(&w), lit(&u), "{name}/{how}: whole = per unit");
+                continue;
+            }
             assert!(
                 chain_escaped(&w),
                 "{name}/{how} whole {:?}\n{}",
@@ -142,6 +158,34 @@ fn a_miss_site_escapes_the_literal_in_both_modes() {
             );
             assert_eq!(lit(&w), lit(&u), "{name}/{how}: whole = per unit");
         }
+    }
+}
+
+/// DEC 250 (Q2): the runtime refuses a program accessor on
+/// `Object.prototype` under any key but `constructor`, so a named read miss
+/// under another key (`zz`) runs none: the literal keeps its birth facts in
+/// both modes. Red before the reader: the miss escaped it.
+#[test]
+fn a_named_miss_meets_no_any_key_accessor_under_the_lock() {
+    let b = r#"export function mk(n: number, _k: string) {
+  const o = { a: n, b: 2 };
+  return o.a + o.b + ((o as any).zz === undefined ? 0 : 1);
+}"#;
+    for (how, a, main) in HOW {
+        let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
+        assert!(
+            birth_safe(&w),
+            "{how} whole {:?}\n{}",
+            lit(&w),
+            w.dump_text()
+        );
+        assert!(
+            birth_safe(&u),
+            "{how} per unit {:?}\n{}",
+            lit(&u),
+            u.dump_text()
+        );
+        assert_eq!(lit(&w), lit(&u), "{how}: whole = per unit");
     }
 }
 
@@ -183,26 +227,34 @@ export function mk(n: number, k: string) { const o = { a: n, b: 2 }; return o.a 
 }
 
 /// A constructor's `this.k = v` is a [[Set]]: a setter on the chain may take
-/// it, so the instance depends on the chain (unproven) in both modes.
+/// it, so the instance depends on the chain (unproven) in both modes. Under
+/// DEC 250 (Q2) a program setter on `Object.prototype` stands only under
+/// `constructor`: `C` (keys `a`, `b`) keeps its facts, `D` (which also sets
+/// `constructor`) still depends on the chain. Red before the reader: C was
+/// unproven.
 #[test]
 fn constructor_set_keys_depend_on_the_chain() {
     let b = r#"class C { a: number; b: number; constructor(n: number) { this.a = n; this.b = 2; } }
-export function mk(n: number, _k: string) { const o = new C(n); return o.a + o.b; }"#;
+class D { a: number; constructor(n: number) { this.a = n; (this as any).constructor = 1; } }
+export function mk(n: number, _k: string) { const o = new C(n); const d = new D(n); return o.a + o.b + d.a; }"#;
     for (how, a, main) in HOW {
         let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
         for pf in [&w, &u] {
-            let c: Vec<_> = pf
-                .templates
-                .iter()
-                .filter(|t| t.display.ends_with(":C"))
-                .collect();
-            assert!(!c.is_empty(), "{how} class C\n{}", pf.dump_text());
+            let of = |name: &str| -> Vec<_> {
+                pf.templates
+                    .iter()
+                    .filter(|t| t.display.ends_with(name))
+                    .map(|t| (t.prefix_stable, t.chain.clone(), t.escape.clone()))
+                    .collect()
+            };
+            let (c, d) = (of(":C"), of(":D"));
             assert!(
-                c.iter().all(|t| !t.prefix_stable),
-                "{how} C {:?}",
-                c.iter().map(|t| (&t.chain, &t.escape)).collect::<Vec<_>>()
+                !c.is_empty() && !d.is_empty(),
+                "{how} classes\n{}",
+                pf.dump_text()
             );
-            assert!(!proven(pf, "a"), "{how} sites {:?}", verdicts(pf, "a"));
+            assert!(c.iter().all(|t| t.0), "{how} C {c:?}");
+            assert!(d.iter().all(|t| !t.0), "{how} D {d:?}");
         }
     }
 }

@@ -39,6 +39,7 @@ mod import_helpers;
 mod import_meta_require;
 mod import_meta_resolve;
 mod json_module;
+mod macros;
 mod native_addon;
 mod native_esm_namespace;
 mod parse_error;
@@ -241,8 +242,8 @@ fn collect_module_one(
             });
         }
 
-        // Perry native extension packages (ethers, mysql2, ws, dotenv) are handled
-        // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
+        // Packages that ship a `perry.nativeLibrary` manifest are served by
+        // their native library — they must NOT be loaded into V8.
         if is_perry_native {
             return Ok(ModuleDiscovery {
                 finish: None,
@@ -499,6 +500,7 @@ fn collect_module_one(
         class_family_syntax,
         source,
         was_cjs_wrapped,
+        cjs_worker_filenames,
         messages,
         computed_require_warnings,
         wrap_dump,
@@ -589,36 +591,57 @@ fn collect_module_one(
         parse_filename,
     )
     .unwrap_or(source);
-    let ast_module_owned: swc_ecma_ast::Module;
-    let ast_module: &swc_ecma_ast::Module = match parse_cache {
-        Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(annotate_parse_error(
-                    e,
-                    &canonical,
-                    &source,
-                    was_cjs_wrapped,
-                ))
-            }
-        },
-        None => match perry_parser::parse_typescript(&source, parse_filename) {
-            Ok(m) => {
-                ast_module_owned = m;
-                &ast_module_owned
-            }
-            Err(e) => {
-                return Err(annotate_parse_error(
-                    anyhow!("Failed to parse {}: {}", canonical.display(), e),
-                    &canonical,
-                    &source,
-                    was_cjs_wrapped,
-                ));
-            }
-        },
+    let normalized_module = match sources {
+        source_prep::WalkSources::Reuse(earlier) => earlier.take_normalized(&canonical, &source)?,
+        source_prep::WalkSources::Keep(_) => None,
     };
-    let defined_module = ctx.parsed_defines.apply(ast_module);
+    let ast_module_owned: swc_ecma_ast::Module;
+    let ast_module: &swc_ecma_ast::Module = if let Some(module) = normalized_module.as_deref() {
+        module
+    } else {
+        match parse_cache {
+            Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Err(annotate_parse_error(
+                        e,
+                        &canonical,
+                        &source,
+                        was_cjs_wrapped,
+                    ))
+                }
+            },
+            None => match perry_parser::parse_typescript(&source, parse_filename) {
+                Ok(m) => {
+                    ast_module_owned = m;
+                    &ast_module_owned
+                }
+                Err(e) => {
+                    return Err(annotate_parse_error(
+                        anyhow!("Failed to parse {}: {}", canonical.display(), e),
+                        &canonical,
+                        &source,
+                        was_cjs_wrapped,
+                    ));
+                }
+            },
+        }
+    };
+    let defined_module = if normalized_module.is_none() {
+        ctx.parsed_defines.apply(ast_module)
+    } else {
+        None
+    };
     let ast_module = defined_module.as_ref().unwrap_or(ast_module);
+    let expanded_module = if normalized_module.is_none() {
+        macros::expand(ast_module, &canonical, ctx)?.map(std::sync::Arc::new)
+    } else {
+        None
+    };
+    if let (source_prep::WalkSources::Keep(kept), Some(module)) = (sources, &expanded_module) {
+        kept.keep_normalized(&canonical, &source, std::sync::Arc::clone(module));
+    }
+    let ast_module = expanded_module.as_deref().unwrap_or(ast_module);
     let resolved_module = import_meta_resolve::resolve_static(ast_module, &canonical, ctx)?;
     let ast_module = resolved_module.as_ref().unwrap_or(ast_module);
     let forwarding_module =
@@ -826,7 +849,7 @@ fn collect_module_one(
     );
     // A builder fold reads the census's create-add answers; one that changed
     // after a module was lowered re-walks every module against the union.
-    if perry_hir::install_lowering_proto_census(&ctx.proto_census)
+    if perry_hir::install_lowering_proto_census(&super::foreign_native_census::census(ctx))
         && ctx.patched_builtins_lowered_modules > 0
     {
         ctx.patched_builtins_grew_after_lower = true;
@@ -1280,7 +1303,13 @@ fn collect_module_one(
         ctx.native_module_imports
             .insert("worker_threads".to_string());
     }
-    worker_url::record(&hir_module, entry_path, &canonical, ctx);
+    worker_url::record(
+        &hir_module,
+        &cjs_worker_filenames,
+        entry_path,
+        &canonical,
+        ctx,
+    );
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {
@@ -1782,9 +1811,9 @@ fn collect_module_one(
                     pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
-                    // Perry native extension packages (ethers, ws, mysql2, dotenv)
-                    // are handled entirely by Perry's built-in stdlib at codegen time.
-                    // They must NOT be loaded into V8 — skip them entirely.
+                    // Packages with a `perry.nativeLibrary` manifest are served
+                    // by their native library at codegen time. They must NOT be
+                    // loaded into V8 — skip them entirely.
                     if is_in_perry_native_package(&resolved_path) {
                         continue;
                     }
@@ -2025,7 +2054,7 @@ fn collect_module_one(
                 || import
                     .specifiers
                     .iter()
-                    .any(|s| local_of(s).starts_with("_lazyreq_"));
+                    .any(|s| is_deferred_require_binding(&local_of(s)));
             if is_lazy {
                 import.is_deferred_require = true;
             }
@@ -2039,6 +2068,28 @@ fn collect_module_one(
 
     ctx.uses_dns |= hir_module.imports.iter().any(|i| is_dns(&i.source));
     ctx.reexport_pruner.imports(&hir_module.imports);
+
+    if !ctx.package_aliases.is_empty() {
+        // Request identities must match rewritten edges to preserve ESM evaluation order.
+        let mut seen = HashSet::new();
+        hir_module.requested_modules.retain_mut(|source| {
+            if let Some(alias) = ctx.package_aliases.get(source.as_str()) {
+                *source = alias.clone();
+            }
+            seen.insert(source.clone())
+        });
+    }
+
+    for export in hir_module.exports.iter_mut() {
+        if let perry_hir::Export::ReExport { source, .. }
+        | perry_hir::Export::ExportAll { source }
+        | perry_hir::Export::NamespaceReExport { source, .. } = export
+        {
+            if let Some(alias) = ctx.package_aliases.get(source.as_str()) {
+                *source = alias.clone();
+            }
+        }
+    }
 
     // Process re-exports
     for (export_index, export) in hir_module.exports.iter().enumerate() {
@@ -2256,4 +2307,13 @@ mod node_specifier_literal_tests {
             ["node:zlib", "node:fs/promises", "node:os", "node:crypto"]
         );
     }
+}
+
+/// The binding of a deferred require's import (`_lazyreq_N` from the CommonJS
+/// wrap, `_lazyreq_static_N` from a `createRequire` alias). No code reads it:
+/// its presence is what marks the import `is_deferred_require`, so the target
+/// initializes when a require call first runs, not at program start. A pass
+/// that drops unread import bindings must keep this one.
+pub(crate) fn is_deferred_require_binding(local: &str) -> bool {
+    local.starts_with("_lazyreq_")
 }

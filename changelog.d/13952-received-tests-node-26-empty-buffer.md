@@ -1,0 +1,1 @@
+ERR_INVALID_ARG_TYPE received-value unit tests follow node 26.12 `value.constructor?.name` (one constructor Get, non-empty string names, otherwise inspect); an empty Buffer now inspects as `<Buffer >` like node (console.log, util.inspect and the received description) instead of `<Buffer>`.

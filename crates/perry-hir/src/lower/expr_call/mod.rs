@@ -23,6 +23,11 @@ use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
 
+/// A remaining qualified name does not establish an Array receiver.
+fn is_qualified_type_name(name: &str) -> bool {
+    name.contains('.')
+}
+
 fn is_typed_array_type(ty: &Type) -> bool {
     matches!(
         ty,
@@ -66,6 +71,8 @@ mod local_array_methods;
 mod module_class_static;
 #[cfg(test)]
 mod module_class_static_tests;
+#[cfg(test)]
+mod module_object_prototype_tests;
 mod module_static;
 mod name_fold;
 mod native_module;

@@ -1,0 +1,20 @@
+depth.own "own-zero"
+depth.viaProtoArr "from-protoArr"
+depth.viaMid "from-mid"
+depth.viaMid7 "mid-seven"
+depth.absent "undefined"
+depth.hasMid true
+depth.hasAbsent false
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+cut.viaCutProto "cut-one"
+cut.arrayProtoLeak "undefined"
+cut.objectProtoLeak "undefined"
+cut.has42 false
+cut.has43 false
+plain.arrayProto "undefined"
+plain.objectProto "undefined"
+strictSet.threw "TypeError"
+strictSet.value "readonly"
+strictSet.own false
+array-proto-depth-v1:done

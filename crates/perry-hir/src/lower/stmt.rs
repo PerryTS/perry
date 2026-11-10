@@ -285,6 +285,7 @@ pub(crate) fn emit_for_of_pattern_binding(
                     break;
                 }
                 let elem_src = Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp_id)),
@@ -1028,6 +1029,7 @@ fn lower_stmt_inner(
                                         value: Box::new(Expr::LocalGet(id)),
                                         receiver: Box::new(Expr::GlobalThisExpr),
                                         strict: false,
+                                        element_offset: 0,
                                         byte_offset: 0,
                                         byte_end: 0,
                                     }));

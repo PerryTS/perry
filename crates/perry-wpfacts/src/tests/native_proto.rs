@@ -10,7 +10,7 @@ const PRELUDE: &str = r#"
     class C extends EventEmitter { constructor() { super(); } }
     const c: any = new C();
     const d = new D();
-    declare const k: string;
+    const k: string = process.argv[2];
 "#;
 
 fn d_escape(body: &str, cfg: FactsConfig) -> Option<String> {
@@ -57,9 +57,33 @@ fn written_native_prototype_keeps_the_escape() {
 fn interpreted_code_is_the_guard_not_a_kill() {
     // Decision 150: interpreted code that may write a native prototype is
     // the runtime's PERRY_INTERP_PROTO_WRITTEN guard on every proof, not a
-    // static escape of everything that passes one.
+    // static escape of everything that passes one. The receiver is built by a
+    // native constructor directly: its prototype is not a replaceable parent
+    // binding, so the only thing interpreted code can do is write the native
+    // prototype, which the guard covers.
+    let src = r#"
+        class D { y = 2; }
+        const m: any = new Error("x");
+        const d = new D();
+        const k: string = process.argv[2];
+        m.absent?.(d); new Function(k)();
+        console.log(d.y);
+    "#;
+    let pf = facts_with(src, interp_cfg());
+    assert!(pf.interp_guard.is_some());
+    assert_eq!(tmpl(&pf, "D").escape, None);
+}
+
+#[test]
+fn interpreted_code_replaces_a_named_import_parent() {
+    // Since 5be5c92e4e interpreted code writes globals and module exports for
+    // real, and super() runs the parent value. Node allows
+    // syncBuiltinESMExports to replace the `events` export, so a subclass of
+    // the named import is constructed by a value interpreted code may supply:
+    // it escapes through its parent (top super), not through a native
+    // prototype write.
     let src = format!("{PRELUDE}c.absent?.(d); new Function(k)();\nconsole.log(d.y);");
     let pf = facts_with(&src, interp_cfg());
     assert!(pf.interp_guard.is_some());
-    assert_eq!(tmpl(&pf, "D").escape, None);
+    assert!(tmpl(&pf, "C").escape.is_some());
 }

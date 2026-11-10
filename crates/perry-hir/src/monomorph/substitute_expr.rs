@@ -206,9 +206,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             index,
             byte_end,
+            element_offset,
             byte_offset,
             ..
         } => Expr::IndexGet {
+            element_offset: *element_offset,
             byte_offset: *byte_offset,
             byte_end: *byte_end,
             object: Box::new(substitute_expr(object, substitutions)),
@@ -218,6 +220,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             index,
             value,
+            element_offset,
             byte_offset,
             byte_end,
             ..
@@ -225,6 +228,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
+            element_offset: *element_offset,
             byte_offset: *byte_offset,
             byte_end: *byte_end,
         },

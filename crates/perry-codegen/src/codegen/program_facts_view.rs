@@ -21,6 +21,11 @@ pub struct ProgramFactsView {
     /// Observational diagnostics; excluded from every emitted-code digest.
     pub fallback: std::sync::Arc<crate::fallback_diag::Facts>,
     pub digest: u64,
+    /// Known body classifications; absent without the verification mode.
+    pub verification_bodies:
+        Option<std::sync::Arc<std::collections::BTreeMap<(u32, String), bool>>>,
+    pub verification_module: Option<String>,
+    pub verification_sites: Option<std::sync::Arc<Vec<crate::verify_facts::SiteClaim>>>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// The program's realm reach R, on the entry module only: its `main`
     /// emits the runtime layouts R reaches (DESIGN §3.2 item 9). Other
@@ -83,6 +88,11 @@ pub struct FactsField {
     /// or when interpreted code can run.
     pub classes: Vec<u32>,
     pub nullable: bool,
+    /// The field's representation (wpfacts `FieldFacts::rep`, DESIGN-p4l1
+    /// §3): `Arr` when the field, on every object of the class, holds only
+    /// plain program Arrays for the object's whole life. A read of the
+    /// field is a value of this representation (`FieldProof::array`).
+    pub rep: FactsRep,
 }
 
 /// A plain compiled body of this module that a binding or a field holds
@@ -176,6 +186,78 @@ impl FactsNumericExpr {
         }
     }
 }
+/// A value's one representation (wpfacts `Rep`). It has no order (the
+/// derived one is not the lattice); every encoding decision goes through
+/// `FactsRep::encoding`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsRep {
+    Boxed,
+    F64,
+    I32,
+    /// Only plain program Arrays (wpfacts `Rep::Arr`, DESIGN-p4l1 §2.1):
+    /// the slot holds the NaN-boxed pointer word, as a Boxed one does.
+    Arr(FactsArrRep),
+}
+
+/// wpfacts `ArrRep`: what every Array the value may hold has for its whole
+/// life (`length >= floor` and `capacity >= floor`; `dense`: no hole below
+/// `floor`; `fixed`: never grows, so never forwarded; `im`: never written
+/// after its birth, which `ElisionFacts::immutable_arrays` turns into a
+/// fact about a local), and the representation of its elements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactsArrRep {
+    pub elem: FactsElemRep,
+    pub floor: u32,
+    pub dense: bool,
+    pub fixed: bool,
+    pub im: bool,
+}
+
+/// wpfacts `ElemRep`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsElemRep {
+    Boxed,
+    F64,
+    I32,
+}
+
+/// wpfacts `Enc`: how a slot's word is stored and passed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsEnc {
+    Boxed,
+    F64,
+    I32,
+}
+
+impl FactsArrRep {
+    /// The join (says less) of two array reps, wpfacts `ArrRep::join`.
+    pub fn join(a: FactsArrRep, b: FactsArrRep) -> FactsArrRep {
+        use FactsElemRep::{Boxed, F64, I32};
+        FactsArrRep {
+            elem: match (a.elem, b.elem) {
+                (Boxed, _) | (_, Boxed) => Boxed,
+                (F64, _) | (_, F64) => F64,
+                (I32, I32) => I32,
+            },
+            floor: a.floor.min(b.floor),
+            dense: a.dense && b.dense,
+            fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
+        }
+    }
+}
+
+impl FactsRep {
+    /// The slot encoding: an `Arr` slot holds the Boxed word.
+    pub fn encoding(self) -> FactsEnc {
+        match self {
+            FactsRep::Boxed | FactsRep::Arr(_) => FactsEnc::Boxed,
+            FactsRep::F64 => FactsEnc::F64,
+            FactsRep::I32 => FactsEnc::I32,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FactsNumericFunction {
     pub params: Vec<u32>,
@@ -198,6 +280,66 @@ pub struct ElisionFacts {
     pub local_classes: std::collections::BTreeMap<u32, u32>,
     pub indexed_owners: std::collections::BTreeMap<u32, FactsIndexedOwner>,
     pub number_inputs: std::collections::BTreeSet<u32>,
+    /// Number bindings whose every value is an int32, never `-0` (the
+    /// wpfacts interval proof, `BindingFacts::int_range`).
+    pub int32_inputs: std::collections::BTreeSet<u32>,
+    /// Local id → the representation the whole-program facts give it
+    /// (representation RFC §10.3, wpfacts `BindingFacts::rep`). A local the
+    /// facts cover takes exactly this one; codegen does not choose.
+    pub local_reps: std::collections::BTreeMap<u32, FactsRep>,
+    /// The `int32_inputs` whose interval is non-negative.
+    pub nonneg_int32_inputs: std::collections::BTreeSet<u32>,
+    /// Local id → it holds only strings and ordinary Arrays: `x.length` is a
+    /// Number.
+    pub length_number_inputs: std::collections::BTreeSet<u32>,
+    /// Local id → the one constant `length` of every value it holds: each
+    /// is a program Array literal whose birth length never moves (wpfacts
+    /// `BindingFacts::const_length`).
+    pub const_length_inputs: std::collections::BTreeMap<u32, i64>,
+    /// Locals that are a rooted `const` holding only immutable program
+    /// Arrays (wpfacts `BindingFacts::immutable_array`): every read that
+    /// yields a value yields an Array nothing writes after its birth.
+    pub immutable_arrays: std::collections::BTreeSet<u32>,
+    /// Local id → the constant contents of every value it holds: such a
+    /// local whose Arrays are all born from literals of these constant
+    /// Numbers, as bit patterns (wpfacts `BindingFacts::const_elems`).
+    pub const_arrays: std::collections::BTreeMap<u32, Vec<u64>>,
+    /// Method call byte offset → each argument's integer interval at the
+    /// call (wpfacts `ModuleBindings::call_arg_ranges`).
+    pub call_arg_ranges: std::collections::BTreeMap<u32, Vec<Option<(i64, i64)>>>,
+    /// Method call byte offsets whose result is a Number at every copy
+    /// (wpfacts `ModuleBindings::number_calls`, `facts_rep::number_call`).
+    pub number_calls: std::collections::BTreeSet<u32>,
+    /// `IndexGet::element_offset` → the read's receivers are program Arrays
+    /// whose storage never moves (wpfacts `ModuleBindings::element_reads`,
+    /// `expr::index_get::proven_array`).
+    pub element_reads: std::collections::BTreeMap<u32, FactsElementRead>,
+    /// Method call byte offset → the call is a field element read of its
+    /// receiver (wpfacts `ModuleBindings::field_read_calls`, b1).
+    pub field_read_calls: std::collections::BTreeMap<u32, FactsFieldReadCall>,
+    /// P2: typed signatures by HIR function id (wpfacts
+    /// `ModuleBindings::signatures`, DESIGN-p2 §1).
+    pub signatures: std::collections::BTreeMap<u32, FactsSignature>,
+    /// P2: call byte offset -> the one same-module body (HIR function id) a
+    /// typed entry serves (wpfacts `typed_calls`, DESIGN-p2 §2).
+    pub typed_calls: std::collections::BTreeMap<u32, u32>,
+    /// Element reads (by `element_offset`) whose value the facts prove a
+    /// plain Number; `true` when it may also be `undefined` (wpfacts
+    /// `canonical_numbers`, P3 B1).
+    pub number_element_reads: std::collections::BTreeMap<u32, bool>,
+    /// Check mode: element reads (by `element_offset`) whose past-the-end
+    /// `undefined` the facts withheld, with the least length lower bound of
+    /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
+    /// `expr::index_get::elem_floor`).
+    pub element_floors: std::collections::BTreeMap<u32, u32>,
+    /// Module binding (local id) → the one integer Number it holds for the
+    /// whole program (wpfacts `ModuleBindings::const_numbers`, N6): a read
+    /// of its module global is that constant (`expr::literals_vars::facts_const_number`).
+    pub const_numbers: std::collections::BTreeMap<u32, i64>,
+    /// Element reads (by `element_offset`) whose key is an integer Number at
+    /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
+    /// PR-C2; `expr::index_get::proven_array`).
+    pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -229,21 +371,43 @@ pub struct ElisionFacts {
     /// IteratorClose finds no `return` (the closing of an array record is
     /// unobservable and emitted as nothing).
     pub array_iterator_close_unwritten: bool,
-    /// Whole-program constructor heritage proofs, keyed by class identity.
-    pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// Whole-program constructor heritage proofs, keyed by class identity:
+    /// the class the evaluated `extends` value is (`None`: no class parent).
+    pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
     /// Compiled code cannot replace Function.prototype.call/apply.
     pub fnproto_borrow_unwritten: bool,
+    /// The source offsets (the callee read's, as the solver records a call
+    /// site) of this module's method calls whose verdict is
+    /// `Verdict::NativeMember`: the member they read is proven to be the
+    /// intrinsic. A host-object call (`console.log(...)`) binds to the
+    /// intrinsic only here; every other one reads the property and calls it.
+    pub native_member_calls: std::collections::BTreeSet<u32>,
 }
 
 impl ElisionFacts {
     pub fn is_empty(&self) -> bool {
         self.indexed_owners.is_empty()
             && self.number_inputs.is_empty()
+            && self.int32_inputs.is_empty()
+            && self.local_reps.is_empty()
+            && self.length_number_inputs.is_empty()
+            && self.const_length_inputs.is_empty()
+            && self.immutable_arrays.is_empty()
+            && self.const_arrays.is_empty()
+            && self.call_arg_ranges.is_empty()
+            && self.number_calls.is_empty()
+            && self.element_reads.is_empty()
+            && self.field_read_calls.is_empty()
+            && self.signatures.is_empty()
+            && self.typed_calls.is_empty()
+            && self.number_element_reads.is_empty()
+            && self.const_numbers.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()
             && self.local_classes.is_empty()
             && self.class_statics.is_empty()
+            && self.native_member_calls.is_empty()
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {
@@ -305,4 +469,45 @@ pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, b
         "@llvm.used = appending global [2 x ptr] [ptr @{name}, ptr @{name}_ref], \
          section \"llvm.metadata\""
     ));
+}
+
+/// wpfacts `ElementRead`: every receiver of the read is a program Array of
+/// exactly `len` elements whose length, storage and element descriptors no
+/// operation of the program ever changes.
+/// b1: a method call proven to be `this.field[arg] ?? default` on its
+/// receiver, which can neither throw nor run user code (wpfacts
+/// P2: a function's typed signature (wpfacts `Signature`, DESIGN-p2 §1).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsSignature {
+    pub params: Vec<FactsRep>,
+    /// Each parameter's int interval (T1).
+    pub ranges: Vec<Option<(i64, i64)>>,
+    pub ret: FactsRep,
+    /// The class id of the one class every `this` holds (E2).
+    pub this_class: Option<u32>,
+}
+
+/// `field_read_calls`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsFieldReadCall {
+    pub field: String,
+    /// The argument that is the index.
+    pub index_arg: u32,
+    /// The Number default of `?? L`, as f64 bits.
+    pub default: Option<u64>,
+    /// The method body's `IndexGet::element_offset` and `this.f` offset.
+    pub element_offset: u32,
+    pub field_offset: u32,
+    /// `Some(floor)`: this call's index is an integer in `[0, floor)`, and
+    /// every Array the method's read may read from has at least `floor`
+    /// elements with no hole below it (wpfacts `FieldReadCall::in_floor`,
+    /// DESIGN-p4l1 §2.8): the slot is a present own element.
+    pub in_floor: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactsElementRead {
+    pub len: u32,
+    /// The key is an integer in `[0, len)`: the read needs no bound.
+    pub key_in_bounds: bool,
 }

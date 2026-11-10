@@ -127,6 +127,8 @@ fn scanning_an_empty_segment_record_keys_cache_is_a_no_op() {
 /// production, which is precisely the bug this cache would introduce.
 #[test]
 fn segment_record_keys_scanner_is_registered() {
+    // Program start: perry runs the feature installer, then gc_init.
+    crate::feature_hooks::js_runtime_install_intl_segmenter();
     crate::gc::gc_init();
     let registered = |scanner: MutableRootScanner| {
         crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {

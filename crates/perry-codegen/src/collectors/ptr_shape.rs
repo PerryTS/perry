@@ -396,7 +396,7 @@ fn collect_shape_proven_ptr_locals_impl(
                             && c.extends_expr.is_none()
                             && c.native_extends.is_none()
                             && !c.heritage_lexically_shadowed
-                            && c.computed_members.is_empty()
+                            && !c.has_evaluated_members()
                             && c.fields.iter().all(|f| f.key_expr.is_none())
                             && named_accessors_are_disjoint(c)
                     })

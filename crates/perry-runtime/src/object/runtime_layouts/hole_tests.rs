@@ -96,7 +96,7 @@ runtime_layout!(
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
@@ -108,7 +108,7 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     kind: 0,
     integrity: 0,
     slot_count: HOLEY::SLOT_COUNT as u32,
-    layout_id: 0x80000088,
+    layout_id: 0x80000089,
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: HOLEY::KEYS.as_ptr(),
@@ -121,6 +121,20 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(HOLEY::SLOT_COUNT as u32),
     _tail_pad: [0; 32],
 };
+
+// A constructor's `Object.defineProperty(this, "holes_b", { value })`: the
+// key optional, carried with the definition's attributes (THR3).
+const DEFINED: u8 = OPT
+    | crate::object::key_attrs::ENTRY_NON_WRITABLE
+    | crate::object::key_attrs::ENTRY_NON_ENUMERABLE
+    | crate::object::key_attrs::ENTRY_NON_CONFIGURABLE;
+runtime_layout!(
+    DEFINED_HOLE,
+    0x7f000018,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [H_A, H_B => DEFINED]
+);
 
 runtime_layout!(
     LITERAL_OPTIONAL,
@@ -147,7 +161,7 @@ static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
     kind: 0,
     integrity: 0,
     slot_count: LITERAL_OPTIONAL::SLOT_COUNT as u32,
-    layout_id: 0x8000008b,
+    layout_id: 0x8000008c,
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: LITERAL_OPTIONAL::KEYS.as_ptr(),
@@ -884,7 +898,7 @@ mod first_birth {
         kind: 0,
         integrity: 0,
         slot_count: 2,
-        layout_id: 0x8000008c,
+        layout_id: 0x8000008d,
         rep: 0,
         proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
         keys: KEYS.as_ptr(),
@@ -1131,4 +1145,156 @@ fn a_literal_family_object_is_its_proven_class_by_the_layout_word() {
         !crate::object::layout_desc::word_is_class_family_layout(other, CLASS),
         "an ordinary classless layout is not the class's family"
     );
+}
+
+runtime_atom!(H_LATE, "holes_late", "686f6c65735f6c617465");
+
+// An array creation family's named layout as perry-codegen emits it: the
+// iterator key, then a key a store site declares ahead of its first store
+// (optional, its slot born holding the hole).
+runtime_layout!(
+    ARRAY_LATE,
+    0x7f000017,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, H_LATE => OPT]
+);
+
+/// An array layout's declared late key is absent until its first store, so
+/// that store is an add: it asks the prototype chain (an inherited read-only
+/// key decides it) and, when nothing intercepts, fills the listed slot.
+#[test]
+fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _ = js_get_global_this();
+    unsafe {
+        let key = crate::value::js_nanbox_string(H_LATE.string as i64);
+        let fresh = || {
+            let arr = crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
+            crate::array::named_props::perry_array_attach_layout(arr, ARRAY_LATE::desc())
+        };
+        let bag_of = |arr: f64| {
+            crate::array::array_property_bag(
+                (arr.to_bits() & crate::value::POINTER_MASK) as *const crate::ArrayHeader,
+            )
+        };
+        let bag_value = |arr: f64| crate::value::js_nanbox_pointer(bag_of(arr) as i64);
+        let late_slot = |arr: f64| {
+            *((bag_of(arr) as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+                .add(1)
+        };
+
+        let a = fresh();
+        assert_eq!(late_slot(a), crate::value::TAG_HOLE);
+        assert!(
+            !crate::object::shape_store::try_own_store(bag_of(a), H_LATE.string, 1.0),
+            "an absent optional key is no own overwrite"
+        );
+        assert!(
+            !obj_value_has_own_key(bag_value(a), key),
+            "a declared late key whose slot holds the hole is absent"
+        );
+        assert!(
+            crate::object::property_ops::set::own_set_descriptor(a, key).is_none(),
+            "[[Set]]'s own-descriptor read walks on to the prototype"
+        );
+        assert_eq!(
+            crate::object::shape_store::try_store(a, key, 1.0),
+            Some(1.0)
+        );
+        assert_eq!(
+            late_slot(a),
+            1.0_f64.to_bits(),
+            "the add fills the listed slot"
+        );
+        assert!(obj_value_has_own_key(bag_value(a), key));
+        assert_eq!(object_keys(bag_of(a)).count(), 2, "the add appended no key");
+        assert!(
+            crate::object::shape_store::try_own_store(bag_of(a), H_LATE.string, 2.0),
+            "a present optional key: its store is the plain overwrite"
+        );
+        assert_eq!(late_slot(a), 2.0_f64.to_bits());
+
+        let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
+        // Decision 250: Object.prototype is sealed, so adding and removing the
+        // inherited read-only key are runtime definitions (the test models a
+        // builtin member; the point is the add asking the chain).
+        crate::object::own_override::as_builtin_definition(|| {
+            js_object_set_field_by_name(proto, H_LATE.string, 5.0)
+        });
+        crate::object::own_override::as_builtin_definition(|| {
+            set_property_attrs(
+                proto as usize,
+                "holes_late".into(),
+                PropertyAttrs::new(false, true, true),
+            )
+        });
+        let b = fresh();
+        let result = crate::object::shape_store::try_store(b, key, 9.0);
+        let slot_after = late_slot(b);
+        let present = obj_value_has_own_key(bag_value(b), key);
+        crate::object::own_override::as_builtin_definition(|| {
+            js_object_delete_dynamic_value(crate::value::js_nanbox_pointer(proto as i64), key)
+        });
+        assert_eq!(result, None, "an inherited read-only key decides the add");
+        assert_eq!(
+            slot_after,
+            crate::value::TAG_HOLE,
+            "the declined add stored nothing"
+        );
+        assert!(!present);
+    }
+}
+
+/// The definition a layout carries an optional key's attributes for fills
+/// its hole in place (THR3), and sets no `OBJ_FLAG_HAS_DESCRIPTORS`: the
+/// shape carries the attributes, as for an object born with them, so a field
+/// guard (`GC_OBJECT_FIELD_GUARD_MASK_I32`, which includes the bit) keeps its
+/// fast path on the filled object. Every attribute reader reads the shape.
+#[test]
+fn a_defined_hole_fill_keeps_the_field_guard_bit_clear() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(DEFINED_HOLE::desc())
+    });
+    let descriptor_bit = |obj: *const ObjectHeader| unsafe {
+        (*crate::gc::header_from_trusted_user_ptr(obj.cast()))._reserved
+            & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+    };
+    let word = object.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        assert_eq!(descriptor_bit(obj), 0, "born without the bit");
+        assert_absent_own(obj as *mut ObjectHeader, &H_B);
+        (*obj).parent_class_id
+    });
+    let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
+    descriptor.with_mut_ptr(|d: *mut ObjectHeader| {
+        js_object_set_field_by_name(d, crate::string::intern_ascii_literal(b"value"), 5.0)
+    });
+    let receiver =
+        object.with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
+    let bag =
+        descriptor.with_const_ptr(|d: *const ObjectHeader| crate::js_nanbox_pointer(d as i64));
+    let key = crate::js_nanbox_string(H_B.string as i64);
+    crate::object::js_object_define_property(receiver, key, bag);
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        assert_eq!(
+            (*obj).parent_class_id,
+            word,
+            "the definition filled the slot in place"
+        );
+        assert_eq!(
+            descriptor_bit(obj),
+            0,
+            "the shape carries the attributes; no header bit"
+        );
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_B.string), 5.0);
+        assert_eq!(
+            crate::object::descriptor_state::get_property_attrs_bytes(obj as usize, b"holes_b")
+                .map(|a| (a.writable(), a.enumerable(), a.configurable())),
+            Some((false, false, false)),
+            "the key has the definition's attributes"
+        );
+    });
 }

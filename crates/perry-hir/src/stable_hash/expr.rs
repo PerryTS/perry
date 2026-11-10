@@ -91,6 +91,7 @@ impl SH for Expr {
             Expr::PrivateLexicalBrand(value) => { tag(h, 12403); value.hash(h); }
             Expr::PrivateLexicalBrandPush(value) => { tag(h, 12404); value.hash(h); }
             Expr::PrivateLexicalBrandPop => { tag(h, 12405); }
+            Expr::ThisProvenClass(class) => { tag(h, 12406); class.hash(h); }
             Expr::NewTarget => { tag(h, 12301); }
             Expr::LiteralChunks(calls) => { tag(h, 12515); calls.hash(h); }
             Expr::LiteralChunkObject => { tag(h, 12516); }

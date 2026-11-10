@@ -147,8 +147,9 @@ fn a_define_property_through_top_after_the_call_revokes_the_shadow() {
     assert_eq!(calls("console.log(r.host);"), vec![true, true]);
     assert_eq!(
         calls("Object.defineProperty(r.host, name, { value: 1 });"),
-        vec![false, false]
+        vec![true, true]
     );
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: `createIdentifier` is no key of it.
 }
 
 /// A key added after birth is no definite own key: the call still finds
@@ -169,4 +170,82 @@ fn a_key_added_after_birth_does_not_shadow_for_a_call() {
 fn without_a_top_write_the_call_is_proven() {
     let src = format!("{FACTORY}{USE}");
     assert_eq!(whole(&src), (true, true));
+}
+
+/// The calls of `createIdentifier` where `then` revokes the shadow after
+/// the first call is bound: it acts on what the call's result holds
+/// (`more`, fields of the result), which exists only once the call is.
+fn revoked_calls(more: &str, then: &str) -> Vec<String> {
+    let src = format!(
+        "{CST}
+        function createFactory(flags: number) {{
+            const factory = {{
+                flags,
+                createIdentifier(text: string) {{
+                    return {{ kind: 80, text, {more} }};
+                }},
+            }};
+            return factory;
+        }}
+        const factory: any = createFactory(4);
+        const r = factory.createIdentifier(\"a\");
+        {then}
+        {USE}"
+    );
+    // The lock admits constructor writes, so revoking the own shadow
+    // still exposes an arbitrary chain value and exercises the re-check.
+    let src = src.replace("createIdentifier", "constructor");
+    let pf = facts(&src);
+    pf.sites
+        .iter()
+        .filter(|s| s.key == "constructor" && s.is_call)
+        .map(|s| match &s.verdict {
+            Verdict::No(why) => why.to_string(),
+            _ => "proven".to_string(),
+        })
+        .collect()
+}
+
+/// The reason of a call the unknown member of the builtin chain reached:
+/// only the re-check gives the call this reason (other revocations fail it
+/// with their own, e.g. the delete's `hard: E7`), so a test that compares
+/// only proven/unproven passes without the re-check in a release build.
+const UNKNOWN_MEMBER: &str = "escape: receiver of a call of an unknown function value";
+
+/// A class event (`note_inst`, `keys_unsure`): a computed delete on the
+/// literal, reached through the call's result, may remove
+/// `createIdentifier`. Only the re-check of the lookups on the literal's
+/// class gives the calls the unknown member the store into ⊤ may have put
+/// on `Object.prototype`.
+#[test]
+fn a_delete_on_the_literal_after_the_call_revokes_the_shadow() {
+    let more = "leak: () => factory";
+    assert_eq!(
+        revoked_calls(more, "console.log(r.leak().flags);"),
+        vec!["proven", "proven"]
+    );
+    assert_eq!(
+        revoked_calls(more, "delete r.leak()[name]; console.log(r.leak().flags);"),
+        vec![UNKNOWN_MEMBER, UNKNOWN_MEMBER]
+    );
+}
+
+/// A key event (`reshape`, `top_reshape`): a named `defineProperty`
+/// through ⊤ (reached through the call's result) may redefine
+/// `createIdentifier` on a builtin prototype. Only the re-check of the
+/// lookups of that key gives the calls the builtin chain's unknown member.
+#[test]
+fn a_named_define_through_top_after_the_call_revokes_the_shadow() {
+    let more = "host: (globalThis as any).hostGet()";
+    assert_eq!(
+        revoked_calls(more, "console.log(r.host);"),
+        vec!["proven", "proven"]
+    );
+    assert_eq!(
+        revoked_calls(
+            more,
+            "Object.defineProperty(r.host, \"createIdentifier\", { value: 1 });"
+        ),
+        vec![UNKNOWN_MEMBER, UNKNOWN_MEMBER]
+    );
 }

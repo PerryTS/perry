@@ -26,10 +26,28 @@ use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, NativeRep
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I64, I8, PTR};
 
-pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
-    ctx.classes
-        .get(class_name)
-        .is_some_and(|class| !class.computed_members.is_empty())
+/// Can a member whose key the compiler does not know intercept `this.x` on an
+/// instance of `class_name`? Only an instance accessor with an evaluated key,
+/// on the class or its chain (`Class::has_evaluated_accessor`). Known keys
+/// (literals, well-known and registered symbols) are named members, and an
+/// evaluated-key method is a writable data property an own field shadows.
+pub(crate) fn class_has_evaluated_accessor(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    let mut name = Some(class_name);
+    let mut depth = 0;
+    while let Some(n) = name {
+        let Some(class) = ctx.classes.get(n) else {
+            return false;
+        };
+        if class.has_evaluated_accessor() {
+            return true;
+        }
+        depth += 1;
+        if depth > 64 {
+            return true;
+        }
+        name = class.extends_name.as_deref();
+    }
+    false
 }
 
 pub(crate) fn lower_runtime_property_get_by_name(
@@ -269,7 +287,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
 
     // wpfacts slice 2: the facts prove the slot always holds a canonical
     // double (an `F64` birth lane that only Numbers are ever stored into).
-    if crate::expr::wpfacts_access::proves_raw_f64(ctx, expr) {
+    if crate::expr::wpfacts_access::proves_number(ctx, expr) {
         if let Some(v) = crate::expr::wpfacts_access::try_lower_get(ctx, object, property, 0)? {
             return Ok(Some(v));
         }
@@ -457,7 +475,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     let Some(class_name) = receiver_class_name(ctx, object) else {
         return Ok(None);
     };
-    if class_has_computed_runtime_members(ctx, &class_name) {
+    if class_has_evaluated_accessor(ctx, &class_name) {
         return Ok(None);
     }
 

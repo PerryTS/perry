@@ -87,6 +87,30 @@ fn nested_closure_bindings_are_not_captured_by_an_enclosing_closure() {
     assert_eq!(captures_of(&[], &outer_body, &[]), vec![1]);
 }
 
+/// An async wrapper keeps only the preallocation of a hoisted `const` (id 2);
+/// its declarator sits in the step closure, which captures the cell:
+/// `(n) => { PreallocateBoxes([2]); let step = () => { let chunk = [n]; ... }; }`.
+/// The wrapper allocates the cell once per activation, so it must not capture
+/// id 2 from its own creation site (every activation would then share the
+/// one cell the creation site handed over).
+#[test]
+fn a_preallocated_binding_is_the_bodys_own_and_not_captured() {
+    let step = closure(
+        31,
+        Vec::new(),
+        vec![let_(2, Expr::LocalGet(1)), Stmt::Return(Some(add(2, 1)))],
+        vec![1, 2],
+    );
+    let body = vec![
+        Stmt::PreallocateBoxes(vec![2]),
+        let_(12, step),
+        Stmt::Return(Some(Expr::LocalGet(12))),
+    ];
+    assert_eq!(captures_of(&[param(1)], &body, &[]), Vec::<u32>::new());
+    // The same body from outside a function: id 1 is free, id 2 is not.
+    assert_eq!(captures_of(&[], &body, &[]), vec![1]);
+}
+
 /// A reference to an id bound in a nested closure still counts when the
 /// enclosing body ALSO reads it at its own level, and a nested closure's
 /// explicit capture list is always forwarded.

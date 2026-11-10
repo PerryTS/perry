@@ -205,4 +205,7 @@ for lib in "$@"; do
     echo "ok: $lib defines all ${#SENTINELS[@]} sentinel symbols"
   fi
 done
+# A shipped runtime archive also carries no std symbolizer: std is built from
+# rust-src without its `backtrace` feature (.cargo/config.toml [unstable]).
+"$(dirname "$0")/check_std_symbolizer.sh" "$@" || status=1
 exit "$status"

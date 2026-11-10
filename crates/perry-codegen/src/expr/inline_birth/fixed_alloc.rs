@@ -4,16 +4,20 @@
 use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8, PTR};
 
-/// Keep the existing allocator on ILP32 and for cells outside the nursery's
-/// small-object contract. The emitted fast path uses the LP64 header ABI.
+/// Keep the existing allocator on targets without a little-endian header
+/// image and for cells outside the nursery's small-object contract. The
+/// emitted fast path writes the target's header words (wasm32: 4-byte
+/// pointers, the arena cell's i32 words).
 pub(super) fn eligible(target: &str, size: u64) -> bool {
     let arch = target.split('-').next().unwrap_or_default();
-    // Packed header words use the shipped little-endian LP64 ABIs. Other
-    // targets keep the runtime's field-wise initialization.
-    matches!(
+    // Packed header words use the shipped little-endian LP64 ABIs and the
+    // wasm32 WASI lowering. Other targets keep the runtime's field-wise
+    // initialization.
+    (matches!(
         arch,
         "x86_64" | "x86_64h" | "amd64" | "aarch64" | "arm64" | "arm64e"
     ) && !crate::target_layout::target_is_ilp32(target)
+        || crate::target_layout::wasm32_lowering(target))
         && size <= 16 * 1024
 }
 
@@ -27,13 +31,12 @@ fn allocate(
     initialize: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> (String, Option<String>) {
+    let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
     let state = crate::expr::load_inline_arena_state(ctx);
     let blk = ctx.block();
-    let offset_ptr = blk.gep(I8, &state, &[(I64, "8")]);
-    let offset = blk.load(I64, &offset_ptr);
+    let (offset_ptr, offset) = super::arena_load(blk, &arena, &state, arena.offset);
     let next = blk.add(I64, &offset, &size.to_string());
-    let limit_ptr = blk.gep(I8, &state, &[(I64, "16")]);
-    let limit = blk.load(I64, &limit_ptr);
+    let (_, limit) = super::arena_load(blk, &arena, &state, arena.limit);
     // The runtime's canonical bump bound is zero during allocate-black.
     // Only descriptor admission remains a separate condition.
     let limit = if let Some(admitted) = admitted {
@@ -51,8 +54,8 @@ fn allocate(
     ctx.block().cond_br(&fits, &fast_label, &refused_label);
     ctx.current_block = fast;
     let blk = ctx.block();
-    // GC_STORE_AUDIT(INIT): the existing nursery cursor, no new allocator state.
-    blk.store(I64, &next, &offset_ptr);
+    // The existing nursery cursor, no new allocator state.
+    super::arena_store(blk, &arena, &next, &offset_ptr);
     let data = blk.load(PTR, &state);
     let raw = blk.gep(I8, &data, &[(I64, &offset)]);
     let fast_value = initialize(ctx, &raw);
@@ -84,7 +87,9 @@ pub(crate) fn closure(
     words: &[String],
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> String {
-    let size = 8 + crate::runtime_abi::CLOSURE_HEADER_SIZE as u64 + words.len() as u64 * 8;
+    let header_size = crate::target_layout::closure_header_size_bytes(ctx.target_triple);
+    let props_offset = crate::target_layout::closure_props_offset_bytes(ctx.target_triple);
+    let size = 8 + header_size + words.len() as u64 * 8;
     if !eligible(ctx.target_triple, size) {
         return slow(ctx);
     }
@@ -110,21 +115,14 @@ pub(crate) fn closure(
                 &[(I64, &crate::runtime_abi::CLOSURE_INFO_OFFSET.to_string())],
             );
             blk.store(PTR, info, &body);
-            let props = blk.gep(
-                I8,
-                &user,
-                &[(I64, &crate::runtime_abi::CLOSURE_PROPS_OFFSET.to_string())],
-            );
+            let props = blk.gep(I8, &user, &[(I64, &props_offset.to_string())]);
             // GC_STORE_AUDIT(INIT): fresh closure's null own-property edge.
             blk.store(PTR, "null", &props);
             for (slot, word) in words.iter().enumerate() {
                 let address = blk.gep(
                     I8,
                     &user,
-                    &[(
-                        I64,
-                        &(crate::runtime_abi::CLOSURE_HEADER_SIZE + slot * 8).to_string(),
-                    )],
+                    &[(I64, &(header_size + slot as u64 * 8).to_string())],
                 );
                 // GC_STORE_AUDIT(INIT): complete capture range of an idle nursery birth.
                 blk.store(I64, word, &address);
@@ -199,6 +197,7 @@ pub(crate) fn layout_with(
         let registered = ctx.block().and(I1, &nonzero, &registered);
         (id, Some(registered))
     };
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
     allocate(
         ctx,
         size,
@@ -215,8 +214,15 @@ pub(crate) fn layout_with(
             let shape_ptr = blk.gep(I8, &user, &[(I64, "4")]);
             blk.store(I32, &id, &shape_ptr);
             let meta = blk.gep(I8, &user, &[(I64, "8")]);
-            // GC_STORE_AUDIT(INIT): unpublished layout object, no per-object meta.
-            blk.store(PTR, "null", &meta);
+            if ilp32 {
+                // GC_STORE_AUDIT(INIT): unpublished layout object: the ILP32
+                // slot-alignment padding word and the meta pointer at 12,
+                // both zero as the runtime's finish_layout_object writes them.
+                blk.store(I64, "0", &meta);
+            } else {
+                // GC_STORE_AUDIT(INIT): unpublished layout object, no per-object meta.
+                blk.store(PTR, "null", &meta);
+            }
             if slots <= 8 || fields.is_some() {
                 for slot in 0..slots {
                     let address = blk.gep(I8, &user, &[(I64, &(16 + slot * 8).to_string())]);

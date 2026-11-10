@@ -19,10 +19,7 @@ use crate::closure::{is_closure_ptr, ClosureHeader, JsThis};
 // retired from-space object — and it now comes from the one rooted,
 // shared-shape constructor in `crate::iter_result`.
 use crate::iter_result::make_iter_result;
-use crate::object::{
-    js_object_alloc, js_object_get_field, js_object_get_field_by_name, js_object_set_field,
-    ObjectHeader,
-};
+use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, ObjectHeader};
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
 use std::cell::Cell;
 
@@ -127,11 +124,11 @@ fn is_nullish(value: f64) -> bool {
 fn throw_error(range: bool, message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = if range {
-        crate::error::js_rangeerror_new(msg)
+        crate::error::CoreError::range_error(msg)
     } else {
-        crate::error::js_typeerror_new(msg)
+        crate::error::CoreError::type_error(msg)
     };
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn type_error(message: &str) -> ! {
@@ -187,51 +184,21 @@ fn truthy(value: f64) -> bool {
     crate::value::js_is_truthy(value) != 0
 }
 
-/// IteratorStepValue on `(iter, next)`; `None` when done.
-///
-/// #7564: the keys are interned (allocation-free after the first call per
-/// thread) and every pointer is re-read from a handle after each call that
-/// can collect, so no pre-collection address is nameable.
+/// IteratorStepValue on `(iter, next)`: the one step
+/// ([`crate::array::js_iterator_step`]); `None` when done. A `next` the record
+/// could not read as a property (a perry-native iterator) is resolved the way
+/// every other record resolves it.
 unsafe fn step_value(iter: f64, next: f64) -> Option<f64> {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let iter_h = scope.root_nanbox_f64(iter);
-    let result = if JSValue::from_bits(next.to_bits()).is_undefined() {
-        // A Perry-native iterator whose `next` is not a readable property.
-        crate::object::js_native_call_method(
-            iter_h.get_nanbox_f64(),
-            b"next".as_ptr() as *const i8,
-            4,
-            std::ptr::null(),
-            0,
-        )
+    let next = if JSValue::from_bits(next.to_bits()).is_undefined() {
+        crate::array::js_iterator_next_method(iter)
     } else {
-        if !crate::object::value_is_callable(next) {
-            type_error("Iterator next method is not a function");
-        }
-        call(next, iter_h.get_nanbox_f64(), &[])
+        next
     };
-    if !is_object(result) {
-        type_error("Iterator result is not an object");
-    }
-    // `js_object_get_field_by_name` (getters, shape work) can collect between
-    // the two reads, so the second read does not reuse the first's address.
-    let result_h = scope.root_nanbox_f64(result);
-    let (done_key, result_now) =
-        result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"done"));
-    let done = js_object_get_field_by_name(
-        js_nanbox_get_pointer(result_now) as *const ObjectHeader,
-        done_key,
-    );
-    if truthy(f64::from_bits(done.bits())) {
+    let mut value = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if crate::array::js_iterator_step(iter, next, &mut value) != 0 {
         return None;
     }
-    let (value_key, result_now) =
-        result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"value"));
-    let value = js_object_get_field_by_name(
-        js_nanbox_get_pointer(result_now) as *const ObjectHeader,
-        value_key,
-    );
-    Some(f64::from_bits(value.bits()))
+    Some(value)
 }
 
 /// Allocate a helper. `iterated` and `arg` are rooted across the birth.
@@ -351,19 +318,19 @@ pub(crate) unsafe fn helper_step(iterated: f64) -> Option<f64> {
     let helper = scope.root_nanbox_f64(iterated);
     set_field(iterated, F_GEN_STATE, GEN_RUNNING);
     let close = Cell::new(false);
-    match crate::exception::catch_js_throw(|| run_op(&helper, op, &close)) {
+    match crate::exception::catch_thrown(|| run_op(&helper, op, &close)) {
         Ok(value) => {
             let state = if value.is_some() { GEN_YIELD } else { GEN_DONE };
             set_field(helper.get_nanbox_f64(), F_GEN_STATE, state);
             value
         }
         Err(error) => {
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             set_field(helper.get_nanbox_f64(), F_GEN_STATE, GEN_DONE);
             if close.get() {
                 close_quietly(field(helper.get_nanbox_f64(), F_ITERATED));
             }
-            crate::exception::js_throw(error.get_nanbox_f64())
+            crate::exception::rethrow_caught(error.caught())
         }
     }
 }
@@ -520,7 +487,7 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
     // flatMap's inner iterator first, then the underlying one (concat has
     // only its active inner iterator).
     set_field(h(), F_GEN_STATE, GEN_RUNNING);
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let inner = field(h(), F_STATE);
         if op == OP_CONCAT {
             if is_object(inner) {
@@ -529,18 +496,18 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
             return;
         }
         if op == OP_FLATMAP && is_object(inner) {
-            if let Err(error) = crate::exception::catch_js_throw(|| close_normal(inner)) {
+            if let Err(error) = crate::exception::catch_thrown(|| close_normal(inner)) {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let error = scope.root_nanbox_f64(error);
+                let error = error.root(&scope);
                 close_quietly(field(h(), F_ITERATED));
-                crate::exception::js_throw(error.get_nanbox_f64());
+                crate::exception::rethrow_caught(error.caught());
             }
         }
         close_normal(field(h(), F_ITERATED));
     });
     set_field(h(), F_GEN_STATE, GEN_DONE);
     if let Err(error) = result {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
     done()
 }

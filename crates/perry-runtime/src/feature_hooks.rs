@@ -183,6 +183,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     crate::wasi_hook_slots::install();
     js_runtime_install_messaging();
     js_runtime_install_event_target();
+    js_runtime_install_navigator();
     js_runtime_install_typedarray();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
@@ -253,6 +254,16 @@ pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn(crate::gc::HeapSnapshotFormat) -> 
 pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
 
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+/// Clears Node-API weak references whose targets died; set when the host installs.
+pub(crate) static NODE_API_WEAK_PRUNE: Hook<fn(&dyn Fn(usize) -> bool)> = Hook::empty();
+
+/// `gc::dead_owner` entry for Node-API weak references: a no-op until the
+/// Node-API host is installed (its TLS storage does not exist before that).
+pub(crate) fn prune_dead_node_api_weak_references(is_dead: &dyn Fn(usize) -> bool) {
+    if let Some(prune) = NODE_API_WEAK_PRUNE.peek() {
+        prune(is_dead);
+    }
+}
 pub(crate) static WASM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static DGRAM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
@@ -575,6 +586,13 @@ pub extern "C" fn js_runtime_install_messaging() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_event_target() {
     crate::event_target_hook_slots::install();
+}
+
+/// `Navigator.prototype`'s getters (`navigator.rs`), for a program that
+/// reaches navigator.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_navigator() {
+    crate::navigator::PROTOTYPE_INSTALL.set(crate::navigator::install_prototype);
 }
 
 #[no_mangle]

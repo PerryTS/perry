@@ -222,9 +222,9 @@ pub(super) fn a_broken_contract_resolves_only_the_units_that_see_it() {
             "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
         ),
     ]);
-    // Round 3 solves `b` alone, which replays the other units' shared
-    // writes too (decision 151), so it costs its own last solve, not quite
-    // its cost alone.
+    // Round 3 replays the shared native-field writes in b and in the
+    // declaration unit of c that reads E.has. The unrelated c root and
+    // both units of m keep their results.
     assert_eq!(
         pf.round_work[1],
         bc.round_work[1] + w("a.ts") + w("m.ts"),
@@ -236,7 +236,13 @@ pub(super) fn a_broken_contract_resolves_only_the_units_that_see_it() {
     assert_eq!(pf.round_work.len(), 3, "{:?}", pf.round_work);
     assert_eq!(
         pf.round_work[2],
-        w("b.ts"),
+        w("b.ts")
+            + pf.units
+                .iter()
+                .find(|(p, _)| p == "c.ts#u1")
+                .unwrap()
+                .1
+                .work,
         "{:?} {:?}",
         pf.round_work,
         pf.units
@@ -290,54 +296,58 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
         pf.round_work
     );
     let w = |p: &str| module_work(&pf, p);
-    // Merged head (main's write effects and ResolveExport): round 2 solves
-    // fewer units than `a`, `m`, `b` and `c` together; the rounds are pinned.
-    // Rewritten for DECISIONS 196 (each reader an argument marker gains is
-    // solve work): [699, 725, 908, 406, 334] -> [709, 731, 914, 410, 334];
-    // for #13294 (decision 151: every unit replays the shared objects'
-    // writes) -> [709, 779, 956, 443, 392]; for DECISIONS 209 (a broken
-    // function read through a value contract is its stand-in, not ⊤: the
-    // units of `a` holding `util.get`, #u1 145 -> 181 and #u3 37 -> 62,
-    // solve its contract and its escaped object; `b`, `c`, `m` and round 2
-    // unchanged) -> [709, 779, 956, 504, 428]; for DECISIONS 210 (a
-    // published function's properties leave with it but its `prototype`,
-    // whose template no longer escapes) -> [695, 772, 949, 497, 428]; for
-    // the intrinsic member descriptions and the static rule (a store into ⊤
-    // writes its key on every builtin prototype, the builtin namespaces'
-    // lookups reach `Object.prototype`; the unit boundary's stand-in store
-    // writes none, a stand-in class's prototype defines its contract's
-    // methods) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    // DEC221: unknown construction sinks its fresh result, without the
-    // extra template-wide escape: the same five rounds do less work
-    // ([754, 879, 986, 543, 467]). SEH: a join of two descriptions keeps what
-    // each says of a field (`ClassContract::join`) where it made the field ⊤:
-    // round 2 builds what the readers held as ⊤, and the fixpoint ends one
-    // round earlier. A method called on a marker with values beside it
-    // reads its key's reach (`method_on`): [754, 1090, 948, 42] -> the pin
-    // below. DCE: a read of a key the object surely holds takes its chain
-    // through a relay that drops the chain end's `undefined`
-    // (`Cons::Defined`): a relay node for the read's own builtin members
-    // and a rule on the chain node, [758, 1094, 952, 42] -> [762, 1104,
-    // 960, 42]. DECISIONS 234: a read of an own definite key takes the
-    // chain's program values only (a chain node of its own) -> [763, 1103,
-    // 960, 42]. DECISIONS 231(c): a store of `a`'s code into an instance of
-    // a class a receiver marker stands for goes to the class's `virt-stored`
-    // node for that key (`virt_store`), which the marker's reads take as its
-    // own field: two such nodes (two keys) in each of the three rounds that
-    // solve `a` -> [765, 1105, 962, 42]. Helper protocols (builtin helper arms
-    // read their operands by protocol instead of escaping them) -> [767,
-    // 1102, 959, 42]. A load from a closed receiver marker adds no absence
-    // `undefined` (+2 in each round) and takes what the marker gives through
-    // a `Cons::Defined` rule (+4) -> [773, 1108, 969, 42]. DECISIONS 242
-    // (contract half G2): the callers replay the callee's reads of its
-    // parameter as miss sites on their arguments (`Cons::Miss`, +5 and +4;
-    // exactly these: with the replay off the old pin holds) -> the pin.
-    assert_eq!(pf.round_work, [773, 1113, 973, 42], "{:?}", pf.units);
-    // DECISIONS 241: `get` reaches unknown code (`m`s, the broken function in
-    // s units): each publishes an unknown computed-key store on it, and its
-    // holders read that join under its own keys in round 3 (before: top from
-    // the publication itself): +4 -> the pin above.
+    // The rounds include declaration-shape comparisons and native holder
+    // walks; unrelated units must still stay out of the later rounds.
+    // Rule G: a global key's ownership is the realm's declaration lookup
+    // (charged per search step) and `%Global%` declares its own keys, so the
+    // same solve is charged more (was [885, 1237, 1039, 258]). An escaped
+    // object literal's class is a layout no unknown code constructs
+    // (`Model::unknown_constructible`): the later rounds build no unknown
+    // `new` of it (was [889, 1241, 1079, 260]). A folded
+    // builtin call is the method call it folds, and a native method runs
+    // once summaries exist (`Deferred::Native`). HOST-P: every model finds
+    // the keys `process` declares as host arrays of strings in the realm's
+    // declarations (charged per search step, as rule G) and holds the
+    // runtime-made `process.execArgv` array beside `process.argv`: 25 work
+    // per unit solve, 9/7/7/2 solves per round (was [832, 1203, 988, 258]).
+    // SEEDE: every unit holds the runtime error object in `thrown`, each
+    // body its throw region, and an operation of a body on a value that can
+    // be ⊤ its `Raise` constraint (DESIGN SEEDE section 8), charged per
+    // delivered set like any constraint (was [1057, 1378, 1163, 308]; with
+    // the regions but no `Raise` constraints [1273, 1549, 1334, 356]); the
+    // `Raise` constraints are summary constraints (`summary::map::gen_kind`),
+    // so the bodies holding them keep their summaries: [1482, 1763, 1479,
+    // 395]. Every escaped value's accessor functions escape (descriptor
+    // reads, ESCACCESSORS): a getter and a setter descriptor walk per
+    // escaped value, charged in each round that escapes it. SEEDKV: a
+    // string literal is its own source node holding its constant
+    // (`Gen::str_literal`), popped once: `a` and `m` hold "get" and "g",
+    // solved in rounds 0-2 (was [1719, 2122, 1854, 449]). NUMBIG: `BigInt`
+    // is its own namespace, one more declared shape on the realm's linear
+    // namespace and family searches (charged per step) (was [1721, 2124,
+    // 1856, 449]). MULTINS: `Error`, the six NativeErrors and
+    // `AggregateError` are eight namespaces, the NativeErrors' chain
+    // `Error`: seven more declared shapes on the same charged searches
+    // (was [1732, 2133, 1864, 452]). WPNS: `%TypedArray%`, the twelve
+    // concrete typed arrays, `DataView`, `ArrayBuffer`, `SharedArrayBuffer`
+    // (and `%BufferSpeciesConstructor%`) are namespaces of their own, more
+    // declared shapes on the same charged searches (was [1799, 2188, 1913,
+    // 470]). A function expression whose body may complete returns
+    // `undefined` (`narrow::may_complete`): the `util` IIFE's result is one
+    // more popped kind in rounds 1-2 (was [1962, 2323, 2034, 512]). The
+    // changed-holder accessor lookup no longer adds a ⊤-token edge beside
+    // its own ⊤ (census attribution): two fewer deliveries in rounds 1-2
+    // (was [1962, 2326, 2037, 512]). A member that escaped after a set
+    // listed it is that set's ⊤ (`escaped_beside_top`) and leaves when ⊤
+    // arrives or at the pop: each shrunk set is rebuilt, charged per member
+    // it held. In rounds 1-2 the removed members fed no later delivery
+    // (with the rebuild uncharged the rounds are the old ones exactly), so
+    // the rebuilds are the whole difference (was [1962, 2324, 2035, 512]).
+    assert_eq!(pf.round_work, [1962, 2339, 2044, 512], "{:?}", pf.units);
+    // Reading native function fields records the shared-object dependency:
+    // a later shared write re-solves its reader, even when the stored key
+    // is not a layout field of the broken contract.
 }
 
 #[test]
@@ -470,7 +480,7 @@ pub(super) fn what_a_method_does_to_its_receiver_happens_to_the_instance() {
         ("a", b),
         (
             "m",
-            "import { D } from './a'; declare const ext: any; ext(new D().me());",
+            "import \"unseen-host\"; import { D } from './a'; declare const ext: any; ext(new D().me());",
         ),
     ];
     let pf = units_of(&mods);
@@ -565,7 +575,7 @@ pub(super) fn a_given_out_instance_receives_what_other_units_methods_do() {
     // proves `warm`; per-unit facts are whole-program facts, owner
     // 2026-10-23). `set` runs on published receivers (DECISIONS 107) and on
     // the instances given out (DECISIONS 125).
-    let m = "import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
+    let m = "import \"unseen-host\"; import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
     let pf = units_of(&[("t", t), ("m", m)]);
     assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
     assert!(!proven(&whole_of(&[("t", t), ("m", m)]), "warm"));
@@ -600,10 +610,10 @@ pub(super) fn a_class_a_contract_returns_carries_its_methods() {
 
 #[test]
 pub(super) fn a_tdz_seed_writes_its_local_in_the_local_unit() {
-    // A TDZ seed initializes its locals (§12.3: the seed statement is the
-    // binding's own, joined with it): `a`'s unit sees the seeded value, as the whole
-    // program does, so `k` is not proven to hold only numbers. A seed in a
-    // unit of its own would write a stand-in of `a` and be lost.
+    // A TDZ seed is the binding's own statement (§12.3, joined with it), and
+    // it is not a value of `a`: the first `g()` reads `a` in its dead zone
+    // and throws a ReferenceError, so `k` holds only what `a` is
+    // initialized to, in `a`'s unit as in the whole program.
     let src = "(function () { const g = () => { a = a; const o = { k: a }; return o.k; }; try { console.log(g()); } catch (e) {} let a = 1; console.log(g()); })();";
     let kind = |pf: &ProgramFacts| {
         pf.dump_text()
@@ -619,7 +629,7 @@ pub(super) fn a_tdz_seed_writes_its_local_in_the_local_unit() {
     let whole = facts(src);
     assert_eq!(
         kind(&whole).as_deref(),
-        Some("kind=num|undef"),
+        Some("kind=num"),
         "{}",
         whole.dump_text()
     );

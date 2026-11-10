@@ -30,13 +30,15 @@ mod rewrite_returns;
 // cross-module symbol here.
 pub(crate) use box_release::build_box_release_stmts;
 pub(crate) use break_continue::{
-    body_contains_yield, collect_hoisted_vars, fix_break_continue_sentinels,
+    body_contains_yield, collect_hoisted_decl_facts, collect_hoisted_vars,
+    fix_break_continue_sentinels,
     fix_break_continue_sentinels_in_catches, fix_break_continue_sentinels_in_stmts,
     fix_placeholder_state, prefix_loop_continues, rewrite_break_continue_in_stmts,
     stmts_have_continue_inside_try_finally,
 };
 pub(crate) use helpers::{
-    alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmts, wrap_returns_in_promise,
+    alloc_local, initialize_tdz_lets_in_stmts, make_iter_result, rewrite_hoisted_lets_in_stmts,
+    strip_tdz_preallocs_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
 pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};

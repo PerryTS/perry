@@ -1,0 +1,18 @@
+sum 62
+grow 1,2,3,11,12
+shrink 2,4,6
+cut 1,2
+ahead 1,20,3
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+holes 1,undefined,3,1,undefined,3
+liar string:2"a"|number:22|object:2null|object:2{"v":1}
+words 5
+objs 12
+ret 5 -1
+pick 6,2,2,10
+labels 1:3,1:1,2:3,2:1
+closures 14,16,18
+heads a2,b4 6
+throw stop4 2
+subclass 36
+own 9 84

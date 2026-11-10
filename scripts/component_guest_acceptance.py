@@ -20,8 +20,7 @@ import time
 def prepare_rust_host_manifest(path, root):
     """Retain the standalone fixture's source selection after copying it."""
     manifest = path.read_text()
-    for relative in ["crates/perry-wasi", "third_party/turnloop/turnloop",
-                     "third_party/turnloop/turnloop-http"]:
+    for relative in ["crates/perry-wasi"]:
         original = json.dumps("../../../../" + relative)
         assert manifest.count(original) == 1, f"Rust host path changed: {relative}"
         manifest = manifest.replace(original, json.dumps(str(root / relative)))
@@ -47,7 +46,7 @@ def main():
     if args.moving_gc and not args.native_runtime_dir:
         parser.error("--moving-gc requires --native-runtime-dir")
     root = Path(__file__).resolve().parent.parent
-    fixture = root / "test-wasi/components/transform"
+    fixture = root / "tests/integration/wasi/components/transform"
     output = args.output.resolve()
     work = output / "transform"
     work.mkdir(parents=True, exist_ok=True)

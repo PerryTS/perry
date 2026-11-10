@@ -11,7 +11,6 @@
 use super::super::*;
 use super::support::*;
 use crate::typed_feedback::leaf_lock_test_hooks as hooks;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// What an allocation's trigger check does once a collection is due: request
 /// one. Under a root lock that request is deferred to the lock's release.
@@ -44,40 +43,29 @@ impl Drop for PlantGuard {
     }
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default()
-}
-
 /// Drive `helper` with a request planted in its locked region and assert the
 /// release caught it (panicked) without collecting and without losing it.
+/// The panic aborts the child process that runs `helper`; its panic hook
+/// reports the collector state the panic left, which is the state a shipped
+/// (`panic = "abort"`) build ends in.
+#[track_caller]
 fn assert_planted_request_is_caught_not_flushed(helper: impl FnOnce()) {
     let _nursery = CopyingNurseryTestGuard::new(1);
     let plant = PlantGuard::plant();
     let before = gc_collection_count();
 
-    let result = catch_unwind(AssertUnwindSafe(helper));
-
-    let message = result
-        .err()
-        .map(|payload| panic_message(&*payload))
-        .expect("a request deferred inside a CannotCollect helper's lock must be caught");
+    let (message, state) =
+        crate::test_support::expect_child_panic_then("#11523", helper, move || {
+            format!(
+                "collections={} pending={}",
+                gc_collection_count() - before,
+                deferred_gc_request_pending()
+            )
+        });
     assert!(message.contains("#11523"), "unexpected panic: {message}");
     assert_eq!(
-        gc_collection_count(),
-        before,
-        "the release of a CannotCollect helper's lock ran a collection"
-    );
-    assert!(
-        deferred_gc_request_pending(),
-        "the request must stay pending for a real safepoint, not be dropped"
-    );
-    assert!(
-        !gc_root_lock_held(),
-        "the lock depth must still unwind to 0"
+        state, "collections=0 pending=true",
+        "the release of a CannotCollect helper's lock ran a collection or dropped the request"
     );
     drop(plant);
 }

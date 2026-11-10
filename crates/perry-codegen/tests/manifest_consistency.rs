@@ -247,6 +247,14 @@ fn cjs_style_node_builtins_have_default_entries() {
 #[test]
 fn every_well_known_binding_has_manifest_entry() {
     const SIDE_EFFECT_ONLY: &[&str] = &[];
+    // Perry-owned link keys nobody imports: the codegen symbol registry
+    // (`perry_codegen::ext_registry`) puts their crate on the link line when a
+    // program emits one of its symbols, so there is no import for the
+    // unimplemented-API gate to cover. perry-ext-ws serves the global
+    // `WebSocket` client (npm `ws` compiles from source); perry-ext-bun
+    // serves `Bun.Transpiler` / `Bun.build` (npm `typescript` compiles from
+    // source).
+    const LINK_ONLY: &[&str] = &["perry/websocket", "perry/bun-transpiler"];
 
     // Inline parse of well_known_bindings.toml — small enough that
     // pulling in `toml` as a dev-dep just for this test would be
@@ -296,7 +304,7 @@ fn every_well_known_binding_has_manifest_entry() {
             }
             name_with_bracket
         };
-        if SIDE_EFFECT_ONLY.contains(&name) {
+        if SIDE_EFFECT_ONLY.contains(&name) || LINK_ONLY.contains(&name) {
             continue;
         }
         if !perry_api_manifest::module_has_any_entries(name) {

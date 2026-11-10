@@ -366,7 +366,7 @@ fn collect_archive_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--defined-only")
         .arg("--format=bsd")
         .arg(archive)
@@ -380,7 +380,7 @@ fn collect_archive_symbols_by_member(
         return Some(parsed);
     }
 
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--defined-only")
         .arg("--format=just-symbols")
         .arg(archive)
@@ -401,7 +401,7 @@ fn collect_archive_global_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--defined-only")
         .arg("--extern-only")
         .arg("--format=bsd")
@@ -454,7 +454,7 @@ fn collect_archive_provided_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--print-armap")
         .arg(archive)
         .output()
@@ -514,7 +514,7 @@ fn collect_archive_undefined_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--undefined-only")
         .arg("--format=bsd")
         .arg(archive)
@@ -1894,7 +1894,9 @@ fn requires_bundled_native_companion(symbol: &str) -> bool {
 mod object_format;
 use object_format::{object_is_coff, object_is_elf};
 
+mod nm_command;
 mod stub_symbols;
+use nm_command::nm_command;
 pub(super) use stub_symbols::localize_stdlib_stub_symbols;
 use stub_symbols::strip_members_present_in_reference;
 
@@ -1946,10 +1948,15 @@ pub(super) fn dedup_runtime_for_tier3(
 }
 
 /// Tier-3 Apple (tvOS/watchOS) dedup for a per-crate native binding staticlib.
-/// Same `-Zbuild-std` std-duplication as [`dedup_stdlib_for_tier3`] (alloc/
-/// panic/eh runtime: `__rust_drop_panic`, `__rdl_alloc`, …) colliding with
-/// perry-runtime's std at the final link. Skips shared libs (`.so`, Android)
-/// and every non-tier-3 target (ios/macos use prebuilt std and don't hit this).
+/// The crate is built by plain `cargo` with the user's own `+nightly` and
+/// `-Zbuild-std` (Perry's workspace `[unstable]` table does not apply to it),
+/// so it carries its own std, with the user's toolchain's features. Like
+/// [`dedup_stdlib_for_tier3`] this removes the duplicated std objects (alloc/
+/// panic/eh runtime: `__rust_drop_panic`, `__rdl_alloc`, ...) that would
+/// collide with perry-runtime's source-built std at the final link. Skips
+/// shared libs (`.so`, Android) and every non-tier-3 target (ios/macos use
+/// prebuilt std and don't hit this). The user's std keeps its symbolizer;
+/// the symbolizer gate does not cover user Rust libraries.
 /// A strip failure is non-fatal and falls back to the original lib.
 pub(super) fn dedup_native_lib_for_tier3(
     target: Option<&str>,

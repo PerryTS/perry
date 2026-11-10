@@ -1,8 +1,9 @@
 //! #11919 P0: an ordinary object that owns a native payload.
 //!
 //! The payload is a `GC_TYPE_NATIVE_HANDLE` cell named by the object's
-//! `ObjectMeta.native_state` word. These pin the contract the pattern rests on:
-//! the word is a traced edge (the cell lives while the object does, through a
+//! payload slot (the private `[[NativePayload]]` key, slot 0 of a born
+//! instance). These pin the contract the pattern rests on:
+//! the slot is a traced edge (the cell lives while the object does, through a
 //! moving minor), the drop runs exactly once whether `close` or the collector
 //! gets there first, and the payload's native bytes feed GC pacing until then.
 
@@ -146,9 +147,9 @@ fn native_payload_live_object_keeps_its_payload_through_a_full_collection() {
 }
 
 /// The object is movable and its payload cell is not: a copying minor moves
-/// the object, the meta record moves with it, and the traced `native_state`
-/// word still names the same live cell. Removing the `native_state` visit in
-/// `gc/layout_slot_visit.rs` leaves the cell unmarked, so the minor's malloc
+/// the object with its payload slot, and the traced slot still names the same
+/// live cell. An object whose cell were reachable only from a side record the
+/// collector does not visit leaves the cell unmarked, so the minor's malloc
 /// sweep drops it and the assertions below go red.
 #[test]
 fn native_payload_cell_survives_a_moving_collection() {
@@ -171,9 +172,9 @@ fn native_payload_cell_survives_a_moving_collection() {
         "test premise: the object moved"
     );
     let _no_conservative = ConservativeScanDisabledGuard::new();
-    // Enough malloc-sweeping minors for the owner to tenure: an OLD meta
-    // record naming a malloc cell is an old->malloc edge the minors must
-    // still honour once the owner stops being traced as young.
+    // Enough malloc-sweeping minors for the owner to tenure: an OLD object's
+    // payload slot naming a malloc cell is an old->malloc edge the minors
+    // must still honour once the owner stops being traced as young.
     for _ in 0..6 {
         let _ = collect_minor_trace(GcTriggerKind::MallocCount);
     }
@@ -189,6 +190,39 @@ fn native_payload_cell_survives_a_moving_collection() {
             .ok(),
         Some(9)
     );
+}
+
+/// The payload is the instance's own slot 0 under the private payload key,
+/// and a born instance has no meta record for it: the shape names the
+/// payload. Red when the cell goes to a side record instead (the
+/// `payload_slot` sabotage skips the slot store).
+#[test]
+fn native_payload_is_slot_zero_of_a_meta_free_instance() {
+    let _reset = PrototypeReset;
+    register_scanners();
+    for sabotage in [false, true] {
+        if sabotage {
+            std::env::set_var("PERRY_TEST_CALLBACK_SABOTAGE", "payload_slot");
+        }
+        let value = native_payload::alloc(&FAMILY, Probe { value: 4 }, 0, &[(b"_options", 1.0)]);
+        std::env::remove_var("PERRY_TEST_CALLBACK_SABOTAGE");
+        let obj = native_payload::any_object(value).expect("an ordinary object");
+        let position = unsafe {
+            crate::object::shaped_symbols::position(obj, native_payload::payload_key())
+        };
+        let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
+        let reached = unsafe { native_payload::payload_mut::<Probe>(value, &FAMILY) }
+            .map(|p| p.value)
+            .ok();
+        if sabotage {
+            assert_eq!(position, None, "sabotage premise: no payload slot");
+            assert_eq!(reached, None, "no slot: the payload is unreachable");
+            continue;
+        }
+        assert_eq!(position, Some(0), "the payload key is the first key");
+        assert!(meta.is_null(), "a payload instance is born without meta");
+        assert_eq!(reached, Some(4));
+    }
 }
 
 /// Distinct allocations are distinct objects, and a foreign object is not an

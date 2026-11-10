@@ -41,25 +41,19 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
     // The verifier caches its environment switch process-wide. Use a fresh
     // process when the ordinary suite runs with that switch off.
     if !env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER") {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = crate::test_support::this_test_process()
             .env("PERRY_GC_VERIFY_CLASSIFIER", "1")
-            .args([
-                "--exact",
-                "gc::tests::full_mark_word::active_classifier_differential_accepts_fold_and_rejects_census_disagreement",
-                "--test-threads=1",
-                "--nocapture",
-            ])
             .output()
             .expect("launch classifier differential control");
         assert!(
-            output.status.success(),
+            crate::test_support::passed(output.status),
             "classifier control failed: {}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
-            "exact child selector must execute the control",
+            String::from_utf8_lossy(&output.stdout).contains(CLASSIFIER_CONTROL_DONE),
+            "the fresh process must execute the control",
         );
         return;
     }
@@ -100,7 +94,9 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         // The armed census owns a drop-restoration guard and therefore is
         // not RefUnwindSafe. This query only reads it; the deliberately
         // modified header is restored immediately after the caught panic.
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| valid.contains(&child)));
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
+            valid.contains(&child)
+        }));
         (*child_header).size = size;
         assert!(classifier_rejected);
         let error = red.expect_err("active differential gate must reject census disagreement");
@@ -113,7 +109,11 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         assert!(mark::classifier_verify_enabled());
         assert!(valid.contains(&child));
     });
+    println!("{CLASSIFIER_CONTROL_DONE}");
 }
+
+#[cfg(perry_gc_instruments)]
+const CLASSIFIER_CONTROL_DONE: &str = "classifier differential control completed";
 
 unsafe fn old_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let (parent, fields) = alloc_old_test_object(1);
@@ -227,7 +227,8 @@ fn assert_coverage(sticky: &StickyRememberedSet, expect_missing: bool) {
         "live coverage premise: {stats:?}"
     );
     if expect_missing {
-        let red = std::panic::catch_unwind(|| assert_eq!(stats.missing_edges, 0, "{stats:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(stats.missing_edges, 0, "{stats:?}"));
         assert!(
             red.is_err(),
             "the independent coverage oracle must turn red"
@@ -623,10 +624,16 @@ fn string_decode_keeps_the_child_descriptor_observer_gate() {
                 &mut worklist,
                 Some(&mut sticky),
             );
-            let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // The sabotaged control must drop the child (a panic, observed
+            // from a child process); the shipped walk must keep it.
+            if negative {
+                let verdict = crate::test_support::child_unwind(|| {
+                    assert!(worklist.contains(&child_header));
+                });
+                assert!(verdict.is_err());
+            } else {
                 assert!(worklist.contains(&child_header));
-            }));
-            assert_eq!(verdict.is_err(), negative);
+            }
         });
     }
 }
@@ -714,12 +721,65 @@ fn a_foreign_handle_cannot_be_declared_shared_key_metadata() {
         *crate::array::array_elements_ptr(array) = ptr_bits(7);
         (*array).length = 1;
         let header = header_from_user_ptr(array.cast());
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
             crate::gc::full_trace::object_words_may_name_handles(header);
         }));
         assert!(
             red.is_err(),
             "the shared-storage declaration must reject a handle word"
+        );
+    });
+}
+
+extern "C" fn passive_observer(
+    _bits: u64,
+    _mark: extern "C" fn(u64, *mut c_void),
+    _ctx: *mut c_void,
+) -> bool {
+    false
+}
+
+/// A young large container is promoted in place by the sweep that follows the
+/// full mark, so the mark records its young children as an old parent's: as
+/// bare old pages. An active foreign observer moves the visit onto the
+/// observer path, which must keep that custody. Recorded as owner-qualified
+/// external entries instead, the edges are invisible to array growth, which
+/// inherits only old-page coverage, and the grown copy's young children go
+/// unremembered.
+#[test]
+fn an_active_observer_keeps_a_young_large_containers_edges_as_old_pages() {
+    isolated(|| unsafe {
+        let container = crate::array::js_array_alloc(20_000);
+        assert!(
+            crate::arena::is_young_large_owner(container as usize),
+            "fixture: the container must be a young large owner"
+        );
+        let child = crate::array::js_array_alloc(2);
+        crate::array::js_array_set_f64_extend(
+            container,
+            3,
+            f64::from_bits(ptr_bits(child as usize)),
+        );
+        let header = header_from_user_ptr(container.cast());
+        assert!(crate::gc::full_trace::object_words_may_name_handles(header));
+        crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(
+            observer_phase,
+            passive_observer,
+        );
+        let _scope = ObserverScope;
+        crate::gc::full_trace::begin_full_trace();
+        assert!(crate::gc::full_trace::handle_trace_active());
+        let sticky = fold(header, &valid_set(false));
+        let slot = crate::array::array_elements_ptr(container) as usize + 3 * 8;
+        let page = crate::arena::generation_page_for_addr(slot);
+        assert!(
+            sticky.external_pages.is_empty(),
+            "a young large container's edges are not owner-qualified: {:?}",
+            sticky.external_pages
+        );
+        assert!(
+            sticky.old_pages.contains(&page),
+            "the young child's slot page must be recorded as an old page"
         );
     });
 }

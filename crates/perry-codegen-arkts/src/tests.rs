@@ -46,6 +46,7 @@ pub(crate) fn empty_module() -> Module {
         init_was_unrolled: false,
         extern_funcs: vec![],
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -58,6 +59,7 @@ pub(crate) fn empty_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 

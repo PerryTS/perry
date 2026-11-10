@@ -405,19 +405,16 @@ const NUMBER_STATIC_DATA: [(&str, f64); 8] = [
     ("MIN_SAFE_INTEGER", -9007199254740991.0),
 ];
 
-/// #2889: install the common static methods on the `Object` / `Array`
-/// constructor closures so rebound usage (`const O = Object; O.keys(x)`)
-/// dispatches through the real runtime helpers. Only the high-traffic
-/// statics with simple f64-in / f64-out shapes are reified here; the long
-/// tail (`Object.defineProperty`, `Object.getOwnPropertyDescriptor`, …)
-/// stays unreified on the rebound value and is a known scope gap.
+/// Install a builtin constructor's intrinsics and statics in one attributed
+/// bag. Member keys stay ordinary spellings until program atoms register:
+/// providers can create the realm before module literal initialization.
 // Only intrinsic construction calls this; the installed functions keep the
 // runtime's speed optimization and ordinary inlining policy (#13662).
 #[optimize(size)]
 pub(crate) fn install_builtin_constructor_statics(
     name: &str,
     ctor: *mut crate::closure::ClosureHeader,
-    prototype: Option<f64>,
+    mut prototype: Option<f64>,
 ) {
     if ctor.is_null() {
         return;
@@ -440,6 +437,35 @@ pub(crate) fn install_builtin_constructor_statics(
     );
     let s = &mut statics;
     match name {
+        "Error" => {
+            if let Some(prototype) = prototype.take() {
+                s.data(
+                    "prototype",
+                    prototype,
+                    super::super::PropertyAttrs::new(false, false, false),
+                );
+            }
+            s.method(
+                "captureStackTrace",
+                crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
+                2,
+            );
+            s.method(
+                "isError",
+                crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
+                1,
+            );
+            s.method(
+                "prepareStackTrace",
+                crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
+                2,
+            );
+            s.data(
+                "stackTraceLimit",
+                10.0,
+                super::super::PropertyAttrs::new(true, true, true),
+            );
+        }
         "Object" => {
             s.method(
                 "keys",
@@ -718,17 +744,17 @@ pub(crate) fn install_builtin_constructor_statics(
             // and reflection see.
             s.method(
                 "abort",
-                crate::fn_info!(#[realm(AbortSignal.abort)] export crate::object::global_this::install_static::abort_signal_abort_thunk, 1; with_declared(0)),
+                crate::fn_info!(#[realm(AbortSignal.abort, effects = { stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: arg(0) | fresh(DOMException.prototype)})) })] export crate::object::global_this::install_static::abort_signal_abort_thunk, 1; with_declared(0)),
                 0,
             );
             s.method(
                 "timeout",
-                crate::fn_info!(#[realm(AbortSignal.timeout)] export crate::object::global_this::install_static::abort_signal_timeout_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(AbortSignal.timeout, effects = { coerce(arg(0), ToPrimitive); calls(islot(result, onabort), this = result, args = [fresh(Event.prototype)]); stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: fresh(DOMException.prototype)})) })] export crate::object::global_this::install_static::abort_signal_timeout_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "any",
-                crate::fn_info!(#[realm(AbortSignal.any)] export crate::object::global_this::install_static::abort_signal_any_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(AbortSignal.any, effects = { coerce(arg(0), Iterate); calls(islot(result, onabort), this = result, args = [fresh(Event.prototype)]); stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: islot(elems(arg(0)), reason)})) })] export crate::object::global_this::install_static::abort_signal_any_thunk, 1; with_declared(1)),
                 1,
             );
         }
@@ -1030,20 +1056,8 @@ pub(crate) fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: 
     use crate::fn_info;
     for (name, arity) in methods.iter().copied() {
         let info = match name {
-            "isPrototypeOf" => {
-                fn_info!(object_prototype_is_prototype_of_thunk, 1; with_flags(FN_BUILTIN))
-            }
-            // A call reads `hasOwnProperty` / `propertyIsEnumerable` off the
-            // receiver like any method, so the copy a builtin prototype
-            // carries must be the real method, never a placeholder.
-            "hasOwnProperty" => {
-                fn_info!(object_prototype_has_own_property_thunk, 1; with_flags(FN_BUILTIN))
-            }
-            "propertyIsEnumerable" => {
-                fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_flags(FN_BUILTIN))
-            }
             "valueOf" => {
-                fn_info!(#[realm(realm_decl! { AggregateError.prototype.valueOf; Array.prototype.valueOf; ArrayBuffer.prototype.valueOf; AsyncDisposableStack.prototype.valueOf; Blob.prototype.valueOf; Crypto.prototype.valueOf; CryptoKey.prototype.valueOf; DataView.prototype.valueOf; DisposableStack.prototype.valueOf; Error.prototype.valueOf; EvalError.prototype.valueOf; File.prototype.valueOf; FinalizationRegistry.prototype.valueOf; FormData.prototype.valueOf; Headers.prototype.valueOf; Map.prototype.valueOf; Promise.prototype.valueOf; RangeError.prototype.valueOf; ReferenceError.prototype.valueOf; RegExp.prototype.valueOf; Request.prototype.valueOf; Response.prototype.valueOf; Set.prototype.valueOf; SharedArrayBuffer.prototype.valueOf; SubtleCrypto.prototype.valueOf; SyntaxError.prototype.valueOf; TextDecoder.prototype.valueOf; TextEncoder.prototype.valueOf; TypeError.prototype.valueOf; URIError.prototype.valueOf; URLSearchParams.prototype.valueOf; WeakMap.prototype.valueOf; WeakRef.prototype.valueOf; WeakSet.prototype.valueOf; WebSocket.prototype.valueOf; })] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_flags(FN_BUILTIN))
+                fn_info!(object_prototype_value_of_thunk, 0; with_flags(FN_BUILTIN))
             }
             // Annex B accessor methods get real thunks (reflective `.call`).
             "__defineGetter__" => {
@@ -1058,7 +1072,7 @@ pub(crate) fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: 
             "__lookupSetter__" => {
                 fn_info!(#[realm(Object.prototype.__lookupSetter__)] export crate::object::global_this::array_error::object_prototype_lookup_setter_thunk, 1; with_flags(FN_BUILTIN))
             }
-            _ => fn_info!(#[realm(realm_decl! { FormData.prototype.delete; FormData.prototype.forEach; FormData.prototype.get; FormData.prototype.getAll; FormData.prototype.has; Headers.prototype.delete; Headers.prototype.forEach; Headers.prototype.get; Headers.prototype.has; AggregateError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toSpliced, spec = {length = 2}, emit = metadata(realm_noop_tospliced_2_metadata); ArrayBuffer.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); AsyncDisposableStack.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Blob.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Blob.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Blob.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); Blob.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); Blob.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Blob.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Boolean.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Crypto.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); CryptoKey.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); DataView.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Date.prototype.toDateString, spec = {length = 0}, emit = metadata(realm_noop_todatestring_0_metadata); Date.prototype.toTimeString, spec = {length = 0}, emit = metadata(realm_noop_totimestring_0_metadata); DisposableStack.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Error.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); EvalError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); File.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); File.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); File.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); File.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); File.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); File.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FinalizationRegistry.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FormData.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); FormData.prototype.entries, spec = {length = 0}, emit = metadata(realm_noop_entries_0_metadata); FormData.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); FormData.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); FormData.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FormData.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Headers.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); Headers.prototype.getSetCookie, spec = {length = 0}, emit = metadata(realm_noop_getsetcookie_0_metadata); Headers.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); Headers.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); Headers.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Headers.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Promise.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); RangeError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); ReferenceError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); RegExp.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Request.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Request.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Request.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Request.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Request.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Request.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Request.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Request.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Response.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Response.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Response.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Response.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Response.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Response.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Response.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Response.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SharedArrayBuffer.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); String.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SubtleCrypto.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Symbol.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SyntaxError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TextDecoder.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TextEncoder.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TypeError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); URIError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); URLSearchParams.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); WeakRef.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); WebSocket.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_flags(FN_BUILTIN)),
+            _ => fn_info!(#[realm(realm_decl! { FormData.prototype.delete; FormData.prototype.forEach; FormData.prototype.get; FormData.prototype.getAll; FormData.prototype.has; Headers.prototype.delete; Headers.prototype.forEach; Headers.prototype.get; Headers.prototype.has; Array.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toSpliced, spec = {length = 2}, emit = metadata(realm_noop_tospliced_2_metadata); Blob.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Blob.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Blob.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); Blob.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); Blob.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Date.prototype.toDateString, spec = {length = 0}, emit = metadata(realm_noop_todatestring_0_metadata); Date.prototype.toTimeString, spec = {length = 0}, emit = metadata(realm_noop_totimestring_0_metadata); File.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); File.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); File.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); File.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); File.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); FormData.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); FormData.prototype.entries, spec = {length = 0}, emit = metadata(realm_noop_entries_0_metadata); FormData.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); FormData.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); FormData.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Headers.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); Headers.prototype.getSetCookie, spec = {length = 0}, emit = metadata(realm_noop_getsetcookie_0_metadata); Headers.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); Headers.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); Headers.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Request.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Request.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Request.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Request.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Request.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Request.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Request.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Response.prototype.arrayBuffer, spec = {length = 0}, effects = { stores(fresh); returns(promise(fresh(ArrayBuffer.prototype), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(this, bodyError))) }, emit = metadata(realm_noop_arraybuffer_0_metadata); Response.prototype.blob, spec = {length = 0}, effects = { stores(fresh); returns(promise(fresh(Blob.prototype), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(this, bodyError))) }, emit = metadata(realm_noop_blob_0_metadata); Response.prototype.bytes, spec = {length = 0}, effects = { stores(fresh); returns(promise(fresh(Uint8Array.prototype), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(this, bodyError))) }, emit = metadata(realm_noop_bytes_0_metadata); Response.prototype.clone, spec = {length = 0}, effects = { stores(fresh); returns(fresh(Response.prototype, slots = {bodyError: islot(this, bodyError)})) }, emit = metadata(realm_noop_clone_0_metadata); Response.prototype.formData, spec = {length = 0}, effects = { stores(fresh); returns(promise(fresh(FormData.prototype), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(this, bodyError))) }, emit = metadata(realm_noop_formdata_0_metadata); Response.prototype.json, spec = {length = 0}, effects = { stores(fresh); returns(promise(json, reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(this, bodyError) | fresh(SyntaxError.prototype))) }, emit = metadata(realm_noop_json_0_metadata); Response.prototype.text, spec = {length = 0}, effects = { stores(fresh); returns(promise(prim(str), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(this, bodyError))) }, emit = metadata(realm_noop_text_0_metadata); })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_flags(FN_BUILTIN)),
         };
         install_proto_method(proto_obj, name, info, arity);
     }
@@ -1124,7 +1138,7 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true; "ArrayBuffer[\"@@species\"].<get>", constructible = true; "Array[\"@@species\"].<get>", constructible = true; "Map[\"@@species\"].<get>", constructible = true; "Promise[\"@@species\"].<get>", constructible = true; "RegExp[\"@@species\"].<get>", constructible = true; "Set[\"@@species\"].<get>", constructible = true; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "ArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Array[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Map[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Promise[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "RegExp[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Set[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
         0,
     );
     if getter.is_null() {

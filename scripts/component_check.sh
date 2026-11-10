@@ -12,6 +12,9 @@ mkdir -p "$CARGO_TARGET_DIR"
 CARGO_TARGET_DIR="$(cd "$CARGO_TARGET_DIR" && pwd)"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1
 out="$CARGO_TARGET_DIR/component-validation"
+# Each run qualifies fresh outputs: the acceptance scripts refuse an existing
+# output dir, and CI restores target/ (with a previous run's outputs) from cache.
+rm -rf "$out"
 mkdir -p "$out"
 git rev-parse HEAD > "$out/source-revision.txt"
 rustup target add wasm32-unknown-unknown wasm32-wasip2

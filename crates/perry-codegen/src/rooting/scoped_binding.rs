@@ -91,3 +91,44 @@ pub(crate) fn with_scoped_arguments(
     }
     result
 }
+
+/// Bind values the caller already lowered as scoped temps for `body`, like
+/// [`with_scoped_arguments`] does for argument expressions. Each value is
+/// rooted for the whole body, so a read in `body` after a collection sees the
+/// relocated value; `proof` is the value's proven type, when it has one.
+pub(crate) fn with_scoped_values<R>(
+    ctx: &mut FnCtx<'_>,
+    values: &[(&str, Option<perry_hir::types::Type>)],
+    body: impl FnOnce(&mut FnCtx<'_>, &[Expr]) -> Result<R>,
+) -> Result<R> {
+    let mut roots = Vec::new();
+    let mut reads = Vec::new();
+    let mut proofs = Vec::new();
+    for (value, proof) in values {
+        let root = temp_root::temp_root_push_double(ctx, value);
+        let mut id = u32::MAX - ctx.scoped_temp_roots.len() as u32;
+        while ctx.locals.contains_key(&id)
+            || ctx.scoped_temp_roots.iter().any(|(bound, _)| *bound == id)
+        {
+            id -= 1;
+        }
+        let previous = ctx.proven_local_types.remove(&id);
+        if let Some(proof) = proof {
+            ctx.proven_local_types.insert(id, proof.clone());
+        }
+        proofs.push((id, previous));
+        ctx.scoped_temp_roots.push((id, root.clone()));
+        roots.push(root);
+        reads.push(Expr::LocalGet(id));
+    }
+    let result = body(ctx, &reads);
+    for (root, (id, previous)) in roots.iter().zip(proofs).rev() {
+        ctx.scoped_temp_roots.pop();
+        ctx.proven_local_types.remove(&id);
+        if let Some(previous) = previous {
+            ctx.proven_local_types.insert(id, previous);
+        }
+        temp_root::temp_root_truncate(ctx, root);
+    }
+    result
+}

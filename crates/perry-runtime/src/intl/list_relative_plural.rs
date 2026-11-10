@@ -109,8 +109,9 @@ pub(crate) fn collect_string_list(value: f64) -> Vec<String> {
     }
     // GetIterator(iterable): a non-iterable throws TypeError.
     let iter = crate::symbol::js_get_iterator(value);
+    let next = crate::collection_iter::iterator_next_method(iter);
     let mut out = Vec::new();
-    while let Some(element) = iterator_next_value(iter) {
+    while let Some(element) = iterator_next_value(iter, next) {
         if !JSValue::from_bits(element.to_bits()).is_any_string() {
             // IteratorClose(iteratorRecord, error): run `return`, then throw.
             iterator_close(iter);

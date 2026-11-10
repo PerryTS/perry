@@ -371,11 +371,13 @@ DISPATCH_CHECKS = (
     ("crates/perry-codegen/src/expr/property_get/generic_dispatch.rs", "lower_property_site_tail",
      r'cond_br\(&served,\s*&merge_label,\s*&call_label\)',
      "declined reads enter complete property semantics"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "emit_static_store_ic_site",
-     r'icmp_ne\(I32,\s*&stored,\s*"0"\)',
+    # The static-key store site is one out-of-line call, `perry_store_or_put`:
+    # the store probe, then complete `[[Set]]` when the probe declines.
+    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_store_or_put",
+     r"if\s+perry_probe_set\(dir,\s*obj_bits,\s*key_bits,\s*hash,\s*value\)\s*!=\s*0\s*\{\s*return\s+value;",
      "only an admitted store probe succeeds"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "emit_static_store_ic_site",
-     r'cond_br\(&hit,\s*&merge_label,\s*&slow_label\)',
+    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_store_or_put",
+     r"put_value::js_put_value_set\(\s*obj,\s*f64::from_bits\(key_bits\),\s*value,\s*obj,\s*strict,?\s*\)",
      "declined stores enter complete Set semantics"),
     ("crates/perry-codegen/src/expr/proxy_reflect.rs", "lower_put_value_dyn_ic_inline",
      r'"js_put_value_set_dynamic",\s*&\[\(DOUBLE,\s*t\),\s*\(DOUBLE,\s*k\),\s*\(DOUBLE,\s*v\),\s*\(I32,\s*strict_i32\)\]',
@@ -407,7 +409,7 @@ def assert_layout_dispatch_authority(sources: dict[str, str]) -> None:
          "lower_property_site_tail", ("perry_probe_get", "perry_probe_get_binding",
                                      "perry_probe_get_length", "js_object_get_field_slow")),
         ("crates/perry-codegen/src/expr/put_value_store_ic.rs",
-         "emit_static_store_ic_site", ("perry_probe_set", "js_put_value_set")),
+         "emit_static_store_ic_site", ("perry_store_or_put",)),
     ):
         body = function_body(sources[path], name)
         for callee in calls:

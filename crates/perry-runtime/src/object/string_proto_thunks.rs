@@ -268,8 +268,7 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
 fn throw_string_proto_nullish(method: &str) -> ! {
     let msg = format!("String.prototype.{method} called on null or undefined");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// `RequireObjectCoercible(this)` + `ToString(this)` for the generic-`this`

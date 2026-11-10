@@ -282,7 +282,7 @@ extern "C-unwind" fn destroy(
     let counter = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
     let count = field(counter.get_nanbox_f64(), b"count");
     set_field(counter.get_nanbox_f64(), b"count", count + 1.0);
-    crate::exception::js_throw(payload)
+    crate::exception::test_throw(payload)
 }
 
 #[test]

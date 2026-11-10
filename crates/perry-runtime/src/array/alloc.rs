@@ -7,8 +7,7 @@ use std::ptr;
 fn throw_invalid_array_length() -> ! {
     let bytes = b"Invalid array length";
     let msg = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// Throw the `RangeError: Invalid array length` raised by `ArraySetLength`
@@ -472,8 +471,8 @@ pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
         // dense, but represent a large fresh holey array exactly like a later
         // sparse length extension: a small backing store plus the full logical
         // length. Indexed reads already treat `index >= capacity` as a hole.
-        const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
-        let arr = if length > MAX_FRESH_DENSE_ARRAY_LENGTH {
+        // wpfacts admits a proven element read only up to the same bound.
+        let arr = if length > perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH {
             let arr = js_array_alloc(0);
             unsafe {
                 (*arr).length = length;

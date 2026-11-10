@@ -31,6 +31,9 @@ extern "C" {
 
 /// Install the runtime's `net` dispatch bucket together with this crate's
 /// export dispatcher, so the first value-form call already has a provider.
+/// It is `node:net` alone: a `child_process` program runs it at its first
+/// stdio pipe socket (perry-runtime `cp_pipe_socket`), and neither that
+/// program nor a `net` one names `tls.connect` ([`js_ext_net_tls_install`]).
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_nm_install() {
     js_set_native_net_dispatch(js_ext_net_native_dispatch);
@@ -39,9 +42,16 @@ pub unsafe extern "C" fn js_ext_net_nm_install() {
     // observed. The payload installer runs once, so later namespace installs
     // and construction preserve both identity and user edits.
     crate::classes::prepare_block_list_prototype();
-    // perry-stdlib's `tls` module dispatch reaches `tls.connect` through this
-    // when its archive has no link-time provider (the prebuilt `full` one).
+}
+
+/// `tls.connect` for perry-stdlib's `tls` module dispatch, which reaches it
+/// through this provider when its archive has no link-time binding (the
+/// prebuilt `full` one). The entry prologue calls it for a program that
+/// imports `tls`, beside `net`'s [`js_ext_net_nm_install`].
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_tls_install() {
     js_set_tls_connect_provider(crate::tls::js_tls_connect);
+    crate::payload_prototype::enable_socket_tls_members();
 }
 
 /// Handle ids box exactly like the static table's `NR_HANDLE_ID` rows; a
@@ -121,6 +131,7 @@ unsafe extern "C" fn js_ext_net_native_dispatch(
         }
         "createServer" | "Server" => handle_value(create_server(args_ptr, args_len)),
         "Socket" | "Stream" => crate::payload_socket::new_socket(crate::payload_io::ROUTE, arg(0)),
+        "Socket.adoptPipe" => crate::payload_socket::adopt_pipe(arg(0), arg(1)),
         "isIP" => crate::ip::js_net_is_ip(js_value_to_str_ptr_for_ffi(arg(0))),
         "isIPv4" => crate::ip::js_net_is_ipv4(js_value_to_str_ptr_for_ffi(arg(0))),
         "isIPv6" => crate::ip::js_net_is_ipv6(js_value_to_str_ptr_for_ffi(arg(0))),

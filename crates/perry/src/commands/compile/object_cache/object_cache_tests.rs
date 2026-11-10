@@ -43,7 +43,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         imported_classes: Vec::new(),
         constructor_param_counts: Default::default(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -75,6 +74,8 @@ fn empty_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -137,7 +138,12 @@ fn key_changes_with_gc_effects_table() {
             ("other", perry_gc_effects::Class::Reenters, true),
         ]
         .into_iter()
-        .map(|(sym, class, throws)| (sym.to_string(), perry_gc_effects::Entry { class, throws }))
+        .map(|(sym, class, throws)| {
+            (
+                sym.to_string(),
+                perry_gc_effects::Entry::unknown(class, throws),
+            )
+        })
         .collect();
         std::sync::Arc::new(perry_codegen::GcEffects::from_sidecar(&table))
     };
@@ -1455,4 +1461,16 @@ fn namespace_owner_is_part_of_the_object_key() {
         .namespace_source_prefixes
         .insert("ns".into(), "owner".into());
     assert_ne!(before, compute_object_cache_key(&options, 1, "0.5.156"));
+}
+
+#[test]
+fn key_changes_with_module_stack_source_path() {
+    let mut a = empty_opts();
+    let mut b = empty_opts();
+    a.app_metadata.module_source_path = Some("/one/dependency.mts".into());
+    b.app_metadata.module_source_path = Some("/two/dependency.mts".into());
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
+    );
 }

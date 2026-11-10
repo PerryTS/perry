@@ -72,9 +72,10 @@ pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,
     build_default_param_stmts, collect_let_decls_in_stmt, for_head_first_decl_keeps_init_slot,
-    is_inspect_custom_key, is_symbol_iterator_key, lower_well_known_computed_method,
-    mapped_argument_parameter_ids, params_are_simple_arguments_list, params_use_arguments,
-    symbol_well_known_key, with_static_member_context, WellKnownComputedMethod,
+    is_inspect_custom_key, is_symbol_iterator_key, literal_computed_key,
+    lower_well_known_computed_method, mapped_argument_parameter_ids,
+    params_are_simple_arguments_list, params_use_arguments, symbol_well_known_key,
+    with_static_member_context, WellKnownComputedMethod,
 };
 pub(crate) use interface_decl::{
     enter_interface_scope, exit_interface_scope, lower_interface_decl,

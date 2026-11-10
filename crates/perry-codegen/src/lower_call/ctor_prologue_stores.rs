@@ -97,6 +97,43 @@ pub(super) struct PrologueStore {
     pub(super) family_key: Option<String>,
 }
 
+impl PrologueStore {
+    /// Must the stored value pass the plain-finite-number test before this
+    /// store may skip the constructor?
+    ///
+    /// * A raw-`f64` lane holds only plain finite doubles.
+    /// * A `<param> + <literal>` store lowers to one `fadd`, which is JS `+`
+    ///   only when the argument is a Number. The parameter's declared TS
+    ///   `number` type does not make it one: untyped code can pass a string,
+    ///   and `"s" + 1` is `"s1"`, while the `fadd` of a NaN-boxed string
+    ///   keeps the string's bits. A Number argument needs no test when the
+    ///   whole-program facts prove it (a numeric literal, or a local in
+    ///   `facts_number_locals` / `number_by_construction_locals`); any other
+    ///   argument is tested. A non-Number argument is a NaN box, `fadd`
+    ///   propagates a NaN, so the result fails the finite test and the
+    ///   construction takes the ordinary constructor.
+    pub(super) fn requires_number_check(&self, ctx: &FnCtx<'_>, args: &[perry_hir::Expr]) -> bool {
+        self.requires_raw_f64
+            || (self.numeric_addend.is_some()
+                && !addend_operand_is_proven_number(ctx, args.get(self.arg_index)))
+    }
+}
+
+/// The facts prove `arg` a Number (a Number's representation is its raw
+/// double): a numeric literal, or a local the whole-program facts
+/// (`codegen/facts_number_locals.rs`) or its structure
+/// (`number_by_construction_locals`) prove holds only Numbers. Never the
+/// declared type.
+fn addend_operand_is_proven_number(ctx: &FnCtx<'_>, arg: Option<&perry_hir::Expr>) -> bool {
+    match arg {
+        Some(perry_hir::Expr::Number(_) | perry_hir::Expr::Integer(_)) => true,
+        Some(perry_hir::Expr::LocalGet(id)) => {
+            ctx.facts_number_locals.contains(id) || ctx.number_by_construction_locals.contains(id)
+        }
+        _ => false,
+    }
+}
+
 /// Can `new <class_name>(…)` skip its constructor call and store the fields
 /// inline? `Some(plan)` = yes, and `plan` is every store to emit, in source
 /// order; `None` = emit the unchanged call.
@@ -148,7 +185,7 @@ pub(super) fn prologue_store_plan(
         || !class.decorators.is_empty()
         || !class.getters.is_empty()
         || !class.setters.is_empty()
-        || !class.computed_members.is_empty()
+        || class.has_evaluated_members()
         || class.alloc_width_hint != 0
     {
         return None;
@@ -193,6 +230,8 @@ pub(super) fn prologue_store_plan(
             return None;
         }
         let arg_index = *param_slot.get(&param_id)?;
+        // Admission only: the store's correctness rests on
+        // `PrologueStore::requires_number_check`, not on this declared type.
         if numeric_addend.is_some()
             && !matches!(ctor.params[arg_index].ty, perry_hir::types::Type::Number)
         {

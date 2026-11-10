@@ -1,0 +1,1 @@
+Build: remove an unused arena re-export, an unread assignment and an unreferenced runtime helper; keep the raw shape deprecation reader in tests and WASI addon archives behind their consuming configurations.

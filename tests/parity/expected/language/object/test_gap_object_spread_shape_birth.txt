@@ -1,0 +1,16 @@
+before,shared,after 1 0 4
+before,shared,after 1 1 4
+before,shared,after 1 2 4
+9 11 3 5
+true
+visible
+3 5
+7 11 13 1
+3 5 7 keys,descriptor:x,get:x,descriptor:y,get:y,descriptor:z,get:z
+{"0":7,"1":11}
+DEC 250: Cannot add member Object.prototype.spreadInherited: built-in objects are read-only in a compiled program
+19
+538500 40
+50115000 9999 3
+17 5 3 3 2000
+29 1

@@ -1,0 +1,16 @@
+mixed keys [0,2,30,6,8] 5 2.5|-1|NaN|Infinity
+named props 5 -2 -7 Infinity 8589934590
+large index 2147483649 5 2
+hot [4992,4999,4998,4997,4996,4995,4994,4993,99,null,null,null,100] 13 
+set keys [0.5,1.5,2.5,3.5] 4 
+mixed values [null,"two",{"three":3}] 3 
+frozen in-bounds TypeError
+frozen [1,2,3] 3 
+sealed in-bounds stored
+sealed extend TypeError
+sealed [1,50,3] 3 
+setter saw 42
+accessor -1
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+proto setter [1,7,3] true
+objects v19968 v19963 64

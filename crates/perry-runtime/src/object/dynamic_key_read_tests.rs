@@ -135,7 +135,7 @@ fn an_absent_key_is_filed_after_the_get_and_dropped_when_object_prototype_change
     let proto = crate::array::object_prototype_addr();
     assert_ne!(proto, 0, "premise: Object.prototype exists");
     let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
-    set(&proto, &missing, 5.0);
+    crate::object::own_override::as_builtin_definition(|| set(&proto, &missing, 5.0));
     assert_eq!(
         answer(&obj, &missing),
         None,

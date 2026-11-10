@@ -186,6 +186,15 @@ fn comes_from_root_reread(body: &str, value: &str, depth: usize) -> bool {
     if rhs.starts_with("call i64 asm \"\", \"=r,0\"(ptr addrspace(1) ") {
         return true;
     }
+    // `reload_reuse.rs` names an earlier re-read of the same root when nothing
+    // between them can collect; that earlier re-read must itself qualify.
+    if let Some(prev) = rhs
+        .strip_prefix("add i64 ")
+        .and_then(|r| r.strip_suffix(", 0"))
+        .filter(|p| p.ends_with(".rs4o"))
+    {
+        return comes_from_root_reread(body, prev, depth - 1);
+    }
     if ["inttoptr ", "ptrtoint ", "bitcast ", "or ", "and "]
         .iter()
         .any(|op| rhs.starts_with(op))
@@ -422,59 +431,86 @@ fn class_birth_slow_arm_relocates_arguments_and_constructor_relocates_instance()
         // The object allocation is the inline field initializer. Its
         // live set must carry the freshly birthed instance across the body.
         assert_constructor_instance(body);
-        // Negative control: remove only the native stores of the newly born
-        // instance. The birth call remains a statepoint in the control.
-        let pre_body = function_slice(&ir, "main");
-        let instance_phi = pre_body
-            .lines()
-            .find(|l| l.contains(" = phi i64 "))
-            .expect("merged class birth")
-            .trim()
-            .split_once(" = ")
-            .unwrap()
-            .0;
-        let homes: Vec<_> = crate::testing::temp_slots::slot_traffic(pre_body)
-            .keys()
-            .filter(|slot| {
-                let isolated = pre_body
-                    .lines()
-                    .filter(|l| {
-                        !l.trim().starts_with("store ")
-                            || l.contains(&format!(", ptr {slot},"))
-                            || l.trim().ends_with(&format!(", ptr {slot}"))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                crate::testing::temp_slots::slot_holding(&isolated, instance_phi).is_some()
-            })
-            .cloned()
-            .collect();
-        assert!(
-            homes.len() >= 2,
-            "instance temp and inline this must both be rooted:\n{ir}"
+        // The negative control (only the native stores of the newly born
+        // instance removed) keeps the birth call a statepoint; the
+        // constructor assertion rejects it in the tests below.
+        assert_relocated(
+            &without_instance_stores(&ir, target),
+            "perry_birth_class",
+            0,
         );
-        let mut broken = ir.clone();
-        for line in pre_body
-            .lines()
-            .filter(|l| l.trim().starts_with("store ptr addrspace(1) %"))
-        {
-            if homes.iter().any(|home| {
-                line.contains(&format!(", ptr {home},"))
-                    || line.trim().ends_with(&format!(", ptr {home}"))
-            }) {
-                let rest = line.trim().split_once(", ptr ").unwrap().1;
-                broken =
-                    broken.replace(line, &format!("  store ptr addrspace(1) null, ptr {rest}"));
-            }
-        }
-        assert_ne!(broken, ir, "negative control must remove a live root store");
-        let broken =
-            crate::inprocess::statepoint_rewritten_ir(&broken, target, "birth_control").unwrap();
-        let broken_body = function_slice(&broken, "main");
-        assert!(
-            std::panic::catch_unwind(|| assert_constructor_instance(broken_body)).is_err(),
-            "constructor assertion accepted removed instance coverage"
-        );
-        assert_relocated(broken_body, "perry_birth_class", 0);
     }
+}
+
+/// Negative control: `main` of the non-complete fixture `ir` with only the
+/// native stores of the newly born instance removed, statepoint-rewritten for
+/// `target`. The birth call remains a statepoint in the control.
+fn without_instance_stores(ir: &str, target: &str) -> String {
+    let pre_body = function_slice(ir, "main");
+    let instance_phi = pre_body
+        .lines()
+        .find(|l| l.contains(" = phi i64 "))
+        .expect("merged class birth")
+        .trim()
+        .split_once(" = ")
+        .unwrap()
+        .0;
+    let homes: Vec<_> = crate::testing::temp_slots::slot_traffic(pre_body)
+        .keys()
+        .filter(|slot| {
+            let isolated = pre_body
+                .lines()
+                .filter(|l| {
+                    !l.trim().starts_with("store ")
+                        || l.contains(&format!(", ptr {slot},"))
+                        || l.trim().ends_with(&format!(", ptr {slot}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            crate::testing::temp_slots::slot_holding(&isolated, instance_phi).is_some()
+        })
+        .cloned()
+        .collect();
+    assert!(
+        homes.len() >= 2,
+        "instance temp and inline this must both be rooted:\n{ir}"
+    );
+    let mut broken = ir.to_string();
+    for line in pre_body
+        .lines()
+        .filter(|l| l.trim().starts_with("store ptr addrspace(1) %"))
+    {
+        if homes.iter().any(|home| {
+            line.contains(&format!(", ptr {home},"))
+                || line.trim().ends_with(&format!(", ptr {home}"))
+        }) {
+            let rest = line.trim().split_once(", ptr ").unwrap().1;
+            broken = broken.replace(line, &format!("  store ptr addrspace(1) null, ptr {rest}"));
+        }
+    }
+    assert_ne!(broken, ir, "negative control must remove a live root store");
+    let broken =
+        crate::inprocess::statepoint_rewritten_ir(&broken, target, "birth_control").unwrap();
+    function_slice(&broken, "main").to_string()
+}
+
+/// The constructor assertion holds on the fixture and rejects
+/// [`without_instance_stores`] for `target`.
+fn removed_instance_stores_are_rejected(target: &str) {
+    let ir = native_ir(&fixture(false), target, true);
+    let rewritten = crate::inprocess::statepoint_rewritten_ir(&ir, target, "birth_roots").unwrap();
+    assert_constructor_instance(function_slice(&rewritten, "main"));
+    assert_constructor_instance(&without_instance_stores(&ir, target));
+}
+
+#[test]
+#[should_panic(expected = "the constructor lost the birthed instance")]
+fn removed_instance_stores_fail_the_constructor_assertion_on_arm64() {
+    removed_instance_stores_are_rejected(NATIVE_TARGETS[0]);
+}
+
+#[test]
+#[should_panic(expected = "the constructor lost the birthed instance")]
+fn removed_instance_stores_fail_the_constructor_assertion_on_x86_64() {
+    removed_instance_stores_are_rejected(NATIVE_TARGETS[1]);
 }

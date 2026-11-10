@@ -12,11 +12,13 @@ use std::cell::{Cell, RefCell};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
-/// Minimum number of inline field slots every object is allocated with, even
-/// when it has fewer fields. This is a corruption-critical invariant: allocation,
-/// every field get/set bounds check, and every direct-slot read MUST use the
-/// SAME floor, or a write/read past the allocated slots corrupts the heap. It is
-/// centralized here so all sites move in lockstep. (Also mirrored in
+/// Minimum number of inline field slots an ordinary allocation (`js_object_alloc`
+/// and the inline `new`) reserves, even when it has fewer fields. A birth on a
+/// compiler-fixed layout (`object/layout_desc.rs`) has exactly its declared
+/// slots, so no reader may assume the floor: a positional slot read or write is
+/// bounded by the object's own allocation, `object_inline_capacity` (a read
+/// past it walks into the next arena object). It is centralized here so the
+/// allocators move in lockstep. (Also mirrored in
 /// perry-codegen `lower_call/new_alloc.rs` MIN_FIELD_SLOTS for the inline-`new`
 /// path and `expr::inline_slot_floor::INLINE_SLOT_FLOOR` for the emitted bounds
 /// checks; paired by `inline_slot_floor_matches_codegen` here and
@@ -154,6 +156,7 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
+pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -166,6 +169,7 @@ pub(crate) mod builtin_namespace;
 pub mod builtin_proto;
 mod builtin_proto_entries;
 pub mod handle_expando;
+pub(crate) mod http_handle_prototype;
 pub(crate) mod owned_state_bag;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
@@ -229,7 +233,7 @@ pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
 pub(crate) use native_module::{class_instance_has_method, class_method_value_target};
 pub(crate) use native_module::{
-    class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+    class_method_entry_source_func_ptr, class_method_home_id, SYMBOL_BOUND_METHOD_NAME,
 };
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
@@ -240,12 +244,12 @@ pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module.
-pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf, js_nm_install_tls,
-    js_nm_install_util,
-};
 #[cfg(test)]
-pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
+pub(crate) use native_module_registry::js_nm_install_events;
+pub(crate) use native_module_registry::{
+    js_install_global_value_surfaces, js_nm_install_fs, js_nm_install_module, js_nm_install_perf,
+    js_nm_install_process, js_nm_install_tls, js_nm_install_util,
+};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -328,7 +332,7 @@ mod with_env;
 // helpers that lived directly in `object/mod.rs`.
 mod class_meta_registry;
 pub(crate) mod descriptor_state;
-mod this_binding;
+pub(crate) mod this_binding;
 mod to_string_tag;
 pub use alloc::*;
 pub use arguments::*;
@@ -358,6 +362,7 @@ pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
 pub(crate) use global_this_tables::*;
+pub use global_this_tables::BuiltinConstructorIdentity;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
@@ -371,7 +376,8 @@ pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
 pub(crate) use nm_namespace_hooks::{
-    arm_nm_ee_ops, arm_nm_namespace_ops, nm_ee_ops, nm_namespace_ops, NmEeOps, NmNamespaceOps,
+    arm_nm_ee_ops, arm_nm_namespace_ops, nm_delete_member, nm_ee_ops, nm_namespace_ops, NmEeOps,
+    NmMember, NmNamespaceOps,
 };
 pub use object_literal_ops::*;
 pub use object_ops::*;
@@ -416,9 +422,9 @@ pub(crate) use descriptor_state::{
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use field_get_set::private_lexical_brand_depth;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use field_get_set::private_member_access_hints_depth;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -430,7 +436,7 @@ pub(crate) use field_get_set::{
 };
 #[cfg(test)]
 pub(crate) use this_binding::derived_super_scope_push_at;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use this_binding::static_private_owner_depth;
 #[cfg(test)]
 pub(crate) use this_binding::static_private_owner_push_at;
@@ -447,9 +453,12 @@ pub use this_binding::{
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
     js_static_this_resolve_class, js_this_coerce_sloppy,
 };
-pub use to_string_tag::js_object_to_string;
+pub(crate) use to_string_tag::fetch_handle_constructor_value;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
+pub(crate) use to_string_tag::web_stream_interface_name;
+pub use to_string_tag::web_stream_prototype_value;
+pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every
@@ -752,7 +761,7 @@ pub(crate) use keys_lookup::*;
 
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use call_method_depth::call_method_depth;
 #[cfg(test)]
 pub(crate) use call_method_depth::test_enter_catch_method;
@@ -914,7 +923,7 @@ fn shape_cache_insert(
 }
 
 /// Thread-local shape-transition cache for the dynamic-key write path
-/// (`obj[name] = value`). One entry per `(predecessor ShapeId, key_ptr)` edge
+/// (`obj[name] = value`). One entry per `(predecessor ShapeId, key_id)` edge
 /// in the shape lattice.
 ///
 /// When `js_object_set_field_by_name` would otherwise do a linear scan
@@ -925,7 +934,7 @@ fn shape_cache_insert(
 ///
 /// The cache is populated on the slow (append) path: after the scan
 /// confirms the key is new and a new keys_array is built, the
-/// transition `(prev_shape_id, key_ptr) → (target_shape_id, new_keys,
+/// transition `(prev_shape_id, key_id) → (target_shape_id, new_keys,
 /// slot_idx)` is stored
 /// here and `new_keys` is stamped `GC_FLAG_SHAPE_SHARED` so any future
 /// extension clones before mutating (same invariant as the SHAPE_CACHE
@@ -945,7 +954,7 @@ fn shape_cache_insert(
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct TransitionEntry {
-    key_ptr: usize,   // offset 0 — key id: content u64 (len 6..=8) or interned ptr
+    key_id: u64,      // offset 0 — key id: content bytes, interned ptr or spread source
     next_keys: usize, // offset 8 — WEAK target edge (rewritten on move, pruned on death)
     prev_shape_id: LayoutWord, // offset 16
     target_shape_id: LayoutWord, // offset 20 — exact successor learned on the slow path
@@ -953,8 +962,37 @@ pub(crate) struct TransitionEntry {
     target_len: u32,  // offset 28, nonzero when target was validated at insert
 }
 
-// SAFETY: all integer fields; `key_ptr == 0` is the miss (#11507).
+// SAFETY: all integer fields; `key_id == 0` is the miss (#11507).
 unsafe impl crate::zeroed_cache::ZeroEmpty for TransitionEntry {}
+
+impl TransitionEntry {
+    /// The interned key address of a pointer-namespace entry (length marker
+    /// 0), or `None` when the key id is content or a spread source id, which
+    /// are not addresses and must never be classified, rewritten or
+    /// death-tested as one.
+    #[inline(always)]
+    fn interned_key(&self) -> Option<usize> {
+        ((self.slot_idx >> 24) == 0 && self.key_id != 0).then(|| interned_key_addr(self.key_id))
+    }
+}
+
+/// The key id of an interned-pointer key (namespace 0).
+///
+/// A transition key id is a `u64` on every target: the content namespace
+/// packs up to 8 payload bytes, which a 32-bit `usize` cannot hold (wasm32
+/// kept bytes 0..4, so `field_7` and `field_8` shared one id and evicted each
+/// other). An address widens losslessly into it.
+#[inline(always)]
+fn interned_key_id(addr: usize) -> u64 {
+    addr as u64
+}
+
+/// The address a namespace-0 key id holds. Such ids are written only by
+/// [`interned_key_id`], so the narrowing cannot fail.
+#[inline(always)]
+fn interned_key_addr(key_id: u64) -> usize {
+    usize::try_from(key_id).unwrap_or(0)
+}
 
 /// Transition-entry layout and packed-key contract.
 ///
@@ -984,7 +1022,7 @@ pub extern "C" fn js_transition_ic_probe_report() {
 
 const TRANSITION_CACHE_SIZE: usize = 16384;
 crate::perry_thread_local! {
-    /// #9754: transition-cache slots whose `key_ptr` / `next_keys` may still be
+    /// #9754: transition-cache slots whose `key_id` / `next_keys` may still be
     /// acted on by a minor (see `gc/young_log.rs`); a minor-scoped
     /// `scan_transition_cache_roots_mut` visits only these.
     static TRANSITION_CACHE_YOUNG: RefCell<crate::gc::young_log::YoungLog<u32>> =
@@ -999,13 +1037,13 @@ fn transition_entry_is_minor_relevant(entry: &TransitionEntry) -> bool {
     use crate::gc::young_log::addr_is_minor_relevant;
     entry.next_keys != 0
         && (addr_is_minor_relevant(entry.next_keys)
-            || ((entry.slot_idx >> 24) == 0 && addr_is_minor_relevant(entry.key_ptr)))
+            || entry.interned_key().is_some_and(addr_is_minor_relevant))
 }
 
 // Per-thread transition cache (`ObjectHotTables::transition_cache`). Was a
 // process-wide `static mut`, but with `perry/thread` user code allocating
 // objects on worker threads each thread has its own arena — cached
-// `next_keys` / `key_ptr` pointers from another thread are use-after-free
+// `next_keys` / interned key pointers from another thread are use-after-free
 // in our address space. The one-time `#[no_mangle]` exposed the symbol for
 // inline LLVM lookups but a grep across crates/perry-codegen confirms no
 // codegen path ever resolved against it, so the export was dead.
@@ -1103,7 +1141,7 @@ fn key_content_hash_impl(key: *const crate::StringHeader) -> u64 {
 /// payload is always inline at +20 (`string_data`) and a 20+6-byte string
 /// occupies a ≥28-byte cell, so the 8-byte load stays inside the allocation.
 #[inline]
-fn transition_key_id(key: *const crate::StringHeader) -> (usize, u32) {
+fn transition_key_id(key: *const crate::StringHeader) -> (u64, u32) {
     // A null key is part of the insert contract (`transition_edge_places_key`
     // rejects one on lookup); it takes the pointer namespace as id 0, exactly
     // as the pre-#9287 `key_ptr = key as usize` did.
@@ -1119,9 +1157,9 @@ fn transition_key_id(key: *const crate::StringHeader) -> (usize, u32) {
                 w.as_mut_ptr(),
                 blen as usize,
             );
-            (u64::from_le_bytes(w) as usize, blen)
+            (u64::from_le_bytes(w), blen)
         } else {
-            (key as usize, 0)
+            (interned_key_id(key as usize), 0)
         }
     }
 }
@@ -1131,13 +1169,13 @@ const TRANSITION_SLOT_IDX_MASK: u32 = 0x00FF_FFFF;
 /// Hash only stable key properties. The namespace changes how identity is
 /// checked, but an interned address must never select a table slot.
 #[inline(always)]
-fn transition_cache_slot(prev_shape_id: LayoutWord, key_id: usize, namespace: u32) -> usize {
+fn transition_cache_slot(prev_shape_id: LayoutWord, key_id: u64, namespace: u32) -> usize {
     let hash = match namespace {
-        0 => interned_key_slot_hash(key_id),
-        spread::SPREAD_TRANSITION_NAMESPACE => key_id as u64,
+        0 => interned_key_slot_hash(interned_key_addr(key_id)),
+        spread::SPREAD_TRANSITION_NAMESPACE => key_id,
         // Packed keys have no alignment bits. Include the length so a
         // zero-padded shorter name is not forced to alias a longer one.
-        _ => key_id as u64 ^ (u64::from(namespace) << 56),
+        _ => key_id ^ (u64::from(namespace) << 56),
     };
     let mixed = (prev_shape_id.0 as u64).wrapping_mul(TRANSITION_HASH_MUL_SHAPE)
         ^ hash.wrapping_mul(TRANSITION_HASH_MUL_KEY);
@@ -1156,7 +1194,7 @@ fn transition_cache_slot(prev_shape_id: LayoutWord, key_id: usize, namespace: u3
 /// ids, so it moved whenever the id numbering did). The pair now shares a
 /// bucket; lookups probe the primary first, so a primary hit costs the same.
 #[inline(always)]
-fn transition_cache_way(prev_shape_id: u32, kid: usize, len_marker: u32) -> usize {
+fn transition_cache_way(prev_shape_id: u32, kid: u64, len_marker: u32) -> usize {
     let slot = transition_cache_slot(
         crate::codegen_abi::LayoutWord(prev_shape_id),
         kid,
@@ -1167,7 +1205,7 @@ fn transition_cache_way(prev_shape_id: u32, kid: usize, len_marker: u32) -> usiz
             let e = &(*t)[i];
             e.next_keys != 0
                 && e.prev_shape_id == crate::codegen_abi::LayoutWord(prev_shape_id)
-                && e.key_ptr == kid
+                && e.key_id == kid
                 && (e.slot_idx >> 24) == len_marker
         };
         if holds(slot) {
@@ -1286,7 +1324,7 @@ fn transition_cache_lookup(
     let edge_is = |e: &TransitionEntry| {
         e.next_keys != 0
             && e.prev_shape_id == prev_shape_id
-            && e.key_ptr == kid
+            && e.key_id == kid
             && (e.slot_idx >> 24) == len_marker
     };
     // A two-way bucket (`slot`, `slot ^ 1`): see `transition_cache_way`.
@@ -1420,14 +1458,9 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
 /// seam — arm through here, so that distinction cannot be dropped in one and
 /// kept in the other (it was: the seam classified `key_ptr` unconditionally).
 #[inline]
-pub(super) fn arm_transition_cache_young(
-    slot: usize,
-    next_keys: usize,
-    kid: usize,
-    len_marker: u32,
-) {
+pub(super) fn arm_transition_cache_young(slot: usize, next_keys: usize, kid: u64, len_marker: u32) {
     if crate::gc::young_log::addr_is_minor_relevant(next_keys)
-        || (len_marker == 0 && crate::gc::young_log::addr_is_minor_relevant(kid))
+        || (len_marker == 0 && crate::gc::young_log::addr_is_minor_relevant(interned_key_addr(kid)))
     {
         TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
     }
@@ -1482,11 +1515,11 @@ fn transition_cache_insert(
             shape_mint_census::note_transition_insert(
                 entry.next_keys != 0
                     && (entry.prev_shape_id != prev_shape_id
-                        || entry.key_ptr != kid
+                        || entry.key_id != kid
                         || (entry.slot_idx >> 24) != len_marker),
             );
         }
-        entry.key_ptr = kid;
+        entry.key_id = kid;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
         entry.prev_shape_id = prev_shape_id;
         entry.target_shape_id = target_shape_id;
@@ -1958,5 +1991,7 @@ pub(crate) use field_get_set::{
     private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
 };
 
+#[cfg(test)]
+pub(crate) use native_call_method::namespace_override_depth;
 #[cfg(any(test, target_os = "wasi"))]
-pub(crate) use native_call_method::{namespace_override_depth, namespace_override_restore_depth};
+pub(crate) use native_call_method::namespace_override_restore_depth;

@@ -280,7 +280,7 @@ jobs:
           export PERRY_NO_AUTO_OPTIMIZE=1
           BIN=target/perry-dev/perry
           SRC=experiments/llvm-inprocess-spike/spike.ts
-          EH=test-files/test_gap_7302_invoke_eh_paths.ts
+          EH=tests/parity/language/error/test_gap_7302_invoke_eh_paths.ts
           W=/tmp/inproc; mkdir -p "$W"
 
           dump() {
@@ -534,7 +534,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Test the gate's failure paths
-        run: python3 -m unittest discover -s tests -p test_cc_parity_gate.py -v
+        run: python3 -m unittest discover -s tests/tooling/compat -p test_cc_parity_gate.py -v
       - name: Set scratch work directory
         run: echo "CC_PARITY_WORK=$RUNNER_TEMP/cc-parity" >> "$GITHUB_ENV"
       - name: Free simulator runtime disk space
@@ -627,7 +627,7 @@ jobs:
           fi
           files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
             --paginate --jq '.[].filename')
-          if echo "$files" | grep -qE '^(crates/perry-runtime/src/(eh|eh_walker|eh_windows|exception)\.rs$|crates/perry-codegen/src/stmt/|test-files/test_(gap|issue)_7302_|\.cargo/config\.toml$|Cargo\.toml$|\.github/workflows/(eh-transport|compiler-runtime)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)'; then
+          if echo "$files" | grep -qE '^(crates/perry-runtime/src/(eh|eh_walker|eh_windows|exception)\.rs$|crates/perry-codegen/src/stmt/|tests/fixtures/programs/test_(gap|issue)_7302_|\.cargo/config\.toml$|Cargo\.toml$|\.github/workflows/(eh-transport|compiler-runtime)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -690,8 +690,8 @@ jobs:
           # Two subjects: the structural try/catch matrix (nesting, finally
           # on both edges, return-in-try, rethrow) and the GC probe that
           # throws across a collection point.
-          for SRC in test-files/test_gap_7302_invoke_eh_paths.ts \
-                     test-files/test_gap_7302_gc_throw_across_collection.ts; do
+          for SRC in tests/parity/language/error/test_gap_7302_invoke_eh_paths.ts \
+                     tests/parity/language/error/test_gap_7302_gc_throw_across_collection.ts; do
             NAME=$(basename "$SRC" .ts)
             "$BIN" "$SRC" -o "/tmp/$NAME"
 
@@ -737,7 +737,7 @@ jobs:
           # perry/thread, so the oracle here is the system unwinder itself:
           # walker-on must equal walker-off, and diff mode must agree on
           # every worker throw.
-          SRC=test-files/test_issue_7302_thread_throws.ts
+          SRC=tests/fixtures/programs/test_issue_7302_thread_throws.ts
           target/perry-dev/perry "$SRC" -o /tmp/eh_threads
           /tmp/eh_threads > /tmp/eh_threads.on
           PERRY_EH_WALKER=off /tmp/eh_threads > /tmp/eh_threads.off
@@ -766,7 +766,7 @@ jobs:
           # the frames the panic=abort + force-unwind-tables contract exists
           # for; a runtime built without the tables aborts here with the
           # self-check's message instead of stranding the throw silently.
-          SRC=test-files/test_gap_7302_throw_across_helper_frames.ts
+          SRC=tests/parity/language/control-flow/test_gap_7302_throw_across_helper_frames.ts
           target/perry-dev/perry "$SRC" -o /tmp/eh_helpers
           node --experimental-strip-types --no-warnings "$SRC" > /tmp/eh_helpers.node
           /tmp/eh_helpers > /tmp/eh_helpers.perry
@@ -1196,7 +1196,7 @@ jobs:
         run: |
           set -euo pipefail
           # pinned-version.txt holds a git branch name, e.g. "v22.x".
-          node_ref="$(tr -d '[:space:]' < test-compat/node-core/pinned-version.txt)"
+          node_ref="$(tr -d '[:space:]' < tests/compat/node-core/pinned-version.txt)"
           node_version="${node_ref#v}"          # v22.x -> 22.x
           echo "Pinned Node core corpus: $node_ref -> node-version $node_version"
           echo "version=$node_version" >> "$GITHUB_OUTPUT"
@@ -1207,7 +1207,7 @@ jobs:
       - name: Sparse checkout pinned Node.js tests
         run: |
           set -euo pipefail
-          node_ref="$(cat test-compat/node-core/pinned-version.txt)"
+          node_ref="$(cat tests/compat/node-core/pinned-version.txt)"
           git clone --no-checkout --depth 1 --branch "$node_ref" \
             --filter=blob:none https://github.com/nodejs/node vendor/nodejs
           git -C vendor/nodejs sparse-checkout set test/parallel test/common test/fixtures
@@ -1221,7 +1221,7 @@ jobs:
           set -euo pipefail
           args=(
             --root vendor/nodejs
-            --report "test-compat/node-core/report-shard-${{ matrix.shard }}.json"
+            --report "tests/compat/node-core/report-shard-${{ matrix.shard }}.json"
             --max-per-api "$NODE_CORE_MAX_PER_API"
             --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
             --time-budget "$NODE_CORE_TIME_BUDGET"
@@ -1243,7 +1243,7 @@ jobs:
         uses: ./.github/actions/perry/actions/upload-artifact
         with:
           name: node-core-subset-report-shard-${{ matrix.shard }}
-          path: test-compat/node-core/report-shard-${{ matrix.shard }}.json
+          path: tests/compat/node-core/report-shard-${{ matrix.shard }}.json
           if-no-files-found: warn
     needs:
       - route-compatibility
@@ -1302,7 +1302,7 @@ jobs:
           done
           scripts/node_core_subset.py \
             --merge "${reports[@]}" \
-            --report test-compat/node-core/report.json
+            --report tests/compat/node-core/report.json
       - name: Write radar summary
         if: always()
         run: |
@@ -1310,7 +1310,7 @@ jobs:
           import json
           from pathlib import Path
 
-          report_path = Path("test-compat/node-core/report.json")
+          report_path = Path("tests/compat/node-core/report.json")
           print("## Node Core Subset Radar")
           print("")
           if not report_path.exists():
@@ -1347,7 +1347,7 @@ jobs:
         uses: ./.github/actions/perry/actions/upload-artifact
         with:
           name: node-core-subset-report
-          path: test-compat/node-core/report.json
+          path: tests/compat/node-core/report.json
           if-no-files-found: warn
     env:
   # Number of shards. MUST equal the length of `matrix.shard` below — the merge
@@ -1448,7 +1448,7 @@ jobs:
           if [[ -f .feature-matrix/feature_matrix.md ]]; then
             cat .feature-matrix/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
           else
-            cat test-features/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
+            cat tests/features/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload feature matrix artifacts
         if: always()
@@ -1544,7 +1544,7 @@ jobs:
       - name: Runtime ABI check (self-test)
         run: python3 scripts/runtime_abi_check.py --self-test
       - name: WASI runner rejects compile failures, stale outputs and timeouts
-        run: python3 scripts/test_wasi_run.py
+        run: python3 tests/tooling/infrastructure/test_wasi_run.py
       - name: Runtime ABI check (report)
         run: python3 scripts/runtime_abi_check.py
       - name: wasm32 runtime ABI table is current
@@ -1757,7 +1757,7 @@ jobs:
           flags=(
             --perry-bin "$GITHUB_WORKSPACE/target/release/perry"
             --out-dir .npm-sweep-results
-            --history test-compat/npm-sweep-history.csv
+            --history tests/compat/npm-sweep-history.csv
             --limit "${SWEEP_LIMIT:-6}"
           )
           if [[ -n "${SWEEP_PACKAGES:-}" ]]; then
@@ -1768,11 +1768,11 @@ jobs:
           fi
 
           set +e
-          python3 test-compat/npm-sweep/run.py "${flags[@]}"
+          python3 tests/compat/npm-sweep/run.py "${flags[@]}"
           sweep_rc=$?
           set -e
 
-          cp test-compat/npm-sweep-history.csv .npm-sweep-results/npm-sweep-history.csv
+          cp tests/compat/npm-sweep-history.csv .npm-sweep-results/npm-sweep-history.csv
           cat .npm-sweep-results/summary.md >> "$GITHUB_STEP_SUMMARY"
           exit "$sweep_rc"
       - name: Upload sweep artifacts
@@ -2441,15 +2441,16 @@ jobs:
         run: |
           cargo build-perry --profile perry-dev
           scripts/gc_call_effects/sidecars.sh target/perry-dev
+      - name: Install the npm packages the parity oracle resolves
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Focused four-store continuation parity
         env:
           PERRY_BIN: target/perry-dev/perry
           PERRY_RUNTIME_DIR: target/perry-dev
-          PERRY_SKIP_BUILD: "1"
         run: >-
-          ./run_parity_tests.sh --suite node-suite --module async_hooks --filter next-route-continuations
+          python3 scripts/parity.py run tests/parity/node-suite/async_hooks/propagation/next-route-continuations.ts --mode fast
       - name: Production App Route provider gate
-        run: tests/test_next_app_route_dylib.sh
+        run: tests/integration/test_next_app_route_dylib.sh
     needs:
       - route-integration
     if: ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['next-app-route'] }}

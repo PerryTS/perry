@@ -31,12 +31,518 @@ use perry_hir::Expr;
 
 use super::FnCtx;
 
+/// The receiver of a run of case2c accesses. `this` names the
+/// receiver of the frame being lowered (an inline constructor body is a frame
+/// of its own); a local names the value it holds until it is written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RunReceiver {
+    This(usize),
+    Local(perry_hir::types::LocalId),
+}
+
+/// The run receiver `object` names, if any.
+pub(crate) fn run_receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<RunReceiver> {
+    match object {
+        Expr::This => Some(RunReceiver::This(ctx.inline_ctor_return.len())),
+        Expr::LocalGet(id) => Some(RunReceiver::Local(*id)),
+        _ => None,
+    }
+}
+
+/// A receiver run in flight (`FnCtx::recv_run`). The run's first
+/// access (its head) is the ordinary 2c site; at its merge `ok` is true
+/// exactly when that access took the hit path, and `rec` is then the
+/// receiver's layout record. Every later access of the same receiver, with no
+/// call and no other store in between (`call_epoch`, `RunTransparency`),
+/// tests its key's bit in `rec` and the slot's hole, and nothing else: the
+/// receiver's layout cannot have changed, since only a call or a store can
+/// change it. Any miss takes the ordinary site and clears `ok` for the rest
+/// of the run. Nothing outlives the lowering of the run: no state is kept at
+/// run time beyond these SSA values.
+#[derive(Clone, Debug)]
+pub(crate) struct RecvRun {
+    receiver: RunReceiver,
+    ok: String,
+    rec: String,
+    /// The receiver's biased payload, valid wherever `ok` holds: no call
+    /// that may collect sits between it and an access of the run (the call
+    /// epoch), and a cold arm's re-proof re-derives it after its calls.
+    biased: String,
+    /// The mask word the run's proofs test ([`MaskTest`]).
+    test: MaskTest,
+    epoch: u64,
+    block: usize,
+    /// A store of the run proved the object carries no metadata record.
+    meta_ok: bool,
+    /// A cold arm's re-proof the run waits on ([`ColdSpan`]), emitted when an
+    /// access first follows.
+    pending: Option<Box<Pending>>,
+}
+
+/// The mask word a run's proofs test (the record offset of the colour or
+/// store mask word) and every proof feeding the run's `ok`: the head's test
+/// and each emitted cold-arm re-proof. Each proof is `and word, C` + `icmp
+/// eq C`; a follower whose bit lies in this word ORs it into `C` of every
+/// proof and tests no bit of its own, so `ok` implies every follower's bit.
+/// A proof made stricter only sends more accesses to their ordinary sites.
+#[derive(Clone, Debug)]
+pub(crate) struct MaskTest {
+    word_offset: usize,
+    proofs: Vec<ProofRef>,
+}
+
+/// One proof's `and` and `icmp` (see [`MaskTest`]), in block `block`.
+#[derive(Clone, Debug)]
+struct ProofRef {
+    block: usize,
+    and: String,
+    icmp: String,
+}
+
+/// The offset of the mask word holding `bit` in a record mask at
+/// `mask_offset`.
+fn mask_word_offset(mask_offset: usize, bit: u32) -> usize {
+    mask_offset + 8 * (bit / 64) as usize
+}
+
+/// Emit a proof (`and word, C` + `icmp eq C`, `C` = `mask`) of the record
+/// `rec`'s mask word at `word_offset`, in the current block.
+fn emit_proof(ctx: &mut FnCtx<'_>, rec: &str, word_offset: usize, mask: u64) -> (String, ProofRef) {
+    let blk = ctx.block();
+    let at = blk.gep(I8, rec, &[(I64, &word_offset.to_string())]);
+    let word = blk.load(I64, &at);
+    let c = (mask as i64).to_string();
+    let and = blk.and(I64, &word, &c);
+    let icmp = blk.icmp_eq(I64, &and, &c);
+    (
+        icmp.clone(),
+        ProofRef {
+            block: ctx.current_block,
+            and,
+            icmp,
+        },
+    )
+}
+
+/// Add the bit of a follower at `word_offset` to every proof of `test`.
+/// Returns false (nothing changed) when the follower's bit lies in another
+/// word or the run has no proof to strengthen: it tests its own bit.
+fn fold_follower_bit(ctx: &mut FnCtx<'_>, test: &MaskTest, word_offset: usize, bit: u32) -> bool {
+    if test.word_offset != word_offset || test.proofs.is_empty() {
+        return false;
+    }
+    let add = 1u64 << (bit % 64);
+    for p in &test.proofs {
+        let blk = ctx.func.block_mut(p.block).expect("run proof block");
+        let c = blk
+            .operand_b(&p.and)
+            .and_then(|c| c.parse::<i64>().ok())
+            .expect("run proof `and` with a constant mask") as u64;
+        let c = ((c | add) as i64).to_string();
+        let ok = blk.set_operand_b(&p.and, &c) && blk.set_operand_b(&p.icmp, &c);
+        debug_assert!(ok);
+    }
+    true
+}
+
+/// What lowering an expression does to the receiver run in flight
+/// (`dispatch::lower_expr`, on both sides of the expression).
+pub(crate) enum RunTransparency {
+    /// Runs no user code and writes no object except through a call (which
+    /// ends the run at its emission) or a 2c access of its own.
+    Transparent,
+    /// A by-name store: the run goes on only when the store was a 2c member
+    /// (`FnCtx::recv_run_store_member`).
+    Store,
+    /// Writes a local: ends the run on that local.
+    LocalWrite(perry_hir::types::LocalId),
+    /// Anything else ends the run, before and after it.
+    Opaque,
+}
+
+pub(crate) fn run_transparency(e: &Expr) -> RunTransparency {
+    match e {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::LocalGet(_)
+        | Expr::This
+        | Expr::Binary { .. }
+        | Expr::Compare { .. }
+        | Expr::Unary { .. }
+        | Expr::PropertyGet { .. }
+        | Expr::Sequence(_) => RunTransparency::Transparent,
+        Expr::PropertySet { .. } | Expr::PutValueSet { .. } => RunTransparency::Store,
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => RunTransparency::LocalWrite(*id),
+        _ => RunTransparency::Opaque,
+    }
+}
+
+/// End the receiver run in flight.
+pub(crate) fn end_run(ctx: &mut FnCtx<'_>) {
+    ctx.recv_run = None;
+}
+
+/// [`run_transparency`] before lowering `e`.
+pub(crate) fn run_enter(ctx: &mut FnCtx<'_>, t: &RunTransparency) {
+    match t {
+        RunTransparency::Opaque => end_run(ctx),
+        RunTransparency::Store => ctx.recv_run_store_member = false,
+        _ => {}
+    }
+}
+
+/// [`run_transparency`] after lowering `e`.
+pub(crate) fn run_exit(ctx: &mut FnCtx<'_>, t: &RunTransparency) {
+    match t {
+        RunTransparency::Opaque => end_run(ctx),
+        RunTransparency::Store => {
+            if !std::mem::take(&mut ctx.recv_run_store_member) {
+                end_run(ctx);
+            }
+        }
+        RunTransparency::LocalWrite(id) => {
+            if ctx
+                .recv_run
+                .as_ref()
+                .is_some_and(|r| r.receiver == RunReceiver::Local(*id))
+            {
+                end_run(ctx);
+            }
+        }
+        RunTransparency::Transparent => {}
+    }
+}
+
+/// The run of `receiver` that an access at the current block follows, if
+/// any: its pending re-proofs are emitted now.
+fn live_run(ctx: &mut FnCtx<'_>, receiver: RunReceiver) -> Option<RecvRun> {
+    let mut run = run_continues(ctx, receiver)?;
+    if let Some(p) = run.pending.take() {
+        let word_offset = run.test.word_offset;
+        let mut proofs = Vec::new();
+        emit_pending(ctx, *p, word_offset, &mut proofs);
+        run.test.proofs.extend(proofs);
+        if let Some(r) = ctx.recv_run.as_mut() {
+            r.pending = None;
+            r.test = run.test.clone();
+        }
+    }
+    Some(run)
+}
+
+/// The run of `receiver` that continues at the current block, if any.
+fn run_continues(ctx: &mut FnCtx<'_>, receiver: RunReceiver) -> Option<RecvRun> {
+    let run = ctx.recv_run.clone()?;
+    if run.receiver != receiver || run.epoch != ctx.block().call_epoch() {
+        return None;
+    }
+    if run.block != ctx.current_block
+        && !ctx
+            .func
+            .proof_dominates_block_end(&run.ok, ctx.current_block)
+    {
+        return None;
+    }
+    Some(run)
+}
+
+/// The run an access leaves behind, completed at its merge ([`finish_run`]).
+struct RunOut {
+    receiver: RunReceiver,
+    rec: String,
+    biased: String,
+    test: MaskTest,
+    head: bool,
+    meta_ok: bool,
+}
+
+/// At an access's merge (the current block), whose hit ended in `hit_label`
+/// and whose ordinary site ended in `site_label`: the run that follows.
+fn finish_run(ctx: &mut FnCtx<'_>, out: RunOut, hit_label: &str, site_label: &str) {
+    let blk = ctx.block();
+    let ok = blk.phi(
+        crate::types::I1,
+        &[("true", hit_label), ("false", site_label)],
+    );
+    let rec = if out.head {
+        blk.phi(PTR, &[(out.rec.as_str(), hit_label), ("null", site_label)])
+    } else {
+        out.rec
+    };
+    let epoch = ctx.block().call_epoch();
+    ctx.recv_run = Some(RecvRun {
+        receiver: out.receiver,
+        ok,
+        rec,
+        biased: out.biased,
+        test: out.test,
+        meta_ok: out.meta_ok,
+        epoch,
+        block: ctx.current_block,
+        pending: None,
+    });
+}
+
+/// A receiver run in flight across a construct whose calls sit only on its
+/// cold arm: a guarded add's dynamic arm. The hot arm emits no call, so the
+/// run's proof holds at its end. The cold arm's calls may run user code that
+/// changes the receiver's layout, so the run goes on past the merge only
+/// when the cold arm re-runs the head's record test after them. That
+/// re-proof is lazy ([`Pending`]): the cold arm hands off through two empty
+/// blocks, and the merge's `ok` takes `false` from the cold arm, until an
+/// access of the run follows ([`live_run`]). A run nothing follows costs
+/// nothing, not even the receiver's liveness across the cold call.
+pub(crate) struct ColdSpan {
+    run: RecvRun,
+    hot_clean: bool,
+}
+
+/// The run that is live at the construct's branch (the current block). Its
+/// own pending re-proof stays pending.
+pub(crate) fn cold_span(ctx: &mut FnCtx<'_>) -> Option<ColdSpan> {
+    let receiver = ctx.recv_run.as_ref()?.receiver;
+    run_continues(ctx, receiver).map(|run| ColdSpan {
+        run,
+        hot_clean: false,
+    })
+}
+
+/// At the end of the construct's hot arm: the run goes on only when the arm
+/// emitted no call.
+pub(crate) fn cold_hot_end(ctx: &mut FnCtx<'_>, span: &mut ColdSpan) {
+    span.hot_clean = ctx.block().call_epoch() == span.run.epoch;
+}
+
+/// The cold arm's hand-off blocks (`l2c.reprove`, `l2c.reprove.fin`).
+pub(crate) struct Reproof {
+    obj_box: String,
+    read: StashedRead,
+    reprove: usize,
+    fin: usize,
+}
+
+/// At the end of the construct's cold arm, after its calls: the two empty
+/// blocks the re-proof fills when an access follows, and the receiver's read
+/// (a local no write has touched, since a write ends the run, or the frame's
+/// `this`). The read is lowered here, where it belongs, but its instructions
+/// are kept off the block ([`StashedRead`]) until the re-proof is emitted:
+/// an unused run leaves no read of the receiver after the cold call, so the
+/// receiver is not kept live across it. A read whose lowering branches stays
+/// in place (its blocks are already wired). Leaves the current block at
+/// `l2c.reprove.fin`, from which the caller branches to the merge.
+pub(crate) fn cold_reprove(
+    ctx: &mut FnCtx<'_>,
+    span: &ColdSpan,
+) -> anyhow::Result<Option<Reproof>> {
+    if !span.hot_clean {
+        return Ok(None);
+    }
+    let object = match span.run.receiver {
+        RunReceiver::This(_) => Expr::This,
+        RunReceiver::Local(id) => Expr::LocalGet(id),
+    };
+    let mut reprove = ctx.new_block("l2c.reprove");
+    let reprove_label = ctx.block_label(reprove);
+    ctx.block().br(&reprove_label);
+    ctx.current_block = reprove;
+    let obj_box = crate::expr::lower_expr(ctx, &object)?;
+    let read = if ctx.current_block == reprove && !ctx.block().is_terminated() {
+        StashedRead(std::mem::take(ctx.block().insts_mut()))
+    } else {
+        reprove = ctx.new_block("l2c.reprove");
+        let reprove_label = ctx.block_label(reprove);
+        ctx.block().br(&reprove_label);
+        ctx.current_block = reprove;
+        StashedRead(Vec::new())
+    };
+    let fin = ctx.new_block("l2c.reprove.fin");
+    let fin_label = ctx.block_label(fin);
+    ctx.block().br(&fin_label);
+    ctx.current_block = fin;
+    Ok(Some(Reproof {
+        obj_box,
+        read,
+        reprove,
+        fin,
+    }))
+}
+
+/// The receiver read of a lazy re-proof, lowered at the cold arm's end and
+/// placed at the head of `l2c.reprove` when the re-proof is emitted.
+#[derive(Clone)]
+pub(crate) struct StashedRead(Vec<crate::inst::LlInst>);
+
+impl std::fmt::Debug for StashedRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StashedRead({} insts)", self.0.len())
+    }
+}
+
+/// At the construct's merge (the current block), whose hot arm ended in
+/// `hot_label`: the run that follows, if the cold arm hands off a re-proof.
+pub(crate) fn cold_merge(
+    ctx: &mut FnCtx<'_>,
+    span: ColdSpan,
+    hot_label: &str,
+    reproof: Option<Reproof>,
+) {
+    let Some(rp) = reproof else {
+        return;
+    };
+    let fin_label = ctx.block_label(rp.fin);
+    let blk = ctx.block();
+    let ok = blk.phi(
+        crate::types::I1,
+        &[
+            (span.run.ok.as_str(), hot_label),
+            ("false", fin_label.as_str()),
+        ],
+    );
+    let rec = blk.phi(
+        PTR,
+        &[
+            (span.run.rec.as_str(), hot_label),
+            ("null", fin_label.as_str()),
+        ],
+    );
+    let biased = blk.phi(
+        I64,
+        &[
+            (span.run.biased.as_str(), hot_label),
+            ("0", fin_label.as_str()),
+        ],
+    );
+    let epoch = ctx.block().call_epoch();
+    ctx.recv_run = Some(RecvRun {
+        receiver: span.run.receiver,
+        ok: ok.clone(),
+        rec: rec.clone(),
+        biased: biased.clone(),
+        test: span.run.test,
+        // The cold arm may have given the object a metadata record.
+        meta_ok: false,
+        epoch,
+        block: ctx.current_block,
+        pending: Some(Box::new(Pending {
+            obj_box: rp.obj_box,
+            read: rp.read,
+            reprove: rp.reprove,
+            fin: rp.fin,
+            merge: ctx.current_block,
+            ok,
+            rec,
+            biased,
+            prev: span.run.pending,
+        })),
+    });
+}
+
+/// A cold arm's re-proof not yet emitted ([`ColdSpan`]): its receiver read,
+/// its empty blocks, the merge whose `ok`/`rec` phis take `false`/`null`
+/// from `fin` until it is, and the pending re-proof of the run the
+/// construct's hot arm carried (its merge phis feed this one's hot edge).
+#[derive(Clone, Debug)]
+pub(crate) struct Pending {
+    obj_box: String,
+    read: StashedRead,
+    reprove: usize,
+    fin: usize,
+    merge: usize,
+    ok: String,
+    rec: String,
+    biased: String,
+    prev: Option<Box<Pending>>,
+}
+
+/// Emit `p`'s re-proof (and the ones it carries): the receiver's read and record,
+/// tested exactly as the run's head tests it (an object, a layout word
+/// naming a record), in `l2c.reprove`; its `ok`/`rec` phis in
+/// `l2c.reprove.fin`; and the merge's phis take them from `fin`.
+fn emit_pending(ctx: &mut FnCtx<'_>, p: Pending, word_offset: usize, proofs: &mut Vec<ProofRef>) {
+    if let Some(prev) = p.prev {
+        emit_pending(ctx, *prev, word_offset, proofs);
+    }
+    let saved = ctx.current_block;
+    let fin_label = ctx.block_label(p.fin);
+    ctx.current_block = p.reprove;
+    let reopened = ctx.block().reopen_br();
+    debug_assert_eq!(reopened.as_deref(), Some(fin_label.as_str()));
+    ctx.block().insts_mut().extend(p.read.0);
+    let bits = ctx.block().bitcast_double_to_i64(&p.obj_box);
+    let word_idx = ctx.new_block("l2c.reprove.word");
+    let none_idx = ctx.new_block("l2c.reprove.none");
+    let word_label = ctx.block_label(word_idx);
+    let none_label = ctx.block_label(none_idx);
+    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &word_label, &none_label);
+    ctx.current_block = word_idx;
+    let rec = emit_record(ctx, &recv.biased, &none_label);
+    // The run's followers fold their bits into this proof (`MaskTest`).
+    let (holds, proof) = emit_proof(ctx, &rec, word_offset, 0);
+    proofs.push(proof);
+    let rec_label = ctx.block_label(ctx.current_block);
+    ctx.block().br(&fin_label);
+    ctx.current_block = none_idx;
+    ctx.block().br(&fin_label);
+    ctx.current_block = p.fin;
+    let merge_label = ctx
+        .block()
+        .reopen_br()
+        .expect("l2c.reprove.fin ends in its br to the merge");
+    let blk = ctx.block();
+    let ok = blk.phi(
+        crate::types::I1,
+        &[
+            (holds.as_str(), rec_label.as_str()),
+            ("false", none_label.as_str()),
+        ],
+    );
+    let rec = blk.phi(
+        PTR,
+        &[
+            (rec.as_str(), rec_label.as_str()),
+            ("null", none_label.as_str()),
+        ],
+    );
+    blk.br(&merge_label);
+    let merge = ctx.func.block_mut(p.merge).expect("re-proof merge block");
+    let set_ok = merge.set_phi_incoming(&p.ok, &fin_label, &ok);
+    let set_rec = merge.set_phi_incoming(&p.rec, &fin_label, &rec);
+    // `l2c.reprove` dominates `fin`: its biased payload is valid there.
+    let set_biased = merge.set_phi_incoming(&p.biased, &fin_label, &recv.biased);
+    debug_assert!(set_ok && set_rec && set_biased);
+    ctx.current_block = saved;
+}
+
+/// The test of `bit` in the record `rec`'s mask at `mask_offset`.
+fn emit_record_bit(
+    blk: &mut crate::block::LlBlock,
+    rec: &str,
+    bit: u32,
+    mask_offset: usize,
+) -> String {
+    let mask_at = blk.gep(
+        I8,
+        rec,
+        &[(I64, &(mask_offset + 8 * (bit / 64) as usize).to_string())],
+    );
+    let mask_word = blk.load(I64, &mask_at);
+    let bit_value = blk.and(I64, &mask_word, &((1u64 << (bit % 64)) as i64).to_string());
+    blk.icmp_ne(I64, &bit_value, "0")
+}
+
 /// An emitted 2c arm: its hit value and the block it was produced in. The
 /// current block, on return from [`begin`], is the miss path.
 pub(crate) struct LayoutRead {
     hit_value: String,
     hit_label: String,
     merge_idx: usize,
+    run: Option<RunOut>,
 }
 
 /// The (mask bit, slot) when `property` is read through the 2c arm.
@@ -52,29 +558,10 @@ pub(crate) fn admitted(ctx: &FnCtx<'_>, property: &str) -> Option<(u32, u32)> {
     ctx.program_layouts.colored(property)
 }
 
-/// The record mask word of `bit` for the receiver whose biased payload is
-/// `biased`, in the current block, branching to `miss_label` when the
-/// receiver's layout word names no record. Leaves the current block at the
-/// mask test's true edge and returns the loaded mask word's test result.
-fn emit_mask_test(
-    ctx: &mut FnCtx<'_>,
-    biased: &str,
-    bit: u32,
-    miss_label: &str,
-    mask_offset: usize,
-) -> String {
-    emit_mask_test_record(ctx, biased, bit, miss_label, mask_offset).0
-}
-
-/// [`emit_mask_test`], also returning the record's address (valid in the
-/// block it leaves).
-fn emit_mask_test_record(
-    ctx: &mut FnCtx<'_>,
-    biased: &str,
-    bit: u32,
-    miss_label: &str,
-    mask_offset: usize,
-) -> (String, String) {
+/// The layout record of the receiver whose biased payload is `biased`, in the
+/// current block, branching to `miss_label` when its layout word names no
+/// record. Leaves the current block at the record's block.
+fn emit_record(ctx: &mut FnCtx<'_>, biased: &str, miss_label: &str) -> String {
     let blk = ctx.block();
     let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, biased, 4);
     let word = blk.load(I32, &word_ptr);
@@ -121,58 +608,89 @@ fn emit_mask_test_record(
         &rel64,
         &crate::runtime_abi::SHAPE_RECORD_SIZE.to_string(),
     );
-    let rec = blk.gep(I8, &base, &[(I64, &offset)]);
-    let mask_at = blk.gep(
-        I8,
-        &rec,
-        &[(I64, &(mask_offset + 8 * (bit / 64) as usize).to_string())],
-    );
-    let mask_word = blk.load(I64, &mask_at);
-    let bit_value = blk.and(I64, &mask_word, &((1u64 << (bit % 64)) as i64).to_string());
-    (blk.icmp_ne(I64, &bit_value, "0"), rec)
+    blk.gep(I8, &base, &[(I64, &offset)])
 }
 
 /// Emit the 2c arm for `receiver_bits.property` if the key is coloured.
 /// On `Some`, the caller lowers its ordinary site in the current block (the
-/// miss path) and passes its value to [`finish`].
+/// miss path) and passes its value to [`finish`]. A read of `receiver`'s run
+/// in flight ([`RecvRun`]) is the run's follower: its bit and its hole.
 pub(crate) fn begin(
     ctx: &mut FnCtx<'_>,
     receiver_bits: &str,
     property: &str,
+    receiver: Option<RunReceiver>,
 ) -> Option<LayoutRead> {
     let (bit, slot) = admitted(ctx, property)?;
-    crate::expr::note_site("case2c");
     let header =
         crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
-    let word_idx = ctx.new_block("l2c.word");
+    let follow = receiver.and_then(|r| live_run(ctx, r));
     let load_idx = ctx.new_block("l2c.load");
     let hit_idx = ctx.new_block("l2c.hit");
     let miss_idx = ctx.new_block("l2c.miss");
     let merge_idx = ctx.new_block("l2c.merge");
-    let word_label = ctx.block_label(word_idx);
     let load_label = ctx.block_label(load_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
 
-    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
-    ctx.block()
-        .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
-
-    ctx.current_block = word_idx;
-    let holds = emit_mask_test(
-        ctx,
-        &recv.biased,
-        bit,
-        &miss_label,
-        crate::runtime_abi::SHAPE_RECORD_COLOUR_MASK,
-    );
-    ctx.block().cond_br(&holds, &load_label, &miss_label);
+    let (biased, run) = match follow {
+        Some(run) => {
+            crate::expr::note_site("case2c-run-follow");
+            let mask = crate::runtime_abi::SHAPE_RECORD_COLOUR_MASK;
+            if fold_follower_bit(ctx, &run.test, mask_word_offset(mask, bit), bit) {
+                ctx.block().cond_br(&run.ok, &load_label, &miss_label);
+            } else {
+                let check_idx = ctx.new_block("l2c.follow");
+                let check_label = ctx.block_label(check_idx);
+                ctx.block().cond_br(&run.ok, &check_label, &miss_label);
+                ctx.current_block = check_idx;
+                let holds = emit_record_bit(ctx.block(), &run.rec, bit, mask);
+                ctx.block().cond_br(&holds, &load_label, &miss_label);
+            }
+            let biased = run.biased.clone();
+            let out = RunOut {
+                receiver: run.receiver,
+                rec: run.rec,
+                biased: run.biased,
+                test: run.test,
+                head: false,
+                meta_ok: run.meta_ok,
+            };
+            (biased, Some(out))
+        }
+        None => {
+            crate::expr::note_site("case2c");
+            let word_idx = ctx.new_block("l2c.word");
+            let word_label = ctx.block_label(word_idx);
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+            ctx.current_block = word_idx;
+            let word_offset = mask_word_offset(crate::runtime_abi::SHAPE_RECORD_COLOUR_MASK, bit);
+            let rec = emit_record(ctx, &recv.biased, &miss_label);
+            let (holds, proof) = emit_proof(ctx, &rec, word_offset, 1u64 << (bit % 64));
+            ctx.block().cond_br(&holds, &load_label, &miss_label);
+            let out = receiver.map(|receiver| RunOut {
+                receiver,
+                rec,
+                biased: recv.biased.clone(),
+                test: MaskTest {
+                    word_offset,
+                    proofs: vec![proof],
+                },
+                head: true,
+                meta_ok: false,
+            });
+            (recv.biased, out)
+        }
+    };
 
     ctx.current_block = load_idx;
     let blk = ctx.block();
     let value_ptr = crate::expr::receiver_range::emit_field_ptr(
         blk,
-        &recv.biased,
+        &biased,
         (header + 8 * slot as u64) as i64,
     );
     let value = blk.load(I64, &value_ptr);
@@ -191,6 +709,7 @@ pub(crate) fn begin(
         hit_value,
         hit_label: hit_label_now,
         merge_idx,
+        run,
     })
 }
 
@@ -201,19 +720,24 @@ pub(crate) fn finish(ctx: &mut FnCtx<'_>, arm: LayoutRead, generic: &str) -> Str
     let generic_label = ctx.block_label(ctx.current_block);
     ctx.block().br(&merge_label);
     ctx.current_block = arm.merge_idx;
-    ctx.block().phi(
+    let value = ctx.block().phi(
         DOUBLE,
         &[
             (arm.hit_value.as_str(), arm.hit_label.as_str()),
             (generic, generic_label.as_str()),
         ],
-    )
+    );
+    if let Some(out) = arm.run {
+        finish_run(ctx, out, &arm.hit_label, &generic_label);
+    }
+    value
 }
 
 /// An emitted 2c store arm (see [`begin_store`]).
 pub(crate) struct LayoutStore {
     hit_label: String,
     merge_idx: usize,
+    run: Option<RunOut>,
 }
 
 /// The store form of the 2c site for a coloured key: the receiver's layout
@@ -223,7 +747,9 @@ pub(crate) struct LayoutStore {
 /// the slot is present; then the assignment is one store plus the write
 /// barrier's bookkeeping. On `Some`, the caller lowers its ordinary store
 /// site in the current block (the miss path) and passes its value to
-/// [`finish_store`].
+/// [`finish_store`]. A store of `receiver`'s run in flight ([`RecvRun`]) is
+/// the run's follower: its bit (and lane), the metadata word once per run,
+/// and its hole.
 pub(crate) fn begin_store(
     ctx: &mut FnCtx<'_>,
     receiver_bits: &str,
@@ -231,39 +757,82 @@ pub(crate) fn begin_store(
     value_double: &str,
     value_bits: &str,
     value_is_scalar: bool,
+    receiver: Option<RunReceiver>,
 ) -> Option<LayoutStore> {
     let (bit, slot) = admitted(ctx, property)?;
-    crate::expr::note_site("case2c-store");
     let header =
         crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
-    let word_idx = ctx.new_block("l2s.word");
-    let meta_idx = ctx.new_block("l2s.meta");
+    let follow = receiver.and_then(|r| live_run(ctx, r));
     let load_idx = ctx.new_block("l2s.load");
     let hit_idx = ctx.new_block("l2s.hit");
     let miss_idx = ctx.new_block("l2s.miss");
     let merge_idx = ctx.new_block("l2s.merge");
-    let word_label = ctx.block_label(word_idx);
-    let meta_label = ctx.block_label(meta_idx);
     let load_label = ctx.block_label(load_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
-    ctx.block()
-        .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+    let (biased, rec, holds, need_meta, run) = match follow {
+        Some(run) => {
+            crate::expr::note_site("case2c-run-follow");
+            let check_idx = ctx.new_block("l2s.follow");
+            let check_label = ctx.block_label(check_idx);
+            ctx.block().cond_br(&run.ok, &check_label, &miss_label);
+            ctx.current_block = check_idx;
+            let mask = crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK;
+            let holds = if fold_follower_bit(ctx, &run.test, mask_word_offset(mask, bit), bit) {
+                "true".to_string()
+            } else {
+                emit_record_bit(ctx.block(), &run.rec, bit, mask)
+            };
+            let need_meta = !run.meta_ok;
+            let biased = run.biased.clone();
+            let out = RunOut {
+                receiver: run.receiver,
+                rec: run.rec.clone(),
+                biased: run.biased,
+                test: run.test,
+                head: false,
+                meta_ok: true,
+            };
+            (biased, run.rec, holds, need_meta, Some(out))
+        }
+        None => {
+            crate::expr::note_site("case2c-store");
+            let word_idx = ctx.new_block("l2s.word");
+            let word_label = ctx.block_label(word_idx);
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+            ctx.current_block = word_idx;
+            let word_offset =
+                mask_word_offset(crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK, bit);
+            let rec = emit_record(ctx, &recv.biased, &miss_label);
+            let (holds, proof) = emit_proof(ctx, &rec, word_offset, 1u64 << (bit % 64));
+            let out = receiver.map(|receiver| RunOut {
+                receiver,
+                rec: rec.clone(),
+                biased: recv.biased.clone(),
+                test: MaskTest {
+                    word_offset,
+                    proofs: vec![proof],
+                },
+                head: true,
+                meta_ok: true,
+            });
+            (recv.biased, rec, holds, true, out)
+        }
+    };
+    let meta_idx = need_meta.then(|| ctx.new_block("l2s.meta"));
+    let after_lane = match meta_idx {
+        Some(idx) => ctx.block_label(idx),
+        None => load_label.clone(),
+    };
 
-    ctx.current_block = word_idx;
-    let (holds, rec) = emit_mask_test_record(
-        ctx,
-        &recv.biased,
-        bit,
-        &miss_label,
-        crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK,
-    );
     if slot >= crate::runtime_abi::SHAPE_REP_SLOTS {
         // A slot past the lane word is `Any`: the mask is the whole proof.
-        ctx.block().cond_br(&holds, &meta_label, &miss_label);
+        ctx.block().cond_br(&holds, &after_lane, &miss_label);
     } else {
         // The mask admits an `Any` or an `F64` lane. A plain double fits
         // either; anything else needs the record's lane for this slot to be
@@ -281,7 +850,7 @@ pub(crate) fn begin_store(
             blk,
             &stored_bits,
         );
-        blk.cond_br(&plain, &meta_label, &rep_label);
+        blk.cond_br(&plain, &after_lane, &rep_label);
 
         ctx.current_block = rep_idx;
         let blk = ctx.block();
@@ -294,23 +863,25 @@ pub(crate) fn begin_store(
         let lane = blk.lshr(I64, &rep, &(2 * slot).to_string());
         let lane = blk.and(I64, &lane, "3");
         let any = blk.icmp_eq(I64, &lane, "0");
-        blk.cond_br(&any, &meta_label, &miss_label);
+        blk.cond_br(&any, &after_lane, &miss_label);
     }
 
     // `ObjectHeader.meta` is the header's last word.
-    ctx.current_block = meta_idx;
-    let blk = ctx.block();
-    let meta_ptr =
-        crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, (header - 8) as i64);
-    let meta = blk.load(I64, &meta_ptr);
-    let plain = blk.icmp_eq(I64, &meta, "0");
-    blk.cond_br(&plain, &load_label, &miss_label);
+    if let Some(meta_idx) = meta_idx {
+        ctx.current_block = meta_idx;
+        let blk = ctx.block();
+        let meta_ptr =
+            crate::expr::receiver_range::emit_field_ptr(blk, &biased, (header - 8) as i64);
+        let meta = blk.load(I64, &meta_ptr);
+        let plain = blk.icmp_eq(I64, &meta, "0");
+        blk.cond_br(&plain, &load_label, &miss_label);
+    }
 
     ctx.current_block = load_idx;
     let blk = ctx.block();
     let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
         blk,
-        &recv.biased,
+        &biased,
         (header + 8 * slot as u64) as i64,
     );
     let current = blk.load(I64, &slot_ptr);
@@ -322,7 +893,7 @@ pub(crate) fn begin_store(
     // bits exactly as the store site's hit does.
     ctx.block().store(DOUBLE, value_double, &slot_ptr);
     if !value_is_scalar {
-        let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &recv.biased);
+        let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &biased);
         crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
             ctx,
             &handle,
@@ -338,6 +909,7 @@ pub(crate) fn begin_store(
     Some(LayoutStore {
         hit_label: hit_end,
         merge_idx,
+        run,
     })
 }
 
@@ -516,7 +1088,10 @@ fn run_target(ctx: &mut FnCtx<'_>, property: &str, value: &Expr) -> Option<RunPl
     let fams = &ctx.program_layouts.families;
     let own = fams.get(&class_id)?;
     let pos = own.keys.iter().position(|(k, _)| k == property)?;
-    if pos >= own.own_count as usize {
+    // A key the constructor defines with attributes (`FamilyKey::Defined`)
+    // is no raw store's: its hole is its definition's, and a non-writable
+    // key's `[[Set]]` fails (TypeError in strict code).
+    if pos >= own.own_count as usize || !own.keys[pos].0.plain() {
         return None;
     }
     let order_known = pos < own.init_count as usize;
@@ -857,6 +1432,7 @@ pub(crate) fn begin_family_init_store(
     Some(LayoutStore {
         hit_label: hit_end,
         merge_idx,
+        run: None,
     })
 }
 
@@ -872,11 +1448,15 @@ pub(crate) fn finish_store(
     let generic_label = ctx.block_label(ctx.current_block);
     ctx.block().br(&merge_label);
     ctx.current_block = arm.merge_idx;
-    ctx.block().phi(
+    let value = ctx.block().phi(
         DOUBLE,
         &[
             (value_double, arm.hit_label.as_str()),
             (generic, generic_label.as_str()),
         ],
-    )
+    );
+    if let Some(out) = arm.run {
+        finish_run(ctx, out, &arm.hit_label, &generic_label);
+    }
+    value
 }

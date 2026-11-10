@@ -94,7 +94,13 @@ pub(crate) fn begin(
     property: &str,
     receiver: &str,
 ) -> Option<FamilyRead> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+    // Every word read is the receiver's i32 layout word @4, a NaN-boxed slot
+    // at object_slot_base_bytes + 8 * slot (16 on LP64 and wasm32), or the
+    // descriptor's fixed-width layout_id @12. The answer is the receiver's
+    // own slot, so no shadow bit or prototype state enters it. Other 32-bit
+    // targets have no lowering yet.
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
         || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
         || crate::expr::typed_feedback_emission_enabled()
         || ctx.is_static_class_this(object)

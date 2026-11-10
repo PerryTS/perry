@@ -1,0 +1,14 @@
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+captured typeof: object
+captured isArray: true
+captured length: 12
+captured [0]: object
+captured [5]: number(5)
+captured [11]: number(11)
+captured identity: true
+captured via closure: 12 number(5)
+plain length: 12 [5]: number(5)
+object a: 1 identity: true
+mutated length: 3 join: 1,2,3
+var redeclare: 3 true 1
+var redeclare: 2 true 4

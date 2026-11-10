@@ -73,6 +73,9 @@ fn export_begin(
     if let Some(bits) = existing {
         return ExportStep::Existing(f64::from_bits(bits));
     }
+    // The export's one callable, minted on its first read whichever init
+    // reads it first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     if let Some(value) = intrinsic_export(module, property) {
         let value = scope.root_nanbox_f64(value);
         NATIVE_CALLABLE_EXPORTS.with(|v| {
@@ -148,6 +151,8 @@ fn export_value(
         ExportStep::Done(value) => value,
         ExportStep::Existing(value) => export_finish(module, property, value),
         ExportStep::Fresh(value) => {
+            // Its decoration is part of the first read (the runtime's).
+            let _census = crate::snap_census::first_use();
             let scope = crate::gc::RuntimeHandleScope::new();
             let value = scope.root_nanbox_f64(value);
             decorate(
@@ -290,6 +295,41 @@ mod messaging_constructor_ownership_tests {
     use super::*;
     use crate::gc::RuntimeHandleScope;
     use crate::value::{js_nanbox_get_pointer, JSValue};
+
+    #[test]
+    fn generated_worker_bodies_dispatch_without_enabling_partial_vm_movement() {
+        crate::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let value = || {
+            crate::value::js_nanbox_pointer(
+                object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+            )
+        };
+        // A dispatcher-only call would miss the generated export-body regression.
+        let marker = scope.root_nanbox_f64(
+            js_native_export_776f726b65725f74687265616473_6d61726b4173556e7472616e7366657261626c65(
+                0,
+            ),
+        );
+        unsafe {
+            crate::closure::call_value(
+                marker.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                &[value(), 42.0],
+            );
+        }
+        assert!(crate::clone_markers::is_untransferable(value()));
+        let movement = scope.root_nanbox_f64(js_native_export_776f726b65725f74687265616473_6d6f76654d657373616765506f7274546f436f6e74657874(0));
+        assert!(crate::exception::catch_js_throw(|| unsafe {
+            crate::closure::call_value(
+                movement.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                &[value(), value()],
+            )
+        })
+        .is_err());
+    }
 
     #[test]
     fn messaging_constructor_ownership_survives_global_reassignment() {

@@ -66,6 +66,7 @@ fn ctor(tail: Vec<Stmt>) -> Function {
         value: Box::new(Expr::LocalGet(1)),
         receiver: Box::new(Expr::This),
         strict: false,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })];

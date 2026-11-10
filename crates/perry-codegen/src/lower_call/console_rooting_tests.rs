@@ -57,6 +57,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,
+        program_facts: crate::temp_root_coverage::proven_console_facts(),
         ..Default::default()
     };
     let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
@@ -67,18 +68,21 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 ///
 /// The receiver must be a `GlobalGet` — that is what `try_lower_console_call`
 /// dispatches on — and it is never lowered by these arms, so any id serves.
+/// The site is one the facts prove native (`compile_body`'s facts), so these
+/// arms, not the generic member call, lower it.
 fn console_call_expr(method: &str, args: Vec<Expr>) -> Expr {
+    let site = crate::temp_root_coverage::PROVEN_CONSOLE_SITE;
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: method.to_string(),
-            byte_offset: 0,
+            byte_offset: site,
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: site,
     }
 }
 

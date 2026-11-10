@@ -105,6 +105,20 @@ const T7: [(&str, &str); 4] = [
     ),
 ];
 
+/// An ESM entry's `createRequire(import.meta.url)` loads a compiled
+/// CommonJS module by a literal relative path: `m.js` is the entry as the
+/// static-require transform leaves it (a deferred side-effect import of the
+/// target, the call kept), `l.js` the target's real wrap with the open arms
+/// (the entry's loader makes the program not closed).
+const T8: [(&str, &str); 3] = [
+    ("/t8/m.js", include_str!("fixtures/cjs_t8/m.js")),
+    ("/t8/l.js", include_str!("fixtures/cjs_t8/l.js")),
+    (
+        "/t8/perry_cjs.js",
+        include_str!("fixtures/cjs_t8/perry_cjs.js"),
+    ),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
@@ -113,6 +127,15 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
             let module = perry_parser::parse_typescript(src, path).expect("parses");
             let mut hir = perry_hir::lower_module(&module, name, path).expect("lowers");
             for imp in &mut hir.imports {
+                // The driver's deferred-require bindings (`collect_modules`
+                // `is_deferred_require_binding`).
+                imp.is_deferred_require |= imp.specifiers.iter().any(|sp| match sp {
+                    perry_hir::ImportSpecifier::Named { local, .. }
+                    | perry_hir::ImportSpecifier::Default { local }
+                    | perry_hir::ImportSpecifier::Namespace { local } => {
+                        local.starts_with("_lazyreq_")
+                    }
+                });
                 if let Some(n) = imp.source.strip_prefix("./") {
                     imp.resolved_path = Some(format!("{dir}/{n}.js"));
                 } else if imp.source.starts_with(&format!("{dir}/")) {
@@ -192,13 +215,17 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // NativeMember: a.js's `__perry_cjs_record.children.push(record)` is
     // `Array.prototype.push` on a.js's record's own `children` literal, which
     // does not escape (22 -> 23; m.js's, handed to `perry:cjs`, stays No).
-    assert_eq!(proven_sites(&w).len(), 23);
+    // CHESS G7: the `console.log` site is a runtime-born host member nothing
+    // writes (23 -> 24).
+    assert_eq!(proven_sites(&w).len(), 24);
     // SEH: per unit proves all 22 others: the module records' fields joined
     // over rounds keep each round's description (`ClassContract::join`)
     // where the join made them ⊤ (`exports.Base` read ⊤, 7 proven). The
     // `children.push` is not proven per unit: the record crosses units, so
     // its `children` is no fact unit there.
-    assert_cjs_per_unit(&w, &u, 22);
+    // CHESS G7: the unit's own `console.log` site is proven per unit too: console is
+    // a runtime-born host object and no unit writes it (the funnel reads every unit).
+    assert_cjs_per_unit(&w, &u, 23);
 }
 
 /// A class of a CommonJS factory that runs once is the class itself
@@ -241,12 +268,13 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
         proven_sites(&w).into_iter().collect::<Vec<_>>(),
         [
             "/t2/m.js@2019.exports",
-            "/t2/m.js@5368.exports",
-            "/t2/m.js@5399.()",
+            "/t2/m.js@5284.log",
+            "/t2/m.js@5366.exports",
+            "/t2/m.js@5397.()",
             "/t2/r.js@1950.exports",
-            "/t2/r.js@5810.exports",
-            "/t2/r.js@5841.()",
-            "/t2/r.js@5921.newInstance",
+            "/t2/r.js@5808.exports",
+            "/t2/r.js@5839.()",
+            "/t2/r.js@5919.newInstance",
         ]
     );
     // Per unit `R`, `S` and `T` stay unbroken. `super()` in the `S` and `T`
@@ -264,7 +292,9 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
     // `module.require` call of its `require` (dead whole-program, DECISIONS
     // 225), and in the class bodies `this.v` in `S::get`, the read `this.k`
     // in `T::run` (E0) and `b.get()` (`b` is `S.make(2)`).
-    assert_cjs_per_unit(&w, &u, 10);
+    // CHESS G7: the unit's own `console.log` site is proven per unit too: console is
+    // a runtime-born host object and no unit writes it (the funnel reads every unit).
+    assert_cjs_per_unit(&w, &u, 11);
     let k_kind = |pf: &ProgramFacts| {
         pf.templates
             .iter()
@@ -388,7 +418,14 @@ fn richards_per_unit_proves_what_the_whole_program_proves() {
     );
     // CJL2: whole-program 22 -> 129 with static edges (the records no
     // longer meet in the dispatch); per unit the dispatch's 4 sites go.
-    assert_cjs_per_unit(&w, &u, 3);
+    // DEC 250 (solver half): per unit 3 -> 19. After the computed store
+    // into ⊤ (`createTask`'s `this.taskTable[identity] = t`) a `push` call
+    // whose lookup reached Object.prototype ran as an opaque member there
+    // (`argument of native Object.prototype.push`), so the module records
+    // escaped and their `exports`/`parent`/`children` reads read ⊤. No
+    // key is added to Object.prototype (Q2): the miss is final, the
+    // records keep their layout (whole-program proves all 19).
+    assert_cjs_per_unit(&w, &u, 19);
 }
 
 #[test]
@@ -402,10 +439,13 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // DECISIONS 225: `moduleRequire` never runs (31 -> 28, see T1).
     // NativeMember: r.js's `__perry_cjs_record.children.push(record)`, as
     // a.js's in T1 (28 -> 29).
-    assert_eq!(proven_sites(&w).len(), 29);
+    // CHESS G7: the `console.log` site (29 -> 30), as in T1.
+    assert_eq!(proven_sites(&w).len(), 30);
     // SEH: all 28 others, as T1 (13 while the joined records read ⊤); the
     // `children.push` is whole-program only, as in T1.
-    assert_cjs_per_unit(&w, &u, 28);
+    // CHESS G7: the unit's own `console.log` site is proven per unit too: console is
+    // a runtime-born host object and no unit writes it (the funnel reads every unit).
+    assert_cjs_per_unit(&w, &u, 29);
 }
 
 #[test]
@@ -545,16 +585,11 @@ const T9: [(&str, &str); 3] = [
 
 #[test]
 fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
-    // The getters hand `isId`, `filter` and `user` to unknown code, so the
-    // census breaks their contracts and their owners run them on ⊤
-    // arguments. A call by name still calls that function: whole-program
-    // proves the callees of `user`'s calls (other units of `t.js`). Before,
-    // a broken function read through a value contract was ⊤ ("broken
-    // function of another unit"): no target, and typescript.js's top-level
-    // helpers (`isIdentifier`, `visitNode`, `some`, ...) lost 22,115 call
-    // sites per unit. The arguments still escape and the result is unknown
-    // (the escaped function's contract, `fn_named`).
-    let (w, u) = both(&T9);
+    // Explicitly hand the functions to unknown code: descriptor installs
+    // alone do not break their contracts. Calls by name must retain targets.
+    let module = format!("{}\n(globalThis as any).host(isId, filter);", T9[1].1);
+    let sources = [T9[0], (T9[1].0, module.as_str()), T9[2]];
+    let (w, u) = both(&sources);
     for f in ["isId", "filter"] {
         assert!(
             u.broken
@@ -641,13 +676,18 @@ fn a_property_of_a_broken_function_holds_anything() {
 
 /// CJL3 (fastify `new Reply`): whole program, `new Reply` escapes (its
 /// prototype comes from unknown code: `Reply` escaped through
-/// `Module._cache`). Per unit `m.js` holds `Reply` as an unknown value
+/// `Module._cache`, which `poke` hands to an unseen module). Per unit `m.js` holds `Reply` as an unknown value
 /// (`new` of it is ⊤) and the unit writing `Reply.prototype.f` holds the
 /// layout with no instance of its own: unknown code constructs the escaped
 /// function there, so its copy is escaped too, never a clean layout.
 #[test]
 fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
-    let (w, u) = both(&T7);
+    // `globalThis.keep` (which holds `poke`, and through it `Module`) is
+    // where an unseen module's code reads it: m.js loads one.
+    let m = super::unseen(T7[0].1);
+    let mut mods = T7;
+    mods[0].1 = &m;
+    let (w, u) = both(&mods);
     let wt = super::escaped_constructor::fn_inst(&w, "Reply#9");
     assert!(
         !wt.is_empty() && wt.iter().all(|t| t.escape.is_some() && !t.prefix_stable),
@@ -724,4 +764,67 @@ fn an_escaped_constructor_function_of_an_unflattened_factory_is_constructed_by_u
         "per unit claims prefix_stable, the whole program does not\n{}",
         u.dump_text()
     );
+}
+
+/// The function `createRequire` returns is a CommonJS `require` relative to
+/// its base: `require("./l.js")` runs `l.js` and returns its
+/// `module.exports`, so `l.load(..)` runs `exports.load`. Main-red: the
+/// body of `exports.load` was inactive (PERRY_VERIFY_FACTS rc 86).
+#[test]
+fn a_create_require_call_runs_the_module_it_names() {
+    assert!(load_runs(&T8));
+}
+
+/// The specifier is the call's literal when the callee is already the
+/// program's `require` as the call is made: `r("module")` is the node:module
+/// namespace, whose `Module._cache` hands out every record (here the one
+/// whose `exports.load` runs). Main-red: the literal was recorded after the
+/// call had resolved, `Module._cache` was never sunk, `exports.load` was an
+/// inactive body. Control: through `require("./l.js")`'s result, as above.
+#[test]
+fn a_create_require_literal_is_known_when_the_call_resolves() {
+    let m = T8[0].1.replace(
+        "const l = require(\"./l.js\");\nconsole.log(l.load({ k: 1 }));",
+        "require(\"./l.js\");\nconst r = createRequire(process.argv[1]);\n\
+         console.log(r(\"module\")._cache[\"/t8/l.js\"].exports.load({ k: 1 }));",
+    );
+    assert_ne!(m, T8[0].1, "the entry was rewritten");
+    assert!(load_runs(&[(T8[0].0, m.as_str()), T8[1], T8[2]]));
+}
+
+/// A specifier that is no literal may name `module` too: the loader
+/// resolves builtins first (`createRequire`'s `require`, the wrappers'
+/// `builtin`), and `Module._cache` hands out every record. Main-red:
+/// `r(process.argv[2])._cache[..]` read a ⊤ that holds no record, and
+/// `exports.load` was an inactive body. Control: the literal `r("module")`
+/// above.
+#[test]
+fn a_computed_require_may_be_node_module() {
+    let m = T8[0].1.replace(
+        "const l = require(\"./l.js\");\nconsole.log(l.load({ k: 1 }));",
+        "require(\"./l.js\");\nconst r = createRequire(process.argv[1]);\n\
+         console.log(r(process.argv[2])._cache[\"/t8/l.js\"].exports.load({ k: 1 }));",
+    );
+    assert_ne!(m, T8[0].1, "the entry was rewritten");
+    assert!(load_runs(&[(T8[0].0, m.as_str()), T8[1], T8[2]]));
+}
+
+/// `/t8/l.js`'s `exports.load` runs: its `o.k` read is a live site.
+fn load_runs(mods: &[(&str, &str)]) -> bool {
+    let (w, _) = both(mods);
+    let off = T8[1].1.find("o.k").expect("load's read") as u32;
+    let live: Vec<&crate::SiteFacts> = w
+        .sites
+        .iter()
+        .filter(|s| {
+            w.module_paths[s.module as usize] == "/t8/l.js"
+                && s.key == "k"
+                && s.byte_offset.abs_diff(off) <= 2
+                && !w.dead_site("/t8/l.js", s)
+        })
+        .collect();
+    if live.is_empty() {
+        eprintln!("{}", w.dump_text());
+    }
+    !live.is_empty()
 }

@@ -15,6 +15,13 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Native throw origins and one shortest open witness per exported entry.
+    ThrowCensus {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long = "archive", required = true)]
+        archives: Vec<PathBuf>,
+    },
     Generate {
         #[arg(long)]
         target: String,
@@ -40,6 +47,20 @@ enum Command {
         archives: Vec<PathBuf>,
         #[arg(required = true)]
         symbols: Vec<String>,
+    },
+    /// Check the effect declarations of realm natives (`realm-v1.json`)
+    /// against the call graph; print the census of all realm natives.
+    Effects {
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Per-native census TSV.
+        #[arg(long)]
+        census: Option<PathBuf>,
+        /// `Realm.path={ effects }`: replace one declaration (sabotage runs).
+        #[arg(long = "override")]
+        overrides: Vec<String>,
+        #[arg(long = "archive", required = true)]
+        archives: Vec<PathBuf>,
     },
 }
 fn stats(res: &Classification) {
@@ -70,6 +91,9 @@ fn run() -> Result<()> {
         .unwrap_or_else(|| SEEDS.into());
     let rules = load_rules(&text)?;
     match cli.command {
+        Command::ThrowCensus { out, archives } => {
+            perry_gc_effects::census::write(&root, &archives, &out)?
+        }
         Command::Generate {
             target,
             out,
@@ -131,6 +155,46 @@ fn run() -> Result<()> {
                 "[gc-call-effects] sidecars: {:.1}s total",
                 t.elapsed().as_secs_f64()
             );
+        }
+        Command::Effects {
+            manifest,
+            census,
+            overrides,
+            archives,
+        } => {
+            let (g, res) = analyze(&archives, &rules, &root)?;
+            let mut natives =
+                perry_gc_effects::effects::natives(&std::fs::read_to_string(&manifest)?)?;
+            for o in &overrides {
+                let (name, text) = o
+                    .split_once('=')
+                    .ok_or_else(|| anyhow::anyhow!("--override wants Realm.path={{ effects }}"))?;
+                let json = perry_runtime_manifest::realm_source::effects::parse_text(text)
+                    .map_err(|e| anyhow::anyhow!("--override {name}: {e}"))?;
+                let effects: Vec<perry_gc_effects::effects::realm_effect::RealmEffect> =
+                    serde_json::from_str(&json)?;
+                let mut hit = false;
+                for n in natives.iter_mut().filter(|n| n.name == name) {
+                    n.effects = effects.clone();
+                    hit = true;
+                }
+                if !hit {
+                    bail!("--override {name}: no such realm native");
+                }
+            }
+            let report = perry_gc_effects::effects::check(&g, &res.effect_reach, &natives)?;
+            if let Some(path) = census {
+                std::fs::write(path, &report.census)?;
+            }
+            for line in &report.lines {
+                println!("{line}");
+            }
+            if report.failures != 0 {
+                bail!(
+                    "{} effect declaration(s) contradict the call graph",
+                    report.failures
+                );
+            }
         }
         Command::Why { archives, symbols } => {
             let (g, res) = analyze(&archives, &rules, &root)?;

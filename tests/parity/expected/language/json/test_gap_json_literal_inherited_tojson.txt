@@ -1,0 +1,51 @@
+{"hello":"world"}
+{"id":1,"name":"Ada","email":"ada@example.com","active":true,"tags":["a","b"]}
+{"a":{"b":{"c":{"d":{"e":1}}}}}
+[{"a":1},{"a":2},{"a":3}]
+[{"id":0,"name":"n0","ok":true},{"id":1,"name":"n1","ok":false},{"id":2,"name":"n2","ok":true},{"id":3,"name":"n3","ok":false}]
+"own"
+{"x":"key:x"}
+"P"
+["P"]
+["P","P"]
+["P","P"]
+[{"a":1},"P"]
+["P",{"a":1}]
+{"n":"P"}
+["P"]
+["P","P"]
+{"x":["P","P"]}
+[{"a":1},"P"]
+"P"
+{"n":"P"}
+["P","P"]
+{"a":1,"b":"two"}
+[{"a":1,"b":"two"},{"a":1,"b":"two"}]
+"C"
+["C","C"]
+{"c":"C"}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+{"a":1}
+[{"a":1},{"a":2}]
+{"a":{"b":1}}
+[{"a":1},{"a":2}]
+{"a":1}
+[{"a":1},{"a":2}]
+{"a":{"b":1}}
+{"a":1}
+"late"
+{"m":"late"}
+["late","late"]
+{"g":"g"}
+["g"]
+"g"
+toJSON reads 3
+{"a":{"s":1},"b":{"s":1}}
+{"a":1,"b":{"c":3}}
+{
+  "a": 1,
+  "b": [
+    1,
+    2
+  ]
+}

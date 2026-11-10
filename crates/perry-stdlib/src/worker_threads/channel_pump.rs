@@ -1,27 +1,18 @@
 //! Event-loop pump for `MessageChannel` / `BroadcastChannel` inboxes.
 //!
-//! Split out of `worker_threads.rs` to keep that file under the 2000-line lint
-//! cap. These two `#[no_mangle]` entry points are called from the async bridge
-//! pump (`common::async_bridge`) and are re-exported from the parent module so
-//! `crate::worker_threads::js_worker_threads_channels_*` keeps resolving.
-
 use super::{
     call_callback1, call_message_callback1, deserialize_nanbox_on_current_thread, event_object,
     object_event_handler, EventListener, SerializedValue, BROADCAST_CHANNELS, MESSAGE_PORTS,
-    PARENT_PORT_HANDLE,
 };
 
-/// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
-/// firing `close` events for closed ports. Called from the event-loop pump.
-/// Returns the number of messages/events dispatched (#3157).
-#[no_mangle]
-pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
+fn process_message_ports(active: &mut Option<(u64, super::port_transport::DispatchGuard)>) -> i32 {
     let mut dispatched = 0;
-
     // Snapshot deliverable (port_id, callback, message) tuples, then invoke the
     // callbacks OUTSIDE the MESSAGE_PORTS borrow — a listener may re-enter
     // postMessage / close, which needs to borrow MESSAGE_PORTS again.
     struct MessageDispatch {
+        port_id: u64,
+        lease: super::Lease,
         target_bits: u64,
         raw_cbs: Vec<EventListener>,
         event_cbs: Vec<EventListener>,
@@ -37,15 +28,21 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 .borrow()
                 .iter()
                 .filter_map(|(port_id, state)| {
-                    (!state.closed && !state.inbox.is_empty())
-                        .then_some((*port_id, state.object_bits))
+                    let selected = active.as_ref().is_some_and(|(id, _)| id == port_id);
+                    (state.pending()
+                        && if active.is_some() {
+                            selected
+                        } else {
+                            !state.closed()
+                        })
+                    .then_some((*port_id, state.object_bits))
                 })
                 .collect()
         });
         let mut next: Option<MessageDispatch> = None;
         for (port_id, target_bits) in candidates {
             let handler_cb = object_event_handler(target_bits, "onmessage");
-            let global_handler = (port_id == PARENT_PORT_HANDLE as u64)
+            let global_handler = (port_id == super::parent_port::id())
                 .then(|| super::worker_surface::web_worker_global_handler("onmessage"))
                 .flatten();
             next = MESSAGE_PORTS.with(|ports| {
@@ -53,12 +50,12 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let state = ports.get_mut(&port_id)?;
                 let has_event_target = state.started
                     && (!state.message_cbs.is_empty() || !state.message_event_cbs.is_empty());
-                if state.closed
+                if (state.closed() && !active.as_ref().is_some_and(|(id, _)| *id == port_id))
                     || (!has_event_target && handler_cb.is_none() && global_handler.is_none())
                 {
                     return None;
                 }
-                state.inbox.pop_front().map(|msg| {
+                super::port_transport::receive(state.lease).map(|msg| {
                     let raw_cbs = state.message_cbs.clone();
                     state.message_cbs.retain(|listener| !listener.once);
                     let event_cbs = state.message_event_cbs.clone();
@@ -70,6 +67,8 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                         state.refed = false;
                     }
                     MessageDispatch {
+                        port_id,
+                        lease: state.lease,
                         target_bits: state.object_bits,
                         raw_cbs,
                         event_cbs,
@@ -86,6 +85,12 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         }
         match next {
             Some(dispatch) => {
+                if active.is_none() {
+                    let Some(guard) = super::port_transport::begin_dispatch(dispatch.lease) else {
+                        continue;
+                    };
+                    *active = Some((dispatch.port_id, guard));
+                }
                 // The listeners run inside the port's MESSAGEPORT resource.
                 let async_ids = dispatch.async_ids;
                 if let Some(ids) = async_ids {
@@ -117,9 +122,10 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let global = (global_handler.is_some()
                     || event_cbs.iter().any(|(_, global)| *global))
                 .then(|| scope.root_nanbox_f64(perry_runtime::object::js_get_global_this()));
-                let value =
-                    f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&dispatch.msg) });
-                let value = scope.root_nanbox_f64(value);
+                let (value, ports) =
+                    unsafe { perry_runtime::thread::deserialize_message(&dispatch.msg, true) };
+                let value = scope.root_nanbox_u64(value);
+                let ports = scope.root_nanbox_u64(ports);
                 for callback in raw_cbs {
                     call_callback1(
                         callback.get_nanbox_f64().to_bits(),
@@ -127,19 +133,17 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                         value.get_nanbox_f64(),
                     );
                 }
-                let global_event = global.as_ref().map(|global| {
-                    let event = event_object(
-                        "message",
-                        global.get_nanbox_f64().to_bits(),
-                        Some(value.get_nanbox_f64()),
+                let global_event = global.as_ref().map(|_| {
+                    let event = perry_runtime::event_target_hook_slots::message_event_with_ports(
+                        value.get_nanbox_f64(),
+                        ports.get_nanbox_f64(),
                     );
                     scope.root_nanbox_f64(event)
                 });
                 if !event_cbs.is_empty() || handler_cb.is_some() {
-                    let event = event_object(
-                        "message",
-                        target.get_nanbox_f64().to_bits(),
-                        Some(value.get_nanbox_f64()),
+                    let event = perry_runtime::event_target_hook_slots::node_message_event(
+                        value.get_nanbox_f64(),
+                        Some(ports.get_nanbox_f64()),
                     );
                     let event = scope.root_nanbox_f64(event);
                     for (callback, is_global) in event_cbs {
@@ -176,95 +180,57 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 }
                 dispatched += 1;
             }
+            None if active.take().is_some() => continue,
             None => break,
         }
     }
+    dispatched
+}
 
-    struct BroadcastDispatch {
-        target_bits: u64,
-        event_cbs: Vec<EventListener>,
-        handler_cb: Option<u64>,
-        msg: SerializedValue,
-    }
+/// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
+/// firing `close` events for closed ports. Called from the event-loop pump.
+/// Returns the number of messages/events dispatched (#3157).
+#[no_mangle]
+pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
+    super::message_port::observe_closed_ports();
+    // Keep the lease outside the JS trap so a thrown callback also ends its drain.
+    let mut active = None;
+    let outcome = perry_runtime::exception::catch_thrown(|| process_message_ports(&mut active));
+    drop(active);
+    let mut dispatched = match outcome {
+        Ok(count) => count,
+        Err(caught) => perry_runtime::exception::rethrow_caught(caught),
+    };
+    super::message_port::observe_closed_ports();
 
     loop {
-        let candidates: Vec<(u64, u64)> = BROADCAST_CHANNELS.with(|channels| {
+        let next = BROADCAST_CHANNELS.with(|channels| {
             channels
-                .borrow()
-                .iter()
-                .filter_map(|(channel_id, state)| {
-                    (!state.closed && !state.inbox.is_empty())
-                        .then_some((*channel_id, state.object_bits))
-                })
-                .collect()
+                .borrow_mut()
+                .values_mut()
+                .find_map(|state| state.inbox.pop_front().map(|msg| (state.object_bits, msg)))
         });
-        let mut next: Option<BroadcastDispatch> = None;
-        for (channel_id, target_bits) in candidates {
-            let handler_cb = object_event_handler(target_bits, "onmessage");
-            next = BROADCAST_CHANNELS.with(|channels| {
-                let mut channels = channels.borrow_mut();
-                let state = channels.get_mut(&channel_id)?;
-                if state.closed || (state.message_event_cbs.is_empty() && handler_cb.is_none()) {
-                    return None;
-                }
-                state.inbox.pop_front().map(|msg| {
-                    let event_cbs = state.message_event_cbs.clone();
-                    state.message_event_cbs.retain(|listener| !listener.once);
-                    BroadcastDispatch {
-                        target_bits: state.object_bits,
-                        event_cbs,
-                        handler_cb,
-                        msg,
-                    }
-                })
-            });
-            if next.is_some() {
-                break;
-            }
+        let Some((target_bits, msg)) = next else {
+            break;
+        };
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(f64::from_bits(target_bits));
+        let value = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&msg) });
+        let event = perry_runtime::event_target_hook_slots::node_message_event(value, None);
+        let event = scope.root_nanbox_f64(event);
+        unsafe {
+            perry_runtime::event_target_hook_slots::dispatch_event(
+                perry_runtime::value::js_nanbox_get_pointer(target.get_nanbox_f64())
+                    as *mut perry_runtime::ObjectHeader,
+                event.get_nanbox_f64(),
+            );
         }
-        match next {
-            Some(dispatch) => {
-                let scope = perry_runtime::gc::RuntimeHandleScope::new();
-                let target = scope.root_nanbox_f64(f64::from_bits(dispatch.target_bits));
-                let event_cbs = dispatch
-                    .event_cbs
-                    .into_iter()
-                    .map(|listener| scope.root_nanbox_f64(f64::from_bits(listener.callback_bits)))
-                    .collect::<Vec<_>>();
-                let handler_cb = dispatch
-                    .handler_cb
-                    .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
-                let value =
-                    f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&dispatch.msg) });
-                let value = scope.root_nanbox_f64(value);
-                let event = event_object(
-                    "message",
-                    target.get_nanbox_f64().to_bits(),
-                    Some(value.get_nanbox_f64()),
-                );
-                let event = scope.root_nanbox_f64(event);
-                if let Some(callback) = handler_cb {
-                    call_message_callback1(
-                        callback.get_nanbox_f64().to_bits(),
-                        target.get_nanbox_f64().to_bits(),
-                        event.get_nanbox_f64(),
-                    );
-                }
-                for callback in event_cbs {
-                    call_message_callback1(
-                        callback.get_nanbox_f64().to_bits(),
-                        target.get_nanbox_f64().to_bits(),
-                        event.get_nanbox_f64(),
-                    );
-                }
-                dispatched += 1;
-            }
-            None => break,
-        }
+        dispatched += 1;
     }
 
     // Fire `close` callbacks once for newly-closed ports.
     struct CloseDispatch {
+        lease: super::Lease,
         target_bits: u64,
         raw_cbs: Vec<EventListener>,
         event_cbs: Vec<EventListener>,
@@ -283,6 +249,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let event_cbs = state.close_event_cbs.clone();
                 state.close_event_cbs.retain(|listener| !listener.once);
                 events.push(CloseDispatch {
+                    lease: state.lease,
                     target_bits: state.object_bits,
                     raw_cbs,
                     event_cbs,
@@ -304,6 +271,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
             .into_iter()
             .map(|listener| scope.root_nanbox_f64(f64::from_bits(listener.callback_bits)))
             .collect::<Vec<_>>();
+        super::port_transport::close(event.lease);
         if !raw_cbs.is_empty() || !event_cbs.is_empty() {
             let close_event = event_object("close", target.get_nanbox_f64().to_bits(), None);
             let close_event = scope.root_nanbox_f64(close_event);
@@ -332,6 +300,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
 /// `message` listener with queued or potentially-incoming messages (#3157).
 #[no_mangle]
 pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
+    super::message_port::observe_closed_ports();
     // Runs after every worker callback (#12448): no allocation for the usual
     // handful of ports. `port_is_refed` may run an `onmessage` getter, so the
     // ids are copied out of the borrow first.
@@ -364,7 +333,7 @@ pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
         ports.borrow().values().any(|state| {
             let has_event_target = state.started
                 && (!state.message_cbs.is_empty() || !state.message_event_cbs.is_empty());
-            (!state.closed && !state.inbox.is_empty() && has_event_target) || state.close_pending
+            (!state.closed() && state.pending() && has_event_target) || state.close_pending
         })
     });
     if pending_without_onmessage {
@@ -375,9 +344,7 @@ pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
         ports
             .borrow()
             .values()
-            .filter_map(|state| {
-                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
-            })
+            .filter_map(|state| (!state.closed() && state.pending()).then_some(state.object_bits))
             .collect()
     });
     if onmessage_targets
@@ -387,30 +354,10 @@ pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
         return 1;
     }
 
-    let broadcast_pending = BROADCAST_CHANNELS.with(|channels| {
-        channels.borrow().values().any(|state| {
-            !state.closed && !state.inbox.is_empty() && !state.message_event_cbs.is_empty()
-        })
-    });
-    if broadcast_pending {
-        return 1;
-    }
-
-    let broadcast_onmessage_targets: Vec<u64> = BROADCAST_CHANNELS.with(|channels| {
+    BROADCAST_CHANNELS.with(|channels| {
         channels
             .borrow()
             .values()
-            .filter_map(|state| {
-                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
-            })
-            .collect()
-    });
-    if broadcast_onmessage_targets
-        .into_iter()
-        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
-    {
-        1
-    } else {
-        0
-    }
+            .any(|state| !state.inbox.is_empty()) as i32
+    })
 }

@@ -125,9 +125,9 @@ fn new_pending_promise_value() -> f64 {
     cp_box_ptr(crate::promise::js_promise_new() as *const u8)
 }
 
-fn type_error(message: &str) -> f64 {
+fn type_error(message: &str) -> crate::error::CoreError {
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    cp_box_ptr(crate::error::js_typeerror_new(message) as *const u8)
+    crate::error::CoreError::type_error(message)
 }
 
 fn plain_object(capacity: u32) -> f64 {
@@ -266,7 +266,7 @@ fn stdio_spec(
     value: f64,
     fd_index: usize,
     held: &mut Vec<std::fs::File>,
-) -> Result<StdioSpec, f64> {
+) -> Result<StdioSpec, crate::error::CoreError> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let value_now = value.get_nanbox_f64();
@@ -322,7 +322,7 @@ fn stdio_spec(
                         Ok(StdioSpec::Fd(fd))
                     }
                     Err(error) => Err(unsafe {
-                        crate::fs::build_fs_error_value(
+                        crate::io_error::fs_error(
                             &error,
                             if fd_index == 0 { "open" } else { "write" },
                             &path,
@@ -351,7 +351,7 @@ fn stdio_value(spec: StdioSpec) -> f64 {
     }
 }
 
-fn normalized_options(options: f64) -> Result<(f64, Vec<std::fs::File>), f64> {
+fn normalized_options(options: f64) -> Result<(f64, Vec<std::fs::File>), crate::error::CoreError> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_nanbox_f64(options);
     let out = scope.root_nanbox_f64(clone_options(source.get_nanbox_f64()));
@@ -501,7 +501,7 @@ fn finish_non_pty_subprocess(subprocess: f64, options: f64) -> f64 {
         // listener) is thrown again later as an uncaught exception.
         let error = scope.root_nanbox_f64(error);
         cp_set_field(subprocess.get_nanbox_f64(), b"__cpError", cp_undefined());
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::throw_open(error.get_nanbox_f64());
     }
 
     let stdout = scope.root_nanbox_f64(decorate_readable(cp_get_field(
@@ -625,7 +625,7 @@ extern "C" fn bun_terminal_resize(
     let columns = number_i32(columns).unwrap_or(0);
     let rows = number_i32(rows).unwrap_or(0);
     if columns <= 0 || rows <= 0 || columns > u16::MAX as i32 || rows > u16::MAX as i32 {
-        crate::exception::js_throw(type_error(
+        crate::exception::throw_core(type_error(
             "Terminal.resize expects positive columns and rows",
         ));
     }
@@ -719,7 +719,7 @@ pub extern "C" fn js_bun_terminal_new(options: f64) -> f64 {
     #[cfg(not(unix))]
     {
         let _ = options;
-        crate::exception::js_throw(crate::child_process::cp_make_error(
+        crate::exception::throw_open(crate::child_process::cp_make_error(
             "Bun.Terminal is only supported on POSIX platforms by Perry",
             &[],
         ));
@@ -952,10 +952,10 @@ fn finish_pty_subprocess(command: &str, args: &[String], options: f64, terminal:
     let terminal = scope.root_nanbox_f64(terminal);
     let options = scope.root_nanbox_f64(options);
     if bool_field(terminal.get_nanbox_f64(), b"closed") {
-        crate::exception::js_throw(type_error("Bun.spawn cannot attach a closed Terminal"));
+        crate::exception::throw_core(type_error("Bun.spawn cannot attach a closed Terminal"));
     }
     if terminal_current(terminal.get_nanbox_f64()).is_some() {
-        crate::exception::js_throw(type_error(
+        crate::exception::throw_core(type_error(
             "Bun.Terminal is already attached to a subprocess",
         ));
     }
@@ -1087,17 +1087,17 @@ fn parse_command(command_or_options: f64, options: f64) -> (String, Vec<String>,
             command_or_options.get_nanbox_f64(),
         )
     } else {
-        crate::exception::js_throw(type_error(
+        crate::exception::throw_core(type_error(
             "Bun.spawn expects a command array or an options object with cmd",
         ));
     };
     let command = scope.root_nanbox_f64(command);
     let Some(command_array) = cp_array_ptr(command.get_nanbox_f64()) else {
-        crate::exception::js_throw(type_error("Bun.spawn cmd must be an array"));
+        crate::exception::throw_core(type_error("Bun.spawn cmd must be an array"));
     };
     let length = crate::array::js_array_length(command_array);
     if length == 0 {
-        crate::exception::js_throw(type_error("Bun.spawn cmd must not be empty"));
+        crate::exception::throw_core(type_error("Bun.spawn cmd must not be empty"));
     }
     let mut values = Vec::with_capacity(length as usize);
     for index in 0..length {
@@ -1106,7 +1106,7 @@ fn parse_command(command_or_options: f64, options: f64) -> (String, Vec<String>,
         };
         let value = crate::array::js_array_get_f64(command_array, index);
         let Some(value) = crate::child_process::cp_value_to_string(value) else {
-            crate::exception::js_throw(type_error("Bun.spawn command entries must be strings"));
+            crate::exception::throw_core(type_error("Bun.spawn command entries must be strings"));
         };
         values.push(value);
     }
@@ -1136,7 +1136,7 @@ pub extern "C" fn js_bun_spawn(command_or_options: f64, options: f64) -> f64 {
             } else if cp_object_ptr(terminal_option.get_nanbox_f64()).is_some() {
                 js_bun_terminal_new(terminal_option.get_nanbox_f64())
             } else {
-                crate::exception::js_throw(type_error(
+                crate::exception::throw_core(type_error(
                     "Bun.spawn terminal must be a Bun.Terminal or Terminal options object",
                 ));
             };
@@ -1144,7 +1144,7 @@ pub extern "C" fn js_bun_spawn(command_or_options: f64, options: f64) -> f64 {
         }
         #[cfg(not(unix))]
         {
-            crate::exception::js_throw(crate::child_process::cp_make_error(
+            crate::exception::throw_open(crate::child_process::cp_make_error(
                 "Bun.spawn terminal is only supported on POSIX platforms by Perry",
                 &[],
             ));
@@ -1153,7 +1153,7 @@ pub extern "C" fn js_bun_spawn(command_or_options: f64, options: f64) -> f64 {
 
     let (normalized, held_files) = match normalized_options(options.get_nanbox_f64()) {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::throw_core(error),
     };
     let normalized = scope.root_nanbox_f64(normalized);
     let args_array = scope.root_nanbox_f64(cp_box_ptr(

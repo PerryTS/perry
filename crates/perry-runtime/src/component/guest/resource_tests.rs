@@ -191,7 +191,7 @@ extern "C-unwind" fn payload_drop_throw(
     let value = scope.root_nanbox_f64(value);
     crate::gc::gc_collect_minor();
     DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    crate::exception::js_throw(value.get_nanbox_f64())
+    crate::exception::test_throw(value.get_nanbox_f64())
 }
 
 unsafe extern "C" fn fake_resource(

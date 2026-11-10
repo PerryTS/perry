@@ -27,7 +27,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURES = ROOT / "tests/link_absence"
+FIXTURES = ROOT / "tests/integration/link_absence"
 NEGATIVES = {
     "hello": None,
     "without_math": ["global_math"],
@@ -243,6 +243,12 @@ def text_bounds(binary):
 
 
 def canonical(name):
+    # A symbol is named by what it is. ThinLTO's promotion suffix
+    # (`.llvm.<module hash>`, printed as ` (.llvm.N)`) and the legacy
+    # mangling hash are not: the module hash changes with the build's source
+    # paths, so the same function spells differently on CI and on a local
+    # host (Apple's final symbol table drops the suffix already).
+    name = re.sub(r" \(\.llvm\.[0-9]+\)$", "", name)
     return re.sub(r"::h[0-9a-f]{16}$", "", name)
 
 

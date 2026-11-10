@@ -51,6 +51,10 @@ pub(crate) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
     if dst_kind == KIND_BIGINT64 || dst_kind == KIND_BIGUINT64 {
         to_bigint_for_store(raw)
     } else {
+        // ToNumber(BigInt) throws; `js_number_coerce` would convert it.
+        if crate::value::JSValue::from_bits(raw.to_bits()).is_bigint() {
+            crate::byte_cell_support::throw_bigint_number_mix();
+        }
         // Typed-array element conversion is the full observable ToNumber,
         // not the primitive-only numeric unboxer. In particular an object
         // source element must run its @@toPrimitive/valueOf hooks.

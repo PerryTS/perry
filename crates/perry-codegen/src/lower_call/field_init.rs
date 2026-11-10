@@ -64,7 +64,7 @@ fn private_element_class_id(ctx: &FnCtx<'_>, class_name: &str) -> u32 {
 /// assignment is reached before anything that could read the field.
 ///
 /// **What the elided write is NOT** (the obvious objection, and it is
-/// measurably wrong — `test-files/test_class_field_init_proto_setter.ts`): it
+/// measurably wrong — `tests/parity/language/class/test_class_field_init_proto_setter.ts`): it
 /// is not an observable `[[Set]]`, so eliding it cannot change how many times
 /// an accessor runs. A class field declaration is a `CreateDataProperty` — a
 /// DEFINE — per `ClassFieldDefinitionRecord` evaluation, so it never consults
@@ -724,7 +724,23 @@ pub(crate) fn apply_field_initializers_recursive(
                     // #b = 1; constructor() { super(); } }` threw "Cannot
                     // initialize a private field twice" from a plain `new F()`
                     // (#11120).
-                    staged_before_ctor_body(ctx, &chain[..=idx], stop_at)
+                    //
+                    // When that `super()` lowers live (`requires_live`, the
+                    // predicate `this_super_call` asks of the body's class),
+                    // it installs every class above `stop_at` itself: the
+                    // checked arm stages them right before its static parent
+                    // body, the live arm runs the parent constructor. Nothing
+                    // is staged here then, exactly as for an own body with a
+                    // live `super()` (`lower_new_impl_inner`).
+                    let body_super_live = ctx
+                        .classes
+                        .get(stop_at)
+                        .is_some_and(|c| crate::expr::super_constructor::requires_live(ctx, c));
+                    if body_super_live {
+                        Vec::new()
+                    } else {
+                        staged_before_ctor_body(ctx, &chain[..=idx], stop_at)
+                    }
                 } else {
                     // A heritage-free `stop_at` is the root and has no
                     // `super()` to install it. Same root exception as
@@ -772,6 +788,13 @@ pub(crate) fn apply_field_initializers_recursive(
     };
 
     for class_name_in_chain in chain {
+        if crate::verify_facts::enabled() {
+            crate::verify_facts::body_entry(
+                ctx,
+                u32::MAX,
+                &format!("{class_name_in_chain}::<fields>"),
+            );
+        }
         // Issue #26: prefer the authoritative chain's resolved fields for this
         // class (correct cross-module parent layout); fall back to the
         // name-keyed `ctx.classes` only when no authoritative entry exists.

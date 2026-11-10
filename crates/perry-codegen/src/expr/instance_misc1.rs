@@ -202,6 +202,17 @@ fn imported_instanceof_rhs_is_static(ctx: &FnCtx<'_>, ty: &str, ty_expr: &Expr) 
     if name != ty {
         return false;
     }
+    // A renamed node-submodule import (`import { ReadableStream as RN }`):
+    // the reserved-id table below is keyed by the built-in name, and `ty` is
+    // only the local one. The binding's value is the constructor itself, so
+    // the runtime answers by its constructor identity, as `new RN(...)` does.
+    if ctx
+        .import_function_node_submodule
+        .get(name)
+        .is_some_and(|(_, exported)| exported != name)
+    {
+        return false;
+    }
     let imported_class = ctx.class_ids.contains_key(name)
         && !ctx.imported_vars.contains(name)
         && !ctx.namespace_imports.contains(name);

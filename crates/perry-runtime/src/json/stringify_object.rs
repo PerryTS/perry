@@ -75,6 +75,18 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     }
 }
 
+// Plain-member admission excludes native-backed receivers. General object
+// walks refresh those receivers before retaining any physical key snapshot.
+#[inline]
+pub(super) fn refresh_environment_receiver(ptr: *const u8) -> *const u8 {
+    let value = crate::value::js_nanbox_pointer(ptr as i64);
+    if crate::process::is_process_env_object(value) {
+        crate::value::js_nanbox_get_pointer(crate::process::refresh_process_env(value)) as *const u8
+    } else {
+        ptr
+    }
+}
+
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
     // Taken unconditionally so a verdict for this object can never reach a
     // later walk (see `TO_JSON_RESOLVED_FOR`). An armed one-shot suppression
@@ -166,6 +178,11 @@ unsafe fn stringify_object_walk(
     global_proof: &mut bool,
 ) {
     check_stringify_nesting_depth(depth as usize);
+    let ptr = if plain_member.is_none() {
+        refresh_environment_receiver(ptr)
+    } else {
+        ptr
+    };
     let obj = ptr as *const crate::ObjectHeader;
     // #6519: a WHATWG `URL` instance is a plain `GC_TYPE_OBJECT` (class_id 0)
     // whose `searchParams` field points back at the URL — walking its fields
@@ -191,7 +208,7 @@ unsafe fn stringify_object_walk(
     // bound; the member loop below re-derives the keys only after a call that
     // can run user code or collect. Re-deriving them at every key access cost
     // five probes per object (#10696).
-    let (mut keys_view, mut num_fields) = match plain_member {
+    let (mut keys_view, num_fields) = match plain_member {
         Some(member) => (member.keys, member.live_slots),
         None => crate::object::object_keys_and_live_slot_count(obj),
     };
@@ -236,10 +253,7 @@ unsafe fn stringify_object_walk(
         if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
             let msg = "Converting circular structure to JSON";
             let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-            crate::exception::js_throw(f64::from_bits(
-                POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-            ));
+            crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
         }
         STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
     }
@@ -319,7 +333,7 @@ unsafe fn stringify_object_walk(
             }
             // A declined attempt can have walked a member (and run its
             // `toJSON`) before rolling back, so re-resolve the facts.
-            (keys_view, num_fields) = crate::object::object_keys_and_live_slot_count(obj);
+            (keys_view, _) = crate::object::object_keys_and_live_slot_count(obj);
             index_keys_known = None;
         }
     }
@@ -367,7 +381,11 @@ unsafe fn stringify_object_walk(
     // fields and `is_object_pointer`'s `keys_len <= field_count` guard
     // returned false, so `JSON.stringify` emitted the literal string "null"
     // for any parsed object with ≥9 fields.
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    // The inline region is the object's own allocation, not the floor: a
+    // birth on a compiler-fixed layout has exactly its declared slots, so a
+    // one-slot birth that gained a key keeps it in overflow storage, and
+    // slot 1 lies past the object's end.
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_len);
     if !slotted {

@@ -29,8 +29,12 @@ fn module_with_scopes(per_function: &[usize]) -> (LlModule, Vec<u32>) {
 fn numbered_definitions(ir: &str) -> HashMap<u32, usize> {
     let mut defs = HashMap::new();
     for line in ir.lines() {
-        let Some(rest) = line.strip_prefix('!') else { continue };
-        let Some((id, _)) = rest.split_once(" = ") else { continue };
+        let Some(rest) = line.strip_prefix('!') else {
+            continue;
+        };
+        let Some((id, _)) = rest.split_once(" = ") else {
+            continue;
+        };
         if let Ok(id) = id.parse::<u32>() {
             *defs.entry(id).or_insert(0) += 1;
         }
@@ -45,11 +49,22 @@ fn more_than_a_hundred_buffer_scopes_define_every_id_once() {
     assert_eq!(scopes.len(), 150);
     let ir = llmod.to_ir();
     let defs = numbered_definitions(&ir);
-    let twice: Vec<_> = defs.iter().filter(|(_, n)| **n > 1).map(|(id, _)| *id).collect();
-    assert!(twice.is_empty(), "metadata ids defined more than once: {twice:?}");
+    let twice: Vec<_> = defs
+        .iter()
+        .filter(|(_, n)| **n > 1)
+        .map(|(id, _)| *id)
+        .collect();
+    assert!(
+        twice.is_empty(),
+        "metadata ids defined more than once: {twice:?}"
+    );
     for &scope in &scopes {
         for id in [scope, scope + 1, scope + 2] {
-            assert_eq!(defs.get(&id), Some(&1), "!{id} of scope !{scope} is not defined once");
+            assert_eq!(
+                defs.get(&id),
+                Some(&1),
+                "!{id} of scope !{scope} is not defined once"
+            );
         }
         // The node is a scope, its list names it, its noalias list omits it.
         let line = |id: u32| {
@@ -60,8 +75,10 @@ fn more_than_a_hundred_buffer_scopes_define_every_id_once() {
         };
         assert!(line(scope).contains("distinct"), "{}", line(scope));
         assert_eq!(line(scope + 1), format!("!{} = !{{!{scope}}}", scope + 1));
-        assert!(!line(scope + 2).contains(&format!("!{scope},"))
-            && !line(scope + 2).ends_with(&format!("!{scope}}}")));
+        assert!(
+            !line(scope + 2).contains(&format!("!{scope},"))
+                && !line(scope + 2).ends_with(&format!("!{scope}}}"))
+        );
     }
 }
 
@@ -82,7 +99,9 @@ fn llvm_parses_a_module_with_more_than_a_hundred_buffer_scopes() {
     let ctx = inkwell::context::Context::create();
     let module = crate::inprocess::parse_ir_text(&ctx, &ir, "alias_scopes")
         .unwrap_or_else(|e| panic!("LLVM rejected the alias tables: {e:#}"));
-    module.verify().unwrap_or_else(|e| panic!("{}", e.to_string()));
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("{}", e.to_string()));
 }
 
 #[test]
@@ -91,5 +110,8 @@ fn loop_ids_follow_the_alias_tables_from_the_same_counter() {
     let after = llmod.allocate_metadata_id();
     let last = *scopes.iter().max().unwrap();
     // scope ids, then their lists, then the domain: all below the next id.
-    assert!(after > last + 2, "counter {after} is not past scope !{last}'s lists");
+    assert!(
+        after > last + 2,
+        "counter {after} is not past scope !{last}'s lists"
+    );
 }

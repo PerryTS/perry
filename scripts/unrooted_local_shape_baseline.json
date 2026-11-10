@@ -1,24 +1,19 @@
 {
   "per_file": {
-    "crates/perry-ext-cheerio/src/lib.rs": 7,
     "crates/perry-ext-http/src/agent.rs": 2,
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
     "crates/perry-ext-http/src/server/handle_dispatch.rs": 2,
     "crates/perry-ext-http/src/server/request.rs": 7,
     "crates/perry-ext-http/src/server/types.rs": 1,
     "crates/perry-ext-net/src/classes.rs": 2,
-    "crates/perry-stdlib/src/cheerio.rs": 6,
     "crates/perry-stdlib/src/crypto/kdf.rs": 9,
     "crates/perry-stdlib/src/crypto/keys.rs": 1,
     "crates/perry-stdlib/src/crypto/sign.rs": 22,
     "crates/perry-stdlib/src/crypto/util.rs": 2,
-    "crates/perry-stdlib/src/ethers.rs": 5,
     "crates/perry-stdlib/src/events/events_on.rs": 10,
     "crates/perry-stdlib/src/events/module_helpers.rs": 1,
     "crates/perry-stdlib/src/events/once_helpers.rs": 1,
-    "crates/perry-stdlib/src/lodash.rs": 21,
     "crates/perry-stdlib/src/querystring.rs": 2,
-    "crates/perry-stdlib/src/sqlite/backup.rs": 3,
     "crates/perry-stdlib/src/sqlite/better.rs": 10,
     "crates/perry-stdlib/src/sqlite/bind.rs": 4,
     "crates/perry-stdlib/src/streams.rs": 14,
@@ -41,5 +36,5 @@
     "crates/perry-stdlib/src/worker_threads/worker_surface.rs": 6
   },
   "schema_version": 3,
-  "total": 250
+  "total": 208
 }

@@ -9,14 +9,18 @@
 //! `D` nodes are marked `obs`, receive every call's arguments, and only
 //! run read rules (read-site facts), never effects.
 //!
-//! Whether a function is summarized follows from its body alone; nothing
-//! depends on a size, count or depth.
+//! The batch planner chooses slices, capture ownership and refusals over
+//! the whole model. The body encoder receives those choices through an
+//! adapter; moving encoding does not make the planner body-local.
 use crate::delta::Tokens;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 use std::rc::Rc;
 
+pub(crate) mod body;
 mod build;
+#[cfg(test)]
+pub(crate) mod packet;
 use build::build_summaries;
 
 /// A summary term: a slot index with this bit, else an absolute node.
@@ -77,9 +81,24 @@ pub enum Deferred {
     /// Births wait for summaries so a summary's call is born per instance,
     /// never once into the shared body (whose nodes seed every instance).
     Construct(CallId, Tok),
+    ReflectConstruct(CallId, Tok, Tok),
     NewNamed(Atom, CallId),
     /// A for-in body token run over an object token (`Model::for_in_tok`).
     ForIn(CallId, Tok, Tok),
+    /// A native method run at a call (`builtins::own_method`,
+    /// `proto_method`, `prim_method`): like a birth, it waits for summaries,
+    /// so what the method births and calls at a summary's call is per
+    /// instance, and no node of the method holds a literal of the body.
+    Native(NativeRecv, Key, CallId),
+}
+
+/// The receiver a native method runs on: a token's own builtin behaviour,
+/// a prototype's methods with `this` = the origin token, or a primitive's.
+#[derive(Clone, Copy, Debug)]
+pub enum NativeRecv {
+    Own(Tok),
+    Proto(Tok, Tok),
+    Prim(u16),
 }
 
 #[derive(Default, Clone, Debug)]
@@ -95,7 +114,8 @@ pub struct Summary {
     /// The `this` term (slot, absolute node or `NO_NODE`: an arrow, or a
     /// `this` a closure captured, keeps the shared node).
     pub this: NodeId,
-    pub seeds: Vec<(u32, Vec<Tok>, u16)>,
+    /// Value seeds and the independent own-test refutation marker.
+    pub seeds: Vec<(u32, Vec<Tok>, u16, bool)>,
     pub edges: Vec<(NodeId, NodeId)>,
     pub cons: Vec<(NodeId, Cons)>,
     /// (template call, the call with terms in place of nodes).
@@ -139,6 +159,11 @@ pub struct Inst {
     pub params: Vec<NodeId>,
     pub ret: NodeId,
     pub this: NodeId,
+    /// The instance's first fresh slot node (`NO_NODE`: none). Its fresh
+    /// slots, the summary's slots outside `Summary::outer` in slot order,
+    /// are the nodes from here on: the copy of slot `i` is a run of the
+    /// shared node `Summary::orig[i]` (`Inst::copies`).
+    pub fresh: NodeId,
 }
 
 #[derive(Default)]
@@ -245,9 +270,14 @@ impl Model {
         if self.nodes[n as usize].obs {
             let dst = match *c {
                 Cons::TopIfAny { dst, .. }
+                | Cons::TopIfTop { dst, .. }
                 | Cons::Guard { dst, .. }
                 | Cons::Defined { dst }
-                | Cons::NotNullish { dst } => Some(dst),
+                | Cons::NotNullish { dst }
+                | Cons::Falsy { dst }
+                | Cons::NotUndefined { dst }
+                // The gate of an own-only read runs where the read does.
+                | Cons::OwnGate { dst, .. } => Some(dst),
                 // Two outputs: both must be observation nodes.
                 Cons::Plus { str, num } => {
                     return !(self.nodes[str as usize].obs && self.nodes[num as usize].obs);
@@ -260,9 +290,14 @@ impl Model {
             return false;
         }
         let call = match *c {
-            Cons::Call { call }
+            Cons::AnnexBLookup { call, .. }
+            | Cons::Call { call }
             | Cons::CallThis { call, .. }
+            | Cons::NativeThis { call, .. }
             | Cons::New { call }
+            | Cons::NewProgram { call }
+            | Cons::ReflectNew { call, .. }
+            | Cons::ReflectNewTarget { call, .. }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
             | Cons::IdxMCall { call, .. }
@@ -322,6 +357,12 @@ impl Model {
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
         self.calls.push(cs);
+        if !self.sum.ready && self.diagnostic.is_some() {
+            // Dump only: a call made before the summaries counts as a
+            // program call (`origin_of` never reads it); the dump still
+            // names the source call it was made for.
+            self.sum.origin.insert(id, by);
+        }
         if self.sum.ready {
             if let Some(o) = self.origin_of(by) {
                 self.sum.origin.insert(id, o);
@@ -380,7 +421,7 @@ impl Model {
         let mut x = o;
         while let TokKind::Obj(_, c) = self.toks[x as usize] {
             // The walk is solve work: the bound covers a chain that grows.
-            self.work += 1;
+            self.charge_work(1);
             match self.made_entry(c) {
                 Some((s, _)) if s == site => return c,
                 Some((_, Maker::Obj(m, _))) => x = m,
@@ -496,6 +537,24 @@ impl Model {
         }
     }
 
+    /// Every (shared node, this instance's copy of it) pair of instance
+    /// `inst`'s fresh slots (`Inst::fresh`).
+    pub(crate) fn inst_copies(&self, inst: u32, mut f: impl FnMut(NodeId, NodeId)) {
+        let it = &self.sum.insts[inst as usize];
+        if it.fresh == NO_NODE {
+            return;
+        }
+        let s = &self.sum.of[&it.f];
+        let mut next = it.fresh;
+        for (i, &orig) in s.orig.iter().enumerate() {
+            if s.outer.contains(&(i as u32)) {
+                continue;
+            }
+            f(orig, next);
+            next += 1;
+        }
+    }
+
     pub(crate) fn summarized(&self, f: FnIdx) -> bool {
         self.sum.of.contains_key(&f)
     }
@@ -512,13 +571,14 @@ impl Model {
         let s = self.sum.of[&f].clone();
         let inst = self.sum.insts.len() as u32;
         // An instance is solve work: the work bound covers instances too.
-        self.work += s.nslots as u64 + 1;
+        self.charge_work(s.nslots as u64 + 1);
         // Outer slots are the context's nodes (the enclosing instance's);
         // a token without a context observes through the shared nodes.
         let mut outer_at = vec![u32::MAX; s.nslots as usize];
         for (j, &sl) in s.outer.iter().enumerate() {
             outer_at[sl as usize] = j as u32;
         }
+        let fresh = self.nodes.len() as NodeId;
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
                 u32::MAX => {
@@ -584,6 +644,11 @@ impl Model {
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret,
             this,
+            fresh: if (self.nodes.len() as NodeId) > fresh {
+                fresh
+            } else {
+                NO_NODE
+            },
         });
         self.sum.inst_key.insert(key, inst);
         self.sum.pending.push((inst, base));
@@ -616,9 +681,18 @@ impl Model {
                 let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
                 (7, site, ft)
             }
-            _ if self.sum.site_calls.contains(&call) => (0, call, ft),
+            _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
+        };
+        // Widened (`past_work_bound`): no new calling context. The call
+        // runs the function's shared instance, which gets this receiver
+        // and these arguments by the same edges (below): a merge of
+        // callers. A birth's run (5) stays per object: its key is what
+        // it births.
+        let key = match key.0 {
+            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => (1, LAY_NONE, ft),
+            _ => key,
         };
         let inst = self.instance(key);
         let it = self.sum.insts[inst as usize].this;
@@ -651,6 +725,19 @@ impl Model {
     /// distinct call sites are distinct instances (key kind 7). The runs of
     /// one site share one (a loop making memos merges them); a site inside
     /// an instance is its template, so instances never multiply instances.
+    /// The program site whose kind-0 run `call` is: a plain call at a
+    /// program site outside every summary (`site_calls`), or a call the
+    /// solver made for a call at such a site (a native method's callback, a
+    /// bound target): the site's own call of that function would be one run
+    /// per site, and so is this one.
+    fn site_of_call(&self, call: CallId) -> Option<CallId> {
+        if self.sum.site_calls.contains(&call) {
+            return Some(call);
+        }
+        let o = *self.sum.origin.get(&call)?;
+        ((o as usize) < self.sum.n_prog && !self.sum.templates.contains(&o)).then_some(o)
+    }
+
     fn closure_maker(&self, f: FnIdx, x: Option<Tok>) -> bool {
         let Some(s) = self.sum.of.get(&f) else {
             return false;
@@ -665,8 +752,7 @@ impl Model {
         while i < self.sum.pending.len() {
             // Instances queue more instances: the work bound holds here too,
             // not only between worklist pops.
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
+            if self.past_work_bound() {
                 self.sum.pending.clear();
                 return;
             }
@@ -693,6 +779,13 @@ impl Model {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
+            // The copy is the template's operation in this context: a
+            // runtime protocol's call (`Model::protocol_calls`: the step of
+            // an iterated value, ToPrimitive ...) stays one, so every rule
+            // that asks gets the template's answer.
+            if self.protocol_calls.contains(t) {
+                self.protocol_calls.insert(id);
+            }
             if lay != LAY_NONE {
                 self.sum.call_lay.insert(id, lay);
             }
@@ -705,13 +798,22 @@ impl Model {
             self.sum.composed.insert((kmap[i as usize], g));
             self.activate(g, "composed");
         }
-        for &(slot, ref toks, prim) in &s.seeds {
+        for &(slot, ref toks, prim, refuted) in &s.seeds {
             // The summary's own slot is where the instance's seed came from
             // (the dump follows it to the ⊤'s origin).
             let saved = (self.cur_src, self.cur_why);
             self.cur_src = s.orig.get(slot as usize).copied().unwrap_or(NO_NODE);
             self.cur_why = u32::MAX;
+            // The seed's Numbers are values its original node held when the
+            // summary was built: that node's interval covers them (it only
+            // grows).
+            let saved_range = self.cur_range;
+            self.cur_range = (self.cur_src != NO_NODE).then(|| self.rg(self.cur_src));
             self.add(base[slot as usize], toks, prim);
+            self.cur_range = saved_range;
+            if refuted {
+                self.refute_own_test(base[slot as usize]);
+            }
             (self.cur_src, self.cur_why) = saved;
         }
         // Closures born here carry this instance's nodes for their outer
@@ -787,7 +889,15 @@ impl Model {
             self.edge(x, c);
             self.edge(c, x);
         }
-        self.tok(TokKind::Func(g, ctx))
+        let t = self.tok(TokKind::Func(g, ctx));
+        // A generator function's per-context `prototype` is one its
+        // generator objects may inherit from (`FuncInfo::gen_fn_protos`).
+        if let Some(gp) = self.funcs[g as usize].gen_fn_protos {
+            let pa = self.atom("prototype");
+            let f = self.field(t, pa);
+            self.edge(f, gp);
+        }
+        t
     }
 
     /// Arguments and result of `call` into summarized function token `ft`.
@@ -968,7 +1078,7 @@ impl Model {
             }
             for &m in args[i].as_ref().unwrap() {
                 // Each lifted token is solve work, as a delivery is.
-                self.work += 1;
+                self.charge_work(1);
                 let x = self.lift(m, b, t);
                 lifted.push(x);
             }
@@ -1008,7 +1118,7 @@ impl Model {
         let mut out = Vec::with_capacity(ms.len() * held.len());
         for &m in &ms {
             for &t in &held {
-                self.work += 1;
+                self.charge_work(1);
                 out.push(self.lift(m, b, t));
             }
         }
@@ -1156,11 +1266,7 @@ impl Model {
             // Beyond its publication (an export or a published literal's
             // field, DECISIONS 210, or known closed callers, DECISIONS 19),
             // unknown code calls it and retains its result.
-            if !contract
-                || (self.pub_reason != Some(reason)
-                    && self.field_fn_reason != Some(reason)
-                    && closed.is_none())
-            {
+            if self.unknown_caller(f, reason) {
                 self.sink_node(r, reason);
             }
         }
@@ -1185,6 +1291,16 @@ impl Model {
         if let Some(this) = this {
             if it != NO_NODE {
                 self.edge(this, it);
+            }
+        }
+        for i in usize::from(setter)..self.funcs[f as usize].params.len() {
+            let t = self.sum.insts[inst as usize].params[i];
+            if t != NO_NODE {
+                self.add_prim(t, prim::UNDEF);
+            }
+            let p = self.funcs[f as usize].params[i];
+            if self.nodes[p as usize].obs {
+                self.add_prim(p, prim::UNDEF);
             }
         }
         if setter {
@@ -1238,11 +1354,21 @@ impl Model {
                 Deferred::ThisTo(f, origin) => self.this_lookup(f, origin),
                 Deferred::EscapeThis(f, reason) => self.escape_this(f, reason),
                 // A summary's call: its instances construct.
-                Deferred::Construct(call, _) | Deferred::NewNamed(_, call)
+                Deferred::Construct(call, _)
+                | Deferred::ReflectConstruct(call, _, _)
+                | Deferred::NewNamed(_, call)
                     if self.sum.templates.contains(&call) => {}
                 Deferred::Construct(call, t) => self.construct(call, t),
+                Deferred::ReflectConstruct(call, target, new_target) => {
+                    self.reflect_construct(call, target, new_target)
+                }
                 Deferred::NewNamed(name, call) => self.new_named(name, call),
                 Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
+                // A summary's call: its instances run the method.
+                Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
+                Deferred::Native(r, key, call) => {
+                    self.with_b(|m| crate::builtins::native_method_at(m, r, key, call))
+                }
             }
         }
         // A `this` with values from generation (static blocks, field
@@ -1274,5 +1400,5 @@ impl Model {
 
 #[path = "summary/compose.rs"]
 mod compose;
+pub use body::compress;
 use compose::compose;
-pub use compose::compress;

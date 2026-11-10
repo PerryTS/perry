@@ -70,7 +70,7 @@ pub(crate) unsafe fn bun_sqlite_database_open(db_handle: Handle) {
     let opened = match open_node_sqlite_connection(db) {
         Ok(opened) => opened,
         Err(err) => {
-            perry_runtime::exception::js_throw(sqlite_error_value(sqlite_error_from_rusqlite(err)))
+            perry_runtime::exception::throw_core(sqlite_core_error(sqlite_error_from_rusqlite(err)))
         }
     };
     if let Err(err) =

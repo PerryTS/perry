@@ -55,14 +55,14 @@ pub(super) use extras::ShapeExtras;
 /// closure pointer or a GC edge. Entries are sorted by slot in a shape.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ConstFnSlotInfo {
-    pub slot: u8,
+    pub slot: u32,
     pub info: u64,
 }
 
 const _: () = assert!(std::mem::align_of::<ShapeExtras>() >= 2);
 // Birth/store facts and weak integrity edges share the same record extension.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 72);
+const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 88);
 
 /// A brand list is strictly ascending: sorted with no duplicate, so equal
 /// sets are equal slices.
@@ -70,22 +70,52 @@ pub(crate) fn brands_are_sorted(brands: &[u64]) -> bool {
     brands.windows(2).all(|pair| pair[0] < pair[1])
 }
 
-/// The exact mask of a sorted body list, or `None` for a duplicate, absent
-/// body, or slot outside the 32 inline representation lanes.
-pub(crate) fn constfn_mask(infos: &[ConstFnSlotInfo]) -> Option<u32> {
+/// The exact word-0 mask of a sorted body list (the ConstFn bodies at slots
+/// 0..32; the `rep` word's SPECIAL lanes), or `None` for a duplicate, absent
+/// body, or slot at or past the shape's live inline bound. A body at slot >=
+/// 32 has no bit in the mask: its lane is the list entry itself
+/// (`ShapeRecord::lane_is_constfn`), so the list is the one source of truth.
+pub(crate) fn constfn_mask(infos: &[ConstFnSlotInfo], live_inline: u32) -> Option<u32> {
     let mut mask = 0u32;
     let mut previous = None;
     for entry in infos {
-        if entry.slot >= crate::object::field_rep::REP_SLOTS as u8
+        if entry.slot >= live_inline
             || entry.info == 0
             || previous.is_some_and(|slot| entry.slot <= slot)
         {
             return None;
         }
-        mask |= 1 << entry.slot;
+        if entry.slot < crate::object::field_rep::REP_SLOTS {
+            mask |= 1 << entry.slot;
+        }
         previous = Some(entry.slot);
     }
     Some(mask)
+}
+
+/// Is `slot` (>= 32) named by the sorted body list? Out of line: no hot path
+/// reaches it, and it keeps every accessor of the three record views small.
+#[inline(never)]
+#[optimize(size)]
+pub(crate) fn tail_constfn_slot(infos: &[ConstFnSlotInfo], slot: u32) -> bool {
+    infos.binary_search_by_key(&slot, |entry| entry.slot).is_ok()
+}
+
+/// Does the sorted body list reach a slot >= 32?
+#[inline(never)]
+#[optimize(size)]
+pub(crate) fn has_tail_infos(infos: &[ConstFnSlotInfo]) -> bool {
+    infos
+        .last()
+        .is_some_and(|entry| entry.slot >= crate::object::field_rep::REP_SLOTS)
+}
+
+/// Lane words past word 0 a body list needs: the learned-deprecation words
+/// of `ShapeExtras::tail_to_any`.
+pub(crate) fn tail_words(infos: &[ConstFnSlotInfo]) -> usize {
+    infos.last().map_or(0, |entry| {
+        (entry.slot / crate::object::field_rep::REP_SLOTS) as usize
+    })
 }
 
 pub(super) const RECORD_FLAG_PRESENT: u8 = 1 << 0;
@@ -590,6 +620,76 @@ impl ShapeRecord {
         }
     }
 
+    /// Is `slot` a ConstFn lane? Slots 0..32 are the `rep` word's SPECIAL lanes
+    /// gated by the mask; a slot past it has the lane exactly when the
+    /// record's own body list names it (the list is identity).
+    #[inline]
+    pub(crate) fn lane_is_constfn(&self, slot: u32) -> bool {
+        if slot < crate::object::field_rep::REP_SLOTS {
+            self.special_constfn_mask & (1u32 << slot) != 0
+        } else {
+            tail_constfn_slot(self.constfn_infos(), slot)
+        }
+    }
+
+    /// The 2-bit lane of `slot`, any slot: word 0 below 32; past it SPECIAL
+    /// exactly for a body-list entry.
+    #[inline]
+    pub(crate) fn lane(&self, slot: u32) -> u64 {
+        if slot < crate::object::field_rep::REP_SLOTS {
+            crate::object::field_rep::slot_rep(self.rep, slot)
+        } else if tail_constfn_slot(self.constfn_infos(), slot) {
+            crate::object::field_rep::REP_SPECIAL
+        } else {
+            crate::object::field_rep::REP_ANY
+        }
+    }
+
+    /// Does the record carry a ConstFn lane at slot >= 32?
+    #[inline]
+    pub(crate) fn has_tail_constfn(&self) -> bool {
+        self.has_boxed_extras() && has_tail_infos(self.constfn_infos())
+    }
+
+    /// Any ConstFn lane at all (word 0 or tail).
+    #[inline]
+    pub(crate) fn has_constfn_lane(&self) -> bool {
+        self.special_constfn_mask != 0 || self.has_tail_constfn()
+    }
+
+    /// Learned deprecation words past word 0 (bit n of word k = slot
+    /// 32 * (k + 1) + n), as plain values.
+    #[cfg(test)]
+    pub(crate) fn tail_deprecation(&self, word: usize) -> u32 {
+        if !self.has_boxed_extras() {
+            return 0;
+        }
+        // SAFETY: the extension is owned by this live record.
+        let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
+        extras.tail_to_any.get(word).map_or(0, |w| {
+            w.load(std::sync::atomic::Ordering::Acquire)
+        })
+    }
+
+    /// Any learned deprecation, word 0 or tail, is pending.
+    #[inline]
+    pub(crate) fn deprecation_pending(&self) -> bool {
+        self.deprecation_targets() != (0, 0) || self.tail_deprecation_pending()
+    }
+
+    #[inline(never)]
+    fn tail_deprecation_pending(&self) -> bool {
+        if !self.has_boxed_extras() {
+            return false;
+        }
+        // SAFETY: the extension is owned by this live record.
+        let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
+        extras
+            .tail_to_any
+            .iter()
+            .any(|w| w.load(std::sync::atomic::Ordering::Acquire) != 0)
+    }
+
     #[inline]
     pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
         if !self.has_boxed_extras() {
@@ -609,18 +709,19 @@ impl ShapeRecord {
     /// A ConstFn lineage learned a different function or a nonfunction. It
     /// keeps its old body invariant for existing carriers, but migrates them
     /// to an Any successor on miss. NoPointer can use the same target later.
+    #[optimize(size)]
+    #[inline(never)]
     pub(crate) fn deprecate_special_to_any(&self, slot: u32) -> bool {
-        assert!(slot < crate::object::field_rep::REP_SLOTS);
-        let bit = 1u32 << slot;
-        assert_ne!(self.special_constfn_mask & bit, 0);
+        assert!(self.lane_is_constfn(slot));
         assert!(self.has_boxed_extras());
+        let bit = 1u32 << (slot % crate::object::field_rep::REP_SLOTS);
         // SAFETY: the record owns the extension for its entire live span.
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
-        extras
-            .to_any
-            .fetch_or(bit, std::sync::atomic::Ordering::AcqRel)
-            & bit
-            == 0
+        let word = match (slot / crate::object::field_rep::REP_SLOTS) as usize {
+            0 => &extras.to_any,
+            k => &extras.tail_to_any[k - 1],
+        };
+        word.fetch_or(bit, std::sync::atomic::Ordering::AcqRel) & bit == 0
     }
 
     /// Called only when a record is retired, not when it is copied or rekeyed.
@@ -687,7 +788,7 @@ impl ShapeRecord {
         infos: &[ConstFnSlotInfo],
         brands: &[u64],
     ) -> bool {
-        let Some(mask) = constfn_mask(infos) else {
+        let Some(mask) = constfn_mask(infos, live_inline_slot_count) else {
             return false;
         };
         self.proto_id == proto_id
@@ -695,9 +796,10 @@ impl ShapeRecord {
             && crate::object::field_rep::identity_with_special(self.rep)
                 == crate::object::field_rep::identity_with_special(rep)
             && self.special_constfn_mask == mask
-            // Both masks came from validated immutable lists: zero iff empty.
-            // There is no body identity to fetch from the cold extension then.
-            && (mask == 0 || self.constfn_infos() == infos)
+            // The body list is identity at every slot, including the ones past
+            // word 0 that have no bit in either mask. No extension is touched
+            // when both lists are empty.
+            && (infos.is_empty() && !self.has_boxed_extras() || self.constfn_infos() == infos)
             && brand_lists_equal(self.brands(), brands)
             && self.facts_match(
                 keys,
@@ -851,9 +953,13 @@ pub(super) fn facts_key_proto(
 /// of line: almost every mint has neither.
 #[cold]
 #[inline(never)]
+#[optimize(size)]
 fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
     let extras = Box::new(ShapeExtras {
         constfn_infos: infos.into(),
+        tail_to_any: (0..tail_words(infos))
+            .map(|_| std::sync::atomic::AtomicU32::new(0))
+            .collect(),
         brands: brands.into(),
         to_nopointer: std::sync::atomic::AtomicU32::new(0),
         to_any: std::sync::atomic::AtomicU32::new(0),

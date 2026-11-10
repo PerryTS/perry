@@ -48,6 +48,7 @@ js_process_pending_exit_code	Leaf	no
 js_register_class_constructor	Leaf	no
 js_register_class_string_member_order	Leaf	no
 js_register_function_metadata	Leaf	no
+js_slot_store_obligations	Leaf	no
 js_string_addref_if_heap_string	Leaf	no
 js_string_compare	Leaf	no
 js_string_register_property_atoms	Leaf	no

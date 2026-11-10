@@ -211,14 +211,14 @@ impl<'a, 's> Stepper<'a, 's> {
         let (stmt, link) = prepare_guarded_with_link(db, raw_db, sql);
         if !stmt.is_null() {
             let bound = if bind_runs_js {
-                match perry_runtime::exception::catch_js_throw(|| bind(raw_db, stmt)) {
+                match perry_runtime::exception::catch_thrown(|| bind(raw_db, stmt)) {
                     Ok(bound) => bound,
                     Err(error) => {
                         let scope = RuntimeHandleScope::new();
-                        let error = scope.root_nanbox_f64(error);
+                        let error = error.root(&scope);
                         // Never stepped: finalizing calls nothing back.
                         ffi::sqlite3_finalize(stmt);
-                        perry_runtime::exception::js_throw(error.get_nanbox_f64());
+                        perry_runtime::exception::rethrow_caught(error.caught());
                     }
                 }
             } else {
@@ -260,11 +260,11 @@ impl<'a, 's> Stepper<'a, 's> {
         // Every run binds from scratch. Clearing calls nothing back.
         ffi::sqlite3_clear_bindings(stmt);
         let bound = if bind_runs_js {
-            match perry_runtime::exception::catch_js_throw(|| bind(raw_db, stmt)) {
+            match perry_runtime::exception::catch_thrown(|| bind(raw_db, stmt)) {
                 Ok(bound) => bound,
                 Err(error) => {
                     (*owner).running = false;
-                    perry_runtime::exception::js_throw(error);
+                    perry_runtime::exception::rethrow_caught(error);
                 }
             }
         } else {
@@ -322,9 +322,9 @@ impl<'a, 's> Stepper<'a, 's> {
             Ok(row) => row,
             Err(error) => {
                 let scope = RuntimeHandleScope::new();
-                let error = scope.root_nanbox_f64(error);
+                let error = error.root(&scope);
                 self.abandon();
-                perry_runtime::exception::js_throw(error.get_nanbox_f64())
+                perry_runtime::exception::throw_core(error.error())
             }
         }
     }
@@ -399,7 +399,7 @@ pub(crate) unsafe fn row_value_checked(
     flags: StmtFlags,
     raw_stmt: *mut ffi::sqlite3_stmt,
     return_arrays: bool,
-) -> Result<JSValue, f64> {
+) -> Result<JSValue, perry_runtime::error::CoreError> {
     let column_count = ffi::sqlite3_column_count(raw_stmt).max(0);
     let scope = RuntimeHandleScope::new();
     let mut values = Vec::with_capacity(column_count as usize);
@@ -445,7 +445,7 @@ unsafe fn column_value_checked(
     raw_stmt: *mut ffi::sqlite3_stmt,
     index: c_int,
     read_bigints: bool,
-) -> Result<JSValue, f64> {
+) -> Result<JSValue, perry_runtime::error::CoreError> {
     Ok(match ffi::sqlite3_column_type(raw_stmt, index) {
         ffi::SQLITE_NULL => JSValue::null(),
         ffi::SQLITE_INTEGER => {

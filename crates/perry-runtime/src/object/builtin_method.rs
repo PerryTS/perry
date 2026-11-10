@@ -114,7 +114,7 @@ unsafe fn forwarded_head(addr: usize) -> Option<usize> {
 unsafe fn map_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_MAP
-            && super::cell_meta::map_cell_meta(raw(v) as *const crate::map::MapHeader).is_null()
+            && !super::cell_meta::builtin_cell_has_meta(raw(v) as usize, (*h).obj_type)
     }) && pristine(BuiltinProto::Map)
 }
 
@@ -123,7 +123,7 @@ unsafe fn map_ok(v: f64) -> bool {
 unsafe fn set_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_SET
-            && super::cell_meta::set_cell_meta(raw(v) as *const crate::set::SetHeader).is_null()
+            && !super::cell_meta::builtin_cell_has_meta(raw(v) as usize, (*h).obj_type)
     }) && pristine(BuiltinProto::Set)
 }
 
@@ -182,10 +182,7 @@ pub(crate) unsafe fn by_name_function_apply(target: f64, args: &[f64]) -> Option
 #[inline(never)]
 unsafe fn array_push(recv: f64, values: &[f64]) -> f64 {
     let arr = raw(recv) as *mut crate::array::ArrayHeader;
-    if crate::array::array_is_frozen(arr) {
-        crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
-    }
-    crate::array::guard_writable_length(arr);
+    crate::array::push_guard(arr, values.len() as u32);
     let mut a = arr;
     for v in values {
         a = crate::array::js_array_push_f64_spec(a, *v);

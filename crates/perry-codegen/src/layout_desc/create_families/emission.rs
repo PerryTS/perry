@@ -59,6 +59,9 @@ pub(crate) fn emit_holder_load(
     let ids: Vec<String> = read.states.iter().map(|s| layout_id(ctx, s)).collect();
     let chain_ids: Vec<String> = read.chain.iter().map(|(_, d)| layout_id(ctx, d)).collect();
     let mut ok = "false".to_string();
+    // `ObjectHeader::meta` is the header's last word: @8 on LP64, @12 on ILP32.
+    let meta_off =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple, read.form()) as i64;
     {
         let blk = ctx.block();
         let wp = emit_field_ptr(blk, biased, 4);
@@ -69,7 +72,7 @@ pub(crate) fn emit_holder_load(
             let held = blk.and(crate::types::I1, &registered, &same);
             ok = blk.or(crate::types::I1, &ok, &held);
         }
-        let mp = emit_field_ptr(blk, biased, header - 8);
+        let mp = emit_field_ptr(blk, biased, meta_off);
         let meta = blk.load(PTR, &mp);
         let no_meta = blk.icmp_eq(PTR, &meta, "null");
         ok = blk.and(crate::types::I1, &ok, &no_meta);

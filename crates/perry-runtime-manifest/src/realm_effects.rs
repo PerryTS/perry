@@ -1,0 +1,699 @@
+//! The `effects = { ... }` clause of a realm attribute: what a built-in does
+//! to its inputs, in a few verbs. Parsed here into the manifest's JSON; the
+//! typed schema is `realm_effect.rs` (serde, read by the compiler builds).
+//!
+//! ```text
+//! effects  := "{" effect (";" effect)* ";"? "}"
+//! effect   := reads(slot, ...) | coerce(slot, Protocol) | stores(slot -> slot) | stores(fresh)
+//!           | calls(slot, this = operand, args = [operand, ...])
+//!           | returns(operand) | open | path(slot)
+//! slot     := this | result | arg(N) | rest(N) | returned(N) | elems(slot) | field(slot, key)
+//! operand  := value ("|" value)*
+//! value    := slot | prim(kind | kind ...) | native(Realm.path)
+//!           | fresh(Realm.path, elems = [operand, ...], fields = {key: operand, ...})
+//!           | species(slot, args = [operand, ...], elems = [slot, ...])
+//!
+//! `returned(N)`: the value the N-th `calls` of this declaration (0-based)
+//! returned; a value only: an operand, a store source or a coerced slot
+//! (`sort` runs ToNumber on its comparator's result).
+//! `fresh(..)`: an object the call makes: elements and own data fields
+//! holding the operands. `native(path)`: the host function value the
+//! realm declares at `path` (its body declares its own effects).
+//! `species(..)`: ArraySpeciesCreate on the slot (see
+//! `RealmOperand::Species`).
+//! `path(slot)`: what node does to a PathLike argument (getValidatedPath:
+//! `toPathIfFileURL`, then the type check), as the reads and coercions it
+//! stands for (`path_effects`).
+//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys | ShallowInspect
+//! kind     := undefined | null | bool | num | str | bigint | symbol
+//! ```
+use super::info;
+use super::Token;
+use crate::realm_json::Value;
+
+fn object(entries: Vec<(&str, Value)>) -> Value {
+    Value::Object(entries.into_iter().map(|(k, v)| (k.into(), v)).collect())
+}
+
+fn tagged(tag: &str, value: Value) -> Value {
+    object(vec![(tag, value)])
+}
+
+/// `name ( inner )` -> (name, inner); a bare word -> (name, None).
+fn call<'a, 's>(ts: &'a [Token<'s>]) -> Result<(&'s str, Option<&'a [Token<'s>]>), String> {
+    let text = info::text(ts);
+    match ts {
+        [] => Err("empty effect term".into()),
+        [word] => Ok((word.text, None)),
+        [word, open, inner @ .., close] if open.text == "(" && close.text == ")" => {
+            Ok((word.text, Some(inner)))
+        }
+        _ => Err(format!("malformed effect term `{text}`")),
+    }
+}
+
+fn index(name: &str, inner: Option<&[Token<'_>]>) -> Result<Value, String> {
+    let text = inner.map(info::text).unwrap_or_default();
+    let n: u8 = text
+        .parse()
+        .map_err(|_| format!("{name}(N) needs an argument index, got `{name}({text})`"))?;
+    Ok(Value::Number(n.to_string()))
+}
+
+/// Builds the slot outermost-first, so steps come out innermost-first.
+fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
+    let (name, inner) = call(ts)?;
+    let (root, steps) = match (name, inner) {
+        ("this", None) => (Value::String("this".into()), Vec::new()),
+        ("result", None) => (Value::String("result".into()), Vec::new()),
+        ("callee", None) => (Value::String("callee".into()), Vec::new()),
+        ("arg" | "rest" | "returned", Some(_)) => {
+            (tagged(name, index(name, inner)?), Vec::new())
+        }
+        ("elems", Some(inner)) => {
+            let Value::Object(mut base) = slot(inner)? else { unreachable!() };
+            let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
+            steps.push(Value::String("elems".into()));
+            (base.remove("root").unwrap(), steps)
+        }
+        (step @ ("field" | "islot"), Some(inner)) => {
+            let parts = info::split(inner, ",");
+            let [of, key] = parts.as_slice() else {
+                return Err(format!("{step}(slot, key) takes a slot and a key"));
+            };
+            let key = match key {
+                [t] => t.string.clone().unwrap_or_else(|| t.text.to_owned()),
+                _ => return Err(format!("field key must be one word or string, got `{}`", info::text(key))),
+            };
+            if key.is_empty() {
+                return Err("field key is empty".into());
+            }
+            let Value::Object(mut base) = slot(of)? else { unreachable!() };
+            let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
+            let tag = if step == "field" { "field" } else { "internal" };
+            steps.push(tagged(tag, Value::String(key)));
+            (base.remove("root").unwrap(), steps)
+        }
+        _ => {
+            return Err(format!(
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), field(slot, key), islot(slot, name))",
+                info::text(ts)
+            ))
+        }
+    };
+    Ok(object(vec![("root", root), ("steps", Value::Array(steps))]))
+}
+
+fn slots(ts: &[Token<'_>]) -> Result<Vec<Value>, String> {
+    if ts.is_empty() {
+        return Ok(Vec::new());
+    }
+    info::split(ts, ",").into_iter().map(slot).collect()
+}
+
+fn bracketed<'a, 's>(what: &str, ts: &'a [Token<'s>]) -> Result<&'a [Token<'s>], String> {
+    match ts {
+        [open, inner @ .., close] if open.text == "[" && close.text == "]" => Ok(inner),
+        _ => Err(format!("{what} must be a [list]")),
+    }
+}
+
+fn keyword<'a, 's>(key: &str, ts: &'a [Token<'s>]) -> Result<&'a [Token<'s>], String> {
+    match ts {
+        [k, eq, rest @ ..] if k.text == key && eq.text == "=" && !rest.is_empty() => Ok(rest),
+        _ => Err(format!("expected `{key} = ...`, got `{}`", info::text(ts))),
+    }
+}
+
+fn operand(ts: &[Token<'_>]) -> Result<Value, String> {
+    let members = info::split(ts, "|");
+    if members.len() > 1 {
+        let members = members
+            .into_iter()
+            .map(value)
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(tagged("union", Value::Array(members)));
+    }
+    value(ts)
+}
+
+fn value(ts: &[Token<'_>]) -> Result<Value, String> {
+    let (name, inner) = call(ts)?;
+    match (name, inner) {
+        ("prim", Some(inner)) => {
+            let kinds = info::split(inner, "|")
+                .into_iter()
+                .map(|kind| match info::text(kind).as_str() {
+                    k @ ("undefined" | "null" | "bool" | "num" | "str" | "bigint" | "symbol") => {
+                        Ok(Value::String(k.into()))
+                    }
+                    k => Err(format!(
+                        "unknown primitive kind `{k}` (undefined, null, bool, num, str, bigint, symbol)"
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if kinds.is_empty() {
+                return Err("prim() names no primitive kind".into());
+            }
+            Ok(tagged("prim", Value::Array(kinds)))
+        }
+        ("fresh", Some(inner)) => {
+            let usage = "fresh(Proto, elems = [operand, ...], fields = {key: operand, ...}, slots = {name: operand, ...})";
+            let parts = info::split(inner, ",");
+            let [proto, rest @ ..] = parts.as_slice() else {
+                return Err(format!("{usage} takes a prototype"));
+            };
+            let mut elems: Option<Vec<Value>> = None;
+            let mut fields: Option<Vec<Value>> = None;
+            let mut slots: Option<Vec<Value>> = None;
+            for part in rest {
+                match part.first().map(|t| t.text) {
+                    Some("elems") if elems.is_none() => {
+                        let list = bracketed("fresh elems", keyword("elems", part)?)?;
+                        elems = Some(if list.is_empty() {
+                            Vec::new()
+                        } else {
+                            info::split(list, ",")
+                                .into_iter()
+                                .map(operand)
+                                .collect::<Result<Vec<_>, _>>()?
+                        });
+                    }
+                    Some(which @ ("fields" | "slots"))
+                        if (which == "fields" && fields.is_none())
+                            || (which == "slots" && slots.is_none()) =>
+                    {
+                        let block = match keyword(which, part)? {
+                            [open, inner @ .., close] if open.text == "{" && close.text == "}" => {
+                                inner
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "fresh {which} must be a {{key: operand, ...}} block"
+                                ))
+                            }
+                        };
+                        let mut keys: Vec<String> = Vec::new();
+                        let mut list = Vec::new();
+                        for field in info::split(block, ",") {
+                            let malformed =
+                                || format!("malformed fresh field `{}`", info::text(field));
+                            let [key, colon, value @ ..] = field else {
+                                return Err(malformed());
+                            };
+                            if colon.text != ":" || value.is_empty() {
+                                return Err(malformed());
+                            }
+                            let key = key.text.trim_matches('"').to_string();
+                            if keys.contains(&key) {
+                                return Err(format!("fresh {which} `{key}` declared twice"));
+                            }
+                            list.push(object(vec![
+                                ("key", Value::String(key.clone())),
+                                ("value", operand(value)?),
+                            ]));
+                            keys.push(key);
+                        }
+                        if which == "fields" {
+                            fields = Some(list);
+                        } else {
+                            slots = Some(list);
+                        }
+                    }
+                    _ => return Err(format!("{usage}: unexpected `{}`", info::text(part))),
+                }
+            }
+            // No internal slots: the form a declaration without them always had.
+            let mut parts = vec![
+                ("proto", Value::String(super::facts::path(proto)?)),
+                ("elems", Value::Array(elems.unwrap_or_default())),
+                ("fields", Value::Array(fields.unwrap_or_default())),
+            ];
+            if let Some(slots) = slots.filter(|s| !s.is_empty()) {
+                parts.push(("slots", Value::Array(slots)));
+            }
+            Ok(tagged("fresh", object(parts)))
+        }
+        ("promise", Some(inner)) => {
+            let usage = "promise(operand | .., reject = operand | ..)";
+            let members = |v: Value| match v {
+                Value::Object(mut o) if o.contains_key("union") => match o.remove("union") {
+                    Some(Value::Array(us)) => us,
+                    _ => unreachable!(),
+                },
+                v => vec![v],
+            };
+            let parts = info::split(inner, ",");
+            let (value, reject) = match parts.as_slice() {
+                [v] => (operand(v)?, None),
+                [v, r] if r.first().map(|t| t.text) == Some("reject") => {
+                    (operand(v)?, Some(operand(keyword("reject", r)?)?))
+                }
+                _ => return Err(format!("{usage}: malformed `{}`", info::text(inner))),
+            };
+            Ok(tagged(
+                "promise",
+                object(vec![
+                    ("value", Value::Array(members(value))),
+                    (
+                        "reject",
+                        Value::Array(reject.map(members).unwrap_or_default()),
+                    ),
+                ]),
+            ))
+        }
+        ("native", Some(inner)) => Ok(tagged("native", Value::String(super::facts::path(inner)?))),
+        ("bound", None) => Ok(Value::String("bound".into())),
+        ("json", None) => Ok(Value::String("json".into())),
+        ("unknown", None) => Ok(Value::String("unknown".into())),
+        ("species", Some(inner)) => {
+            let parts = info::split(inner, ",");
+            let usage = "species(slot, args = [operand, ...], elems = [slot, ...])";
+            let [of, args, rest @ ..] = parts.as_slice() else {
+                return Err(format!("{usage} takes a slot, args and elems"));
+            };
+            let args = info::split(bracketed("species args", keyword("args", args)?)?, ",")
+                .into_iter()
+                .map(operand)
+                .collect::<Result<Vec<_>, _>>()?;
+            let elems = match rest {
+                [] => Vec::new(),
+                [elems] => slots(bracketed("species elems", keyword("elems", elems)?)?)?,
+                _ => return Err(format!("{usage} takes a slot, args and elems")),
+            };
+            Ok(tagged(
+                "species",
+                object(vec![
+                    ("of", slot(of)?),
+                    ("args", Value::Array(args)),
+                    ("elems", Value::Array(elems)),
+                ]),
+            ))
+        }
+        _ => Ok(tagged("slot", slot(ts)?)),
+    }
+}
+
+fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
+    let (verb, inner) = call(ts)?;
+    let inner = || inner.ok_or_else(|| format!("effect `{verb}` needs (arguments)"));
+    Ok(match verb {
+        "open" if ts.len() == 1 => Value::String("open".into()),
+        "reads" => {
+            let read = slots(inner()?)?;
+            if read.is_empty() {
+                return Err("reads() names no slot".into());
+            }
+            tagged("reads", Value::Array(read))
+        }
+        "escapes" => tagged("escapes", slot(inner()?)?),
+        "async_resource" => tagged("async_resource", slot(inner()?)?),
+        "coerce" => {
+            let parts = info::split(inner()?, ",");
+
+            let [of, protocol] = parts.as_slice() else {
+                return Err("coerce(slot, Protocol) takes a slot and a protocol".into());
+            };
+            let protocol = match info::text(protocol).as_str() {
+                "ToPrimitive" => "to_primitive",
+                "Iterate" => "iterate",
+                "IterNext" => "iter_next",
+                "IterResult" => "iter_result",
+                "Json" => "json",
+                "HasInstance" => "has_instance",
+                "OwnKeys" => "own_keys",
+                "ShallowInspect" => "shallow_inspect",
+                "Any" => return Err("coerce(.., Any) is not declarable: name the protocol".into()),
+                p => {
+                    return Err(format!(
+                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys, ShallowInspect)"
+                    ))
+                }
+            };
+            tagged(
+                "coerce",
+                object(vec![
+                    ("slot", slot(of)?),
+                    ("protocol", Value::String(protocol.into())),
+                ]),
+            )
+        }
+        "calls" => {
+            let parts = info::split(inner()?, ",");
+            let [callee, this, args] = parts.as_slice() else {
+                return Err(
+                    "calls(slot, this = operand, args = [operand, ...]) takes three parts".into(),
+                );
+            };
+            let args = info::split(bracketed("calls args", keyword("args", args)?)?, ",")
+                .into_iter()
+                .map(operand)
+                .collect::<Result<Vec<_>, _>>()?;
+            tagged(
+                "calls",
+                object(vec![
+                    ("callee", slot(callee)?),
+                    ("this", operand(keyword("this", this)?)?),
+                    ("args", Value::Array(args)),
+                ]),
+            )
+        }
+        "stores" => {
+            let inner = inner()?;
+            if let [word] = inner {
+                if word.text == "fresh" {
+                    // The body stores only into objects it creates itself.
+                    return Ok(Value::String("stores_fresh".into()));
+                }
+            }
+            let arrow = inner
+                .windows(2)
+                .position(|w| w[0].text == "-" && w[1].text == ">")
+                .ok_or("stores(src -> dst) needs `->`")?;
+            tagged(
+                "stores",
+                object(vec![
+                    ("src", slot(&inner[..arrow])?),
+                    ("dst", slot(&inner[arrow + 2..])?),
+                ]),
+            )
+        }
+        "returns" => tagged("returns", operand(inner()?)?),
+        _ => {
+            return Err(format!(
+                "unknown effect `{}` (reads, coerce, calls, stores, returns, open, path)",
+                info::text(ts)
+            ))
+        }
+    })
+}
+
+/// `slot` one step further in: `field(slot, key)` or `elems(slot)`.
+fn step(slot: &Value, step: Value) -> Value {
+    let mut slot = slot.clone();
+    if let Value::Object(map) = &mut slot {
+        if let Some(Value::Array(steps)) = map.get_mut("steps") {
+            steps.push(step);
+        }
+    }
+    slot
+}
+
+fn field(slot: &Value, key: &str) -> Value {
+    step(slot, tagged("field", Value::String(key.into())))
+}
+
+/// `path(slot)`: node's getValidatedPath on a PathLike argument (node 22..26,
+/// lib/internal/url.js and lib/internal/errors.js; traced with a Proxy):
+/// - `isURL`: `href`, `protocol`, `auth`, `path` ([[Get]], truthiness only);
+/// - `fileURLToPath` of a URL-like value: `protocol`, `hostname`, `pathname`;
+///   the pathname's `length` and elements, and ToString of it
+///   (`decodeURIComponent`); on Windows ToString of `hostname`
+///   (`domainToUnicode`);
+/// - a value of another type throws ERR_INVALID_ARG_TYPE, whose message
+///   (`determineSpecificType`) reads `name` of a function, `constructor`
+///   and its `name` of an object (both ToString in a template), else runs
+///   `util.inspect(v, { depth: -1 })` on it (`ShallowInspect`; before the
+///   `[util.inspect.custom]` hook it reads the `prototype` of the
+///   constructor).
+/// A getter under any other key never runs.
+/// The body keeps nothing and calls nothing else.
+fn path_effects(s: &Value) -> Vec<Value> {
+    let pathname = field(s, "pathname");
+    let constructor = field(s, "constructor");
+    let reads = [
+        "href",
+        "protocol",
+        "auth",
+        "path",
+        "hostname",
+        "pathname",
+        "constructor",
+        "name",
+    ]
+    .into_iter()
+    .map(|k| field(s, k))
+    .chain([
+        field(&pathname, "length"),
+        step(&pathname, Value::String("elems".into())),
+        field(&constructor, "name"),
+        field(&constructor, "prototype"),
+    ])
+    .collect();
+    let coerce = |slot: Value, protocol: &str| {
+        tagged(
+            "coerce",
+            object(vec![
+                ("slot", slot),
+                ("protocol", Value::String(protocol.into())),
+            ]),
+        )
+    };
+    vec![
+        tagged("reads", Value::Array(reads)),
+        coerce(pathname, "to_primitive"),
+        coerce(field(s, "hostname"), "to_primitive"),
+        coerce(field(&constructor, "name"), "to_primitive"),
+        coerce(field(s, "name"), "to_primitive"),
+        coerce(s.clone(), "shallow_inspect"),
+    ]
+}
+
+/// The value of `effects = { ... }`: the list of effects, in source order.
+pub(super) fn parse(ts: &[Token<'_>]) -> Result<Value, String> {
+    let inner = match ts {
+        [open, inner @ .., close] if open.text == "{" && close.text == "}" => inner,
+        _ => return Err("effects must be a { verb(..); ... } block".into()),
+    };
+    let mut effects = Vec::new();
+    for e in info::split(inner, ";")
+        .into_iter()
+        .filter(|e| !e.is_empty())
+    {
+        match call(e) {
+            Ok(("path", Some(of))) => effects.extend(path_effects(
+                &slot(of).map_err(|err| format!("effects: path: {err}"))?,
+            )),
+            _ => effects.push(effect(e).map_err(|err| format!("effects: {err}"))?),
+        }
+    }
+    if effects.is_empty() {
+        return Err(
+            "effects: empty block (omit `effects` for unknown code, or write `open`)".into(),
+        );
+    }
+    let open = effects
+        .iter()
+        .filter(|e| matches!(e, Value::String(s) if s == "open"))
+        .count();
+    if open != 0 && effects.len() > 1 {
+        return Err("effects: `open` cannot be combined with other effects".into());
+    }
+    Ok(Value::Array(effects))
+}
+
+/// Text form, for tests and tools: `{ reads(this); returns(prim(num)) }` -> JSON.
+pub fn parse_text(text: &str) -> Result<String, String> {
+    let ts = super::tokens(text)?;
+    Ok(parse(&ts)?.encode())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_text;
+
+    #[test]
+    fn each_verb_parses_to_the_schema_form() {
+        assert_eq!(
+            parse_text("{ reads(this, elems(arg(0))) }").unwrap(),
+            r#"[{"reads":[{"root":"this","steps":[]},{"root":{"arg":0},"steps":["elems"]}]}]"#
+        );
+        assert_eq!(
+            parse_text("{ coerce(elems(this), ToPrimitive) }").unwrap(),
+            r#"[{"coerce":{"protocol":"to_primitive","slot":{"root":"this","steps":["elems"]}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]) }")
+                .unwrap(),
+            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"prim":["num"]},{"slot":{"root":"this","steps":[]}}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ stores(rest(0) -> elems(this)); }").unwrap(),
+            r#"[{"stores":{"dst":{"root":"this","steps":["elems"]},"src":{"root":{"rest":0},"steps":[]}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(prim(num | undefined)); returns(fresh(Array.prototype, elems = [elems(this)])); returns(field(this, \"k\")) }").unwrap(),
+            r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"slot":{"root":"this","steps":["elems"]}}],"fields":[],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
+        );
+        assert_eq!(parse_text("{ open }").unwrap(), r#"["open"]"#);
+        assert_eq!(
+            parse_text("{ coerce(arg(0), ShallowInspect) }").unwrap(),
+            r#"[{"coerce":{"protocol":"shallow_inspect","slot":{"root":{"arg":0},"steps":[]}}}]"#
+        );
+        // A slot more than one step deep.
+        assert_eq!(
+            parse_text("{ reads(field(field(arg(0), pathname), length)) }").unwrap(),
+            r#"[{"reads":[{"root":{"arg":0},"steps":[{"field":"pathname"},{"field":"length"}]}]}]"#
+        );
+        assert_eq!(
+            parse_text("{ reads(this); stores(fresh) }").unwrap(),
+            r#"[{"reads":[{"root":"this","steps":[]}]},"stores_fresh"]"#
+        );
+        assert_eq!(
+            parse_text("{ calls(arg(0), this = arg(1), args = [elems(this), prim(num) | elems(this)]); returns(fresh(Array.prototype, elems = [returned(0)])) }").unwrap(),
+            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"union":[{"prim":["num"]},{"slot":{"root":"this","steps":["elems"]}}]}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}},{"returns":{"fresh":{"elems":[{"slot":{"root":{"returned":0},"steps":[]}}],"fields":[],"proto":"Array.prototype"}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(species(this, args = [prim(num)], elems = [elems(this)])) }")
+                .unwrap(),
+            r#"[{"returns":{"species":{"args":[{"prim":["num"]}],"elems":[{"root":"this","steps":["elems"]}],"of":{"root":"this","steps":[]}}}}]"#
+        );
+    }
+
+    /// `path(slot)` is the reads and coercions node's getValidatedPath runs,
+    /// written out: the same effects as the long form.
+    #[test]
+    fn path_is_node_get_validated_path() {
+        let long = "{ reads(field(arg(0), href), field(arg(0), protocol), field(arg(0), auth), \
+            field(arg(0), path), field(arg(0), hostname), field(arg(0), pathname), \
+            field(arg(0), constructor), field(arg(0), name), field(field(arg(0), pathname), length), \
+            elems(field(arg(0), pathname)), field(field(arg(0), constructor), name), \
+            field(field(arg(0), constructor), prototype)); \
+            coerce(field(arg(0), pathname), ToPrimitive); coerce(field(arg(0), hostname), ToPrimitive); \
+            coerce(field(field(arg(0), constructor), name), ToPrimitive); \
+            coerce(field(arg(0), name), ToPrimitive); coerce(arg(0), ShallowInspect); returns(prim(bool)) }";
+        assert_eq!(
+            parse_text("{ path(arg(0)); returns(prim(bool)) }").unwrap(),
+            parse_text(long).unwrap()
+        );
+        assert!(parse_text("{ path(self) }")
+            .unwrap_err()
+            .contains("path: unknown effect slot `self`"));
+    }
+
+    #[test]
+    fn malformed_declarations_name_what_is_wrong() {
+        for (text, needle) in [
+            ("{ writes(this) }", "unknown effect `writes(this)`"),
+            ("{ reads() }", "reads() names no slot"),
+            ("{ reads(self) }", "unknown effect slot `self`"),
+            ("{ reads(arg(x)) }", "needs an argument index"),
+            ("{ coerce(this, Any) }", "not declarable"),
+            ("{ coerce(this, ValueOf) }", "unknown protocol `ValueOf`"),
+            ("{ stores(arg(0), this) }", "needs `->`"),
+            ("{ stores(fresh(Array.prototype)) }", "needs `->`"),
+            ("{ returns(species(this)) }", "takes a slot, args and elems"),
+            (
+                "{ returns(species(this, elems = [this])) }",
+                "expected `args = ...`",
+            ),
+            ("{ reads(returned(x)) }", "needs an argument index"),
+            ("{ calls(arg(0), arg(1)) }", "takes three parts"),
+            (
+                "{ calls(arg(0), this = undefined, args = []) }",
+                "unknown effect slot `undefined`",
+            ),
+            ("{ returns(prim(int)) }", "unknown primitive kind `int`"),
+            ("{ open; reads(this) }", "`open` cannot be combined"),
+            ("{ }", "empty block"),
+            ("reads(this)", "must be a { verb(..); ... } block"),
+        ] {
+            let err = parse_text(text).expect_err(text);
+            assert!(err.contains(needle), "{text}: {err}");
+        }
+    }
+
+    /// `fresh(.., fields = {..})` and `native(..)`: own data fields with
+    /// their values, the host function a body makes.
+    #[test]
+    fn fresh_fields_and_native_parse() {
+        assert_eq!(
+            parse_text("{ returns(fresh(Object.prototype, fields = {isFile: native(\"%FsStatsPredicate%\"), size: prim(num)})) }").unwrap(),
+            r#"[{"returns":{"fresh":{"elems":[],"fields":[{"key":"isFile","value":{"native":"%FsStatsPredicate%"}},{"key":"size","value":{"prim":["num"]}}],"proto":"Object.prototype"}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(fresh(Array.prototype, elems = [prim(str)])) }").unwrap(),
+            r#"[{"returns":{"fresh":{"elems":[{"prim":["str"]}],"fields":[],"proto":"Array.prototype"}}}]"#
+        );
+        for (bad, why) in [
+            (
+                "{ returns(fresh(Object.prototype, fields = {a: prim(num), a: prim(str)})) }",
+                "declared twice",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, fields = {a prim(num)})) }",
+                "malformed fresh field",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, fields = [a])) }",
+                "fields must be",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, slots = [a])) }",
+                "slots must be",
+            ),
+        ] {
+            let err = parse_text(bad).unwrap_err();
+            assert!(err.contains(why), "{bad}: {err}");
+        }
+    }
+
+    /// The W1 forms (fetch, AbortController/AbortSignal): `escapes(slot)`,
+    /// an internal slot step `islot(slot, name)`, a fresh object's internal
+    /// `slots`, a `promise(value, reject = ..)` operand, and a call of a
+    /// function the result holds (`calls(islot(result, k), this = result)`).
+    #[test]
+    fn escapes_islot_slots_and_promise_parse() {
+        for (text, json) in [
+            (
+                "{ escapes(field(arg(1), body)) }",
+                r#"[{"escapes":{"root":{"arg":1},"steps":[{"field":"body"}]}}]"#,
+            ),
+            (
+                "{ stores(arg(0) -> islot(islot(this, signal), reason)) }",
+                r#"[{"stores":{"dst":{"root":"this","steps":[{"internal":"signal"},{"internal":"reason"}]},"src":{"root":{"arg":0},"steps":[]}}}]"#,
+            ),
+            (
+                "{ returns(islot(this, reason) | prim(undefined)) }",
+                r#"[{"returns":{"union":[{"slot":{"root":"this","steps":[{"internal":"reason"}]}},{"prim":["undefined"]}]}}]"#,
+            ),
+            (
+                "{ returns(fresh(AbortSignal.prototype, slots = {reason: arg(0)})) }",
+                r#"[{"returns":{"fresh":{"elems":[],"fields":[],"proto":"AbortSignal.prototype","slots":[{"key":"reason","value":{"slot":{"root":{"arg":0},"steps":[]}}}]}}}]"#,
+            ),
+            (
+                "{ returns(promise(fresh(Response.prototype), reject = fresh(TypeError.prototype) | islot(field(arg(1), signal), reason))) }",
+                r#"[{"returns":{"promise":{"reject":[{"fresh":{"elems":[],"fields":[],"proto":"TypeError.prototype"}},{"slot":{"root":{"arg":1},"steps":[{"field":"signal"},{"internal":"reason"}]}}],"value":[{"fresh":{"elems":[],"fields":[],"proto":"Response.prototype"}}]}}}]"#,
+            ),
+            (
+                "{ returns(promise(prim(undefined))) }",
+                r#"[{"returns":{"promise":{"reject":[],"value":[{"prim":["undefined"]}]}}}]"#,
+            ),
+            (
+                "{ calls(islot(result, onabort), this = result, args = [fresh(Event.prototype)]) }",
+                r#"[{"calls":{"args":[{"fresh":{"elems":[],"fields":[],"proto":"Event.prototype"}}],"callee":{"root":"result","steps":[{"internal":"onabort"}]},"this":{"slot":{"root":"result","steps":[]}}}}]"#,
+            ),
+        ] {
+            assert_eq!(parse_text(text).unwrap(), json, "{text}");
+        }
+        for (bad, why) in [
+            ("{ escapes() }", "empty effect term"),
+            ("{ escapes(arg(0), arg(1)) }", "arg(N)"),
+            (
+                "{ returns(islot(this)) }",
+                "islot(slot, key) takes a slot and a key",
+            ),
+            (
+                "{ returns(promise(reject = prim(undefined))) }",
+                "malformed effect term",
+            ),
+            (
+                "{ returns(fresh(Object.prototype, slots = {a: prim(num), a: prim(str)})) }",
+                "declared twice",
+            ),
+        ] {
+            let e = parse_text(bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
+        }
+    }
+}

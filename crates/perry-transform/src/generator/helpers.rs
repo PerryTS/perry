@@ -17,6 +17,87 @@ pub fn rewrite_hoisted_lets_in_stmts(
     }
 }
 
+/// Give every `let x;` (no initializer) of an id in `tdz_ids` its
+/// declaration's value, `undefined`, wherever it sits in the state body's
+/// control flow (the same walk as [`rewrite_hoisted_lets_in_stmts`]).
+pub fn initialize_tdz_lets_in_stmts(
+    stmts: &mut [Stmt],
+    tdz_ids: &std::collections::HashSet<LocalId>,
+) {
+    if tdz_ids.is_empty() {
+        return;
+    }
+    for stmt in stmts.iter_mut() {
+        walk_hoisting_scope_mut(stmt, &mut |stmt| {
+            if let Stmt::Let { id, init, .. } = stmt {
+                if init.is_none() && tdz_ids.contains(id) {
+                    *init = Some(Expr::Undefined);
+                }
+            }
+        });
+    }
+}
+
+/// Remove the ids in `moved` from every `PreallocateTdzBoxes` of a state
+/// body (their cells are the activation's, seeded in the outer wrapper).
+pub fn strip_tdz_preallocs_in_stmts(
+    stmts: &mut [Stmt],
+    moved: &std::collections::HashSet<LocalId>,
+) {
+    for stmt in stmts.iter_mut() {
+        walk_hoisting_scope_mut(stmt, &mut |stmt| {
+            if let Stmt::PreallocateTdzBoxes(ids) = stmt {
+                ids.retain(|id| !moved.contains(id));
+            }
+        });
+    }
+}
+
+fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
+    f(stmt);
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            if let Some(eb) = else_branch {
+                eb.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+        }
+        Stmt::Labeled { body, .. } => walk_hoisting_scope_mut(body, f),
+        Stmt::For { init, body, .. } => {
+            if let Some(i) = init {
+                walk_hoisting_scope_mut(i, f);
+            }
+            body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            if let Some(c) = catch {
+                c.body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            }
+            if let Some(fin) = finally {
+                fin.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases {
+                case.body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn rewrite_hoisted_lets_in_stmt(
     stmt: &mut Stmt,
     hoisted_ids: &std::collections::HashSet<LocalId>,

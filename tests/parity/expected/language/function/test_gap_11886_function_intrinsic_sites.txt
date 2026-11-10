@@ -1,0 +1,80 @@
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+plain=obj:39:x
+plain-undef-this=u:39:y
+plain-null-this=u:39:y
+strict-undef=undef:39
+strict-null=null:39
+strict-prim=number:39
+strict-str=string:39
+sloppy-type-obj=object
+sloppy-prim=number
+sloppy-str=string
+sloppy-undef=undefined
+sloppy-null=object
+arrow=arrow:39:z
+method-own-this=obj.m:39:1
+method-other-this=other.m:39:1
+class-method=other.K.m:39:2
+class-method-self=K.K.m:39:2
+static=static:other:39
+rest=rest:obj:39|r
+arguments=args:2:39|a
+too-few=1,2,undefined,undefined,undefined,undefined
+many=1,2,3,4,5,6
+no-args=u:undefined:undefined
+bound=other:B:39
+generator=7,8
+genfn=gen:39
+adders=1040
+builtin-hasOwn=true
+builtin-slice=2,3
+builtin-toString=[object Array]
+apply-array=obj:39:a
+apply-like=other:39:l
+apply-short=other:39:undefined
+apply-null=other:undefined:undefined
+apply-undef=other:undefined:undefined
+apply-arguments=obj:39:f
+apply-rest=rest:obj:39|1|2
+apply-builtin=9
+apply-strict-prim=boolean:39
+bind-plain=obj:39:b
+bind-arrow=arrow:39:c
+bind-method=other.m:39:d
+bind-bound=other:B:39
+bind-class=K:bound K
+bind-name=bound plain:1
+class-call=TypeError
+class-apply=TypeError
+fake-call=fake:39
+own-call=own-call:39
+own-call-sibling=obj:39:s
+patched-call=obj:39:p
+patched-call-arrow=arrow:39:p
+patched-apply=obj:39:p
+patched-bind=obj:39:p
+patched-direct=other:39:d
+log=0:
+restored-call=obj:39:r
+restored-apply=obj:39:r
+restored-bind=obj:39:r
+log-after-restore=0
+mid-loop=29=obj:29:m;30=obj:30:m;44=obj:44:m;45=obj:45:m;
+swapped=obj:s1,s2:ignored
+swapped-fresh-site=obj:39,w:ignored
+unswapped=obj:u1:u2
+unswapped-fresh-site=obj:39:w
+noncallable=obj:1:2
+after-noncallable=obj:1:2
+async=42

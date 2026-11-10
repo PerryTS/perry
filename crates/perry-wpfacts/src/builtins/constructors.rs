@@ -17,6 +17,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             spread: vec![],
             ret: c.ret,
             site: c.site,
+            region: m.thrown,
         });
         return new_builtin_ns(m, ns, c2);
     }
@@ -64,13 +65,14 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                         spread: vec![],
                         ret,
                         site: call2,
+                        region: m.thrown,
                     },
                 );
                 m.cons(ex, Cons::Call { call: call2 });
             }
             ret_tok(m, call, p);
         }
-        BuiltinNs::Error | BuiltinNs::AggregateError => {
+        BuiltinNs::Error | BuiltinNs::NativeError(_) | BuiltinNs::AggregateError => {
             implicit_args(m, call, "Error message", Protocol::Any);
             let e = error_tok(m, call);
             let options = if ns == BuiltinNs::AggregateError {
@@ -133,13 +135,26 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let o = site_tmpl(m, call, "RegExp");
             ret_tok(m, call, o);
         }
-        BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer => {
+        BuiltinNs::TypedArray
+        | BuiltinNs::TypedArrayKind(_)
+        | BuiltinNs::DataView
+        | BuiltinNs::ArrayBuffer
+        | BuiltinNs::SharedArrayBuffer => {
             // 23.2.5: object sources are iterated or read as array-like;
             // elements ToNumber/ToBigInt. ArrayBuffer length is ToIndex,
-            // with only options.maxByteLength read. No identity is kept.
+            // with only options.maxByteLength read. A DataView's buffer is
+            // read through its internal slots; offset and length ToIndex.
+            // No identity is kept.
+            let buffer = matches!(ns, BuiltinNs::ArrayBuffer | BuiltinNs::SharedArrayBuffer);
+            let what = match ns {
+                BuiltinNs::DataView => "DataView",
+                BuiltinNs::ArrayBuffer => "ArrayBuffer",
+                BuiltinNs::SharedArrayBuffer => "SharedArrayBuffer",
+                _ => "TypedArray",
+            };
             let c = m.calls[call as usize].clone();
             if let Some(&src) = c.args.first() {
-                if ns == BuiltinNs::ArrayBuffer {
+                if buffer {
                     string_methods::to_prim(m, src, "ArrayBuffer byteLength ToIndex");
                     if let Some(&opts) = c.args.get(1) {
                         string_methods::read_prim(
@@ -148,6 +163,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                             "maxByteLength",
                             "ArrayBuffer maxByteLength ToIndex",
                         );
+                    }
+                } else if ns == BuiltinNs::DataView {
+                    for &a in c.args.iter().skip(1).take(2) {
+                        string_methods::to_prim(m, a, "DataView byteOffset/byteLength ToIndex");
                     }
                 } else {
                     let vals = typed_array_methods::source(m, call, src);
@@ -161,14 +180,17 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     }
                 }
             }
-            let o = site_tmpl(m, call, "TypedArray");
-            let fa = m.field_any(o);
-            m.add_prim(fa, prim::NUM | prim::BIGINT);
+            let o = site_tmpl(m, call, what);
+            // A typed array's elements; a buffer or a DataView has none.
+            if what == "TypedArray" {
+                let fa = m.field_any(o);
+                m.add_prim(fa, prim::NUM | prim::BIGINT);
+            }
             let c = m.calls[call as usize].clone();
             if let Some(&src) = c.args.first() {
                 m.cons(src, Cons::ShareBuffer { ta: o });
             }
-            if ns == BuiltinNs::ArrayBuffer && c.args.len() > 1 {
+            if buffer && c.args.len() > 1 {
                 // B4: `new ArrayBuffer(n, { maxByteLength })` is resizable.
                 let r = m.reason("B4 resizable ArrayBuffer");
                 m.mark_hard(o, Hard::B4Resizable, r);
@@ -176,6 +198,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::Function => {
+            if !function_ctor_runs_code(m, call, 0, true) {
+                return;
+            }
             set_dyn_eval(m, "E14 new Function(...)");
             unknown_method(m, call, "E14 dynamic code");
         }
@@ -220,7 +245,7 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
                 m.cons(
                     src,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: fields,
                     },
                 );
@@ -243,7 +268,7 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
             let o = site_tmpl(m, call, "TextCodec");
             ret_tok(m, call, o);
         }
-        "AbortController" | "Headers" => {
+        "Headers" => {
             implicit_args(m, call, "builtin constructor argument", Protocol::Any);
             let o = site_tmpl(m, call, "builtin");
             ret_tok(m, call, o);
@@ -262,6 +287,21 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
             }
             unknown_method(m, call, "E9 Proxy");
         }
-        _ => unknown_method(m, call, &format!("argument of unknown constructor {name}")),
+        _ => match super::effects::declared_ctor(name) {
+            // The realm's constructor, while the global holds it: what its
+            // declaration says. A write under the name (now, or later in the
+            // solve: the replay) is the unknown constructor again.
+            Some(e) if !m.unit_mode => {
+                let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let a = m.atom(name);
+                if native_written(m, g, a) {
+                    unknown_method(m, call, &format!("argument of written constructor {name}"));
+                } else {
+                    m.native_missing.push((g, a, NativeMiss::New(call)));
+                    super::effects::run_construct(m, e, call);
+                }
+            }
+            _ => unknown_method(m, call, &format!("argument of unknown constructor {name}")),
+        },
     }
 }

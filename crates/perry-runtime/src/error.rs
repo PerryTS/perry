@@ -2,6 +2,7 @@
 //!
 //! Provides the built-in Error class and its subclasses.
 
+pub use crate::exception::CoreError;
 use crate::string::{js_string_from_bytes, StringHeader};
 
 /// `ErrorHeader`'s own leading discriminator. #8113 removed the punned
@@ -142,7 +143,7 @@ thread_local! {
     /// currently being dispatched, set by codegen-emitted
     /// `js_set_call_location` immediately before a dynamic method/call
     /// dispatch that can throw "X is not a function" / "is not a
-    /// constructor". `make_stack` reads it so the thrown TypeError's
+    /// constructor". Frame capture records it so the thrown TypeError's
     /// `.stack` shows `at <file>:<line>` instead of `at <anonymous>`.
     ///
     /// Only populated when the program was compiled with `--debug-symbols`
@@ -212,20 +213,6 @@ fn recorded_stack_frame() -> Option<String> {
             format!("    at {}:{}", String::from_utf8_lossy(bytes), line)
         })
     })
-}
-
-unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
-    // Build a simple "<name>: <message>\n    at <file>:<line>" string
-    // (or "<anonymous>" when no #5247 source location is recorded). Real
-    // multi-frame stack traces are not implemented; the test only checks
-    // `.includes(message)`.
-    let frame = current_stack_frame();
-    let s = if message.is_empty() {
-        format!("{}\n{}", name, frame)
-    } else {
-        format!("{}: {}\n{}", name, message, frame)
-    };
-    js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
 unsafe fn alloc_error(
@@ -449,8 +436,7 @@ pub extern "C" fn js_rangeerror_new(message: *mut StringHeader) -> *mut ErrorHea
 pub(crate) fn throw_allocation_failed() -> ! {
     let msg = b"Array buffer allocation failed";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = js_rangeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(CoreError::range_error(s))
 }
 
 /// Create a new ReferenceError with a message
@@ -516,6 +502,121 @@ pub unsafe extern "C" fn js_error_value_with_code(
     crate::value::js_nanbox_pointer(err as i64)
 }
 
+/// The typed constructors of [`CoreError`]: each is an error constructor
+/// above, wrapped. These (and the io error builders in `crate::io_error`)
+/// are the only places a `CoreError` is made.
+impl CoreError {
+    /// The existing kind/options constructor, retaining its native-error origin.
+    pub fn kind_with_options(kind: u32, message: *mut StringHeader, options: f64) -> Self {
+        Self::of(js_error_new_kind_with_options(kind, message, options))
+    }
+    #[inline]
+    fn of(err: *mut ErrorHeader) -> Self {
+        CoreError::mint(crate::value::js_nanbox_pointer(err as i64))
+    }
+
+    /// `Error(message)`.
+    #[inline]
+    pub fn error(message: *mut StringHeader) -> Self {
+        Self::of(js_error_new_with_message(message))
+    }
+
+    /// `TypeError(message)`.
+    #[inline]
+    pub fn type_error(message: *mut StringHeader) -> Self {
+        Self::of(js_typeerror_new(message))
+    }
+
+    /// `RangeError(message)`.
+    #[inline]
+    pub fn range_error(message: *mut StringHeader) -> Self {
+        Self::of(js_rangeerror_new(message))
+    }
+
+    /// `ReferenceError(message)`.
+    #[inline]
+    pub fn reference_error(message: *mut StringHeader) -> Self {
+        Self::of(js_referenceerror_new(message))
+    }
+
+    /// `SyntaxError(message)`.
+    #[inline]
+    pub fn syntax_error(message: *mut StringHeader) -> Self {
+        Self::of(js_syntaxerror_new(message))
+    }
+
+    /// `EvalError(message)`.
+    #[inline]
+    pub fn eval_error(message: *mut StringHeader) -> Self {
+        Self::of(js_evalerror_new(message))
+    }
+
+    /// `URIError(message)`.
+    #[inline]
+    pub fn uri_error(message: *mut StringHeader) -> Self {
+        Self::of(js_urierror_new(message))
+    }
+
+    /// An `Error` with a custom `.name` (as [`js_error_new_with_name_message`]).
+    #[inline]
+    pub fn named(name: &'static [u8], message: *mut StringHeader) -> Self {
+        Self::of(js_error_new_with_name_message(name, message))
+    }
+
+    /// [`CoreError::named`] for a name that is not a `'static` literal.
+    #[inline]
+    pub(crate) fn named_bytes(name: &[u8], message: *mut StringHeader) -> Self {
+        Self::of(js_error_new_with_name_message_bytes(name, message))
+    }
+
+    /// The `ErrorHeader`'s address, for the runtime-written own properties
+    /// (`crate::node_submodules::set_error_user_prop`) set before the throw.
+    #[inline]
+    pub(crate) fn header_addr(&self) -> usize {
+        crate::value::js_nanbox_get_pointer(self.value()) as usize
+    }
+
+    /// `TypeError(message)` with an own enumerable `code` (Node's internal
+    /// `ERR_*` errors: `Object.keys(e)` is `["code"]`).
+    pub fn type_error_with_own_code(message: &[u8], code: &[u8]) -> Self {
+        Self::with_own_code(js_typeerror_new, message, code)
+    }
+
+    /// `RangeError(message)` with an own enumerable `code`.
+    pub fn range_error_with_own_code(message: &[u8], code: &[u8]) -> Self {
+        Self::with_own_code(js_rangeerror_new, message, code)
+    }
+
+    fn with_own_code(
+        make: extern "C" fn(*mut StringHeader) -> *mut ErrorHeader,
+        message: &[u8],
+        code: &[u8],
+    ) -> Self {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let code_ptr = js_string_from_bytes(code.as_ptr(), code.len() as u32);
+        let code = scope.root_nanbox_f64(crate::value::js_nanbox_string(code_ptr as i64));
+        let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let err = make(msg);
+        crate::node_submodules::set_error_user_prop(err as usize, "code", code.get_nanbox_f64());
+        Self::of(err)
+    }
+
+    /// An error of `kind` (0 = Error, 1 = TypeError, 2 = RangeError) whose
+    /// `.code` is `code` (as [`js_error_value_with_code`]).
+    pub fn with_code(message: &str, code: &str, kind: i32) -> Self {
+        // SAFETY: both slices are valid UTF-8 byte ranges for the call.
+        CoreError::mint(unsafe {
+            js_error_value_with_code(
+                message.as_ptr(),
+                message.len(),
+                code.as_ptr(),
+                code.len(),
+                kind,
+            )
+        })
+    }
+}
+
 /// Generic "throw a JS Error subclass carrying a Node `.code`" FFI entry
 /// point for out-of-crate callers (e.g. `perry-ext-http`'s http2
 /// settings helpers) that have no direct access to `perry-runtime`'s Rust
@@ -531,9 +632,9 @@ pub unsafe extern "C" fn js_throw_error_with_code(
     code_len: usize,
     kind: i32,
 ) -> ! {
-    crate::exception::js_throw(js_error_value_with_code(
+    crate::exception::throw_core(CoreError::mint(js_error_value_with_code(
         msg_ptr, msg_len, code_ptr, code_len, kind,
-    ))
+    )))
 }
 
 /// Build a Node-style *system* `Error` value carrying `.message`, `.code`
@@ -788,8 +889,7 @@ pub extern "C" fn js_error_new_kind_with_options(
 fn throw_not_iterable_type_error() -> ! {
     let message = b"is not iterable";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn error_kind_name(kind: u32) -> (&'static [u8], u32) {
@@ -812,8 +912,7 @@ fn coerce_error_message_value(value: f64) -> Option<*mut StringHeader> {
     }
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         let msg = js_string_from_bytes(b"Cannot convert a Symbol value to a string".as_ptr(), 41);
-        let err = js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
     Some(crate::builtins::js_string_coerce(value))
 }
@@ -1006,8 +1105,7 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
 fn throw_builtin_not_constructor(name: &'static str) -> ! {
     let message = format!("{name} is not a constructor");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]
@@ -1024,8 +1122,7 @@ pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
 pub extern "C" fn js_throw_strict_eval_arguments_syntax_error() -> f64 {
     let message = b"Unexpected eval or arguments in strict mode";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 /// PerformEval early errors (super outside its context / undeclared private
@@ -1034,8 +1131,7 @@ pub extern "C" fn js_throw_strict_eval_arguments_syntax_error() -> f64 {
 pub extern "C" fn js_throw_eval_syntax_error(message: f64) -> f64 {
     let message = value_to_lossy_string(message);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 // #1561-style force-keep: only generated IR calls this.
@@ -1069,10 +1165,10 @@ pub extern "C" fn js_throw_json_constructor_type_error() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_throw_illegal_constructor_type_error() -> f64 {
-    let message = b"Illegal constructor";
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    // Node: `TypeError [ERR_ILLEGAL_CONSTRUCTOR]: Illegal constructor`. The
+    // code is a static string: the registered-code throw every runtime coded
+    // error with a fixed code uses (this throw is linked into every binary).
+    crate::fs::validate::throw_type_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
 }
 
 fn value_to_lossy_string(value: f64) -> String {
@@ -1096,8 +1192,7 @@ pub extern "C" fn js_throw_type_error_const_assignment(name: f64) -> f64 {
         format!("Assignment to constant variable '{}'.", name)
     };
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_typeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 #[no_mangle]
@@ -1109,14 +1204,12 @@ pub extern "C" fn js_throw_reference_error_unresolvable_assignment(name: f64) ->
         format!("{} is not defined", name)
     };
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_referenceerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg_str))
 }
 
 fn throw_reference_error_message(message: &'static [u8]) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_referenceerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg))
 }
 
 /// Temporal Dead Zone ReferenceError. Thrown when a lexical `let`/`const`/
@@ -1136,8 +1229,7 @@ pub extern "C" fn js_throw_reference_error_tdz(name: f64) -> f64 {
         format!("Cannot access '{}' before initialization", name)
     };
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_referenceerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg_str))
 }
 
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code-
@@ -1187,8 +1279,7 @@ pub extern "C" fn js_throw_reference_error_this_before_super() -> f64 {
 fn throw_capture_stack_trace_target_type_error() -> ! {
     let message = b"The \"targetObject\" argument must be an object";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 // ───────────────────────── V8 CallSite shim ─────────────────────────
@@ -1329,70 +1420,14 @@ fn error_prepare_stack_trace_override() -> Option<f64> {
     Some(val_f64)
 }
 
-/// Compute a `.stack` value honoring the current `Error.prepareStackTrace`.
-/// With a user override, returns `prepareStackTrace(receiver, [CallSite, …])`;
-/// otherwise the coarse string. Returning it (vs storing it) keeps the result
-/// GC-rooted by the reading caller — a Rust-side store of the nursery CallSite
-/// array gets reclaimed the moment this returns (V8 itself evaluates `.stack`
-/// lazily for exactly this reason).
-unsafe fn compute_stack_value(receiver: f64) -> f64 {
-    if let Some(prep) = error_prepare_stack_trace_override() {
-        let structured = build_structured_stack(10);
-        let prep_ptr =
-            crate::value::js_nanbox_get_pointer(prep) as *const crate::closure::ClosureHeader;
-        return crate::closure::js_closure_call2(
-            prep_ptr,
-            crate::closure::plain_call_receiver(),
-            receiver,
-            structured,
-        );
-    }
-    let s = make_stack("Error", "");
-    crate::value::js_nanbox_string(s as i64)
-}
-
-/// Lazy `stack` accessor installed by `Error.captureStackTrace`. Fires on read
-/// with `this` bound to the target object (V8 semantics: `prepareStackTrace` is
-/// consulted at access time, not capture time).
-extern "C" fn error_stack_lazy_getter(
-    _closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    let receiver = this.as_f64();
-    unsafe { compute_stack_value(receiver) }
-}
-
-/// Install the lazy `stack` getter accessor on `target`.
-unsafe fn install_lazy_stack_accessor(target_ptr: *mut crate::object::ObjectHeader) {
-    let fp = crate::fn_info!(error_stack_lazy_getter, 0; with_declared(0));
-    let closure = crate::closure::js_closure_alloc(fp, 0);
-    if closure.is_null() {
-        return;
-    }
-    let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
-    let key = js_string_from_bytes(b"stack".as_ptr(), 5);
-    crate::object::ensure_key_in_keys_array(target_ptr, key);
-    crate::object::install_builtin_getter(target_ptr, "stack", getter_bits);
-    crate::object::set_accessor_descriptor(
-        target_ptr as usize,
-        "stack".to_string(),
-        crate::object::AccessorDescriptor {
-            get: getter_bits,
-            set: 0,
-        },
-    );
-    crate::object::set_property_attrs(
-        target_ptr as usize,
-        "stack".to_string(),
-        crate::object::PropertyAttrs::new(true, false, true),
-    );
-}
+#[path = "error_capture_stack.rs"]
+mod capture_stack;
+use capture_stack::install_lazy_stack_accessor;
 
 /// `Error.captureStackTrace(target[, constructorOpt])`.
 ///
-/// Perry's stack strings are intentionally coarse today; this helper installs
-/// the same non-enumerable `stack` data property shape Node exposes and
-/// preserves the invalid-target TypeError contract.
+/// Capture the source frames at this call and install a non-enumerable lazy
+/// accessor. Formatting and `Error.prepareStackTrace` lookup happen on read.
 #[no_mangle]
 pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f64) -> f64 {
     #[cfg(perry_contract_checks)]
@@ -1420,7 +1455,7 @@ pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f6
         // or the coarse string when there is no override. A getter RETURNS the
         // value to its caller (GC-rooted), unlike a stored nursery array which a
         // minor GC would reclaim the instant `captureStackTrace` returns.
-        install_lazy_stack_accessor(target_ptr);
+        install_lazy_stack_accessor(target);
     }
 
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -1595,9 +1630,7 @@ pub extern "C-unwind" fn js_throw_type_error_property_access(
         receiver, prop
     );
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// Issue #510: calling a method on a primitive whose name doesn't
@@ -1658,9 +1691,7 @@ pub extern "C-unwind" fn js_throw_type_error_not_a_function(
         format!("({}).{} is not a function", kind, prop)
     };
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// `new <primitive>(…)` where the callee is a primitive value (number, string,
@@ -1679,9 +1710,7 @@ pub extern "C-unwind" fn js_throw_type_error_not_a_function(
 pub extern "C-unwind" fn js_throw_not_a_constructor() -> f64 {
     let msg = b"is not a constructor";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 const _: extern "C-unwind" fn() -> f64 = js_throw_not_a_constructor;
@@ -1725,9 +1754,7 @@ pub extern "C" fn js_throw_type_error_immutable_write(
         _ => format!("Cannot modify object: '{}'", key),
     };
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// Convenience wrapper for the runtime — accepts the key as a

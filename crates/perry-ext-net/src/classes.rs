@@ -58,29 +58,31 @@ unsafe fn block_list<'a>(handle: i64) -> &'a mut BlockListState {
 }
 
 fn throw_miss<T>(miss: PayloadMiss) -> T {
-    extern "C" {
-        fn js_typeerror_new(message: *mut StringHeader) -> *mut u8;
-    }
-    // Release transports JS exceptions as raw foreign unwind records. Its
-    // panic=abort C-unwind call guard would abort before the generated catch.
     #[cfg(panic = "abort")]
     extern "C" {
-        fn js_throw(value: f64) -> !;
+        fn js_throw_error_with_code(
+            msg: *const u8,
+            msg_len: usize,
+            code: *const u8,
+            code_len: usize,
+            kind: i32,
+        ) -> !;
     }
     #[cfg(not(panic = "abort"))]
     extern "C-unwind" {
-        fn js_throw(value: f64) -> !;
+        fn js_throw_error_with_code(
+            msg: *const u8,
+            msg_len: usize,
+            code: *const u8,
+            code_len: usize,
+            kind: i32,
+        ) -> !;
     }
     let text = match miss {
         PayloadMiss::Foreign => "Illegal receiver",
         PayloadMiss::Closed => "Native payload is closed",
     };
-    let message = alloc_string(text);
-    unsafe {
-        js_throw(f64::from_bits(
-            JsValue::from_object_ptr(js_typeerror_new(message.as_raw())).bits(),
-        ))
-    }
+    unsafe { js_throw_error_with_code(text.as_ptr(), text.len(), std::ptr::null(), 0, 1) }
 }
 
 extern "C" {

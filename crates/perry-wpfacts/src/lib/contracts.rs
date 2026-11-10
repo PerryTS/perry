@@ -823,7 +823,7 @@ pub(super) fn arg_contract_of(
                 }
                 let model::TokKind::Obj(tm, _) = g.m.toks[t as usize] else {
                     vc.unknown_because(match g.m.toks[t as usize] {
-                        model::TokKind::Top | model::TokKind::BuiltinFn => "top-argument",
+                        model::TokKind::Top | model::TokKind::BuiltinFn(_) => "top-argument",
                         model::TokKind::Bound(_) => "bound-function-argument",
                         model::TokKind::ClassObj(_) => "class-constructor-argument",
                         model::TokKind::Proto(_)

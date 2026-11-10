@@ -35,6 +35,7 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
     eager.extend(deferred_async_dependencies(ctx, entry_path));
+    eager.extend(program_cjs_support(ctx));
     // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
     // have no static importer (loaded by a runtime-computed path). They are left
     // Deferred — eager-initing turbopack chunks at startup runs React-SSR code
@@ -155,6 +156,25 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             perry_hir::ModuleInitKind::Deferred
         };
     }
+}
+
+/// The CommonJS support module (`perry:cjs`) of a program that is not
+/// closed. Its `cache` is the program's `require.cache`, and its
+/// `js_cjs_install` makes it `Module._cache`. In Node that object exists from
+/// process start, so every `createRequire` function's `require.cache` and
+/// `Module._cache` are one object. The module is therefore Eager and
+/// initializes before every other module: a `createRequire` that runs before
+/// the first CommonJS load (the support module would otherwise come in with
+/// the first deferred require) still holds the program's cache. A closed
+/// program reaches none of these (its census has no `createRequire`), so its
+/// support module keeps the init kind its importers give it.
+fn program_cjs_support(ctx: &CompilationContext) -> Option<PathBuf> {
+    if ctx.cjs_closed {
+        return None;
+    }
+    ctx.cjs_support_path
+        .clone()
+        .filter(|path| ctx.native_modules.contains_key(path))
 }
 
 /// Order a module's dependency edges the way ESM evaluation visits them:
@@ -320,6 +340,17 @@ pub(super) fn topo_sort_non_entry_modules(
     // Any module not reachable from the entry through the collected edges
     // (Deferred dynamic-import targets, etc.) is appended afterwards in
     // alphabetical order for determinism.
+    // The CommonJS support module initializes first (`program_cjs_support`).
+    if let Some(support) = program_cjs_support(ctx) {
+        dfs_visit(
+            &support,
+            &deps,
+            &path_to_name,
+            &mut visited,
+            &mut visiting,
+            &mut sorted,
+        );
+    }
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
             if import.is_dynamic
@@ -454,30 +485,37 @@ pub(super) fn direct_requested_module_dependencies(
     ctx: &mut CompilationContext,
     path: &Path,
 ) -> Vec<PathBuf> {
-    let Some(module) = ctx.native_modules.get(path) else {
-        return Vec::new();
-    };
-    let mut targets: Vec<PathBuf> = module
-        .imports
-        .iter()
-        .filter(|i| !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require)
-        .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
-        .collect();
-    let sources: Vec<String> = module
-        .exports
-        .iter()
-        .filter_map(|e| match e {
-            perry_hir::Export::ExportAll { source }
-            | perry_hir::Export::ReExport { source, .. }
-            | perry_hir::Export::NamespaceReExport { source, .. } => Some(source.clone()),
-            _ => None,
-        })
-        .collect();
-    for source in sources {
-        if let Some((target, _)) = resolve_import_with_context(&source, path, ctx) {
-            targets.push(target);
-        }
+    static_requested_paths(ctx, path)
+}
+
+/// Runtime static edges in [[RequestedModules]] order, including SCC back-edges.
+pub(super) fn static_requested_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    let Some(module) = ctx.native_modules.get(path) else { return Vec::new(); };
+    let mut edges = Vec::new();
+    for import in &module.imports {
+        if import.is_dynamic || import.type_only || import.runtime_erased || import.is_deferred_require { continue; }
+        if let Some(target) = &import.resolved_path { edges.push((PathBuf::from(target), import.source.as_str())); }
     }
-    targets.retain(|p| ctx.native_modules.contains_key(p));
-    targets
+    for export in &module.exports {
+        let source = match export {
+            perry_hir::Export::ExportAll { source } | perry_hir::Export::ReExport { source, .. }
+            | perry_hir::Export::NamespaceReExport { source, .. } => source,
+            perry_hir::Export::Named { .. } => continue,
+        };
+        if let Some((target, _)) = resolve_import_with_context(source, path, ctx) { edges.push((target, source)); }
+    }
+    let mut ordered = esm_request_order(edges, &module.requested_modules);
+    let mut seen = HashSet::new();
+    ordered.retain(|p| ctx.native_modules.contains_key(p) && seen.insert(p.clone()));
+    ordered
+}
+
+/// Require rejects the graph by its executable static edges, never annotations.
+pub(super) fn graph_has_tla(ctx: &CompilationContext, path: &Path) -> bool {
+    fn visit(ctx: &CompilationContext, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
+        if !seen.insert(path.to_owned()) { return false; }
+        let Some(module) = ctx.native_modules.get(path) else { return false; };
+        module.has_top_level_await || static_requested_paths(ctx, path).iter().any(|dep| visit(ctx, dep, seen))
+    }
+    visit(ctx, path, &mut HashSet::new())
 }

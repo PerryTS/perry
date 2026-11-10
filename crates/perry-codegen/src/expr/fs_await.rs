@@ -34,7 +34,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // One operand, consumed by the very next emission: no window.
             let p = lower_expr(ctx, path)?;
             let _ = ctx.block().call(I32, "js_fs_unlink_sync", &[(DOUBLE, &p)]);
-            Ok(double_literal(0.0))
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 
         // -------- Await with busy-wait loop --------

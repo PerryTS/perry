@@ -4,7 +4,7 @@ use crate::realm_manifest::RealmKind;
 macro_rules! entry {
     ($name:literal $(=> $($birth:literal),*)?) => {
         RealmEntry { name: $name, kind: RealmKind::Constructor,
-            births: &[$($($birth),*)?], module: None, facts: "{}" }
+            births: &[$($($birth),*)?], module: None, facts: "{}", effects: &[], own: &[], proto: None }
     };
 }
 const CATALOG: &[RealmEntry] = &[
@@ -48,6 +48,9 @@ const CATALOG: &[RealmEntry] = &[
         births: &["Buffer", "Error"],
         module: Some("fs"),
         facts: "{}",
+        effects: &[],
+        own: &[],
+        proto: None,
     },
 ];
 
@@ -240,6 +243,7 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         (crate::Expr::GlobalThisExpr, true),
         (
             crate::Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(crate::Expr::GlobalThisExpr),
@@ -249,6 +253,7 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         ),
         (
             crate::Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(crate::Expr::GlobalThisExpr),
@@ -417,8 +422,13 @@ fn get_builtin_module_is_require_for_reach() {
 fn assert_loads_fs(form: &str, literal: &str) {
     let partial = reach(literal);
     assert!(!partial.is_full(), "{form}: {literal}: {partial:?}");
-    assert!(partial.names.contains("node:fs"), "{form}: {literal}: {partial:?}");
-    let dynamic_source = literal.replace("\"node:fs\"", "name").replace("\"fs\"", "name");
+    assert!(
+        partial.names.contains("node:fs"),
+        "{form}: {literal}: {partial:?}"
+    );
+    let dynamic_source = literal
+        .replace("\"node:fs\"", "name")
+        .replace("\"fs\"", "name");
     assert_ne!(dynamic_source, literal, "{form}: fixture has no literal");
     let dynamic = reach(&dynamic_source);
     assert!(
@@ -429,12 +439,18 @@ fn assert_loads_fs(form: &str, literal: &str) {
 
 fn assert_escapes(form: &str, source: &str) {
     let r = reach(source);
-    assert!(r.top.contains(&RealmTop::DynamicModule), "{form}: {source}: {r:?}");
+    assert!(
+        r.top.contains(&RealmTop::DynamicModule),
+        "{form}: {source}: {r:?}"
+    );
 }
 
 #[test]
 fn optional_chain_get_builtin_module_loads_the_module() {
-    assert_loads_fs("optional call", "const fs = process.getBuiltinModule?.(\"node:fs\");");
+    assert_loads_fs(
+        "optional call",
+        "const fs = process.getBuiltinModule?.(\"node:fs\");",
+    );
     assert_loads_fs(
         "optional member",
         "const fs = globalThis.process?.getBuiltinModule(\"node:fs\");",
@@ -511,7 +527,10 @@ fn imported_get_builtin_module_loads_the_module() {
 
 #[test]
 fn computed_get_builtin_module_loads_the_module() {
-    assert_loads_fs("computed key", "process[\"getBuiltinModule\"](\"node:fs\");");
+    assert_loads_fs(
+        "computed key",
+        "process[\"getBuiltinModule\"](\"node:fs\");",
+    );
     assert_loads_fs(
         "constant computed key",
         "const k = \"getBuiltinModule\"; process[k](\"node:fs\");",
@@ -520,7 +539,8 @@ fn computed_get_builtin_module_loads_the_module() {
 
 #[test]
 fn create_require_result_used_as_a_value_is_top() {
-    let head = "import { createRequire } from \"node:module\"; const req = createRequire(__filename);";
+    let head =
+        "import { createRequire } from \"node:module\"; const req = createRequire(__filename);";
     assert_escapes("map argument", &format!("{head} [\"fs\"].map(req);"));
     assert_escapes("helper argument", &format!("{head} helper(req);"));
     assert_escapes("stored", &format!("{head} const o = {{ load: req }};"));
@@ -528,16 +548,25 @@ fn create_require_result_used_as_a_value_is_top() {
     assert_escapes("call", &format!("{head} req.call(null, \"fs\");"));
     assert_escapes("exported", "import { createRequire } from \"node:module\"; export const req = createRequire(__filename);");
     assert_escapes("export list", &format!("{head} export {{ req }};"));
-    assert_escapes("maker as a value", "import { createRequire } from \"node:module\"; helper(createRequire);");
+    assert_escapes(
+        "maker as a value",
+        "import { createRequire } from \"node:module\"; helper(createRequire);",
+    );
 }
 
 #[test]
 fn require_used_as_a_value_is_top() {
-    assert_escapes("alias map argument", "const req = require; [\"fs\"].map(req);");
+    assert_escapes(
+        "alias map argument",
+        "const req = require; [\"fs\"].map(req);",
+    );
     assert_escapes("alias helper argument", "const req = require; helper(req);");
     assert_escapes("free require argument", "helper(require);");
     assert_escapes("let alias", "let req = require; req(\"fs\");");
-    assert_escapes("getBuiltinModule value", "[\"fs\"].map(process.getBuiltinModule);");
+    assert_escapes(
+        "getBuiltinModule value",
+        "[\"fs\"].map(process.getBuiltinModule);",
+    );
     // Uses that do not let the loader escape stay partial.
     for source in [
         "const p = require.resolve(\"node:fs\"); require(\"node:fs\");",
@@ -549,4 +578,28 @@ fn require_used_as_a_value_is_top() {
         assert!(!r.is_full(), "{source}: {r:?}");
         assert!(r.names.contains("node:fs"), "{source}: {r:?}");
     }
+}
+
+#[test]
+fn an_ambient_require_declaration_keeps_require_the_loader() {
+    // HIR lowering erases `declare function require` (#8447) and `declare
+    // var`; the scan must read the same: an ES module still loads node:fs.
+    assert_loads_fs(
+        "declare function require",
+        "declare function require(id: string): any; const fs = require(\"fs\"); export const keep = 1;",
+    );
+    assert_loads_fs(
+        "exported declare function require",
+        "export declare function require(id: string): any; const fs = require(\"fs\");",
+    );
+    assert_loads_fs(
+        "declare var require",
+        "declare var require: any; const fs = require(\"fs\"); export const keep = 1;",
+    );
+    // A require with a body is a program binding: it loads nothing.
+    let r = reach(
+        "function require(id: string): any { return id; } const fs = require(\"fs\"); export const keep = 1;",
+    );
+    assert!(!r.names.contains("node:fs"), "{r:?}");
+    assert!(!r.top.contains(&RealmTop::DynamicModule), "{r:?}");
 }

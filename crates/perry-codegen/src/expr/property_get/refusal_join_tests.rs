@@ -264,3 +264,94 @@ fn shared_refusal_keeps_collection_and_binding_probe_semantics() {
         }
     }
 }
+
+/// `.size` on a native Map/Set answers from the storage word only while that
+/// count is [[Get]](recv, "size"): the cell's `meta` edge is null (no own
+/// key, no recorded [[Prototype]]) and the family's intrinsic prototype word
+/// is unshadowed. Each test's miss is the probe and the complete read; the
+/// size load has no other way in.
+#[test]
+fn collection_size_storage_answer_requires_the_intrinsic_chain() {
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+    ] {
+        let ir = emit(&["size"], false, target);
+        let b = blocks(&ir);
+        let (_, kind) = block(&b, "pget.collection_kind.");
+        let (meta_label, meta) = block(&b, "pget.collection_meta.");
+        let (intrinsic_label, _) = block(&b, "pget.collection_intrinsic.");
+        let (size_label, _) = block(&b, "pget.collection_size.");
+        let (other_label, _) = block(&b, "pget.collection_other.");
+        let names = |line: &str, label: &str| line.contains(&format!("label %{label}"));
+        let kind_exit = kind.last().unwrap();
+        assert!(
+            names(kind_exit, meta_label) && names(kind_exit, other_label),
+            "{target}: the kind test reaches the meta test or the probe: {kind:?}"
+        );
+        let meta_offset = format!(
+            "i64 {}, i64 {}",
+            super::super::generic_dispatch::MAP_HEADER_META_OFFSET,
+            super::super::generic_dispatch::SET_HEADER_META_OFFSET
+        );
+        assert!(
+            meta.iter()
+                .any(|l| l.contains("select i1") && l.contains(&meta_offset)),
+            "{target}: the meta word is the kind's: {meta:?}"
+        );
+        assert!(
+            meta.iter().any(|l| l.contains("load i64")),
+            "{target}: {meta:?}"
+        );
+        assert!(meta
+            .iter()
+            .any(|l| l.contains("icmp eq i64") && l.ends_with(", 0")));
+        let meta_exit = meta.last().unwrap();
+        assert!(
+            names(meta_exit, intrinsic_label) && names(meta_exit, other_label),
+            "{target}: a cell with a metadata record takes the probe: {meta:?}"
+        );
+        let into_size: Vec<_> = b
+            .iter()
+            .filter(|(_, body)| body.last().is_some_and(|t| names(t, size_label)))
+            .collect();
+        assert_eq!(
+            into_size.len(),
+            1,
+            "{target}: one way into the size load: {b:?}"
+        );
+        let (_, word_test) = into_size[0];
+        let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
+        assert!(
+            word_test
+                .iter()
+                .any(|l| l.contains("icmp ult i32") && l.ends_with(&format!(", {end}"))),
+            "{target}: the size load follows the intrinsic word test: {word_test:?}"
+        );
+        assert!(
+            names(word_test.last().unwrap(), other_label),
+            "{target}: a written intrinsic prototype takes the probe: {word_test:?}"
+        );
+    }
+}
+
+/// The meta offsets the inline `.size` arm reads are the ones the runtime
+/// pins with `offset_of!` (a reorder there must not leave these stale).
+#[test]
+fn collection_meta_offsets_match_the_runtime() {
+    fn pinned(src: &str, needle: &str) -> String {
+        let rest = src.split_once(needle).expect(needle).1;
+        rest.chars().take_while(char::is_ascii_digit).collect()
+    }
+    let map = include_str!("../../../../perry-runtime/src/map.rs");
+    let set = include_str!("../../../../perry-runtime/src/set.rs");
+    assert_eq!(
+        super::super::generic_dispatch::MAP_HEADER_META_OFFSET,
+        pinned(map, "offset_of!(MapHeader, meta) == ")
+    );
+    assert_eq!(
+        super::super::generic_dispatch::SET_HEADER_META_OFFSET,
+        pinned(set, "offset_of!(SetHeader, meta) == ")
+    );
+}

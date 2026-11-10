@@ -255,6 +255,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
+            if let Some(v) = class_field_update(ctx, object, property, *op, *prefix, *strict)? {
+                return Ok(v);
+            }
             // #7628's scope note: the same read-modify-write skeleton as
             // `Expr::IndexUpdate`, and the same repair — with one extra shape
             // on top. The read derives a RAW `i64` handle before
@@ -408,6 +411,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // is the element's own non-BigInt proof, so a typed-array `ta[i]++`
             // keeps the IR it had.
             let element_read = Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: object.clone(),
@@ -619,4 +623,163 @@ fn emit_numeric_slot_update(
         );
     }
     Ok(if prefix { new } else { old })
+}
+
+/// `o.f++` / `--o.f` on a class-instance receiver: the same read and store
+/// routes `o.f = o.f + 1` takes, with `ToNumeric` and the step inline for a
+/// plain double.
+///
+/// Before this arm, an update the facts could not prove into a raw-f64 lane
+/// (most `this.count++` fields, whose birth lane is boxed) went through
+/// `js_object_get_field_by_name_f64` + `js_to_numeric` + `js_numeric_step` +
+/// `js_put_value_set`, by name, even in a proven-shape method clone,
+/// while `this.count += 1` used the fixed-slot class-field routes.
+///
+/// Semantics are `[[Get]]`, `ToNumeric`, step, `[[Set]]`, in that order and
+/// once each, as in the generic arm: the read and the store are the ordinary
+/// `PropertyGet`/`PropertySet` lowerings, and anything that is not a plain
+/// double (an INT32 box, a string, a BigInt, an object with `valueOf`) takes
+/// the runtime `js_to_numeric`/`js_numeric_step` pair on a cold arm. The
+/// receiver is re-evaluated for the store, so it must be `this` or a local
+/// nothing between the read and the store can rebind (a `valueOf` can run
+/// there): not boxed, not captured, not a module global.
+fn class_field_update(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    op: BinaryOp,
+    prefix: bool,
+    strict: bool,
+) -> Result<Option<String>> {
+    if std::env::var("PERRY_CLASS_FIELD_UPDATE").as_deref() == Ok("0") {
+        return Ok(None);
+    }
+    if property.starts_with('#') {
+        return Ok(None);
+    }
+    let receiver_ok = match object {
+        Expr::This => !ctx.is_static_class_this(object) && !ctx.this_stack.is_empty(),
+        Expr::LocalGet(id) => {
+            ctx.locals.contains_key(id)
+                && !ctx.boxed_vars.contains(id)
+                && !ctx.closure_captures.contains_key(id)
+                && !ctx.module_globals.contains_key(id)
+                && !ctx.scalar_replaced.contains_key(id)
+        }
+        _ => false,
+    };
+    if !receiver_ok {
+        return Ok(None);
+    }
+    let Some(class_name) = crate::type_analysis::receiver_class_name(ctx, object) else {
+        return Ok(None);
+    };
+    // A declared field at a fixed slot, with no accessor or private-element
+    // layout in the way: the shapes the class-field read/store routes serve.
+    if crate::type_analysis::class_field_global_index(ctx, &class_name, property).is_none()
+        || super::property_get::class_has_evaluated_accessor(ctx, &class_name)
+        || ctx
+            .methods
+            .contains_key(&(class_name.clone(), format!("__get_{property}")))
+        || ctx
+            .methods
+            .contains_key(&(class_name.clone(), format!("__set_{property}")))
+    {
+        return Ok(None);
+    }
+    if super::private_field_site::private_field_site(ctx, object, property, 1).is_some() {
+        return Ok(None);
+    }
+
+    let field_read = Expr::PropertyGet {
+        byte_end: 0,
+        object: Box::new(object.clone()),
+        property: property.to_string(),
+        byte_offset: 0,
+    };
+    let not_bigint = crate::type_analysis::is_provably_not_bigint(ctx, &field_read);
+    let old = lower_expr(ctx, &field_read)?;
+
+    let is_num = crate::stmt::emit_js_value_is_number(ctx, &old);
+    let fast_idx = ctx.new_block("field_update.number");
+    let slow_idx = ctx.new_block("field_update.numeric");
+    let merge_idx = ctx.new_block("field_update.merge");
+    let fast_l = ctx.block_label(fast_idx);
+    let slow_l = ctx.block_label(slow_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&is_num, &fast_l, &slow_l);
+
+    ctx.current_block = fast_idx;
+    let fast_new = match op {
+        BinaryOp::Sub => ctx.block().fsub(&old, "1.0"),
+        _ => ctx.block().fadd(&old, "1.0"),
+    };
+    let fast_end = ctx.block_label(ctx.current_block);
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = slow_idx;
+    let slow_old = ctx.block().call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+    let step_arg = match op {
+        BinaryOp::Sub => "0",
+        _ => "1",
+    };
+    let step = |ctx: &mut FnCtx<'_>, operand: &str| {
+        ctx.block().call(
+            DOUBLE,
+            "js_numeric_step",
+            &[(DOUBLE, operand), (I32, step_arg)],
+        )
+    };
+    // A postfix update yields `old_num`, a heap BigInt on this arm, and
+    // `js_numeric_step` allocates: root it across the step and read it back,
+    // as the generic arm's `adopt_emitted` does.
+    let (slow_old, slow_new) = if !prefix && !not_bigint {
+        crate::rooting::with_scoped_values(ctx, &[(slow_old.as_str(), None)], |ctx, reads| {
+            let new = step(ctx, &slow_old);
+            Ok((lower_expr(ctx, &reads[0])?, new))
+        })?
+    } else {
+        let new = step(ctx, &slow_old);
+        (slow_old, new)
+    };
+    let slow_end = ctx.block_label(ctx.current_block);
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = merge_idx;
+    let old_num = ctx.block().phi(
+        DOUBLE,
+        &[
+            (old.as_str(), fast_end.as_str()),
+            (slow_old.as_str(), slow_end.as_str()),
+        ],
+    );
+    let new = ctx.block().phi(
+        DOUBLE,
+        &[
+            (fast_new.as_str(), fast_end.as_str()),
+            (slow_new.as_str(), slow_end.as_str()),
+        ],
+    );
+
+    // Both results may be BigInt heap values on the cold arm, and the store
+    // can run a setter (a subclass accessor, a Proxy prototype) that
+    // collects: bind them as rooted scoped temps for the store and the
+    // result read.
+    let proof = not_bigint.then_some(perry_hir::types::Type::Number);
+    let mut values = vec![(new.as_str(), proof.clone())];
+    if !prefix {
+        values.push((old_num.as_str(), proof));
+    }
+    let out = crate::rooting::with_scoped_values(ctx, &values, |ctx, reads| {
+        let store = Expr::PropertySet {
+            object: Box::new(object.clone()),
+            property: property.to_string(),
+            value: Box::new(reads[0].clone()),
+            byte_offset: 0,
+            byte_end: 0,
+        };
+        super::property_set::lower(ctx, &store, strict)?;
+        lower_expr(ctx, reads.last().expect("one value at least"))
+    })?;
+    Ok(Some(out))
 }

@@ -36,10 +36,7 @@ use std::cell::{Cell, RefCell};
 
 mod prototypes;
 
-pub(crate) use prototypes::{
-    attach_perf_hooks_constructor, perf_supported_entry_types_value,
-    performance_prototype_method_value,
-};
+pub(crate) use prototypes::{attach_perf_hooks_constructor, perf_supported_entry_types_value};
 use prototypes::{is_perf_constructor_name, link_perf_prototype};
 
 const ENTRY_TYPE_MARK: u8 = 0;
@@ -226,37 +223,15 @@ pub(crate) unsafe fn is_perf_entry_object_instance_of(
     })
 }
 
+/// `instanceof Performance` for the perf_hooks shape check: only the
+/// `performance` singleton is a Performance instance (node:
+/// `require("perf_hooks") instanceof Performance` is false).
 pub(crate) fn is_performance_object_value(value: f64) -> bool {
-    let bits = value.to_bits();
-    // Fast path: the exact cached singleton pointer.
-    if PERFORMANCE_NS.with(|c| {
-        let cached = c.get();
-        cached != 0 && cached == bits
-    }) {
-        return true;
-    }
-    // #3871: `performance` (global + `node:perf_hooks` import) resolves to the
-    // `perf_hooks` native-module namespace object via
-    // `js_create_native_module_namespace`, whose pointer may differ from the
-    // `PERFORMANCE_NS` cell (the cell is only set by `performance_namespace()`).
-    // Recognize any `perf_hooks` namespace object by its stored module name so
-    // `performance instanceof Performance` holds — mirrors the field-0 name
-    // check used for the observer entry list below.
-    unsafe {
-        if let Some(obj) = as_object_ptr(value) {
-            let module = js_object_get_field(obj, 0);
-            if string_of(module).as_deref() == Some("perf_hooks") {
-                return true;
-            }
-        }
-    }
-    false
+    is_performance_namespace_value(value)
 }
 
-/// True only for the canonical `performance` singleton.  The broader
-/// `is_performance_object_value` predicate also accepts legacy perf-hooks
-/// namespace objects for `instanceof` compatibility, but Performance
-/// prototype methods require the object's actual internal brand.
+/// True only for the canonical `performance` singleton: Performance.prototype
+/// methods require this receiver.
 pub(crate) fn is_performance_namespace_value(value: f64) -> bool {
     PERFORMANCE_NS.with(|c| {
         let cached = c.get();
@@ -327,18 +302,18 @@ pub(crate) unsafe fn perf_entry_to_json(this: f64) -> f64 {
     crate::value::js_nanbox_pointer(out as i64)
 }
 
-/// The per-thread singleton `performance` namespace object (perf_hooks-tagged).
-/// Both the `node:perf_hooks` named import and `globalThis.performance` resolve
-/// through here so `globalThis.performance === require("perf_hooks").performance`
-/// holds, matching Node.
+/// The per-thread singleton `performance` object: an ordinary object with no
+/// own keys whose [[Prototype]] is `Performance.prototype` (whose own
+/// [[Prototype]] is `EventTarget.prototype`), as in Node. Both the
+/// `node:perf_hooks` named import and `globalThis.performance` resolve here, so
+/// `globalThis.performance === require("perf_hooks").performance` holds.
 pub fn performance_namespace() -> f64 {
     let cached = PERFORMANCE_NS.with(|c| c.get());
     if cached != 0 {
         return f64::from_bits(cached);
     }
-    let module = b"perf_hooks";
-    let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
-    let ns = link_perf_prototype(ns, "Performance");
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { performance, kind = namespace, extends = Performance.prototype, members = { }; } };
+    let ns = link_perf_prototype(crate::value::js_nanbox_pointer(obj as i64), "Performance");
     PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
     ns
 }
@@ -400,9 +375,7 @@ fn num_of(v: JSValue) -> Option<f64> {
 /// TypeError, matching Node's input-validation errors). Never returns.
 fn throw_type_error(msg: &str) -> ! {
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// A `TypeError` with no Node `code` — what surfaces when Node reads an
@@ -424,15 +397,13 @@ fn throw_dom_exception(msg: &str, name: &str) -> ! {
     let message = f64::from_bits(str_value(msg).bits());
     let name = f64::from_bits(str_value(name).bits());
     let err = crate::event_target_hook_slots::js_dom_exception_new(message, name);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_open(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn throw_syntax_error_with_code(msg: &str, code: &'static str) -> ! {
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_str, code);
-    let err_ptr = crate::error::js_syntaxerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg_str))
 }
 
 /// The `nodeTiming` milestones Node refuses as user-timing mark names — a

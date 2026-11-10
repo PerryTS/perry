@@ -37,6 +37,11 @@ pub(super) fn optimize_and_emit(
     native_roots: bool,
     mut stats: Option<&mut UnitCodegenStats>,
 ) -> Result<Vec<Vec<u8>>> {
+    let verification = if crate::verify_facts::enabled() {
+        Some(super::verify_facts_copies::Inventory::capture(module)?)
+    } else {
+        None
+    };
     #[cfg(feature = "target-wasi")]
     crate::wasi_toolchain::check_linked(effective_target)?;
     global_init(mllvm);
@@ -123,6 +128,8 @@ pub(super) fn optimize_and_emit(
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
     super::coff::coalesce_helpers(module, effective_target);
+    // Before the statepoint rewrite hides the callees (see `cold_paths`).
+    super::cold_paths::apply(module);
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.
@@ -255,6 +262,12 @@ pub(super) fn optimize_and_emit(
     // After every IR-level fold has seen the constants: NaN-box operands of
     // the marked functions become reads of the runtime's table.
     super::nanbox_operands::apply(module, effective_target);
+    if let Some(verification) = verification {
+        verification.finish(module)?;
+        module
+            .verify()
+            .map_err(|e| anyhow!("verification copy metadata: {e}"))?;
+    }
 
     // Last change to the module before emission, so it sees exactly the
     // functions that become symbols (see `crate::function_order`).

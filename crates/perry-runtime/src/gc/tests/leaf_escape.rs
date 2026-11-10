@@ -136,7 +136,7 @@ fn precise_root_retains_a_leaf_without_any_other_evidence() {
 
 #[test]
 fn planted_missed_escape_is_caught_by_the_precise_oracle() {
-    let r = std::thread::spawn(|| unsafe {
+    let r = crate::test_support::thread_outcome(true, || unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let (old, fields) = alloc_old_test_object(2);
@@ -150,15 +150,14 @@ fn planted_missed_escape_is_caught_by_the_precise_oracle() {
             "the sabotage must drop the bit"
         );
         service();
-    })
-    .join();
+    });
     let text = panic_text(r);
     assert!(text.contains("precise service proves live"), "{text}");
 }
 
 #[test]
 fn a_writer_that_clears_the_shared_bit_is_caught() {
-    let r = std::thread::spawn(|| unsafe {
+    let r = crate::test_support::thread_outcome(true, || unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let (old, fields) = alloc_old_test_object(2);
@@ -168,8 +167,7 @@ fn a_writer_that_clears_the_shared_bit_is_caught() {
         assert_ne!(flags(l) & GC_FLAG_HAS_SURVIVED, 0);
         (*header_from_user_ptr(l as *const u8)).gc_flags &= !GC_FLAG_HAS_SURVIVED;
         service();
-    })
-    .join();
+    });
     let text = panic_text(r);
     assert!(text.contains("precise service proves live"), "{text}");
 }

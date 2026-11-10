@@ -1,0 +1,6 @@
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+0 builtin builtin
+1 builtin builtin
+2 builtin builtin
+3 builtin builtin

@@ -159,6 +159,7 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
     let name = facts::path(clauses.first().ok_or("array birth needs a realm path")?)?;
     let mut dynamic = false;
     let mut declared_kind = None;
+    let mut declared_word = None;
     let mut source_table = None;
     let mut integrity = Integrity::Extensible;
     let mut members = None;
@@ -188,7 +189,10 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
         }
         match (clause[0].text, clause[2].text) {
             ("value", "dynamic") => dynamic = true,
-            ("elements", kind) => declared_kind = Some(elements_kind(kind)?),
+            ("elements", kind) => {
+                declared_kind = Some(elements_kind(kind)?);
+                declared_word = Some(kind.to_owned());
+            }
             ("elements_source", table) => source_table = Some(table.to_owned()),
             ("integrity", level) => integrity = super::derive::integrity(level)?,
             ("kind", "prototype") => prototype_kind = true,
@@ -301,6 +305,11 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
             "value".into(),
             object([("kind", string("dynamic")), ("value", string(name.clone()))]),
         );
+        // The declared word, not the storage kind it collapses to: `string`
+        // and `object` arrays both hold pointers.
+        if let Some(word) = declared_word {
+            map.insert("elements".into(), string(word));
+        }
         return Ok(Value::Object(map));
     }
     if declared_kind.is_some() {

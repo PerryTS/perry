@@ -38,20 +38,18 @@ Each of these, absolutely (there is no allowlist to add an entry to):
     names a `TOKIO` package, or a `not_tokio` package that has left the lock
     (a stale note fails, so the file cannot describe a tree that is gone).
 
-NOT TOKIO: `tungstenite`, `lettre`
-----------------------------------
+NOT TOKIO: `tungstenite`
+------------------------
 
-The old inventory tracked the whole "tokio family" by name, which included two
+The old inventory tracked the whole "tokio family" by name, which included
 crates that are not tokio at all. They are listed under `not_tokio` in the JSON
-with the reason, and the gate CHECKS that reason against the lock rather than
+with the reason (`lettre` left with the nodemailer binding), and the gate CHECKS that reason against the lock rather than
 trusting it:
 
   * `tungstenite` 0.30 — synchronous WebSocket protocol. perry-ui-android uses
     it over a blocking `std::net::TcpStream` on one std thread per connection,
     and turnloop-websocket uses it as a codec. Its lock entry has no tokio
     dependency.
-  * `lettre` — perry-ext-nodemailer uses its `message` builder only; the
-    `tokio1` / `tokio1-rustls-tls` / `pool` transport features are off.
 
 USAGE
 -----
@@ -285,7 +283,7 @@ def wasi_fixture_problems(root: Path, metadata_loader=None) -> list[str]:
     """
     metadata_loader = metadata_loader or load_metadata
     problems = []
-    for manifest in sorted((root / "test-wasi/components").glob("*/*/Cargo.toml")):
+    for manifest in sorted((root / "tests/integration/wasi/components").glob("*/*/Cargo.toml")):
         directory = manifest.parent
         label = str(directory.relative_to(root))
         for edge in edges_from_metadata(metadata_loader(directory)):
@@ -448,7 +446,7 @@ def self_test() -> int:
         subprocess.run(["git", "init", "--quiet", str(root)], check=True)
         (root / "Cargo.lock").write_text(clean_lock)
         (root / ".gitignore").write_text("target/\n")
-        nested = root / "test-wasi/components/nested/host/Cargo.lock"
+        nested = root / "tests/integration/wasi/components/nested/host/Cargo.lock"
         nested.parent.mkdir(parents=True)
         nested.write_text(clean_lock + '\n[[package]]\nname = "tokio-new"\nversion = "1.0.0"\n')
         ignored = root / "target/Cargo.lock"
@@ -489,7 +487,7 @@ renamed = { package = "tokio-new", version = "1", optional = true }
     import tempfile
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        fixture = root / "test-wasi/components/probe/rust"
+        fixture = root / "tests/integration/wasi/components/probe/rust"
         (fixture / "src").mkdir(parents=True)
         (fixture / "Cargo.toml").write_text("[workspace]\n")
         lock = fixture / "Cargo.lock"

@@ -116,18 +116,19 @@ fn unknown_module_and_empty_stale_profile_are_explained() {
 }
 
 #[test]
-fn fresh_fact_is_consumed_once_and_scope_restores_on_unwind() {
+fn fresh_fact_is_consumed_once_and_a_nested_scope_restores_the_outer_state() {
     let _scope = enter(&profile());
     register();
     let fact = select_numeric_array(42, false).unwrap();
     assert_eq!(fact.state, "consumed");
     assert!(fact.detail.contains("advisory=true"));
     assert!(select_numeric_array(42, false).is_none());
-    let result = std::panic::catch_unwind(|| {
+    {
+        // A nested scope with the site fresh again: had its end not restored
+        // the outer state, the read below would select the fact once more.
         let _inner = enter(&profile());
-        panic!("scope sabotage");
-    });
-    assert!(result.is_err());
+        register();
+    }
     assert!(
         select_numeric_array(42, false).is_none(),
         "outer consumed state must be restored"

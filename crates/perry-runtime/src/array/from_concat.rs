@@ -27,9 +27,7 @@ fn throw_not_iterable(receiver: &str) -> ! {
         receiver
     );
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// Throw `TypeError: <value> is not a function` for a non-callable mapFn,
@@ -64,9 +62,7 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
     };
     let msg = format!("{} {} is not a function", type_name, value_str);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// `Array.from(source)` — the non-mapped form. Per ECMA-262 §23.1.2.1,
@@ -548,9 +544,7 @@ pub(super) fn finish_length(result: &RuntimeHandle<'_>, len: usize, array_result
 fn throw_cannot_define_property(index: usize) -> ! {
     let msg = format!("Cannot define property {}, object is not extensible", index);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// Call `mapfn(value, index)` with `this_arg` bound. Restores the implicit
@@ -563,7 +557,7 @@ fn call_map_fn(mapfn: f64, this_arg: f64, value: f64, index: usize) -> f64 {
         &[value, index as f64],
     ) {
         Ok(v) => v,
-        Err(e) => crate::exception::js_throw(e),
+        Err(e) => crate::exception::rethrow_caught(e),
     }
 }
 
@@ -756,9 +750,15 @@ unsafe fn populate_from_iterable(
                 ),
                 None => crate::symbol::js_get_iterator(items.get_nanbox_f64()),
             });
+            let next = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(
+                iter.get_nanbox_f64(),
+            ));
             let mut k = 0usize;
             loop {
-                match crate::collection_iter::iterator_next_value(iter.get_nanbox_f64()) {
+                match crate::collection_iter::iterator_next_value(
+                    iter.get_nanbox_f64(),
+                    next.get_nanbox_f64(),
+                ) {
                     None => return finish_length(result, k, array_result),
                     Some(value) => {
                         let mapped = if mapping {
@@ -769,9 +769,9 @@ unsafe fn populate_from_iterable(
                             ) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    let e = scope.root_nanbox_f64(e);
+                                    let e = e.root(&scope);
                                     crate::collection_iter::iterator_close(iter.get_nanbox_f64());
-                                    crate::exception::js_throw(e.get_nanbox_f64());
+                                    crate::exception::rethrow_caught(e.caught());
                                 }
                             }
                         } else {

@@ -87,7 +87,34 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
 
-Cross-target libraries (`--target android`, `ios`, `wasi`, ...) are separate packages, one per target, at the same version as perry: `npm install -g @perryts/perry-target-<triple>@<perry version>`, for example `@perryts/perry-target-aarch64-linux-android`. `perry compile --target` prints the exact command when one is missing; `perry target add <target>` installs the same package without npm. Native-extension archives (node:http, ws, zlib, ...) ship in `@perryts/perry-ext-<triple>`, which perry downloads by itself the first time a compile needs one (`PERRY_NO_AUTO_FETCH=1` turns that off; `perry target add --ext` installs it ahead of time).
+Every install channel (npm, Homebrew, apt, winget and install.sh) installs the
+host compiler, runtime, stdlib and sidecars. Optional host libraries are three
+independent packages, fetched only when a program links that kind:
+
+| Program | Package | Install ahead of time |
+|---|---|---|
+| `perry/ui` | `@perryts/perry-ui-<triple>` | `perry target add --ui` |
+| `WebAssembly` | `@perryts/perry-wasm-host-<triple>` | `perry target add --wasm-host` |
+| Native extensions (bcrypt, node:http, ws, zlib, ...) | `@perryts/perry-ext-<triple>` | `perry target add --ext` |
+
+A hello program fetches nothing. Each kind is installed once per Perry version
+in `~/.perry/<kind>/<version>/<triple>/`, after checking its signed release
+manifest and archive hashes. UI packages cover Darwin, glibc Linux and Windows
+on arm64/x64; musl hosts have wasm-host and ext packages only.
+
+Lookup prefers installed library directories, then a matching npm package
+beside Perry, then the matching version's `~/.perry` directory, then downloads
+only the missing kind. `PERRY_NO_AUTO_FETCH=1` disables downloads and reports
+the exact package, pinned npm command and `perry target add` command instead.
+For npm, install the exact matching version alongside Perry:
+`npm install -g @perryts/perry-ui-<triple>@<perry-version>` (or use
+`--save-dev` for a project install). `perry target list --verify` checks all
+kinds; `perry target remove --ui` and `--wasm-host` remove the selected kind
+from `~/.perry`. These commands accept an optional Rust triple.
+
+Cross-target libraries (`--target android`, `ios`, `wasi`, ...) remain separate
+`@perryts/perry-target-<triple>` packages, with runtime, stdlib, UI and sidecars
+for that target. `perry target add <target>` installs one ahead of time.
 
 #### Linux glibc requirement
 
@@ -104,7 +131,7 @@ On older glibc hosts Perry uses the **fully-static musl build** instead, which h
 
 The musl build still needs clang on the host (`apk add clang` on Alpine): static linking changes the libc of the produced binaries, not the assembler step described under Prerequisites.
 
-The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. The glibc package includes the GTK4 archive, built separately on Ubuntu 24.04; linking a UI app still requires the GTK4, WebKitGTK, libshumate and GStreamer development libraries. Tracking issues: [#6298](https://github.com/PerryTS/perry/issues/6298), [#6351](https://github.com/PerryTS/perry/issues/6351).
+The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. The glibc UI package supplies the GTK4 archive, built separately on Ubuntu 24.04; linking a UI app still requires the GTK4, WebKitGTK, libshumate and GStreamer development libraries. Tracking issues: [#6298](https://github.com/PerryTS/perry/issues/6298), [#6351](https://github.com/PerryTS/perry/issues/6351).
 
 ### Homebrew (macOS)
 

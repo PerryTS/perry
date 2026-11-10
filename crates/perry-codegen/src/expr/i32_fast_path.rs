@@ -21,6 +21,7 @@ use crate::types::{DOUBLE, F32, I16, I32, I64, I8};
 #[cfg(test)]
 mod bits_tests;
 mod native_narrow;
+pub(crate) mod temps;
 
 use native_narrow::{
     lower_expr_native_i16, lower_expr_native_i8, lower_expr_native_isize, lower_expr_native_u16,
@@ -485,6 +486,10 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
                 .all(|a| i32_chain_magnitude_bits(a, env).is_some())
                 .then_some(I32_CHAIN_LEAF_BITS)
         }
+        // N1: conditionals and `Math.min`/`max`/`abs` of chains (`temps`).
+        Expr::Conditional { .. } | Expr::MathMin(_) | Expr::MathMax(_) | Expr::MathAbs(_) => {
+            temps::selection_bits(e, env, i32_chain_magnitude_bits)
+        }
         // Issue #50 bridge: element of a flat-const 2D int table.
         Expr::IndexGet { object, .. } => match object.as_ref() {
             Expr::IndexGet { object: inner, .. } => {
@@ -886,7 +891,7 @@ pub(crate) fn lower_expr_native(
     expected: ExpectedNativeRep,
 ) -> Result<LoweredValue> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, e);
-    let _consumed = crate::facts_consumed::enter(e);
+    let _consumed = crate::facts_consumed::enter(e, &ctx.func.name);
     match expected {
         ExpectedNativeRep::JsValueBits => lower_expr_native_js_value_bits(ctx, e),
         ExpectedNativeRep::I8 => lower_expr_native_i8(ctx, e),
@@ -1012,6 +1017,9 @@ fn lower_expr_native_string_ref(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Lowered
 }
 
 fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
+    if let Some(v) = temps::lower_selection(ctx, e)? {
+        return Ok(Some(v));
+    }
     let value = match e {
         Expr::Integer(n) => Some((*n as i32).to_string()),
         Expr::LocalGet(id) => ctx

@@ -127,15 +127,12 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         }
         None => {
             // A statically resolved parent has no per-evaluation heritage
-            // value to pin (native constructors use reserved class ids).
-            // The declared prototype already carries that parent edge in its
-            // shape; copy it rather than defaulting this evaluation to Object.
-            let template_proto = super::super::class_registry::class_decl_prototype_value(class_id);
-            if JSValue::from_bits(template_proto.to_bits()).is_pointer() {
-                Some(super::super::js_object_get_prototype_of(template_proto).to_bits())
-            } else {
-                super::super::class_registry::global_object_prototype_bits()
-            }
+            // value to pin (native constructors use reserved class ids). Its
+            // edge is the declaration's static parent link, read from the
+            // declaration facts, not from the template's declaration holder:
+            // building this evaluation's prototype never builds the
+            // template's (S7b).
+            super::super::class_registry::static_parent_prototype_bits(class_id)
         }
     };
     finish_class_evaluation_prototype(class.get_raw_mut_ptr(), parent_proto)
@@ -168,20 +165,17 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         }) {
             CLASS_EVALUATION_PROTOTYPES_MATERIALIZED
                 .store(true, std::sync::atomic::Ordering::Relaxed);
-            proto.with_mut_ptr::<ObjectHeader, _>(|p| {
-                crate::object::class_registry::install_evaluation_prototype_symbol_members(
-                    p, class_id,
-                )
-            });
             let proto_value = proto
                 .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
-            crate::object::install_evaluation_generator_symbols(
-                proto_value,
-                class.with_const_ptr::<ObjectHeader, _>(|c| {
-                    crate::value::js_nanbox_pointer(c as i64)
-                }),
-                class_id,
-            );
+            proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+                crate::object::class_registry::install_prototype_symbol_members(
+                    p,
+                    class_id,
+                    class.with_const_ptr::<ObjectHeader, _>(|c| {
+                        crate::value::js_nanbox_pointer(c as i64)
+                    }),
+                )
+            });
             class.with_mut_ptr::<ObjectHeader, _>(|class| {
                 super::class_object_template::class_object_add_internal_for(
                     class,
@@ -264,6 +258,8 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 class_id,
                 &name,
                 class_value,
+                proto
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
             )
         });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
@@ -280,13 +276,12 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
     }
 
     proto.with_mut_ptr::<ObjectHeader, _>(|p| {
-        crate::object::class_registry::install_evaluation_prototype_symbol_members(p, class_id)
+        crate::object::class_registry::install_prototype_symbol_members(
+            p,
+            class_id,
+            class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
+        )
     });
-    crate::object::install_evaluation_generator_symbols(
-        proto.with_const_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
-        class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
-        class_id,
-    );
     if let Some(parent_proto) = &parent_proto {
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_link_class_evaluation_prototype(

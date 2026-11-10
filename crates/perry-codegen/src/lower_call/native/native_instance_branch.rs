@@ -391,7 +391,7 @@
             ctx.current_block = generic_idx;
             let generic_handle = {
                 let blk = ctx.block();
-                blk.call_void("js_array_push_guard", &[(I64, &orig_handle)]);
+                blk.call_void("js_array_push_guard", &[(I64, &orig_handle), (I32, "1")]);
                 let value_double = blk.sitofp(I32, &value, DOUBLE);
                 blk.call(
                     I64,
@@ -412,7 +412,8 @@
         } else {
             // Spec §23.1.3.21: Set(O,"length",…,true) fires unconditionally — guard
             // even when args is empty so frozen / non-writable-length throw correctly.
-            blk.call_void("js_array_push_guard", &[(I64, &arr_handle)]);
+            let argc = push_roots.len().to_string();
+            blk.call_void("js_array_push_guard", &[(I64, &arr_handle), (I32, &argc)]);
             for &root in &push_roots {
                 // Re-read per element: the previous push may have grown the
                 // array, so the register an argument was lowered into can be

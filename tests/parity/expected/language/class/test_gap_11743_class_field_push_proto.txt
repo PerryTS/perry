@@ -1,0 +1,3 @@
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+prototype lock locked;arg; 1
+custom prototype custom:6; 0

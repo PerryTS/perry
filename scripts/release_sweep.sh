@@ -50,7 +50,7 @@ cd "$REPO_ROOT"
 TIER_REGISTRY=(
     "00|build_matrix|all|cargo build for every shipped target triple"
     "01|cargo_workspace|all|cargo test --workspace with host-appropriate exclusions"
-    "02|parity|all|run_parity_tests.sh — gap + edge suites byte-vs-Node"
+    "02|parity|all|scripts/parity.py run --mode auto — every program case byte-vs-Node"
     "03|real_packages|all|drizzle/hono/s3-lite/mysql/redis/fastify/ws/axios fixtures"
     "04|gc_stress|all|run_memory_stability_tests.sh × {gen,evac,wb,classic}"
     "05|threading|all|run_thread_tests.sh"

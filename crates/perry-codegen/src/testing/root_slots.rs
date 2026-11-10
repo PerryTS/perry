@@ -318,7 +318,10 @@ entry.0:
 
     /// The property that keeps this reader from rotting the way the counters
     /// did: a bound slot from an unknown family is a hard failure.
+    ///
+    /// Folding an unclassifiable bound slot into a total silently is #7504.
     #[test]
+    #[should_panic(expected = "belongs to no known slot family")]
     fn a_bound_slot_from_an_unknown_family_is_refused_not_bucketed() {
         let unknown = "\
 define i32 @main() {
@@ -328,12 +331,7 @@ entry.0:
   ret i32 0
 }
 ";
-        let refused = std::panic::catch_unwind(|| value_slot_binds(unknown));
-        assert!(
-            refused.is_err(),
-            "an unclassifiable bound slot must fail loudly — folding it into a \
-             total silently is #7504"
-        );
+        let _ = value_slot_binds(unknown);
     }
 
     /// An `align` suffix must not push a known slot into the unclassified
@@ -354,6 +352,7 @@ entry.0:
     /// slot; the frame base-index alloca is one such, and mistaking it for a
     /// pool slot would let a real regression hide in the temp bucket.
     #[test]
+    #[should_panic(expected = "its alloca (Some(\"i64\")) belongs to no known slot family")]
     fn an_uninitialised_i64_alloca_is_not_mistaken_for_a_temp_root() {
         let frame_base = "\
 define i32 @main() {
@@ -364,6 +363,6 @@ entry.0:
   ret i32 0
 }
 ";
-        assert!(std::panic::catch_unwind(|| bound_slots(frame_base)).is_err());
+        let _ = bound_slots(frame_base);
     }
 }

@@ -505,16 +505,20 @@ fn lower_new_impl_inner<'a>(
     // ran, and `g()` can collect. That collection rewrote only the group's
     // roots, so the stored values must be the group's re-reads, as for every
     // other consumer after a collection point (#12462).
-    let birth_args = if birth_plan
-        .as_ref()
-        .is_some_and(|plan| plan.iter().all(|store| !store.requires_raw_f64))
-    {
+    // A store whose value needs the plain-finite-number test cannot be
+    // written in the birth: the test decides between this plan and the
+    // constructor, so it runs after the allocation (`ctor_prologue.fast`).
+    let birth_unchecked = birth_plan.as_ref().is_some_and(|plan| {
+        plan.iter()
+            .all(|store| !store.requires_number_check(ctx, args))
+    });
+    let birth_args = if birth_unchecked {
         refresh_rooted_args(ctx, group)?
     } else {
         lowered_args.clone()
     };
     let constructor_birth = birth_plan.as_ref().map(|plan| {
-        let fields = plan.iter().all(|store| !store.requires_raw_f64).then(|| {
+        let fields = birth_unchecked.then(|| {
             plan.iter()
                 .map(|store| {
                     let value = store.numeric_addend.map_or_else(
@@ -642,8 +646,8 @@ fn lower_new_impl_inner<'a>(
         // #2768/new.target: the standalone `<class>_constructor` symbol is a
         // separate compiled function, so its only `new.target` source is the
         // runtime cell — which this path never set, leaving `new.target ===
-        // undefined` for a base class. Set the cell to this class's ref (the
-        // `INT32_TAG | class_id` value `Expr::ClassRef` produces) around the
+        // undefined` for a base class. Set the cell to this class's function
+        // object (the value `Expr::ClassRef` produces) around the
         // call and restore it after, but ONLY when the ctor actually reads
         // `new.target`, so the common ctor keeps the zero-overhead fast path.
         // The gate spans the WHOLE super(...) chain, not just the leaf's own
@@ -749,14 +753,21 @@ fn lower_new_impl_inner<'a>(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
+            let checked: Vec<bool> = plan
+                .iter()
+                .map(|store| store.requires_number_check(ctx, args))
+                .collect();
             {
                 let blk = ctx.block();
                 let mut acc = "true".to_string();
                 // Charter step 5: a plain finite double is valid in an `F64` lane
                 // and in an `Any` lane alike, so the per-store number test
                 // below is the whole proof; no header layout bit is read.
-                for (store_index, store) in plan.iter().enumerate() {
-                    if !store.requires_raw_f64 {
+                // A `<param> + <literal>` store is tested too: its `fadd` is
+                // JS `+` only for a Number argument
+                // (`PrologueStore::requires_number_check`).
+                for (store_index, &needs_check) in checked.iter().enumerate() {
+                    if !needs_check {
                         continue;
                     }
                     let bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);
@@ -960,8 +971,8 @@ fn lower_new_impl_inner<'a>(
     // class's ref via a `new_target_stack` slot. Using the codegen slot
     // rather than the runtime cell keeps a non-constructor method called from
     // the ctor body — compiled as a separate function whose `new_target_stack`
-    // is empty — correctly reading `undefined`. A class ref is
-    // `INT32_TAG | class_id`, the same value `Expr::ClassRef` produces, so
+    // is empty — correctly reading `undefined`. The class's function object
+    // is the same value `Expr::ClassRef` produces, so
     // `new.target === C`, `new.target.name`, and `new.target.prototype` all
     // work. Falls back to `undefined` if the class id is somehow unresolved.
     let new_target_value = match ctx.class_ids.get(class_name).copied() {
@@ -1109,7 +1120,9 @@ fn lower_new_impl_inner<'a>(
                     found = Some(pname.to_string());
                     break;
                 }
-                if parent_class.extends_expr.is_some() {
+                if parent_class.extends_expr.is_some()
+                    && !crate::expr::super_constructor::static_parent_edge(ctx, parent_class)
+                {
                     break;
                 }
                 walker = parent_class.extends_name.as_deref();
@@ -1220,6 +1233,7 @@ fn lower_new_impl_inner<'a>(
             // active and still receives every throwing invoke.
             let caller_try_depth = ctx.try_depth;
             ctx.try_depth = 0;
+            crate::verify_facts::body_entry(ctx, class.constructor.as_ref().unwrap().id, "");
             let lower_result =
                 crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body);
             ctx.try_depth = caller_try_depth;
@@ -1314,6 +1328,7 @@ fn lower_new_impl_inner<'a>(
                     }
                     let caller_try_depth = ctx.try_depth;
                     ctx.try_depth = 0;
+                    crate::verify_facts::body_entry(ctx, parent_ctor.id, "");
                     let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
                     ctx.try_depth = caller_try_depth;
                     lower_result?;

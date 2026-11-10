@@ -72,21 +72,7 @@ unsafe fn class_receiver_arm(
 ) -> Option<f64> {
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
     let _ = (root_scope, &refreshed_args);
-    if crate::object::class_prototype_ref_id(object).is_some() {
-        if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-            crate::object::class_registry::class_method_slot_target(class_id, method_name)
-        {
-            return Some(crate::object::class_registry::call_vtable_method(
-                func_ptr,
-                object.to_bits() as i64,
-                args_ptr,
-                args_len,
-                param_count,
-                has_synthetic_arguments,
-                has_rest,
-            ));
-        }
-    } else if class_id != 0
+    if class_id != 0
         && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
             .is_some()
     {
@@ -197,12 +183,10 @@ pub(super) unsafe fn dispatch_primitive(
         ));
     }
 
-    // A legacy class value (the INT32 immediate or `C.prototype`); class
-    // function objects arrive through `class_value_method_call`.
+    // A flagged `C.prototype` reference; constructor function objects arrive
+    // through `class_value_method_call`. INT32 numbers use primitive methods.
     if (object.to_bits() >> 48) == 0x7FFE {
-        if let Some(class_id) =
-            crate::object::class_value::legacy_class_value_word(object.to_bits())
-        {
+        if let Some(class_id) = crate::object::class_value::class_ref_word(object.to_bits()) {
             if let Some(r) = class_receiver_arm(
                 class_id,
                 root_scope,
@@ -604,10 +588,7 @@ pub(super) unsafe fn dispatch_primitive(
                     let msg = b"'then' property on Promise is not callable";
                     let msg_str =
                         crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                    let err = crate::error::js_typeerror_new(msg_str);
-                    crate::exception::js_throw(f64::from_bits(
-                        JSValue::pointer(err as *const u8).bits(),
-                    ));
+                    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
                 }
                 let args = refreshed_args();
                 let result = unsafe {

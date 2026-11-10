@@ -361,12 +361,8 @@ fn unsupported_targets_keep_the_default_convention() {
     }
 }
 
-/// The promoted (`force_external`) define and the cross-unit declare BOTH
-/// carry the convention: codegen-unit splitting changes visibility, never
-/// the ABI. A mismatch across a unit boundary is UB that will not
-/// necessarily crash near the cause, so this is pinned at the renderer.
-#[test]
-fn unit_promotion_carries_the_convention() {
+/// A module holding one internal `preserve_nonecc` clone.
+fn preserve_none_clone_module() -> crate::module::LlModule {
     use crate::module::LlModule;
     use crate::types::DOUBLE;
 
@@ -375,37 +371,64 @@ fn unit_promotion_carries_the_convention() {
     let lf = llmod.define_function("clone$spec_i32", DOUBLE, vec![("i32", "%arg0".into())]);
     lf.linkage = "internal".to_string();
     lf.create_block("entry").ret(DOUBLE, "0.0");
+    llmod
+}
 
+/// The in-module define and the promoted (`force_external`) define of the
+/// clone in [`preserve_none_clone_module`].
+fn preserve_none_clone_headers() -> (String, String) {
+    let mut llmod = preserve_none_clone_module();
     let f = llmod.function_mut(0).unwrap();
-    fn assert_headers(internal: &str, external: &str) {
-        assert!(
-            internal
-                .starts_with("define internal preserve_nonecc double @clone$spec_i32(i32 %arg0) ")
-                && internal.ends_with(" {"),
-            "the in-module define carries linkage + convention: {internal}"
-        );
-        assert_eq!(
-            external,
-            internal.replacen("define internal ", "define ", 1),
-            "force_external drops the linkage keyword and NOTHING else"
-        );
-    }
-    let internal = f.define_header(false);
-    let external = f.define_header(true);
-    assert_headers(&internal, &external);
-    // Size policy may add attributes, but the relaxed rendering assertion
-    // must still reject a missing convention on either side of the boundary.
-    for (bad_internal, bad_external) in [
-        (internal.replace("preserve_nonecc ", ""), external.clone()),
-        (internal.clone(), external.replace("preserve_nonecc ", "")),
-    ] {
-        assert!(std::panic::catch_unwind(|| assert_headers(&bad_internal, &bad_external)).is_err());
-    }
+    (f.define_header(false), f.define_header(true))
+}
+
+/// Size policy may add attributes, so this is a relaxed rendering assertion;
+/// it must still reject a missing convention on either side of the boundary.
+fn assert_preserve_none_headers(internal: &str, external: &str) {
+    assert!(
+        internal.starts_with("define internal preserve_nonecc double @clone$spec_i32(i32 %arg0) ")
+            && internal.ends_with(" {"),
+        "the in-module define carries linkage + convention: {internal}"
+    );
+    assert_eq!(
+        external,
+        internal.replacen("define internal ", "define ", 1),
+        "force_external drops the linkage keyword and NOTHING else"
+    );
+}
+
+/// The promoted (`force_external`) define and the cross-unit declare BOTH
+/// carry the convention: codegen-unit splitting changes visibility, never
+/// the ABI. A mismatch across a unit boundary is UB that will not
+/// necessarily crash near the cause, so this is pinned at the renderer.
+#[test]
+fn unit_promotion_carries_the_convention() {
+    let mut llmod = preserve_none_clone_module();
+    let f = llmod.function_mut(0).unwrap();
+    assert_preserve_none_headers(&f.define_header(false), &f.define_header(true));
     assert_eq!(
         crate::module::declare_line_for(f),
         "declare preserve_nonecc double @clone$spec_i32(i32)",
         "the cross-unit declare binds with the callee's real convention"
     );
+}
+
+/// Negative control: the in-module define without the convention.
+#[test]
+#[should_panic(expected = "the in-module define carries linkage + convention")]
+fn an_internal_define_without_the_convention_is_rejected() {
+    let (internal, external) = preserve_none_clone_headers();
+    assert_preserve_none_headers(&internal, &external);
+    assert_preserve_none_headers(&internal.replace("preserve_nonecc ", ""), &external);
+}
+
+/// Negative control: the promoted define without the convention.
+#[test]
+#[should_panic(expected = "force_external drops the linkage keyword and NOTHING else")]
+fn a_promoted_define_without_the_convention_is_rejected() {
+    let (internal, external) = preserve_none_clone_headers();
+    assert_preserve_none_headers(&internal, &external);
+    assert_preserve_none_headers(&internal, &external.replace("preserve_nonecc ", ""));
 }
 
 /// The end-to-end point of the convention: the clone's entry (the leaf path)

@@ -42,10 +42,10 @@ unsafe extern "C" fn poll(
             return perry_abi::component_host::HTTP_FAILURE;
         }
         let frame = &*(primary as usize as *const callback::Frame<'_>);
-        frame.capture(field(
+        frame.capture(crate::exception::test_caught(field(
             context::imports(frame.owner.get_nanbox_f64()),
             b"expected",
-        ));
+        )));
         reply(out, b"P3 primary failure");
         RELEASED_ERROR
     } else {

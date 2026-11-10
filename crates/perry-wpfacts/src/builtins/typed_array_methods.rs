@@ -48,9 +48,26 @@ fn species(m: &mut Model, t: Tok, call: CallId, args: Vec<NodeId>) {
             spread: vec![],
             ret: c.ret,
             site: c.site,
+            region: m.thrown,
         },
     );
     m.cons(sp, Cons::New { call: made });
+}
+
+/// `ArrayBuffer.prototype.slice` / `SharedArrayBuffer.prototype.slice`
+/// (ECMA-262 25.1.6.7, 25.2.5.6) on buffer `t` of kind `what`: start and
+/// end ToIntegerOrInfinity, then SpeciesConstructor(this) constructed with
+/// the new length, beside the intrinsic result (a new buffer of the kind).
+pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    for &a in c.args.iter().take(2) {
+        to_prim(m, a, "buffer slice start/end ToIntegerOrInfinity");
+    }
+    let out = site_tmpl(m, call, what);
+    ret_tok(m, call, out);
+    let num = m.node_l("buffer-length");
+    m.add_prim(num, prim::NUM);
+    species(m, t, call, vec![num]);
 }
 
 fn fresh(m: &mut Model, call: CallId) -> Tok {
@@ -211,6 +228,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     spread: vec![],
                     ret: r,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -235,6 +253,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     spread: vec![],
                     ret: c.ret,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -254,7 +273,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             } else {
                 elem
             };
-            let it = super::collections::iter_over(m, call, vals);
+            let it = super::collections::iter_over(m, call, members::ARRAY_ITERATOR, vals);
             ret_tok(m, call, it);
         }
         _ => return false,

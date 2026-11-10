@@ -6,6 +6,29 @@ use perry_hir::Expr;
 impl<'a> Gen<'a> {
     // ----------------------------------------------------------- walking
 
+    #[cfg(test)]
+    pub(crate) fn packet_reads(&mut self, start: usize) {
+        let Some(scope) = &self.m.packet_scope else {
+            return;
+        };
+        let f = scope.f;
+        let reads: Vec<_> = self.read_sites[start..]
+            .iter()
+            .filter(|s| s.func == f)
+            .cloned()
+            .collect();
+        for site in reads {
+            let key = self.m.atoms[site.key as usize].clone();
+            self.m.packet_observe(
+                site.byte_offset,
+                format!("read call={} value={}", site.is_call, site.value_call),
+                key,
+                site.recv,
+                None,
+            );
+        }
+    }
+
     pub fn walk_all(&mut self) {
         let modules = self.modules.clone();
         // RPG1b: the once closures and the evaluation order (`derive`'s
@@ -189,6 +212,57 @@ impl<'a> Gen<'a> {
     /// and classes. A module it loads statically, by an import or a
     /// re-export, loads with it (`dynamic_only_modules` counts both).
     pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
+        // The module body's throw region: uncaught at evaluation, except a
+        // dynamically imported module's, which rejects the import.
+        let r = self.m.raise_of(init_fn);
+        if self.dynamic_only.contains(&mi) {
+            self.m.edge(r, self.thrown);
+        }
+        // A target this module requires lazily (a deferred CommonJS require)
+        // runs its body when the require runs, through the path registry.
+        for i in self.imports_of(mi as usize) {
+            if !i.is_deferred_require {
+                continue;
+            }
+            let t = i
+                .resolved_path
+                .as_ref()
+                .and_then(|p| self.path_index.get(p).copied());
+            if let Some(t) = t {
+                let rt = self.module_raise(t);
+                self.m.edge(rt, self.m.lazy_raise);
+            }
+        }
+        let region = std::mem::replace(&mut self.m.gen_region, Some(r));
+        self.walk_module_inner(mi, init_fn);
+        self.m.gen_region = region;
+    }
+
+    /// The throw region of module `t`'s body (its `<init>` function's).
+    pub(crate) fn module_raise(&mut self, t: u32) -> NodeId {
+        let f = match self.init_fn_of.get(&t) {
+            Some(&f) => f,
+            None => {
+                let f = self.synthetic_fn(t, "<init>");
+                self.init_fn_of.insert(t, f);
+                f
+            }
+        };
+        self.m.raise_of(f)
+    }
+
+    fn walk_module_inner(&mut self, mi: u32, init_fn: FnIdx) {
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(init_fn);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
+        #[cfg(test)]
+        {
+            let body = self.init_of(mi as usize);
+            for stmt in body {
+                self.m.packet_declarations(std::slice::from_ref(stmt));
+            }
+        }
         if !self.dynamic_only.is_empty() {
             for i in self.imports_of(mi as usize) {
                 if i.is_dynamic || i.type_only || i.runtime_erased {
@@ -252,6 +326,13 @@ impl<'a> Gen<'a> {
             self.name_enum_object(mi, s);
         }
         (self.order_ok, self.loop_depth) = saved;
+        // Codegen invokes this owned body when the module evaluates. Follow
+        // that explicit FuncId edge only after the owning init is activated.
+        if let Some(id) = self.modules[mi as usize].1.async_init_function {
+            if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
+                self.m.activate(f, "module-init");
+            }
+        }
         for f in self.functions_of(mi as usize) {
             if self.m.aborted {
                 return;
@@ -264,6 +345,11 @@ impl<'a> Gen<'a> {
                 return;
             }
             self.walk_class(mi, c, &fx);
+        }
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
         }
     }
 
@@ -504,6 +590,11 @@ impl<'a> Gen<'a> {
     /// DECISIONS 225: whether the body of `f` waits (it is not active):
     /// kept for `walk_activated`, or, with the set final, never walked.
     pub(crate) fn defer_walk(&mut self, f: FnIdx, w: PendingWalk<'a>) -> bool {
+        #[cfg(test)]
+        if self.m.packets_inert && self.m.packet_scope.as_ref().is_some_and(|b| b.f != f) {
+            self.pending_walk.entry(f).or_default().push(w);
+            return true;
+        }
         if self.m.body_active(f) {
             return false;
         }
@@ -534,6 +625,8 @@ impl<'a> Gen<'a> {
                         }
                         PendingWalk::Fields(mi, c) => self.walk_fields_body(mi, c),
                         PendingWalk::Closure(cfx, e) => self.walk_closure_body(&cfx, e),
+                        #[cfg(test)]
+                        PendingWalk::OwnedClosure(cfx, e) => self.walk_closure_body(&cfx, &e),
                         PendingWalk::Module(mi) => {
                             let f = self.init_fn_of[&mi];
                             self.walk_module(mi, f);
@@ -556,7 +649,27 @@ impl<'a> Gen<'a> {
     ) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(fxi);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
+        #[cfg(test)]
+        self.m.packet_declarations(&f.body);
+        // An async function body that runs untransformed throws into its
+        // promise (`async_body`), never into its caller.
+        let r = if f.is_async && !f.is_generator {
+            self.thrown
+        } else {
+            self.m.raise_of(fxi)
+        };
+        let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
+        self.m.gen_region = region;
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         (self.order_ok, self.loop_depth) = saved;
     }
 
@@ -571,7 +684,7 @@ impl<'a> Gen<'a> {
         self.m.note_walked(fxi);
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
-        let fx = Fx {
+        let mut fx = Fx {
             guard: None,
             module: mi,
             f: fxi,
@@ -582,8 +695,17 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor,
         };
+        if !f.is_strict && fn_ctor && crate::ctor_phase::body_mentions_this(&f.body) {
+            // The view belongs to the function's body, like its parameters.
+            let prev = std::mem::replace(&mut self.m.cur_fn, fxi);
+            fx.this = self.sloppy_this(info.this);
+            self.m.cur_fn = prev;
+        }
+        if f.is_async && !f.is_generator {
+            fx = self.async_body(&fx).0;
+        }
         self.params(&fx, &f.params);
-        if f.is_async || f.is_generator {
+        if f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
             self.m.add_top(info.ret, |_| {
@@ -603,7 +725,44 @@ impl<'a> Gen<'a> {
             self.stmts(&fx, &body);
             return;
         }
+        let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
+        self.note_own_stores(f);
+        let scope = self.narrow_enter_body(fx.module, fxi, &f.params, &f.body, &f.captures);
         self.stmts(&fx, &f.body);
+        if ctor_of.is_none() && narrow::may_complete(&f.body) {
+            // The body's normal completion returns `undefined` (a class
+            // constructor's completion is never its result: `new` and
+            // `super()` yield `this`).
+            self.m.add_prim(fx.ret, prim::UNDEF);
+        }
+        self.narrow_exit_body(scope);
+        self.own_helper_finish(fxi, own);
+    }
+
+    /// The `this` a sloppy function's body reads: its callers' `this`,
+    /// where a nullish one is the global object and a primitive one is
+    /// boxed, an object the model does not hold (anything). The function's
+    /// own `this` node, its interface, stays what callers pass.
+    pub(crate) fn sloppy_this(&mut self, this: NodeId) -> NodeId {
+        let view = self.m.node_l("sloppy-this");
+        self.m.own(view);
+        self.m.edge(this, view);
+        let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let global = self.tok_node(global_tok);
+        for (test, from) in [
+            (crate::model::guard::NULLISH, global),
+            (crate::model::guard::BOXED, self.m.top_tok_node),
+        ] {
+            self.m.cons(
+                view,
+                Cons::Guard {
+                    test,
+                    from,
+                    dst: view,
+                },
+            );
+        }
+        view
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
@@ -618,10 +777,20 @@ impl<'a> Gen<'a> {
             if let Some(d) = &p.default {
                 // The default is the parameter's value only when a call
                 // passes `undefined` or nothing (missing arguments are
-                // `undefined`, `bind_args`).
+                // `undefined`, `bind_args`). The calls pass to the argument
+                // node (`register_fn`): the local holds what they pass but
+                // `undefined`, and the default when one may pass it.
                 let v = self.expr(fx, d);
+                let arg = self
+                    .default_args
+                    .get(&(fx.module, p.id))
+                    .copied()
+                    .unwrap_or(n);
+                if arg != n {
+                    self.m.cons(arg, Cons::NotUndefined { dst: n });
+                }
                 self.m.cons(
-                    n,
+                    arg,
                     Cons::Guard {
                         test: crate::model::guard::UNDEF,
                         from: v,
@@ -645,9 +814,28 @@ impl<'a> Gen<'a> {
 
     /// Field initializers run per construction: unordered (RPG1b).
     fn walk_fields_body(&mut self, mi: u32, c: &'a Class) {
+        // Field initializers run inside the constructor call: the shared
+        // cell, which every catch reads.
+        let region = std::mem::replace(&mut self.m.gen_region, Some(self.thrown));
+        self.walk_fields_body_region(mi, c);
+        self.m.gen_region = region;
+    }
+
+    fn walk_fields_body_region(&mut self, mi: u32, c: &'a Class) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        #[cfg(test)]
+        let packet_prior = self
+            .m
+            .packet_body(self.field_init_fn[&self.mods[mi as usize].classes[&c.name]]);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
         self.walk_fields_body_inner(mi, c);
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         (self.order_ok, self.loop_depth) = saved;
     }
 
@@ -703,7 +891,7 @@ impl<'a> Gen<'a> {
                     self.m.cons(
                         thisn,
                         Cons::Store {
-                            key: Key::Any,
+                            key: Key::any(),
                             src: v,
                             site,
                         },
@@ -739,6 +927,10 @@ impl<'a> Gen<'a> {
         // Static fields and static blocks: `this` is the class object.
         let si = self.static_init_fn[&tm];
         self.m.note_walked(si);
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(si);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
         let sfx = Fx {
             guard: None,
             module: mi,
@@ -785,6 +977,11 @@ impl<'a> Gen<'a> {
                 None => self.m.field(cobj, named),
             };
             self.m.edge(v, fl);
+        }
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
         }
         for d in &c.decorators {
             for a in &d.args {
@@ -876,12 +1073,52 @@ impl<'a> Gen<'a> {
     // ---------------------------------------------------------- statements
 
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
-        for s in ss {
-            self.stmt(fx, s);
+        let mut pushed = 0;
+        let mut i = 0;
+        while i < ss.len() {
+            if let Some(value) = for_of_binding(&ss[i..]) {
+                // `value = arrayRecordForValue(…); state = n; let s = value`:
+                // the binding reads the value just written, not every write
+                // of the value local (its `undefined` initializer and
+                // release, the step's output).
+                let Stmt::Expr(set) = &ss[i] else {
+                    unreachable!()
+                };
+                let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+                let n = self.expr(fx, set);
+                self.m.cur_fn = prev;
+                self.stmt(fx, &ss[i + 1]);
+                self.for_binding = Some((fx.module, value, n));
+                self.stmt(fx, &ss[i + 2]);
+                self.for_binding = None;
+                i += 3;
+                continue;
+            }
+            self.stmt(fx, &ss[i]);
+            // An `if` whose one branch always leaves: what follows runs
+            // under the other outcome of its test (`narrow_guard`).
+            if let Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } = &ss[i]
+            {
+                let else_exits = else_branch.as_deref().is_some_and(narrow::always_exits);
+                if narrow::always_exits(then_branch) && !else_exits {
+                    pushed += self.narrow_guard(fx, condition, false);
+                } else if else_exits && !narrow::always_exits(then_branch) {
+                    pushed += self.narrow_guard(fx, condition, true);
+                }
+            }
+            i += 1;
         }
+        self.narrow_pop(pushed);
     }
 
     pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+        if let Some((array, counter)) = guarded_for_of_walk(s) {
+            self.for_of_walks.insert((fx.module, array, counter));
+        }
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         self.stmt_inner(fx, s);
         self.m.cur_fn = prev;
@@ -922,8 +1159,17 @@ impl<'a> Gen<'a> {
 
     fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
-            Stmt::Let { id, init, ty, .. } => {
+            Stmt::Let {
+                id,
+                init,
+                ty,
+                mutable,
+                ..
+            } => {
                 let n = self.local(fx.module, *id);
+                if !*mutable && init.is_some() {
+                    self.initialized_consts.insert((fx.module, *id));
+                }
                 if matches!(ty, perry_hir::types::Type::Array(_)) {
                     self.cell_locals.insert((fx.module, *id));
                 }
@@ -960,24 +1206,51 @@ impl<'a> Gen<'a> {
                 then_branch,
                 else_branch,
             } => {
+                let plan = self.own_guard_plan(condition, Region::Stmts(then_branch));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let own = self.own_guard_arm(plan, t);
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
+                // A branch that always leaves: its writes reach only where
+                // it jumps to (`narrow_leave`).
+                let pre = self.narrow_snapshot();
+                let k = self.narrow_guard(fx, condition, true);
                 self.stmts(&then_fx, then_branch);
+                self.narrow_pop(k);
+                self.narrow_leave(then_branch, pre);
+                self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         ..fx.clone()
                     };
+                    let pre = self.narrow_snapshot();
+                    let k = self.narrow_guard(fx, condition, false);
                     self.stmts(&else_fx, e);
+                    self.narrow_pop(k);
+                    self.narrow_leave(e, pre);
                 }
             }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            Stmt::While { condition, body } => {
+                self.narrow_enter_loop(s);
                 self.loop_depth += 1;
+                self.jumps += 1;
+                let _ = self.expr(fx, condition);
+                let k = self.narrow_guard(fx, condition, true);
+                self.stmts(fx, body);
+                self.narrow_pop(k);
+                self.jumps -= 1;
+                self.loop_depth -= 1;
+            }
+            Stmt::DoWhile { body, condition } => {
+                self.narrow_enter_loop(s);
+                self.loop_depth += 1;
+                self.jumps += 1;
                 let _ = self.expr(fx, condition);
                 self.stmts(fx, body);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::For {
@@ -986,20 +1259,40 @@ impl<'a> Gen<'a> {
                 update,
                 body,
             } => {
+                self.narrow_enter_loop(s);
                 if let Some(i) = init {
                     self.stmt(fx, i);
                 }
                 self.loop_depth += 1;
+                self.jumps += 1;
                 if let Some(c) = condition {
                     let _ = self.expr(fx, c);
                 }
+                // The update runs after the body: it reads the end node.
+                let narrowed = self.narrow_for(
+                    fx,
+                    init.as_deref(),
+                    condition.as_ref(),
+                    update.as_ref(),
+                    body,
+                );
+                if narrowed {
+                    self.narrow_in_update(true);
+                }
                 if let Some(u) = update {
                     let _ = self.expr(fx, u);
+                }
+                if narrowed {
+                    self.narrow_in_update(false);
                 }
                 match self.for_in_of(fx, body) {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
                 }
+                if narrowed {
+                    self.narrow_end();
+                }
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
@@ -1011,30 +1304,42 @@ impl<'a> Gen<'a> {
             | Stmt::ReleaseBoxes(_) => {}
             Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
-                    let n = self.local(fx.module, *id);
+                    let n = self.dead_zone(fx.module, *id);
                     self.m.add_prim(n, prim::UNDEF);
                 }
             }
             Stmt::Throw(e) => {
                 let v = self.expr(fx, e);
-                self.m.edge(v, self.thrown);
+                let r = self.region();
+                self.m.edge(v, r);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
+                // The try body is a throw region of its own; its catch and
+                // finally run in the enclosing one.
+                let rt = self.m.node_l("RAISE-try");
+                let outer = std::mem::replace(&mut self.m.gen_region, Some(rt));
+                self.tries += 1;
                 self.stmts(fx, body);
+                self.m.gen_region = outer;
                 if let Some(c) = catch {
                     if let Some((id, _)) = &c.param {
                         let n = self.local(fx.module, *id);
+                        self.m.edge(rt, n);
                         self.m.edge(self.thrown, n);
                     }
                     self.stmts(fx, &c.body);
+                } else {
+                    let r = self.region();
+                    self.m.edge(rt, r);
                 }
                 if let Some(f) = finally {
                     self.stmts(fx, f);
                 }
+                self.tries -= 1;
             }
             Stmt::Switch {
                 discriminant,
@@ -1042,15 +1347,25 @@ impl<'a> Gen<'a> {
             } => {
                 let d = self.expr(fx, discriminant);
                 // `===` against case values: no coercion.
-                let _ = d;
+                self.jumps += 1;
                 for c in cases {
                     if let Some(t) = &c.test {
-                        let _ = self.expr(fx, t);
+                        let tv = self.expr(fx, t);
+                        // N1: a case test is the strict equality it means.
+                        self.equality_demand(discriminant, t, d, tv);
                     }
                     self.stmts(fx, &c.body);
                 }
+                self.jumps -= 1;
             }
         }
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// The throw region generation is in (`thrown` outside a body).
+    pub(crate) fn region(&self) -> NodeId {
+        self.m.gen_region.unwrap_or(self.thrown)
     }
 }
 
@@ -1077,4 +1392,165 @@ pub(crate) fn variant_name(e: &Expr) -> String {
     let mut h = Head(String::new(), false);
     let _ = std::fmt::write(&mut h, format_args!("{e:?}"));
     h.0
+}
+
+/// The counted walk of a for-of source that is an ordinary array
+/// (`perry_hir::lower::for_of_guard`): `for (let __forof_lit_k_N = 0;
+/// __forof_lit_k_N < a.length; __forof_lit_k_N++) { const x =
+/// a[__forof_lit_k_N]; body }`, where nothing in the body writes the
+/// counter or the array binding. Its array and counter locals. The whole
+/// shape is checked, not only the temp's name, because the binding read is
+/// then taken to lie below the length.
+fn for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
+    let Stmt::For {
+        init: Some(init),
+        condition: Some(condition),
+        update: Some(update),
+        body,
+    } = s
+    else {
+        return None;
+    };
+    let Stmt::Let {
+        id: k,
+        name,
+        init: Some(Expr::Integer(0)),
+        ..
+    } = init.as_ref()
+    else {
+        return None;
+    };
+    let k = *k;
+    if !name.starts_with("__forof_lit_k_") {
+        return None;
+    }
+    let Some(Stmt::Let {
+        init: Some(Expr::IndexGet { object, index, .. }),
+        ..
+    }) = body.first()
+    else {
+        return None;
+    };
+    let (Expr::LocalGet(a), Expr::LocalGet(i)) = (object.as_ref(), index.as_ref()) else {
+        return None;
+    };
+    let a = *a;
+    if *i != k {
+        return None;
+    }
+    let bounded = matches!(condition, Expr::Compare {
+        op: perry_hir::CompareOp::Lt,
+        left,
+        right,
+    } if matches!(left.as_ref(), Expr::LocalGet(l) if *l == k)
+        && matches!(right.as_ref(), Expr::PropertyGet { object, property, .. }
+            if property == "length" && matches!(object.as_ref(), Expr::LocalGet(o) if *o == a)));
+    let stepped = matches!(update, Expr::Update {
+        id,
+        op: perry_hir::UpdateOp::Increment,
+        ..
+    } if *id == k);
+    let untouched = !body
+        .iter()
+        .any(|s| perry_hir::walker::stmt_any_expr(s, &mut |e| writes_local(e, k, a)));
+    (bounded && stepped && untouched).then_some((a, k))
+}
+
+/// The proven arm of a for-of over a source that is not a literal
+/// (`perry_hir::lower::for_of_guard::source_for_of`):
+/// `if (arrayRecordNeedsIterator(t) === false) { [const a = t;] walk }`.
+/// The runtime test holds only for an ordinary Array whose iteration
+/// members nobody replaced, so inside the arm `a` is an Array and the walk's
+/// element is what iterating it yields. A loop of the walk's shape outside
+/// that arm (over an array-like, say) is not a walk.
+fn guarded_for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
+    let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left,
+                right,
+            },
+        then_branch,
+        ..
+    } = s
+    else {
+        return None;
+    };
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args,
+        object: None,
+        ..
+    } = left.as_ref()
+    else {
+        return None;
+    };
+    let (Some(Expr::LocalGet(t)), Expr::Bool(false)) = (args.first(), right.as_ref()) else {
+        return None;
+    };
+    if module != "__perry_runtime" || method != "arrayRecordNeedsIterator" {
+        return None;
+    }
+    let (array, walk) = match then_branch.as_slice() {
+        [walk] => (*t, walk),
+        [Stmt::Let {
+            id,
+            init: Some(Expr::LocalGet(src)),
+            ..
+        }, walk]
+            if src == t =>
+        {
+            (*id, walk)
+        }
+        _ => return None,
+    };
+    for_of_walk(walk).filter(|(a, _)| *a == array)
+}
+
+/// `e` writes local `k` or `a`, or holds a closure that may (a mutable
+/// capture of either).
+fn writes_local(e: &Expr, k: u32, a: u32) -> bool {
+    match e {
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } if *id == k || *id == a => true,
+        Expr::Closure {
+            mutable_captures, ..
+        } if mutable_captures.iter().any(|id| *id == k || *id == a) => true,
+        _ => {
+            let mut hit = false;
+            perry_hir::walker::walk_expr_children(e, &mut |c| hit = hit || writes_local(c, k, a));
+            hit
+        }
+    }
+}
+
+/// The head of a for-of body as HIR lowers it (`IteratorRecord::drive`,
+/// the shape codegen's `record_binding_prefix` reads): `value =
+/// arrayRecordForValue(mode, value, element); state = n; let s = value`.
+/// The value local.
+fn for_of_binding(ss: &[Stmt]) -> Option<u32> {
+    let [Stmt::Expr(Expr::LocalSet(value, read)), Stmt::Expr(Expr::LocalSet(state, n)), Stmt::Let {
+        init: Some(Expr::LocalGet(bound)),
+        ..
+    }, ..] = ss
+    else {
+        return None;
+    };
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args,
+        ..
+    } = read.as_ref()
+    else {
+        return None;
+    };
+    let ok = module == "__perry_runtime"
+        && method == "arrayRecordForValue"
+        && matches!(args.get(1), Some(Expr::LocalGet(v)) if v == value)
+        && matches!(n.as_ref(), Expr::Number(_))
+        && state != value
+        && bound == value;
+    ok.then_some(*value)
 }

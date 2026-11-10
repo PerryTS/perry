@@ -7,6 +7,8 @@ FROM ${OLD_GLIBC_IMAGE}
 # The archived slim image has no CA bundle. Debian Release signatures are still
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch.
+COPY .github/actions/setup-llvm22/apt.llvm.org.gpg.key /tmp/apt.llvm.org.gpg.key
+COPY scripts/install-llvm22-bullseye.sh /tmp/install-llvm22-bullseye.sh
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
       'deb https://archive.debian.org/debian-security bullseye-security main' \
@@ -24,13 +26,7 @@ RUN printf '%s\n' \
     # (CMAKE_AR-NOTFOUND: libz-ng-sys's static archive step); 3.25 does.
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       -t bullseye-backports cmake \
-    && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
-      -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
-    && printf '%s\n' \
-      'deb https://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-22 main' \
-      > /etc/apt/sources.list.d/llvm22.list \
-    && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    && /tmp/install-llvm22-bullseye.sh /tmp/apt.llvm.org.gpg.key \
       clang-22 libpolly-22-dev llvm-22-dev \
     && llvm-config-22 --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }' \
     && rm -rf /var/lib/apt/lists/*

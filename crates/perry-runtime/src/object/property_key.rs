@@ -189,19 +189,17 @@ unsafe fn set_property_key_resolved(obj_value: f64, key: f64, value: f64) -> f64
     if key_str.is_null() {
         return value;
     }
-    // Class constructor/prototype refs are INT32-tagged values, not real
-    // `ObjectHeader`s — `extract_obj_ptr` returns null for them, so a
-    // `C.prototype[key] = v` / `C[key] = v` write silently no-op'd here. The
-    // get side already passes the raw NaN-boxed bits into the by-name dispatch
-    // (which has a dedicated 0x7FFE class-ref branch); mirror that on the set
-    // side so static-accessor and prototype instance-setter dispatch run.
+    // A class constructor is a class function object, not a real
+    // `ObjectHeader` — `extract_obj_ptr` returns null for it, so a
+    // `C[key] = v` write silently no-op'd here. The get side already passes
+    // the raw NaN-boxed bits into the by-name dispatch (which has a dedicated
+    // class-ref branch); mirror that on the set side so static-accessor
+    // dispatch runs.
     if let Some(class_id) = super::class_ref_id(obj_value) {
-        if super::class_prototype_ref_id(obj_value).is_none() {
-            let name_ptr = crate::string::string_data(key_str);
-            let name_len = (*key_str).byte_len as usize;
-            if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
-                crate::error::throw_immutable_write(class_id, "prototype");
-            }
+        let name_ptr = crate::string::string_data(key_str);
+        let name_len = (*key_str).byte_len as usize;
+        if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
+            crate::error::throw_immutable_write(class_id, "prototype");
         }
         js_object_set_field_by_name(obj_value.to_bits() as *mut ObjectHeader, key_str, value);
         return value;
@@ -521,7 +519,7 @@ mod property_key_tests {
             assert_eq!(js_to_property_key(sym).to_bits(), sym.to_bits());
 
             assert_eq!(string_value_to_rust(js_to_property_key(42.0)), "42");
-            let int_key = f64::from_bits(crate::value::JSValue::int32(7).bits());
+            let int_key = f64::from(7);
             assert_eq!(string_value_to_rust(js_to_property_key(int_key)), "7");
             assert_eq!(
                 string_value_to_rust(js_to_property_key(f64::from_bits(crate::value::TAG_TRUE))),
@@ -900,8 +898,9 @@ mod property_key_tests {
             crate::object::class_registry::test_clear_class_side_table_roots();
 
             let class_id = 0x3581;
+            crate::object::js_register_class_id(class_id);
             let sym = crate::symbol::js_symbol_new_empty();
-            let sym_key = crate::symbol::sym_key_from_f64(sym);
+            let _ = crate::object::class_registry::class_decl_prototype_value(class_id);
 
             crate::object::class_registry::js_register_class_computed_method(
                 class_id as i64,
@@ -914,12 +913,8 @@ mod property_key_tests {
                 0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
-            let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
-                class_id, sym_key, false,
-            )
-            .expect("computed symbol method should be registered");
-            assert_eq!(method.1, 0);
-            assert!(!method.2);
+            let prototype = crate::object::class_registry::class_decl_prototype_value(class_id);
+            assert!(crate::symbol::js_object_has_own_symbol(prototype, sym));
 
             crate::object::class_registry::js_register_class_computed_accessor(
                 class_id as i64,
@@ -930,13 +925,7 @@ mod property_key_tests {
                 2,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
-            let value = crate::object::class_registry::class_symbol_getter_value(
-                class_id,
-                sym_key,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-                false,
-            )
-            .expect("computed symbol getter should be registered");
+            let value = crate::symbol::js_object_get_symbol_property(prototype, sym);
             assert_eq!(value, 88.0);
 
             crate::object::class_registry::test_clear_class_side_table_roots();

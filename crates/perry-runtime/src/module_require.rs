@@ -302,9 +302,9 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
     let message = format!("Cannot find module '{specifier}'");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "MODULE_NOT_FOUND");
-    let error = crate::error::js_error_new_with_message(msg);
+    let error = crate::error::CoreError::error(msg);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let error_handle = scope.root_raw_mut_ptr(error);
+    let error_handle = error.root(&scope);
     let stack = crate::array::js_array_alloc_with_length(1);
     let stack_handle = scope.root_raw_mut_ptr(stack);
     let base_value = string_value(&base.to_string_lossy());
@@ -314,8 +314,10 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
     let stack_value = stack_handle.with_mut_ptr(|stack: *mut crate::array::ArrayHeader| {
         f64::from_bits(JSValue::array_ptr(stack).bits())
     });
-    let error_value = error_handle.with_mut_ptr(|error: *mut crate::object::ObjectHeader| {
-        let error_value = js_nanbox_pointer(error as i64);
+    {
+        let error_value = error_handle.value();
+        let error =
+            crate::value::js_nanbox_get_pointer(error_value) as *mut crate::object::ObjectHeader;
         unsafe {
             crate::object::exotic_expando::exotic_set_property(
                 error as usize,
@@ -325,9 +327,8 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
                 error_value,
             );
         }
-        error_value
-    });
-    crate::exception::js_throw(error_value)
+    }
+    crate::exception::throw_core(error_handle.error())
 }
 
 fn throw_package_path_not_exported(specifier: &str) -> ! {
@@ -699,9 +700,12 @@ impl Drop for PendingRequireParentGuard {
     }
 }
 
-fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f64 {
+fn require_path(path: &std::path::Path, parent_filename: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cache_handle = scope.root_nanbox_f64(cache);
+    // `Module._cache`: the program's `require.cache` from program start (the
+    // CommonJS support module initializes first, `init_order`), the object
+    // the module stores its record in during the load below.
+    let cache_handle = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
     let filename = path.to_string_lossy();
     if let Some((record, exports)) = cached_record(cache_handle.get_nanbox_f64(), &filename) {
         let exports_handle = scope.root_nanbox_f64(exports);
@@ -879,11 +883,7 @@ extern "C" fn require_thunk(
     let base = require_base_dir(closure);
     let parent_filename = require_base_filename(closure);
     match resolve_request(&base, &specifier) {
-        Ok(path) => require_path(
-            crate::object::module_cjs_cache_value(),
-            &path,
-            &parent_filename,
-        ),
+        Ok(path) => require_path(&path, &parent_filename),
         Err(ResolveError::NotExported) => throw_package_path_not_exported(&specifier),
         Err(ResolveError::NotFound) => throw_require_module_not_found(&specifier, &base),
     }
@@ -1244,9 +1244,13 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
 /// `init_addr` is codegen's `ptrtoint` of an `extern "C" fn()` module body.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
+    crate::snap_census::init_part();
+    if crate::snap_census::skip_body() {
+        return;
+    }
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
     let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
-    let outcome = crate::exception::js_call_catching(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     });
@@ -1255,29 +1259,56 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
             MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, None));
         }
         Err(error) => {
-            MODULE_PATH_REGISTRY
-                .with(|r| r.finish_module_boundary(boundary, Some(error.to_bits())));
-            crate::exception::js_throw(error)
+            MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, Some(error)));
+            crate::exception::rethrow_caught(error)
         }
     }
 }
 
+/// Record numbers of module evaluations, process-wide so a guard that exists
+/// once per thread (a worker program) still names a distinct record.
+static MODULE_INIT_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The evaluation record number kept beside a module's guard byte, assigned on
+/// the guard's first evaluation. It follows the program's evaluation order; the
+/// guard's address follows the link and must not reach the record's key (the
+/// key text is hashed and compared on every module entry).
+///
+/// # Safety
+/// `guard_addr` names an emitted eight-byte guard global (`module_init.rs`):
+/// the guard is its first byte, bytes 4..8 are this number.
+unsafe fn module_init_record_number(guard_addr: i64) -> u32 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let slot =
+        std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
+    let number = slot.load(Relaxed);
+    if number != 0 {
+        return number;
+    }
+    let number = MODULE_INIT_SEQUENCE.fetch_add(1, Relaxed) + 1;
+    slot.store(number, Relaxed);
+    number
+}
+
 /// Execute one compiled module evaluation using the existing module registry.
-/// Its per-module guard address identifies the evaluation record independently
+/// Its per-module guard identifies the evaluation record independently
 /// of a possibly folded initializer body or CommonJS partial-export publication.
 /// An ESM or parse-error stub may throw before publishing anything. Successful reentries retain the emitted
 /// one-byte guard; a failure clears that guard and remains in the registry.
 ///
 /// # Safety
 /// `init_addr` names an `extern "C" fn()` evaluation body; `guard_addr` names
-/// its stable generated i8 global, thread-local for worker programs.
+/// its stable generated eight-byte global (guard byte, then the record number),
+/// thread-local for worker programs.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: i64) {
-    let key = format!("\0module-init:{guard_addr:x}");
+    let key = format!("\0module-init:{:x}", module_init_record_number(guard_addr));
     let outcome = MODULE_PATH_REGISTRY.with(|registry| {
         assert!(registry.register_init(key.clone(), init_addr as usize));
         registry.require_with(&key, &run_path_initializer)
     });
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::init_guard(init_addr as usize, guard_addr as usize);
     match outcome {
         Ok(_) => {}
         Err(error) => {
@@ -1286,7 +1317,7 @@ pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: 
             *(guard_addr as *mut u8) = 0;
             match error {
                 PathModuleRequireError::Initializer(error) => {
-                    crate::exception::js_throw(f64::from_bits(error));
+                    crate::exception::rethrow_caught(error);
                 }
                 PathModuleRequireError::OwnershipConflict => {
                     crate::fs::validate::throw_error_with_code(
@@ -1320,16 +1351,18 @@ fn directory_module_candidates(key: &str) -> Vec<String> {
     candidates
 }
 
-fn run_path_initializer(addr: usize) -> Result<(), u64> {
+fn run_path_initializer(addr: usize) -> Result<(), crate::exception::Caught> {
     // SAFETY: `addr` came from codegen's `ptrtoint` of an `extern "C" fn()`
     // module initializer and was accepted once for this canonical path.
     let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
-    crate::exception::js_call_catching(|| {
+    crate::snap_census::init_enter(addr);
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     })
-    .map(|_| ())
-    .map_err(f64::to_bits)
+    .map(|_| ());
+    crate::snap_census::init_exit(outcome.is_err());
+    outcome
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
@@ -1342,13 +1375,12 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 /// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    let _require = crate::snap_census::require_scope();
     let path = value_to_string(path_value, "id");
     let key = module_lookup_key(&path);
     match require_path_key(&key) {
         Ok(Some(bits)) => return path_module_exports(bits),
-        Err(PathModuleRequireError::Initializer(error)) => {
-            crate::exception::js_throw(f64::from_bits(error))
-        }
+        Err(PathModuleRequireError::Initializer(error)) => crate::exception::rethrow_caught(error),
         Err(PathModuleRequireError::OwnershipConflict) => {
             crate::fs::validate::throw_error_with_code(
                 "Perry rejected a cross-owner path-module initialization cycle",
@@ -1362,7 +1394,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
         match require_path_key(&candidate) {
             Ok(Some(bits)) => return path_module_exports(bits),
             Err(PathModuleRequireError::Initializer(error)) => {
-                crate::exception::js_throw(f64::from_bits(error))
+                crate::exception::rethrow_caught(error)
             }
             Err(PathModuleRequireError::OwnershipConflict) => {
                 crate::fs::validate::throw_error_with_code(
@@ -1784,3 +1816,29 @@ mod builtin_allowlist_parity_tests {
 mod init_guard_tests;
 
 pub(crate) mod file_url_text;
+
+/// The SNAP census check run: evaluate the module whose initializer is
+/// `addr` (an imaged init the census entered inside a skipped body of D),
+/// once, through its emitted guard, or for a path-wrapper frame through the
+/// registry, as a `require` of it would.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn snap_evaluate_init(addr: usize, guard: usize) {
+    if guard != 0 {
+        // Static dependencies enter the evaluation directly: their path entry
+        // names the outer wrapper, so an address lookup cannot replay them.
+        unsafe {
+            let done = guard as *mut u8;
+            if *done != 0 {
+                return;
+            }
+            *done = 1;
+            js_run_module_init_guarded(addr as i64, guard as i64);
+        }
+        return;
+    }
+    let Some(key) = path_registry::key_of_init_addr(addr) else {
+        return;
+    };
+    let _require = crate::snap_census::require_scope();
+    let _ = require_path_key(&key);
+}

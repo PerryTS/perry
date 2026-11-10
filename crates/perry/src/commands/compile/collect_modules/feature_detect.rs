@@ -180,6 +180,31 @@ fn stmts_any_expr(
         .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |e| found(e)))
 }
 
+/// A BigInt64/BigUint64 view lowers to a numeric `kind` that the HIR debug
+/// text never spells by name, yet every element read produces a BigInt.
+fn module_uses_bigint_typed_array(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::{TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64};
+    use perry_hir::Expr;
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            Expr::TypedArrayNew { kind, .. } | Expr::NativeArenaView { kind, .. }
+                if matches!(*kind, TYPED_ARRAY_KIND_BIGINT64 | TYPED_ARRAY_KIND_BIGUINT64) =>
+            {
+                return true
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| found = found || uses(child));
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
 /// `global-math`: does the program evaluate the `Math` namespace object?
 ///
 /// Direct calls (`Math.max(a, b)`) lower to intrinsics and never read it. A
@@ -281,6 +306,15 @@ fn module_uses_process_object(module: &perry_hir::Module) -> bool {
 
     fn uses(expr: &Expr) -> bool {
         match expr {
+            // `process.dlopen` loads an authenticated addon; the call itself
+            // touches no process state. What the addon reaches is its own
+            // fact: an open one installs every subsystem (`addon_world`).
+            Expr::NativeMethodCall {
+                module,
+                method,
+                object: None,
+                ..
+            } if module == "process" && method == "dlopen" => {}
             Expr::NativeModuleRef(module) | Expr::NativeMethodCall { module, .. }
                 if matches!(
                     module.as_str(),
@@ -577,6 +611,8 @@ fn detect_optional_feature_usage_with_capabilities(
             "TextEncoder",
             "NativeMemory",
             "ProcessStdin",
+            // The embedded-file read of `perry` returns a Buffer.
+            "readEmbedded",
         ]
         .iter()
         .any(|name| hir_debug.contains(name))
@@ -607,6 +643,24 @@ fn detect_optional_feature_usage_with_capabilities(
                         | "bun:ffi"
                         | "sqlite"
                         | "perry/thread"
+                        // Modules whose results are Buffers without the program
+                        // naming one: compressed output, byte-mode stream chunks,
+                        // StringDecoder lastChar, WebSocket messages, BLOB columns.
+                        | "zlib"
+                        | "stream"
+                        | "stream/consumers"
+                        | "string_decoder"
+                        | "ws"
+                        | "better-sqlite3"
+                        | "bun:sqlite"
+                        // Well-known providers whose code is not in this repo.
+                        | "pg"
+                        | "mysql2"
+                        | "mysql2/promise"
+                        | "tursodb"
+                        | "iroh"
+                        // tty.ReadStream reads hand out Buffers.
+                        | "tty"
                 )
         });
     ctx.uses_event_target |= global_object::may_escape(hir_module)
@@ -639,6 +693,10 @@ fn detect_optional_feature_usage_with_capabilities(
                     "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
                 )
         });
+    ctx.uses_navigator |= global_object::may_escape(hir_module)
+        || ["navigator", "Navigator"]
+            .iter()
+            .any(|name| hir_debug.contains(&format!("\"{name}\"")));
     ctx.uses_messaging |= global_object::may_escape(hir_module)
         || hir_debug.contains(r#""worker_threads""#)
         || hir_module.imports.iter().any(|import| {
@@ -731,8 +789,9 @@ fn detect_optional_feature_usage_with_capabilities(
         || hir_debug.contains("Bigint")
         || hir_debug.contains("bigint")
         || hir_debug.contains("Buffer")
-        || hir_debug.contains("BigUint64Array")
+        || hir_debug.contains("BigUint64")
         || hir_debug.contains("GlobalThisExpr")
+        || module_uses_bigint_typed_array(hir_module)
         || hir_debug.contains("property: \"globalThis\"")
     {
         ctx.uses_bigint = true;
@@ -1216,6 +1275,10 @@ fn detect_optional_feature_usage_with_capabilities(
             || hir_debug.contains("\"fetch\"")
         {
             ctx.uses_global_webfetch = true;
+            // Installing the global surface also installs what the runtime
+            // calls through it: the constructors register from perry-stdlib
+            // web-fetch (install_fetch), so the stdlib must be linked.
+            ctx.needs_stdlib = true;
         }
         // `process` IPC channel properties. Bare-token matching on purpose:
         // the property name reaches the runtime as a string, so any `send` /
@@ -1304,6 +1367,31 @@ fn detect_optional_feature_usage_with_capabilities(
         {
             ctx.uses_dgram = true;
         }
+        // child_process the same way: its stdio pipes are net sockets.
+        let imports_child_process_or_create_require = hir_module.imports.iter().any(|import| {
+            if import.type_only || import.runtime_erased {
+                return false;
+            }
+            let bare = import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source);
+            bare == "child_process"
+                || (bare == "module"
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named { imported, .. }
+                                if imported == "createRequire"
+                        )
+                    }))
+        });
+        if imports_child_process_or_create_require
+            || hir_debug.contains("module: \"child_process\"")
+            || hir_debug.contains("NativeModuleRef(\"child_process\")")
+        {
+            ctx.uses_child_process = true;
+        }
         // `node:test` → gates `perry-runtime/mod-node-test` (the runner, and
         // with it the JSON serializer its snapshot assertions call). Like
         // dgram it is runtime-only, so `requires_stdlib` is false for it and
@@ -1325,6 +1413,9 @@ fn detect_optional_feature_usage_with_capabilities(
         }
         if debug_hir_uses_get_builtin_module(&hir_debug) {
             ctx.uses_get_builtin_module = true;
+        }
+        if hir_debug.contains("\"upgradeToTLS\"") {
+            ctx.uses_upgrade_to_tls = true;
         }
     }
 
@@ -1477,12 +1568,26 @@ mod tests {
     }
 
     #[test]
+    fn bigint_views_select_the_bigint_producer() {
+        for source in [
+            "const b = new BigUint64Array(new Float64Array([-4]).buffer)[0]; console.log(String(b));",
+            "const b = new BigInt64Array(2)[0]; console.log(String(b));",
+            "const b = BigUint64Array.from([]); console.log(b.length);",
+            "const v = new DataView(new ArrayBuffer(8)); console.log(String(v.getBigUint64(0)));",
+        ] {
+            assert!(detect_for_source(source).uses_bigint, "{source}");
+        }
+        assert!(!detect_for_source("console.log(new Float64Array(2)[0]);").uses_bigint);
+    }
+
+    #[test]
     fn emitter_members_do_not_select_process_hooks() {
         for source in [
             r#"import { EventEmitter } from "events"; const e = new EventEmitter(); e.on("x", () => {}); e.emit("x");"#,
             r#"const e = { on() {}, emit() {} }; e.on(); e.emit();"#,
             r#"console.log("stdin", "on", "emit", "kill");"#,
             r#"console.log(process.argv[2], process.env.HOME, process.pid);"#,
+            r#"const m = { exports: {} }; process.dlopen(m, "addon.node");"#,
         ] {
             assert!(!detect_for_source(source).uses_os, "{source}");
         }
@@ -1502,6 +1607,7 @@ mod tests {
             r#"const callback = () => { const p = process; p.on("beforeExit", () => {}); }; callback();"#,
             r#"class C { subscribe(p: any = process) { p.on("beforeExit", () => {}); } } new C().subscribe();"#,
             r#"console.log(process.stdin, process.stdout, process.stderr);"#,
+            r#"const m = { exports: {} }; process.dlopen(m, String(process.stdin));"#,
         ] {
             assert!(detect_for_source(source).uses_os, "{source}");
         }

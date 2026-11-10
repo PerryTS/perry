@@ -87,8 +87,8 @@ pub(crate) extern "C" fn shared_array_buffer_byte_length_getter_thunk(
 /// `SharedArrayBuffer.prototype.slice(start, end)`. The brand check (the `this`
 /// value must be a SharedArrayBuffer, never a plain ArrayBuffer or a
 /// non-object) lives here so `SharedArrayBuffer.prototype.slice.call(notSab)`
-/// throws a TypeError; the actual byte copy + ToIntegerOrInfinity arg coercion
-/// is shared with the instance dispatch in `buffer_dispatch`.
+/// throws a TypeError; the byte copy + ToIntegerOrInfinity arg coercion is
+/// `buffer_dispatch::array_buffer_slice`, shared with `ArrayBuffer`'s.
 pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -97,8 +97,7 @@ pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
 ) -> f64 {
     match shared_array_buffer_receiver_addr(this) {
         Some(addr) => unsafe {
-            let args = [start, end];
-            super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+            super::super::buffer_dispatch::array_buffer_slice(addr, &[start, end])
         },
         None => super::super::object_ops::throw_object_type_error(
             b"Method SharedArrayBuffer.prototype.slice called on incompatible receiver",
@@ -114,8 +113,7 @@ pub(crate) extern "C" fn array_buffer_slice_thunk(
 ) -> f64 {
     match array_buffer_receiver_addr(this) {
         Some(addr) => unsafe {
-            let args = [start, end];
-            super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+            super::super::buffer_dispatch::array_buffer_slice(addr, &[start, end])
         },
         None => super::super::object_ops::throw_object_type_error(
             b"Method ArrayBuffer.prototype.slice called on incompatible receiver",
@@ -123,11 +121,10 @@ pub(crate) extern "C" fn array_buffer_slice_thunk(
     }
 }
 
-/// `ArrayBuffer.prototype.{resize, transfer, transferToFixedLength}` reached
-/// reflectively (`ArrayBuffer.prototype.resize.call(ab, n)`). Instances
-/// dispatch through `buffer_dispatch` directly; these only brand-check the
-/// receiver and forward to the same arm, so the two cannot disagree (#10873).
-fn array_buffer_method_via_dispatch(
+/// `ArrayBuffer.prototype.{resize, transfer, transferToFixedLength}`: brand
+/// check (a plain ArrayBuffer, never a SharedArrayBuffer or a DataView), then
+/// the implementation. Instance calls reach these through the prototype member.
+fn array_buffer_method(
     this: crate::closure::JsThis,
     method: &'static str,
     arg: f64,
@@ -137,10 +134,14 @@ fn array_buffer_method_via_dispatch(
         Some(addr)
             if !crate::buffer::is_shared_array_buffer(addr)
                 && !crate::buffer::is_data_view(addr) =>
-        unsafe {
+        {
             let args = [arg];
-            super::super::buffer_dispatch::dispatch_buffer_method(addr, method, args.as_ptr(), 1)
-        },
+            if method == "resize" {
+                crate::buffer::array_buffer_resize(addr, &args)
+            } else {
+                crate::buffer::array_buffer_transfer(addr, &args, method == "transfer")
+            }
+        }
         _ => super::super::object_ops::throw_object_type_error(brand_error),
     }
 }
@@ -150,7 +151,7 @@ pub(crate) extern "C" fn array_buffer_resize_thunk(
     this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
-    array_buffer_method_via_dispatch(
+    array_buffer_method(
         this,
         "resize",
         new_length,
@@ -163,7 +164,7 @@ pub(crate) extern "C" fn array_buffer_transfer_thunk(
     this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
-    array_buffer_method_via_dispatch(
+    array_buffer_method(
         this,
         "transfer",
         new_length,
@@ -176,12 +177,62 @@ pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
     this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
-    array_buffer_method_via_dispatch(
+    array_buffer_method(
         this,
         "transferToFixedLength",
         new_length,
         b"Method ArrayBuffer.prototype.transferToFixedLength called on incompatible receiver",
     )
+}
+
+/// `SharedArrayBuffer.prototype.grow(newLength)` (length 1).
+pub(crate) extern "C" fn shared_array_buffer_grow_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    new_length: f64,
+) -> f64 {
+    match shared_array_buffer_receiver_addr(this) {
+        Some(addr) => crate::buffer::shared_array_buffer_grow(addr, &[new_length]),
+        None => super::super::object_ops::throw_object_type_error(
+            b"Method SharedArrayBuffer.prototype.grow called on incompatible receiver",
+        ),
+    }
+}
+
+/// `get SharedArrayBuffer.prototype.growable` / `maxByteLength`.
+fn shared_array_buffer_flag_getter(this: crate::closure::JsThis, key: &[u8]) -> f64 {
+    let Some(addr) = shared_array_buffer_receiver_addr(this) else {
+        super::super::object_ops::throw_object_type_error(if key == b"growable" {
+            b"Method get SharedArrayBuffer.prototype.growable called on incompatible receiver"
+        } else {
+            b"Method get SharedArrayBuffer.prototype.maxByteLength called on incompatible receiver"
+        })
+    };
+    let value = if key == b"growable" {
+        JSValue::bool(crate::buffer::is_resizable_buffer(addr))
+    } else {
+        let buf = addr as *const crate::buffer::BufferHeader;
+        JSValue::number(
+            crate::buffer::resizable_max_byte_length(addr)
+                .map(|max| max as f64)
+                .unwrap_or_else(|| crate::buffer::js_buffer_length(buf) as f64),
+        )
+    };
+    f64::from_bits(value.bits())
+}
+
+pub(crate) extern "C" fn shared_array_buffer_growable_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    shared_array_buffer_flag_getter(this, b"growable")
+}
+
+pub(crate) extern "C" fn shared_array_buffer_max_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    shared_array_buffer_flag_getter(this, b"maxByteLength")
 }
 
 /// Shared body of the reflectable `resizable` / `maxByteLength` / `detached`
@@ -555,7 +606,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
 }
 
 /// Install the four `%TypedArray%.prototype` accessor descriptors
-/// (`length`, `byteLength`, `byteOffset`, `buffer`) on a typed-array
+/// (`buffer`, `byteLength`, `byteOffset`, `length`: node's own-key order) on a typed-array
 /// constructor's prototype object so `Object.getOwnPropertyDescriptor`
 /// reflects them as `{ get, set: undefined, enumerable: false,
 /// configurable: true }`. #2060.
@@ -572,8 +623,8 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         };
         install_builtin_getter(
             proto_obj,
-            "length",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_declared(0))),
+            "buffer",
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
@@ -587,8 +638,8 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         );
         install_builtin_getter(
             proto_obj,
-            "buffer",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_declared(0))),
+            "length",
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_declared(0))),
         );
     }
 }
@@ -683,12 +734,14 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     // Reachable ahead of `populate_global_this_builtins` from
     // `typedarray_props.rs:812` on the allocation-point route. See
     // `gc::tests::lazy_intrinsic_towers` for the gate.
+    // %TypedArray% is the realm's, whichever init first asks (SNAP census).
+    let _realm = crate::snap_census::realm_build();
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
         crate::fn_info!(#[realm(realm_decl! { BigInt64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); BigUint64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { fromBase64; fromHex; prototype; BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8ClampedArray, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); "%TypedArray%", kind = constructor, capture = [ref(Uint8Array.prototype)], members = { from; of; [Symbol.species] = accessor(get = "%TypedArray%[\"@@species\"].<get>"); }, spec = {name = "TypedArray"}, emit = metadata(realm_typed_array_public), births = [ArrayBuffer]; })] export crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk, 1; with_declared(0)),
         1,
     );
-    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; length = accessor(get = "%TypedArray%.prototype.length.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); at; copyWithin; entries; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; keys; lastIndexOf; map; reduce; reduceRight; reverse; set; slice; some; sort; subarray; toLocaleString; toReversed; toSorted; values; with; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); length = accessor(get = "%TypedArray%.prototype.length.<get>"); entries; keys; values; at; copyWithin; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; lastIndexOf; map; reverse; reduce; reduceRight; set; slice; some; sort; subarray; toReversed; toSorted; with; toLocaleString; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
     if ctor.is_null() || proto.is_null() {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }

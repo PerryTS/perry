@@ -341,16 +341,14 @@ pub(crate) fn request_block_pool_drain() {
 
 /// Called only from full-cycle publication. A critical-pressure request stays
 /// sticky through unsafe/deferred periods and is retired after the owed full
-/// collection has completed all arena reclamation.
-pub(crate) fn drain_block_pool_if_requested() -> BlockPoolDrainStats {
+/// collection has completed all arena reclamation. `None`: nobody requested
+/// the drain, so nobody is owed the memory back now.
+pub(crate) fn drain_block_pool_if_requested() -> Option<BlockPoolDrainStats> {
     let requested = BLOCK_POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
         std::mem::replace(&mut pool.drain_requested, false)
     });
-    if !requested {
-        return BlockPoolDrainStats::default();
-    }
-    drain_block_pool()
+    requested.then(drain_block_pool)
 }
 
 #[cfg(test)]
@@ -580,6 +578,7 @@ impl ArenaBlock {
         let ptr = unsafe { self.data.add(aligned_offset) };
         let next = bumped.checked_add(pad - 1)? & !(pad - 1);
         self.offset = next;
+        crate::snap_census::birth(ptr, size);
         Some(ptr)
     }
 
@@ -1308,7 +1307,6 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: crate::gc::TriggerInput<usize> = const { crate::gc::TriggerInput::new(0) };
 }
-
 crate::perry_thread_local! {
     /// Cached running sum of `block.offset` across the old-gen arena —
     /// the delta-maintained twin of `ARENA_TOTAL_BYTES` above, same

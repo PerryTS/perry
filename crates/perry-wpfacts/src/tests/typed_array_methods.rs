@@ -101,7 +101,7 @@ fn typed_replaced_method_stays_conservative() {
 #[test]
 fn typed_unknown_receiver_stays_conservative() {
     check(
-        "const x: any = (globalThis as any).unknown; x.set(o)",
+        "import \"unseen-host\"; const x: any = (globalThis as any).unknown; x.set(o)",
         false,
     );
 }

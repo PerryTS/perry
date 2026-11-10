@@ -10,8 +10,7 @@ fn resource_receiver(receiver: f64) -> i64 {
             b"Cannot read properties of undefined".as_slice()
         };
         let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let error = crate::error::js_typeerror_new(message);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(message));
     }
     crate::value::js_nanbox_get_pointer(receiver)
 }

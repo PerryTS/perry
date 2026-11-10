@@ -596,6 +596,34 @@ unsafe fn push_patched_proto(
     Some(result.to_bits())
 }
 
+/// [`js_array_push_f64_spec_or_own`] for an ordinary array whose own
+/// `[[Prototype]]` was replaced (`GC_ARRAY_CUSTOM_PROTO`): its `push` is the
+/// one its chain holds, so the real `Get` selects it (a user prototype's
+/// override, or an accessor's getter). `None` when that is still the builtin,
+/// so the caller's plain push runs.
+///
+/// Without this a `number[]`-typed receiver that adopted
+/// `Object.create(Array.prototype)` with its own `push` appended through the
+/// builtin, while `map` and `indexOf` honoured the override (their checked
+/// entries test the same bit).
+unsafe fn push_custom_proto(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> Option<u64> {
+    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    let live = crate::array::clean_arr_ptr_mut(arr);
+    if live.is_null()
+        || crate::array::array_object_flags_resolved(live) & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+    {
+        return None;
+    }
+    push_patched_proto(live, value, own_out)
+}
+
 /// [`js_array_push_f64_spec_or_own`] for every receiver the plain push
 /// declined: forwarded, carrying named properties or descriptors, sealed,
 /// frozen, or not an ordinary array at all.
@@ -615,6 +643,9 @@ unsafe fn push_or_own_declined(
         return result.to_bits();
     }
     let Some(live) = array_owning_push(arr) else {
+        if let Some(bits) = push_custom_proto(arr, value, own_out) {
+            return bits;
+        }
         return crate::array::push_spec_declined(arr, value) as u64;
     };
     let scope = crate::gc::RuntimeHandleScope::new();

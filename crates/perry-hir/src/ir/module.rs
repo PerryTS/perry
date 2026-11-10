@@ -187,6 +187,8 @@ pub struct Module {
     /// deferred-import dispatch to chain the init promise rather than
     /// returning a pre-resolved namespace.
     pub has_top_level_await: bool,
+    /// Resumable module body; its lexical bindings remain module globals.
+    pub async_init_function: Option<crate::types::FuncId>,
     /// Issue #100: eager vs deferred init. Modules reachable from the
     /// entry over only static-import edges init at program start (Eager).
     /// Modules only reachable through dynamic `import()` init lazily on
@@ -272,9 +274,54 @@ pub struct Module {
     /// (`export * from "./a"` above `import * as b from "./b"` evaluates `a`
     /// first); `topo_sort_non_entry_modules` follows it.
     pub requested_modules: Vec<String>,
+    /// Local names of TypeScript named/default imports that a top-level
+    /// declaration of this module repeats. Each is the early
+    /// `SyntaxError: Identifier 'x' has already been declared` only if the
+    /// export it resolves to has a value meaning: a specifier naming an
+    /// interface or type alias binds nothing (tsc elides it) and the local
+    /// declaration merges with it. The compile driver decides them once
+    /// imports resolve; every other redeclaration is rejected by lowering.
+    pub locally_redeclared_imports: Vec<String>,
 }
 
 impl Module {
+    /// Whether exported `name` is only an erased TypeScript declaration (an
+    /// interface or type alias, or the local of a type-only import:
+    /// `import type { X }`, or a declaration of only `type` specifiers) and
+    /// no JavaScript binding of this module. tsc erases `export { X }` of a
+    /// type-only import as it erases `export type`.
+    ///
+    /// Interfaces and type aliases stay in `exports` so cross-module type
+    /// resolution can follow re-export chains; a declaration-merged name that
+    /// also has a value binding is a value. It is the one predicate for "this
+    /// export is no runtime export": the facts (no value, no namespace key)
+    /// and codegen read it as the namespace builders do.
+    pub fn is_type_only_export_binding(&self, name: &str) -> bool {
+        let has_type_declaration = self.interfaces.iter().any(|i| i.name == name)
+            || self.type_aliases.iter().any(|alias| alias.name == name)
+            || self.imports.iter().any(|i| {
+                (i.type_only || i.runtime_erased)
+                    && i.specifiers.iter().any(|s| match s {
+                        ImportSpecifier::Named { local, .. }
+                        | ImportSpecifier::Default { local }
+                        | ImportSpecifier::Namespace { local } => local == name,
+                    })
+            });
+        has_type_declaration
+            && !(self.functions.iter().any(|f| f.name == name)
+                || self
+                    .exported_functions
+                    .iter()
+                    .any(|(exported, _)| exported == name)
+                || self
+                    .exported_objects
+                    .iter()
+                    .any(|exported| exported == name)
+                || self.classes.iter().any(|c| c.name == name)
+                || self.enums.iter().any(|e| e.name == name)
+                || self.globals.iter().any(|g| g.name == name))
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -303,6 +350,7 @@ impl Module {
             extern_funcs: Vec::new(),
             init_was_unrolled: false,
             has_top_level_await: false,
+            async_init_function: None,
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
@@ -314,6 +362,7 @@ impl Module {
             local_source_spans: std::collections::HashMap::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),
             requested_modules: Vec::new(),
+            locally_redeclared_imports: Vec::new(),
         }
     }
 

@@ -67,12 +67,14 @@ fn raw_mode_preserves_pty_output() {
         assert_eq!(initial.c_oflag, flags, "PTY must exercise requested flags");
         let mut child = ChildGuard(
             Command::new(std::env::current_exe().unwrap())
-                .args([
+                // The way libtest's runner starts a per-test process under
+                // `panic-abort-tests`: the test body runs in this process with
+                // the PTY as stdin (a re-exec through libtest would replace
+                // stdin); exit 50 (libtest's `TR_OK`) is a pass.
+                .env(
+                    "__RUST_TEST_INVOKE",
                     "readline::raw_mode::termios_impl::tests::raw_mode_pty_child",
-                    "--exact",
-                    "--ignored",
-                    "--nocapture",
-                ])
+                )
                 .stdin(Stdio::from(slave.try_clone().unwrap()))
                 .stdout(Stdio::null())
                 .stderr(Stdio::inherit())
@@ -111,7 +113,7 @@ fn raw_mode_preserves_pty_output() {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(status) = child.0.try_wait().unwrap() {
-                assert!(status.success(), "PTY child failed: {status}");
+                assert_eq!(status.code(), Some(50), "PTY child failed: {status}");
                 break;
             }
             assert!(Instant::now() < deadline, "raw input timed out");

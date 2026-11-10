@@ -1,0 +1,17 @@
+initial true true
+date alias true false
+date getter true 1
+number alias true false
+constructors true true
+array binding replaced true
+array getter true 1
+array constructor deleted true
+absent true
+DEC 250: Cannot add member Function.prototype.isBuffer: built-in objects are read-only in a compiled program
+inherited getter false 0
+own 19 0
+own deleted false 0
+prototype deleted true 0
+terminal native false false
+terminal target true false
+physical target true true

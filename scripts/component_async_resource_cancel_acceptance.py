@@ -53,7 +53,7 @@ def main():
         shutil.copy2(binaries / (name + suffix), frozen / (name + suffix))
     generator = frozen / ("canonical_c" + suffix)
     host = frozen / ("async_resource_cancel" + suffix)
-    fixture = root / "test-wasi/components/async-resource-cancel"
+    fixture = root / "tests/integration/wasi/components/async-resource-cancel"
     peers = []
     for world, source in [("provider", "provider.c"), ("supervisor", "supervisor.c")]:
         folder = out / world

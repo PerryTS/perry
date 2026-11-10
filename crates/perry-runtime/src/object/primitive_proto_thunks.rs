@@ -224,8 +224,7 @@ fn receiver_value(this: crate::closure::JsThis) -> f64 {
 fn throw_incompatible_receiver(proto: &str, method: &str) -> ! {
     let msg = format!("{proto}.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 fn boxed_payload(receiver: f64, expected_class_id: u32) -> Option<f64> {

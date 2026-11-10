@@ -116,7 +116,7 @@ pub(super) fn assert_only_dead_bodies_dropped(
     cfg: &FactsConfig,
     w: &ProgramFacts,
 ) {
-    let all = crate::compute_act(list, cfg, None, None, false);
+    let all = crate::compute_act(list, cfg, None, None, None);
     for s in all.sites.iter().filter(|s| proven(s)) {
         let path = &all.module_paths[s.module as usize];
         let kept = w.sites.iter().any(|x| {
@@ -153,7 +153,8 @@ fn an_uncalled_body_does_not_escape_what_it_names() {
 #[test]
 fn every_way_the_body_can_run_keeps_it_refused() {
     for (arm, tail, _) in ARMS {
-        let pf = facts(&format!("{BASE}{tail}\n"));
+        // `plugin` is an unseen module's loader.
+        let pf = facts(&unseen(&format!("{BASE}{tail}\n")));
         let s = mk(&pf);
         assert!(
             !s.is_empty() && s.iter().all(|s| !proven(s)),

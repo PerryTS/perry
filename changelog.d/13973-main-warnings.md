@@ -1,0 +1,1 @@
+Fixed the rustc warnings the `warnings` CI job reports under `-D warnings` on main: the `STACK_MAPS_REBUILD_OWED` doc comment now sits inside `per_test_global!`, the unneeded `unsafe` around `schedule_native_immediate` is gone, `runtime_layouts::layout_id` (test-only) is `#[cfg(test)]`, and `perry-ext-http` no longer glob-re-exports `client_surface`. No runtime behavior changes.

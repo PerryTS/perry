@@ -108,6 +108,6 @@ dep with one that doesn't need the capability.
 ## See also
 
 - [`#501`](https://github.com/PerryTS/perry/issues/501) — design discussion.
-- [`--lockdown`](./lockdown.md)
-- [Egress Allowlist (`allowedHosts`)](./allowed-hosts.md)
-- [`PERRY_SANDBOX_BUILDRS`](./sandbox-buildrs.md)
+- [`--lockdown`](lockdown.md)
+- [Egress Allowlist (`allowedHosts`)](allowed-hosts.md)
+- [`PERRY_SANDBOX_BUILDRS`](sandbox-buildrs.md)

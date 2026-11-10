@@ -55,6 +55,7 @@ fn validate_random_bytes_size(size: f64) -> usize {
 pub extern "C" fn js_crypto_random_bytes_buffer(
     size: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
+    perry_runtime::effect!(host_read, random);
     let size = validate_random_bytes_size(size);
     let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
         perry_runtime::buffer::bytes::Brand::Buffer,
@@ -83,6 +84,7 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
 /// callback dispatch is deferred.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: f64) -> f64 {
+    perry_runtime::effect!(host_read, random);
     let buf = js_crypto_random_bytes_buffer(size);
     let value = if buf.is_null() {
         f64::from_bits(JSValue::undefined().bits())
@@ -113,6 +115,7 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
 /// crypto.randomBytes(size).toString('hex') -> string
 #[no_mangle]
 pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
+    perry_runtime::effect!(host_read, random);
     let size = validate_random_bytes_size(size);
 
     let mut bytes = vec![0u8; size];
@@ -130,6 +133,7 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
 /// `{ disableEntropyCache: true }`, which draws fresh OS entropy.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut StringHeader {
+    perry_runtime::effect!(host_read, random);
     let uuid = if validate_random_uuid_options(options_bits) {
         perry_uuid::v4_uncached()
     } else {
@@ -149,6 +153,7 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 /// accepted for shape parity but does not change the generated value.
 #[no_mangle]
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
+    perry_runtime::effect!(host_read, random);
     let uuid = perry_uuid::v7();
     let uuid_bytes = uuid.as_bytes();
     js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
@@ -247,6 +252,7 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
 /// Returns a uniformly distributed integer in `[min, max)`.
 #[no_mangle]
 pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
+    perry_runtime::effect!(host_read, random);
     let min = validate_random_int_arg(min_bits, "min");
     let max = validate_random_int_arg(max_bits, "max");
     if max <= min {
@@ -1165,7 +1171,7 @@ mod tests {
         // the key eagerly but must still defer delivery, because the callback has
         // to execute inside its own `PBKDF2REQUEST` async resource so
         // `async_hooks` observes init -> before -> after -> destroy around it
-        // (`test-parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
+        // (`tests/parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
         assert!(
             !CB_FIRED.with(|f| f.get()),
             "pbkdf2 callback must not fire synchronously"
@@ -1250,7 +1256,7 @@ mod tests {
     }
 
     fn int32(value: i32) -> f64 {
-        f64::from_bits(perry_runtime::JSValue::int32(value).bits())
+        f64::from(value)
     }
 
     /// The bytes behind a `Buffer` the dispatcher returned, or empty when it

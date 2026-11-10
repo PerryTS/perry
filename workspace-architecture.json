@@ -10,22 +10,16 @@
     "perry-ext-argon2",
     "perry-ext-bcrypt",
     "perry-ext-better-sqlite3",
-    "perry-ext-cheerio",
-    "perry-ext-ethers",
     "perry-ext-http",
     "perry-ext-net",
-    "perry-ext-nodemailer",
     "perry-ext-parcel-watcher",
     "perry-ext-pdf",
     "perry-ext-sharp",
-    "perry-ext-typescript",
-    "perry-ext-undici",
+    "perry-ext-bun",
     "perry-ext-ws",
     "perry-ext-zlib"
   ],
-  "allowed_binding_runtime_dependencies": [
-    "perry-ext-undici"
-  ],
+  "allowed_binding_runtime_dependencies": [],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",
@@ -64,16 +58,12 @@
       "perry-ext-argon2",
       "perry-ext-bcrypt",
       "perry-ext-better-sqlite3",
-      "perry-ext-cheerio",
-      "perry-ext-ethers",
+      "perry-ext-bun",
       "perry-ext-http",
       "perry-ext-net",
-      "perry-ext-nodemailer",
       "perry-ext-parcel-watcher",
       "perry-ext-pdf",
       "perry-ext-sharp",
-      "perry-ext-typescript",
-      "perry-ext-undici",
       "perry-ext-ws",
       "perry-ext-zlib",
       "perry-ffi",
@@ -85,6 +75,7 @@
       "perry-native-registration",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime",
       "perry-runtime-manifest",
       "perry-runtime-static",
@@ -120,6 +111,7 @@
       "perry-http-client",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime-manifest",
       "perry-tls-session",
       "perry-transform",
@@ -237,15 +229,10 @@
       "decision": "externalize",
       "migration": "external-package"
     },
-    "perry-ext-cheerio": {
+    "perry-ext-bun": {
       "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-ethers": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-http": {
       "category": "binding",
@@ -256,11 +243,6 @@
       "category": "binding",
       "decision": "keep",
       "migration": "core-runtime"
-    },
-    "perry-ext-nodemailer": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-parcel-watcher": {
       "category": "binding",
@@ -276,16 +258,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "external-package"
-    },
-    "perry-ext-typescript": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-undici": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-ws": {
       "category": "binding",
@@ -331,6 +303,10 @@
     },
     "perry-perex": {
       "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-realm-table": {
+      "category": "compiler-core",
       "decision": "keep"
     },
     "perry-runtime": {

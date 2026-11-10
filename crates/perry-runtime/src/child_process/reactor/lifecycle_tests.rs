@@ -48,6 +48,9 @@ fn native_process_fixture() {
     let mut tail = Vec::new();
     input.read_to_end(&mut tail).unwrap();
     assert_eq!(tail, b"exit");
+    // An LSP server exits 0 after `exit`; a passing libtest process would
+    // exit `TEST_PASSED`.
+    std::process::exit(0);
 }
 
 extern "C" fn event(
@@ -92,20 +95,20 @@ fn spawn_fixture(mode: &str, timeout: Option<f64>) -> f64 {
         b"PERRY_8512_CHILD_MODE",
         cp_box_string(mode),
     );
+    // The fixture runs as libtest runs every test: alone in its own process
+    // (`test_support::test_process`), on stdio this spawn owns.
+    cp_set_field(
+        env.get_nanbox_f64(),
+        crate::test_support::TEST_INVOKE.as_bytes(),
+        cp_box_string("child_process::reactor::lifecycle_tests::native_process_fixture"),
+    );
     let opts = scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
     cp_set_field(opts.get_nanbox_f64(), b"env", env.get_nanbox_f64());
     cp_set_field(opts.get_nanbox_f64(), b"windowsHide", TAG_TRUE_F64);
     if let Some(timeout) = timeout {
         cp_set_field(opts.get_nanbox_f64(), b"timeout", timeout);
     }
-    let mut args = crate::array::js_array_alloc(3);
-    for arg in [
-        "--exact",
-        "child_process::reactor::lifecycle_tests::native_process_fixture",
-        "--nocapture",
-    ] {
-        args = crate::array::js_array_push_f64(args, cp_box_string(arg));
-    }
+    let args = crate::array::js_array_alloc(0);
     let path = std::env::current_exe()
         .unwrap()
         .to_string_lossy()

@@ -1,0 +1,1 @@
+http IncomingMessage now supports paused-mode reading: 'readable' is emitted on a later turn, 'end' follows once the body is read, and read() draining the body schedules 'readable' and 'end', so readers that pull a request body complete.

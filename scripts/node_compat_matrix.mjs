@@ -7,7 +7,7 @@
  *   Perry reproduces each builtin's EXPORT SHAPE, for BOTH import forms
  *   (`M` and `node:M`). Its value is BREADTH: every builtin, both forms,
  *   one pinned oracle. Behavioral parity lives in the hand-authored
- *   node-suite (run_parity_tests.sh); this is a wide, shallow shape sweep.
+ *   node-suite (scripts/parity.py); this is a wide, shallow shape sweep.
  *
  *   Design choices (see docs/src/testing/node-compat-matrix.md):
  *     - BINARY pin, not a source checkout: the oracle is the official
@@ -16,8 +16,8 @@
  *       We measure shape against the SHIPPED runtime, not a self-build.
  *     - Node ESM runner, not bash: the matrix is data-structured (per
  *       module x per form, a JSON baseline, SRI download/verify, a printed
- *       table). run_parity_tests.sh streams a single node-vs-perry compare
- *       beautifully; this needs records, not streams. We DO reuse its
+ *       table). scripts/parity.py compares whole programs node-vs-perry;
+ *       this needs per-export records. We DO reuse its
  *       compile+run contract (PERRY_ALLOW_UNIMPLEMENTED=1, the
  *       --enable-js-runtime retry, PERRY_STUB_DIAG=off) — and sidestep its
  *       output-normalization entirely with a sentinel-wrapped fingerprint
@@ -34,7 +34,7 @@
  *     --check              compare to the committed baseline; exit 1 on
  *                          regressions (a cell that got strictly worse, or a
  *                          prefix-parity invariant that broke)
- *     --update-baseline    rewrite test-parity/node-compat-matrix.baseline.json
+ *     --update-baseline    rewrite tests/parity/node-compat-matrix.baseline.json
  *     --node-version <ver> use a different Node line (e.g. the LTS row);
  *                          verified via that version's SHASUMS256.txt
  *     --json               also print the raw result object as JSON
@@ -75,8 +75,8 @@ import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const EXTERNAL_TOOLS_JSON = path.join(REPO_ROOT, 'external-tools.json')
-const BASELINE_PATH = path.join(REPO_ROOT, 'test-parity', 'node-compat-matrix.baseline.json')
-const SKIP_PATH = path.join(REPO_ROOT, 'test-parity', 'node-compat-matrix.skip.json')
+const BASELINE_PATH = path.join(REPO_ROOT, 'tests/parity', 'node-compat-matrix.baseline.json')
+const SKIP_PATH = path.join(REPO_ROOT, 'tests/parity', 'node-compat-matrix.skip.json')
 const CACHE_ROOT = path.join(REPO_ROOT, '.cache', 'node-pin')
 const MANIFEST_ENTRIES = path.join(
   REPO_ROOT,
@@ -358,7 +358,7 @@ function perryFingerprint(probeFile, outBin) {
     env: compileEnv,
   })
   const cout = `${c.stdout || ''}\n${c.stderr || ''}`
-  // Mirror run_parity_tests.sh: retry once with the JS-runtime host opt-in
+  // Mirror scripts/parity.py: retry once with the JS-runtime host opt-in
   // when the failure names perry-jsruntime.
   if (c.status !== 0 && /perry-jsruntime/.test(cout)) {
     c = spawnSync(PERRY_BIN, ['--enable-js-runtime', probeFile, '-o', outBin], {
@@ -618,7 +618,7 @@ const BASELINE_SCHEMA = {
     'perry-unresolved': 'node resolved, perry did not compile/run',
     'perry-extra': 'perry resolved a form the node oracle did not',
     'both-unresolved': 'neither node nor perry resolved the form (neutral)',
-    skip: 'curated skip (see test-parity/node-compat-matrix.skip.json)',
+    skip: 'curated skip (see tests/parity/node-compat-matrix.skip.json)',
   },
   fields: {
     prefixParity:

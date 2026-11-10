@@ -470,7 +470,7 @@ fn test_old_young_edge_verifier_rejects_unbarriered_old_object_field() {
         (*old_header).gc_flags |= GC_FLAG_MARKED;
     }
 
-    let result = std::panic::catch_unwind(verify_old_to_young_edges_covered);
+    let result = crate::test_support::child_unwind(verify_old_to_young_edges_covered);
 
     assert!(
         result.is_err(),
@@ -549,7 +549,7 @@ fn test_old_young_edge_verifier_rejects_object_fallback_only() {
         s.borrow_mut().insert(old_header as usize);
     });
 
-    let result = std::panic::catch_unwind(verify_old_to_young_edges_covered);
+    let result = crate::test_support::child_unwind(verify_old_to_young_edges_covered);
 
     assert!(
         result.is_err(),

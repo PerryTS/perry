@@ -1080,7 +1080,7 @@ pub(crate) fn compute_auto_captures_with_globals(
     let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
     crate::collectors::collect_free_ref_ids_in_stmts(body, &mut referenced);
     let mut inner_lets: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    crate::collectors::collect_let_ids(body, &mut inner_lets);
+    crate::collectors::collect_own_binding_ids(body, &mut inner_lets);
     let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
     let already: std::collections::HashSet<u32> = out.iter().copied().collect();
     // Sort for determinism (HashSet iteration order is unspecified).

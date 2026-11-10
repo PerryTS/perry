@@ -63,6 +63,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     m.cons(
@@ -115,7 +116,7 @@ fn read_match(m: &mut Model, rec: NodeId) {
     m.cons(
         rec,
         Cons::Load {
-            key: Key::Any,
+            key: Key::any(),
             dst: v,
         },
     );
@@ -124,7 +125,7 @@ fn read_match(m: &mut Model, rec: NodeId) {
     m.cons(
         v,
         Cons::Load {
-            key: Key::Any,
+            key: Key::any(),
             dst: g,
         },
     );
@@ -215,7 +216,19 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 "codePointAt" => prim::NUM | prim::UNDEF,
                 _ => prim::STR,
             };
+            // `charAt` and `at` read one code unit (or none: `""`,
+            // `undefined`).
+            let one_unit = matches!(name, "charAt" | "at");
+            let saved = one_unit.then(|| {
+                m.cur_range.replace(crate::model::Rg {
+                    num: crate::model::Iv::TOP,
+                    chr: crate::model::range::CHAR_ANY,
+                })
+            });
             ret_prim(m, call, r);
+            if let Some(saved) = saved {
+                m.cur_range = saved;
+            }
             return true;
         }
         // 22.1.3.28 / .30 / .10 / .31: no operand is read.
@@ -436,7 +449,14 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
     let cap = m.node_l("split-capture");
     let i = m.node_l("split-capture-index");
     m.add_prim(i, prim::NUM);
-    m.cons(z, Cons::IdxLoad { idx: i, dst: cap });
+    m.cons(
+        z,
+        Cons::IdxLoad {
+            idx: i,
+            dst: cap,
+            shape: 0,
+        },
+    );
     let a = site_tmpl(m, call, "Array");
     let fa = m.field_any(a);
     m.add_prim(fa, prim::STR);
@@ -457,6 +477,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     m.cons(ctor, Cons::New { call });

@@ -8,7 +8,7 @@ fn async_zlib_options_reach_codecs_and_preserve_callback_contract() {
     let binary = dir.path().join("zlib_async_options");
     std::fs::write(
         &entry,
-        include_str!("../../../test-files/test_gap_10309_zlib_async_options.ts"),
+        include_str!("../../../tests/parity/node-suite/zlib/test_gap_10309_zlib_async_options.ts"),
     )
     .unwrap();
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))

@@ -20,11 +20,11 @@ impl RuntimeStoreSite {
         target: f64,
         key: &'static [u8],
         value: f64,
-    ) -> Result<(), f64> {
+    ) -> Result<(), crate::exception::Caught> {
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target);
         let value = scope.root_nanbox_f64(value);
-        crate::exception::catch_js_throw(|| {
+        crate::exception::catch_thrown(|| {
             self.store_slow(target.get_nanbox_f64(), key, value.get_nanbox_f64());
         })
     }
@@ -116,7 +116,7 @@ mod tests {
             );
         });
         assert!(
-            crate::exception::catch_js_throw(|| SITE.store(receiver(), b"lastIndex", 3.0)).is_err()
+            crate::exception::catch_thrown(|| SITE.store(receiver(), b"lastIndex", 3.0)).is_err()
         );
         let key = scope.root_string_ptr(crate::string::intern_ascii_literal(b"lastIndex"));
         object.with_mut_ptr::<crate::object::ObjectHeader, _>(|o| {

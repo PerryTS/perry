@@ -86,22 +86,22 @@ fn dispatch_validated(
         MessagePortOperation::Ref | MessagePortOperation::Unref => {
             with_port_states(|map| {
                 if let Some(state) = map.get_mut(&ptr) {
-                    state.refed = !state.closed && matches!(operation, MessagePortOperation::Ref);
+                    state.refed = port_transport::alive(state.lease)
+                        && matches!(operation, MessagePortOperation::Ref);
                 }
             });
             js_undefined()
         }
         MessagePortOperation::HasRef => js_bool(with_port_states(|map| {
             map.get(&ptr)
-                .is_some_and(|state| !state.closed && state.refed)
+                .is_some_and(|state| port_transport::alive(state.lease) && state.refed)
         })),
     }
 }
 
 fn invalid_receiver() -> ! {
     let message = key("Illegal invocation");
-    let error = crate::error::js_typeerror_new(message);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(message))
 }
 
 /// Read the message and optional transfer list without padding away absence.

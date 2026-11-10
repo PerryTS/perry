@@ -143,8 +143,7 @@ unsafe fn value_is_null_proto_object(value: f64) -> bool {
 pub(crate) fn throw_cannot_convert_to_primitive() -> ! {
     let msg = b"Cannot convert object to primitive value";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Spec-faithful `OrdinaryToPrimitive(O, hint)` (ES2024 §7.1.1.1) for the

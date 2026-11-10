@@ -1,40 +1,15 @@
-//! Target and ext packages: one triple's prebuilt libraries, installed apart
-//! from perry itself.
+//! Signed library packages, installed apart from the host compiler.
 //!
-//! A package is `@perryts/perry-<kind>-<triple>`, the name derived from the
-//! triple [`rust_target_triple`](super::rust_target_triple) returns (or, for
-//! perry's own platform, the triple it was built for). There are two kinds:
+//! Host UI, WebAssembly host and native-extension archives each have their
+//! own on-demand package. A cross-target package holds its runtime, stdlib,
+//! UI and sidecars together. npm/packaged-triples.json declares availability;
+//! npm/archive-kinds.rules declares archive ownership for staging and lookup.
 //!
-//! - a **target** package (`perry-target-<triple>`) holds a cross triple's
-//!   runtime, stdlib and UI archives (+ the runtime's `.gc-effects` sidecar);
-//! - an **ext** package (`perry-ext-<triple>`) holds the triple's
-//!   native-extension archives (`libperry_ext_*.a`, the host functions behind
-//!   node:http, ws, zlib, ...). They are too big for the host package, so an
-//!   npm install fetches them only when a program needs one (see
-//!   `commands::target::ensure_ext_package`).
-//!
-//! Which triples have a package of each kind is one list,
-//! `npm/packaged-triples.json`, which the publish scripts stage from too.
-//!
-//! Both kinds have the same layout: `target.json` and `lib/<archive>[.zst]`,
-//! found in two places:
-//!
-//! - an npm install: `A/node_modules/@perryts/perry-target-<triple>/` for an
-//!   ancestor `A` of the perry binary's directory, nearest first. This is
-//!   Node's own resolution seen from the binary, so it covers a global
-//!   install (unix `<prefix>/lib`, Windows `%APPDATA%\npm`), a project
-//!   install (hoisted or nested) and pnpm (the real `.pnpm/...` path of the
-//!   binary has the project as an ancestor);
-//! - `~/.perry/<targets|ext>/<perry-version>/<triple>/`, written by
-//!   `perry target add [--ext]` and by the ext auto-fetch.
-//!
-//! A root counts only when its `target.json` names this perry's exact
-//! version, its source revision (when this binary was built with one) and
-//! the requested triple. A root that fails is never used "close enough"; it
-//! is reported so the missing-target error can say what was found instead.
-//! [`collect_library_candidates`](super::library_search::collect_library_candidates)
-//! adds `<root>/lib/<name>` for every accepted root after the install-layout
-//! candidates, so zips, Homebrew and workspace builds keep their precedence.
+//! Every kind uses target.json and lib/<archive>[.zst], discovered beside the
+//! compiler in npm's ancestor node_modules, then under
+//! ~/.perry/<kind>/<version>/<triple>. Roots must match this compiler's exact
+//! version, source revision (when embedded) and requested target triple.
+//! Library search appends these roots after installed library directories.
 
 use std::fs;
 use std::io::Read;
@@ -55,18 +30,27 @@ pub(crate) const NPM_SCOPE: &str = "@perryts";
 pub(crate) enum PackageKind {
     /// `perry-target-<triple>`: a cross triple's runtime, stdlib and UI.
     Target,
-    /// `perry-ext-<triple>`: the triple's native-extension archives.
+    /// `perry-ext-<triple>`: the triple's native-extension, UI and wasm_host archives.
     Ext,
+    Ui,
+    WasmHost,
 }
 
 impl PackageKind {
-    pub(crate) const ALL: [PackageKind; 2] = [PackageKind::Target, PackageKind::Ext];
+    pub(crate) const ALL: [PackageKind; 4] = [
+        PackageKind::Target,
+        PackageKind::Ext,
+        PackageKind::Ui,
+        PackageKind::WasmHost,
+    ];
 
     /// The npm name prefix after the scope, and the release asset prefix.
     pub(crate) fn prefix(self) -> &'static str {
         match self {
             PackageKind::Target => "perry-target-",
             PackageKind::Ext => "perry-ext-",
+            PackageKind::Ui => "perry-ui-",
+            PackageKind::WasmHost => "perry-wasm-host-",
         }
     }
 
@@ -75,6 +59,8 @@ impl PackageKind {
         match self {
             PackageKind::Target => "targets",
             PackageKind::Ext => "ext",
+            PackageKind::Ui => "ui",
+            PackageKind::WasmHost => "wasm-host",
         }
     }
 }
@@ -94,6 +80,9 @@ const PACKAGED_TRIPLES_JSON: &str = include_str!("../../../../../npm/packaged-tr
 struct PackagedTriples {
     targets: Vec<String>,
     ext: Vec<String>,
+    ui: Vec<String>,
+    #[serde(rename = "wasm-host")]
+    wasm_host: Vec<String>,
 }
 
 /// Whether perry releases publish a `kind` package for `triple`. A triple
@@ -106,6 +95,8 @@ pub(crate) fn is_packaged(kind: PackageKind, triple: &str) -> bool {
     let triples = match kind {
         PackageKind::Target => list.targets,
         PackageKind::Ext => list.ext,
+        PackageKind::Ui => list.ui,
+        PackageKind::WasmHost => list.wasm_host,
     };
     triples.iter().any(|t| t == triple)
 }

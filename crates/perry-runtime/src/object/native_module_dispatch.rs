@@ -140,7 +140,7 @@ macro_rules! nm_general_closures {
         let $i32_arg = |n: usize| -> i32 {
             let v = $arg(n);
             let bits = v.to_bits();
-            if (bits >> 48) == 0x7FFE {
+            if crate::value::is_int32_bits(bits) {
                 return (bits & 0xFFFF_FFFF) as u32 as i32;
             }
             if v.is_nan() || v.is_infinite() {
@@ -364,12 +364,38 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             super::native_module_crypto_random::random_fill_sync(*args_ptr, undefined, undefined)
         }
+        // The same for the rest of the runtime-created `globalThis.crypto`:
+        // `crypto.subtle.digest(...)` / `crypto.randomUUID()` on the global
+        // before any `node:crypto` namespace site ran found no bucket and
+        // threw "crypto.subtle.digest is not supported". Both buckets arms
+        // only forward to the dispatchers perry-stdlib registers at start-up,
+        // so forward here too (a program without the stdlib has none: the
+        // throw below stays).
+        None if matches!(module_name, "crypto.subtle" | "crypto.webcrypto")
+            && !global_crypto_dispatcher(module_name).is_null() =>
+        {
+            let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                std::mem::transmute(global_crypto_dispatcher(module_name));
+            dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+        }
         // No bucket and no registry export: answering `undefined` hid a missing
         // implementation behind a call that appeared to succeed.
         None => crate::collection_iter::throw_type_error(&format!(
             "{module_name}.{method_name} is not supported"
         )),
     }
+}
+
+/// The perry-stdlib dispatcher the crypto bucket forwards `module_name`'s
+/// methods to (`nm_dispatch_crypto`): WebCrypto for `crypto.subtle`, node
+/// crypto for `crypto.webcrypto`. Null when the stdlib is not linked.
+fn global_crypto_dispatcher(module_name: &str) -> *mut () {
+    let slot = if module_name == "crypto.subtle" {
+        &crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+    } else {
+        &crate::value::JS_NATIVE_CRYPTO_DISPATCH
+    };
+    slot.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 // ── per-module dispatch buckets, split out for file-size (pure relocation) ──
@@ -391,6 +417,8 @@ pub(crate) use dispatch_d_i::{
     nm_dispatch_dgram, nm_dispatch_dns, nm_dispatch_domain, nm_dispatch_events, nm_dispatch_fs,
     nm_dispatch_http, nm_dispatch_inspector,
 };
+#[cfg(unix)]
+pub(crate) use dispatch_m_p::net_provider_call;
 pub(crate) use dispatch_m_p::{
     js_net_subclass_init, nm_ctor_net, nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty,
     nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process,

@@ -1,0 +1,5 @@
+accessor 2 undefined
+c0 c3 undefined 4
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+undefined c1 c2
+c1 undefined 4

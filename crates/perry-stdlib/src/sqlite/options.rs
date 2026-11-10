@@ -3,8 +3,8 @@ pub(crate) use crate::common::string_from_header_lossy as string_from_header;
 use perry_runtime::{
     closure::{is_closure_ptr, ClosureHeader},
     gc::RuntimeHandleScope,
-    js_get_string_pointer_unified, js_nanbox_pointer, js_object_get_field_by_name,
-    js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
+    js_get_string_pointer_unified, js_object_get_field_by_name, js_string_from_bytes, JSValue,
+    ObjectHeader, StringHeader,
 };
 use rusqlite::{ffi, limits::Limit, Connection};
 use std::ffi::{CStr, CString};
@@ -31,8 +31,7 @@ pub(crate) fn throw_type(message: &str) -> ! {
 
 pub(crate) fn throw_plain_type(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::type_error(msg))
 }
 
 pub(crate) fn throw_construct_required() -> ! {

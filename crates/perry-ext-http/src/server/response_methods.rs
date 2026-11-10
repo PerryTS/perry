@@ -122,6 +122,13 @@ pub(super) unsafe fn write(handle: i64, args: &[f64]) -> f64 {
         .map(|a| closure_arg(Some(*a)))
         .find(|c| *c != 0)
         .unwrap_or(0);
+    if let Some(encoding) = args.get(1) {
+        crate::server::response_cork::throw_unknown_chunked_encoding(
+            response_root.get(),
+            args[0],
+            encoding.to_bits() as i64,
+        );
+    }
     bool_value(
         crate::server::response::js_node_http_res_write_with_cb(response_root.get(), args[0], cb)
             != 0,

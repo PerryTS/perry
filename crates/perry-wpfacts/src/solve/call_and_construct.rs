@@ -49,7 +49,17 @@ impl Model {
             });
             return self.call_tok(call, TOP, this_tok);
         }
-        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
+        let prev = self.cur_native_call.replace(call);
+        let native = self.native_call(call, t, this_tok);
+        self.cur_native_call = prev;
+        if native {
+            return;
+        }
+        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn(_)) {
+            if let Some(d) = self.diagnostic.as_mut() {
+                let n = d.cause_node;
+                d.unknown_calls.entry(call).or_insert((n, t == TOP));
+            }
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
             if let Some(x) = this_tok {
@@ -64,6 +74,10 @@ impl Model {
                         self.tok_name(x)
                     );
                     self.reason(&why)
+                } else if self.diagnostic.is_some() {
+                    self.reason(&format!(
+                        "receiver of a call of an unknown function value [call {call}]"
+                    ))
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
@@ -80,7 +94,7 @@ impl Model {
             return;
         }
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => unreachable!(),
+            TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
@@ -97,7 +111,9 @@ impl Model {
             }
             TokKind::Builtin(ns) => self.with_b(|m| {
                 let prev = std::mem::replace(&mut m.cur_this, this_tok);
+                let pc = m.cur_native_call.replace(call);
                 builtins::call_builtin_ns(m, ns, call);
+                m.cur_native_call = pc;
                 m.cur_this = prev;
             }),
             TokKind::Obj(_, _)
@@ -214,7 +230,11 @@ impl Model {
         if t == TOP {
             self.top_calls += 1;
         }
-        let r = if t == TOP {
+        let r = if t == TOP && self.diagnostic.is_some() {
+            self.reason(&format!(
+                "passed to a call of an unknown function value [call {call}]"
+            ))
+        } else if t == TOP {
             self.reason("passed to a call of an unknown function value")
         } else {
             self.reason("passed to an opaque builtin function value")
@@ -237,6 +257,16 @@ impl Model {
             }
         }
         let ret = self.calls[call as usize].ret;
+        let region = self.calls[call as usize].region;
+        self.raise_top(
+            region,
+            ret,
+            if t == TOP {
+                "a call of an unknown function value may throw anything"
+            } else {
+                "an opaque builtin call may throw anything"
+            },
+        );
         if t == TOP {
             self.add_tok(ret, TOP);
         } else {
@@ -278,6 +308,10 @@ impl Model {
         if !self.bind_done.insert((call, t, u32::MAX - 1)) {
             return;
         }
+        // What the callee's body throws reaches the call's region.
+        let raise = self.raise_of(f);
+        let region = self.calls[call as usize].region;
+        self.edge(raise, region);
         if self.summarized(f) {
             self.bind_summarized(call, t);
             return;
@@ -379,6 +413,7 @@ impl Model {
                 spread: c.spread.clone(),
                 ret: c.ret,
                 site: c.site,
+                region: self.thrown,
             },
         );
         self.bound_synth.insert(call2);
@@ -419,6 +454,7 @@ impl Model {
             spread: vec![arr, sp],
             ret,
             site: 0,
+            region: self.thrown,
         });
         self.bound_merged.insert((b, new), call);
         self.bound_synth.insert(call);
@@ -455,13 +491,18 @@ impl Model {
     }
 
     pub(super) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
-        // Elements of whatever array the node holds: a store relay.
+        // Elements of whatever array the node holds: a store relay. A rest
+        // array is made from the arguments at indices 0..n: the store is an
+        // element store (`elem_key`), which no named non-index key of the
+        // array reads (`is_elem_array`), so an argument is never its
+        // `indexOf` or `@@iterator`.
         let relay = self.node_named("elems-into", || format!("elems-into({arr_node})"));
         let site = self.anon_store_site();
+        let ek = self.elem_key();
         self.cons(
             arr_node,
             Cons::Store {
-                key: Key::Any,
+                key: ek,
                 src: relay,
                 site,
             },
@@ -540,7 +581,7 @@ impl Model {
         }
     }
 
-    fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
+    pub(super) fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             if self.foreign_ctor_returns.contains(&c) {
@@ -622,7 +663,22 @@ impl Model {
                 // E12: a constructor function returning an object.
                 self.ctor_ret_objects(call, t, c.ret);
             }
-            TokKind::Top | TokKind::BuiltinFn => {
+            // A method of an intrinsic prototype is no constructor
+            // (TypeError): nothing flows.
+            TokKind::BuiltinFn(Native::Member { .. })
+                if !builtins::native_constructible(self, t) => {}
+            // A realm constructor whose declaration says what `new` does
+            // (declared at the body its dispatch arm calls): the declaration
+            // runs, as for a global constructor by name. Any value of it
+            // (`const S = inspector.Session; new S()`) is that constructor.
+            TokKind::BuiltinFn(Native::Member { identity, .. })
+                if !self.unit_mode && builtins::declared_construct(identity).is_some() =>
+            {
+                let e = builtins::declared_construct(identity).expect("guarded");
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::run_construct(m, e, call));
+            }
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
                 }
@@ -654,6 +710,7 @@ impl Model {
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
+                        region: self.thrown,
                     },
                 );
                 self.bound_synth.insert(call2);
@@ -663,6 +720,105 @@ impl Model {
             TokKind::Builtin(ns) => self.with_b(|m| builtins::new_builtin_ns(m, ns, call)),
             _ => {}
         }
+    }
+
+    /// `Cons::NewProgram`: `call` constructs `t` when `t` is a program
+    /// constructor, a class or function of the program's code (a bound one
+    /// through its target). A realm constructor (`%Array%`, a builtin
+    /// function value, ⊤'s) is the built-in's own result, already made.
+    pub fn construct_program(&mut self, call: CallId, t: Tok) {
+        match self.toks[t as usize] {
+            TokKind::ClassObj(_) | TokKind::Func(_, _) => self.construct(call, t),
+            TokKind::Bound(b) => {
+                if !self.construct_done.insert((call, t)) {
+                    return;
+                }
+                let (target, _bthis, bargs) = self.bound[b as usize].clone();
+                let c = self.calls[call as usize].clone();
+                let mut args = bargs;
+                args.extend(c.args.iter().copied());
+                let call2 = self.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args,
+                        spread: c.spread.clone(),
+                        ret: c.ret,
+                        site: c.site,
+                        region: self.thrown,
+                    },
+                );
+                self.cons(target, Cons::NewProgram { call: call2 });
+            }
+            _ => {}
+        }
+    }
+
+    /// `Cons::FromArrayLike` of token `t`: `Array.from` reads a program
+    /// object whose `@@iterator` may be nullish as an array-like (ECMA-262
+    /// 23.1.2.1 step 5): ToLength(Get(t, "length")), then Get(t, k) for each
+    /// index, into `dst`. Only a program value (an object of a program
+    /// template, a function, a class, a prototype): an Array, a builtin's
+    /// object (a collection, an iterator, all of them iterable) or ⊤ is the
+    /// iteration's (`load_from` under the iteration key).
+    pub fn from_array_like(&mut self, t: Tok, dst: NodeId) {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _)
+                if self.tmpls[tm as usize].kind.is_fact_unit() && !self.is_array_like(t) => {}
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Proto(_) => {}
+            _ => return,
+        }
+        // GetMethod(t, @@iterator) is nullish when t's own value under the
+        // key is, or when t holds none and its chain's is. Each half may be
+        // nullish: the own fields under the key (stored values, no read of
+        // the absence: an instance never holds a class's method), and the
+        // read of the key from t's prototypes, which ends `undefined` where
+        // no link holds it.
+        let src = self.node_l("from-source");
+        self.add_tok(src, t);
+        let wk = self.atom(crate::builtins::WK_ITERATOR);
+        let protos = self.node_l("from-prototypes");
+        self.cons(src, Cons::ProtoOf { dst: protos });
+        let inherited = self.node_l("from-inherited-iterator");
+        self.cons(
+            protos,
+            Cons::Load {
+                key: Key::Named(wk),
+                dst: inherited,
+            },
+        );
+        let like = self.node_l("from-array-like");
+        let own = self.field(t, wk);
+        let any = self.field_any(t);
+        for test in [inherited, own, any] {
+            self.cons(
+                test,
+                Cons::Guard {
+                    test: guard::NULLISH,
+                    from: src,
+                    dst: like,
+                },
+            );
+        }
+        let la = self.atom("length");
+        let len = self.node_l("from-length");
+        self.cons(
+            like,
+            Cons::Load {
+                key: Key::Named(la),
+                dst: len,
+            },
+        );
+        let r = self.reason("ToLength of an Array.from array-like length");
+        self.cons(
+            len,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+        let ek = self.elem_key();
+        self.cons(like, Cons::Load { key: ek, dst });
     }
 
     /// `super(...)` from a subclass constructor: the parent chain runs on
@@ -751,7 +907,9 @@ impl Model {
     pub fn ret_objects(&mut self, ret: NodeId, dst: NodeId) {
         // Object tokens only (a primitive return is ignored by `new`).
         let filt = self.node_named("objret", || format!("objret({ret})"));
-        self.edge(ret, filt);
+        // A body that completes returns `undefined` (`narrow::may_complete`),
+        // which `new` never yields.
+        self.cons(ret, Cons::NotNullish { dst: filt });
         // `filt` keeps prims; dst gets them too, which is a harmless
         // over-approximation for kinds only when the ctor returns
         // primitives — but it would pollute `new` results, so relay
@@ -784,7 +942,10 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.
@@ -797,6 +958,24 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // An array is never the iterator the iteration protocol steps or
+        // closes: the step of the iterated value itself (`v.next()`,
+        // `Gen::iterate`) is made only on a value `js_get_iterator` returns
+        // unchanged, never an array (it gives a fresh array iterator); a
+        // for-of record's payload holds the source array beside the
+        // iterator, and closes it through a fresh array iterator
+        // (`js_array_record_close`), not itself. The same predicate as
+        // `Cons::IterNext`'s: the runtime makes no such call on an array,
+        // whatever its chain holds.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && matches!(self.atoms[a as usize].as_str(), "next" | "return")
+                && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                    if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            {
+                return;
+            }
+        }
         // DECISIONS 242(2): a call of a key the receiver may not own.
         if t != TOP {
             self.note_chain_miss(t, key);
@@ -848,7 +1027,7 @@ impl Model {
             self.mark_use(t, crate::model::MARK_READ);
             let r = match key {
                 Key::Named(a) => self.marker_load(t, Some(a)),
-                Key::Any => self.reach_of(t),
+                Key::Any(_) => self.reach_of(t),
             };
             self.mark_use(r, crate::model::MARK_READ);
             return;
@@ -871,7 +1050,7 @@ impl Model {
             }
             let m = match key {
                 Key::Named(a) => self.marker_load(t, Some(a)),
-                Key::Any => self.reach_of(t),
+                Key::Any(_) => self.reach_of(t),
             };
             self.mark_escape_why(m, &|mm: &Self| match key {
                 Key::Named(a)
@@ -881,7 +1060,7 @@ impl Model {
                 }
                 Key::Named(_) if mm.reach_marker.contains(&t) => "method: of a reach".into(),
                 Key::Named(_) => "method: of a marker that is no own parameter".into(),
-                Key::Any => "method: computed key".into(),
+                Key::Any(_) => "method: computed key".into(),
             });
             // That method is an unknown function, as a plain call through a
             // marker is (`call_tok`): the arguments escape, the result is
@@ -891,13 +1070,52 @@ impl Model {
             }
             return;
         }
+        // Native own statics, fields and inherited methods are the same
+        // ordinary read whether the source immediately calls the value or
+        // saves it first. This also covers constructors without a specialized
+        // namespace model.
+        if !self.unit_mode
+            && matches!(self.toks[t as usize], TokKind::BuiltinFn(_))
+            && matches!(key, Key::Named(_))
+        {
+            let callee = self.node_l("builtin-function-read");
+            self.load_from(t, t, key, callee);
+            self.bind_via(callee, call, t);
+            return;
+        }
+        // A described namespace method is the ordinary member value,
+        // called with its receiver. Its aliases use the very same model.
+        if !self.unit_mode {
+            if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
+                if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()
+                    || builtins::namespace_receiver_getter(self, t, &self.atoms[a as usize])
+                {
+                    let callee = self.node_l("builtin-function-read");
+                    self.load_from(t, t, key, callee);
+                    self.bind_via(callee, call, t);
+                    return;
+                }
+            }
+        }
+        // A missing intrinsic member calls exactly the ordinary read's
+        // values, including program fields, getters and reopened chains.
+        // No callable value means a TypeError, with no argument escape.
+        if let Key::Named(a) = key {
+            if builtins::undeclared(self, t, a) {
+                let callee = self.node_l("builtin-member-read");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
+        }
         // Own function-valued fields, then the prototype chain.
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,
             (Key::Named(a), None) => self.field(t, a),
-            (Key::Any, _) => self.all_fields(t),
+            (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);
+        self.builtin_field_use(t, key, ChainAct::Call(call));
         // A key only another unit's subclass defines runs that subclass's
         // method (DECISIONS 97).
         if let (Key::Named(a), Some(_)) = (key, virt) {

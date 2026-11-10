@@ -8,6 +8,23 @@ Use `parallelMap`, `parallelFilter` and `spawn` to run native work on OS threads
 
 Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
+## BroadcastChannel names
+
+`BroadcastChannel` requires a name argument. Explicit `undefined` is a valid name
+and becomes `"undefined"`; omission throws `TypeError` with `ERR_MISSING_ARGS`.
+Names use implicit string conversion, including a string hint for object
+conversion. Symbols (including an object's conversion result) throw before a
+channel is registered. A throwing conversion propagates its original value.
+
+`BroadcastChannel.prototype` owns the read-only `name` getter and the core
+`postMessage`, `close`, `ref` and `unref` methods. Borrowing one channel's method
+operates on the actual receiver, including a transparent proxy or an object
+inheriting from a genuine channel;
+other receivers throw `TypeError` with `ERR_INVALID_THIS`. Closing a channel does
+not discard its name. Receiver validation precedes message-argument validation,
+and a closed channel rejects a supplied message before cloning it. Listener and
+handler APIs are separate from this core-operation surface.
+
 ## Message events
 
 `MessageEvent` extends `Event`. Its constructor accepts `data`, `origin`,
@@ -15,6 +32,52 @@ Perry workers run native code on OS threads, each with its own arena and collect
 ports. Worker and channel message listeners receive the same canonical event
 values, with dispatch targets and phases restored after callbacks return or throw.
 Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
+
+## Worker listeners
+
+Worker `on`, `once`, `addListener`, `off` and `removeListener` require function
+listeners, including for unknown events and exited workers. The add/remove
+aliases use the same listener registry as `on`/`off`.
+
+MessagePort uses EventListener admission instead: nullish values and objects are
+accepted, while other primitives throw `TypeError` with `ERR_INVALID_ARG_TYPE`.
+This applies to its Node-style methods and Web-style add/remove methods.
+Adding a nullish listener schedules an `AddEventListenerArgumentTypeWarning`;
+removing one is a silent no-op.
+Perry does not dispatch MessagePort listener objects through `handleEvent`.
+
+## Transferring MessagePorts
+
+Closing a port outside message dispatch discards its incoming queue. Closing it
+from its message callback lets the active dispatch drain that same FIFO before
+the `close` event. Peer messages posted during that drain are included, and
+`receiveMessageOnPort` can consume queued messages synchronously. The closing
+port cannot be transferred or send further messages.
+
+Include every `MessagePort` reachable from a message in its transfer list:
+
+```typescript,no-test
+const channel = new MessageChannel();
+worker.postMessage({ port: channel.port1 }, [channel.port1]);
+```
+
+The receiving agent gets a new wrapper around the same native endpoint, including
+its pending FIFO messages. The source wrapper becomes inert; moving the endpoint
+back creates another wrapper rather than reactivating either old one. Listeners
+stay with their original wrappers. This applies to channel ports and a Worker's
+`parentPort`; transferring `parentPort` moves its data connection, not Worker
+termination or reload control.
+
+`postMessage`, `workerData` and `structuredClone` share the clone transaction.
+Graph aliases, cycles, Map/Set references and transferred buffer views retain
+identity. Admission and serialization must succeed before any port ownership or
+buffer backing moves. A getter's successful nested transfer remains committed
+when an outer transfer fails.
+
+Delivered `MessageEvent.ports` is frozen, ordered by the transfer list, and
+includes ports absent from `data`. Its entries are the same wrappers referenced
+by `data`; Node-style `on("message")` and synchronous receive still return only
+the message data.
 
 ## Three Primitives
 
@@ -273,6 +336,12 @@ Each `Worker.terminate()` call returns a distinct promise. Calls made before the
 `exit` event complete with the worker's exit code after that event is delivered.
 Calls made from an `exit` listener or later resolve to `undefined`.
 
+`Worker.prototype[Symbol.asyncDispose]()` dynamically calls the receiver's
+`terminate()` with no arguments and awaits it, fulfilling with `undefined`.
+Each call returns a fresh promise; errors from lookup, invocation, or awaiting
+reject that promise. It reuses termination's exit ordering and accepts borrowed
+receivers with a callable `terminate`, including overrides.
+
 ### Worker process exit
 
 Inside a Worker, `process.exit()` stops only that Worker; it does not terminate
@@ -290,6 +359,36 @@ throws `TypeError` with code `ERR_MISSING_ARGS`, but explicit `undefined` is a
 valid message. Rejected calls do not enqueue a message. Worker method calls use
 the ordinary method lookup, including own replacements and getters.
 
+For Node-compatible DOM-style delivery on BroadcastChannel and MessagePort
+(including `parentPort`), an explicit `undefined` becomes `null` in
+`MessageEvent.data`, matching the public constructor default. Raw
+`on("message")` callbacks and `receiveMessageOnPort` retain `undefined`.
+Perry-only Worker web-style and worker-global delivery keep their existing
+lossless data behavior.
+
+### BroadcastChannel EventTarget listeners
+
+BroadcastChannel inherits EventTarget. Borrowed `addEventListener` and
+`removeEventListener` use the actual receiver, including its prototype, derived
+objects and transparent proxies; invalid receivers throw `ERR_INVALID_THIS`.
+Listeners share EventTarget's capture matching, `once`, AbortSignal removal and
+listener-object `handleEvent` dispatch. `events.getEventListeners` observes the
+same registrations used by delivery and manual `dispatchEvent`.
+
+`onmessage` and `onmessageerror` occupy stable positions in that listener list.
+Replacing a handler keeps its position; assigning `null` silences the wrapper
+without removing it. Closing a channel discards its transport inbox, not its
+EventTarget listeners: manual dispatch remains available after close. The provider
+releases the closed transport immediately; only ordinary references to the channel
+retain its listeners.
+
+Dispatch supports callable Proxy listeners and removes `once` records before
+invocation, even if another callback changes the receiver's constructor. A listener
+removed and re-added during dispatch does not run from the old snapshot. Persistent
+listener traversal is linear in the listener count. Exceptions from callbacks or
+`handleEvent` getters are reported asynchronously through `uncaughtException`;
+they do not skip later listeners or property handlers.
+
 ### Messaging constructor errors
 
 `MessageChannel` requires `new` (`ERR_CONSTRUCT_CALL_REQUIRED`). `MessagePort`
@@ -304,3 +403,49 @@ constructor identity, including aliases named like another constructor.
 Worker aliases retain child-entry discovery and the same options/eval lowering
 as canonical imports. Lexical bindings, namespace imports and explicit global
 constructors keep their existing resolution rules.
+
+Worker module functions can be captured from named imports or CommonJS and
+invoked through `call`, `apply` or spread arguments. These callable values use
+the same environment, clone-marker, `receiveMessageOnPort` and
+`postMessageToThread` implementations as direct calls. Realm movement through
+`moveMessagePortToContext` remains unsupported on this callable path.
+
+### CommonJS worker entry discovery
+
+Perry includes literal file paths passed to immutable CommonJS Worker bindings
+(`const { Worker } = require("node:worker_threads")`, including renamed bindings)
+and immutable namespace bindings (`const threads = require("worker_threads")`).
+These paths are compiled as worker entries, not executed as ordinary imports.
+The constructor and its arguments still evaluate at runtime.
+
+Automatic discovery requires an unshadowed, unreassigned `require`, a literal
+relative or absolute filename, and no options or a plain file-mode options object.
+Eval workers, opaque options, spread arguments, and forwarded or mutable
+constructor bindings are not inferred by this analysis. A literal
+`new URL("./child.cjs", import.meta.url)` can explicitly include an entry when
+the runtime constructor is obtained indirectly.
+
+### Error stack accessors
+
+Message cloning reads an Error's `stack` property, including non-enumerable
+accessors. A throwing getter aborts `structuredClone` or `postMessage` with the
+original exception; no message is delivered. An undefined stack remains
+undefined in the recipient rather than exposing a newly captured stack.
+
+Uncaught worker exceptions use best-effort diagnostic delivery: a throwing stack
+getter does not replace the original error or prevent its `error` and `exit`
+events. This does not provide support for custom `Error.prepareStackTrace` hooks.
+
+Message cloning preserves an Error's own data `cause`, including non-enumerable
+and explicitly undefined values, within the existing clone graph. Shared causes,
+back-references and self-references keep their identity. The data cause is
+captured before reentrant stack accessors run. Cause accessors are
+ignored without invoking their getters.
+
+Uncaught Worker diagnostics use a separate prototype-first property snapshot.
+Cause getters run with the original Error receiver, successful undefined values
+remain own properties, and descriptor attributes survive delivery. A failing
+cause getter falls back to ordinary cloning without custom diagnostic code.
+Synchronous eval-entry exceptions observe stack decoration before this snapshot;
+errors from later callbacks do not repeat that execution phase. Diagnostic getters
+run before agent cleanup, while cooperative Worker termination remains active.

@@ -420,14 +420,19 @@ pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<H
 /// (the per-server struct differs but the dispatch logic is
 /// identical). Per the issue #604 architectural change, we no
 /// longer block on the handler-returned Promise.
-pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
+pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
-    let res_f64 = handle_to_pointer_f64(pending.response_handle);
+    // The response is rooted for the dispatch: every callback below can run
+    // a moving collection. The fresh word goes back before parking.
+    let exchange_roots = perry_ffi::TransientRootScope::enter();
+    let res_root = exchange_roots.root_nanbox(pending.response);
     // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
     // before the handler observes req/res (see process_pending in server.rs).
     unsafe {
         crate::server::types::js_handle_clear_side_tables(pending.request_handle);
-        crate::server::types::js_handle_clear_side_tables(pending.response_handle);
+        if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
+            crate::server::types::js_handle_clear_side_tables(pending.response_handle());
+        }
     }
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
@@ -471,11 +476,12 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
                     let _ =
-                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
                 }
                 js_promise_run_microtasks();
             }
         }
+        pending.response = res_root.get();
         crate::server::server::finalize_or_park_request(&pending);
         return;
     }
@@ -484,7 +490,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = handler_rooted.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
             }
             js_promise_run_microtasks();
         }
@@ -498,7 +504,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
             }
             js_promise_run_microtasks();
         }
@@ -508,7 +514,8 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // is already flushed, otherwise park it for the reaper instead of
     // synthesizing a premature empty response and freeing the handles out
     // from under the pending work.
-    crate::server::server::finalize_or_park_request(&pending);
+    pending.response = res_root.get();
+        crate::server::server::finalize_or_park_request(&pending);
 }
 
 /// `httpsServer.address()` mirroring `http.Server.address()`.

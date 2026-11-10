@@ -3,6 +3,21 @@
 use super::*;
 
 impl<'a> Gen<'a> {
+    /// ToPropertyKey of a reflective key operand
+    /// (`Object.getOwnPropertyDescriptor`, `Reflect.getOwnPropertyDescriptor`,
+    /// `Reflect.deleteProperty`): an object key runs its `@@toPrimitive`,
+    /// `toString` or `valueOf` before the lookup.
+    pub(crate) fn to_property_key(&mut self, key: NodeId) {
+        let r = self.m.reason("ToPropertyKey");
+        self.m.cons(
+            key,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+
     pub(super) fn expr_rest_reflection(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -50,15 +65,22 @@ impl<'a> Gen<'a> {
                 );
                 let key = match key.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 // DECISIONS 217: a computed key is `o[k]`'s (`IdxLoad`: the
                 // key's values decide what it names). Under `__proto__`
                 // Object.prototype's getter runs on the receiver.
                 let out = match key {
-                    Key::Any => {
+                    Key::Any(_) => {
                         let dst = self.tmp("reflect.get");
-                        self.m.cons(t, Cons::IdxLoad { idx: k, dst });
+                        self.m.cons(
+                            t,
+                            Cons::IdxLoad {
+                                idx: k,
+                                dst,
+                                shape: 0,
+                            },
+                        );
                         dst
                     }
                     _ => self.load(t, key),
@@ -88,7 +110,7 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, receiver);
                 let key = match key.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 self.store(fx, t, key, v, "Reflect.set".into(), None, false);
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);
@@ -96,7 +118,8 @@ impl<'a> Gen<'a> {
             }
             Expr::ReflectDelete { target, key } => {
                 let t = self.expr(fx, target);
-                let _ = self.expr(fx, key);
+                let k = self.expr(fx, key);
+                self.to_property_key(k);
                 let r = self.m.reason("E7 Reflect.deleteProperty");
                 self.m.cons(
                     t,
@@ -129,15 +152,30 @@ impl<'a> Gen<'a> {
                 self.m.cons(nt, Cons::NewTargetHard { reason: r });
                 // A new target picks the prototype of whatever the target
                 // constructs, an Array exotic object included (#13645).
-                self.m.array_member_write.get_or_insert(r);
+                #[cfg(test)]
+                let recorded = self
+                    .m
+                    .packet_emit(crate::summary::packet::Emission::ArrayMemberWrite(r));
+                #[cfg(not(test))]
+                let recorded = false;
+                if !recorded {
+                    self.m.array_member_write.get_or_insert(r);
+                }
                 let (call, ret) = self.new_call(ThisArg::Undef, vec![], vec![a]);
-                self.m.cons(t, Cons::New { call });
+                self.m.cons(
+                    t,
+                    Cons::ReflectNew {
+                        call,
+                        new_target: nt,
+                    },
+                );
                 ret
             }
             Expr::DynamicImport {
                 paths,
                 arg,
                 options,
+                synchronous,
                 ..
             } => {
                 let a = self.expr(fx, arg);
@@ -183,6 +221,19 @@ impl<'a> Gen<'a> {
                 // of any specifier): runtime-made values, never a compiled
                 // module outside `paths`.
                 self.m.add_tok(out, TOP);
+                // A synchronous CommonJS `require(expr)` (codegen
+                // `lower_dynamic_require`) returns the target value itself: no
+                // promise, and no `then` adoption (node's CJS loader never calls
+                // `then` on `module.exports`). The ⊤ fallback stays ⊤; what goes
+                // is a `then(resolve, reject)` call on it, which handed the
+                // program-wide rejecter to unknown code and so made every
+                // `catch` ⊤. A require that fails (MODULE_NOT_FOUND, the ambient
+                // require's own errors) throws a realm error at the site.
+                if *synchronous {
+                    let r = self.region();
+                    self.m.add_tok(r, self.runtime_error);
+                    return out;
+                }
                 self.promise_of(mi, out)
             }
 

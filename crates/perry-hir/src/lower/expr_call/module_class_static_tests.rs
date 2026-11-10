@@ -84,8 +84,8 @@ fn namespace_static_read_getter_spread_and_computed_forms_keep_the_receiver() {
 
 #[test]
 fn native_ffi_statics_and_server_call_keep_their_dispatch() {
-    let h = hir("import * as eth from 'ethers'; eth.Wallet.createRandom();");
-    assert!(h.contains("class_name: Some(\"Wallet\")"), "{h}");
+    let h = hir("import * as n from 'node:net'; n.SocketAddress.parse('127.0.0.1:80');");
+    assert!(h.contains("class_name: Some(\"SocketAddress\")"), "{h}");
     for module in ["http", "https"] {
         let h = hir(&format!(
             "import * as ns from 'node:{module}'; ns.Server.call({{}}, () => {{}});"

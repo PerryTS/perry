@@ -524,6 +524,14 @@ fn compute_object_cache_key_with_env(
         "entry_source_path",
         opts.app_metadata.entry_source_path.as_deref().unwrap_or(""),
     );
+    // Every source module retains its path in a stack-frame info.
+    h.field(
+        "module_source_path",
+        opts.app_metadata
+            .module_source_path
+            .as_deref()
+            .unwrap_or(""),
+    );
     // The declared format decides the entry's tick/microtask checkpoint.
     h.field(
         "entry_declared_esm",
@@ -570,6 +578,8 @@ fn compute_object_cache_key_with_env(
     let mut deferred_names: Vec<_> = opts.deferred_namespace_imports.iter().cloned().collect();
     deferred_names.sort();
     h.field("deferred_namespaces", &deferred_names.join("|"));
+    h.field("async_modules", if opts.program_has_tla { "1" } else { "0" });
+    h.field("async_graph", if opts.module_graph_has_tla { "1" } else { "0" });
     // Issue #842: side-effect-only dynamic-import targets emit a
     // `@__perry_ns_<prefix>` global + populator regardless of
     // `namespace_entries`. Toggling this flag changes the emitted IR
@@ -977,39 +987,6 @@ fn compute_object_cache_key_with_env(
             buf.push('|');
         }
         h.field("imported_classes", &buf);
-    }
-
-    // #8772: these producer capabilities are harvested from OTHER modules and
-    // can change the guarded direct-call arms without changing this module's
-    // own HIR. Keep ordering independent of HashMap/rayon traversal order.
-    {
-        let mut candidates: Vec<&perry_codegen::ShortSpreadMethodCandidate> = opts
-            .short_spread_method_candidates
-            .values()
-            .flatten()
-            .collect();
-        candidates.sort_by(|a, b| {
-            a.method_name
-                .cmp(&b.method_name)
-                .then(a.class_id.cmp(&b.class_id))
-                .then(a.target.cmp(&b.target))
-        });
-        let value = candidates
-            .into_iter()
-            .map(|candidate| {
-                format!(
-                    "{}:{}@{}:{}:{}:{}",
-                    candidate.method_name,
-                    candidate.class_id,
-                    candidate.source_prefix,
-                    candidate.target,
-                    candidate.shape_id_global,
-                    candidate.declared_count,
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("|");
-        h.field("short_spread_method_candidates", &value);
     }
 
     // #8775 reverse-flow object candidates likewise affect modules that do

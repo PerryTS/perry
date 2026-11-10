@@ -26,7 +26,12 @@ pub(crate) fn default_ctor_dynamic_parent_owner(ctx: &FnCtx<'_>, class: &Class) 
     if class.constructor.is_some() {
         return None;
     }
-    if class.extends_expr.is_some() {
+    // DEC 251 B: an `extends <expression>` edge the whole-program fact
+    // proves to be the class it names is a static edge (`static_heritage`).
+    let dynamic_edge = |c: &Class| {
+        c.extends_expr.is_some() && !crate::expr::super_constructor::static_parent_edge(ctx, c)
+    };
+    if dynamic_edge(class) {
         return Some(class.name.clone());
     }
 
@@ -44,7 +49,7 @@ pub(crate) fn default_ctor_dynamic_parent_owner(ctx: &FnCtx<'_>, class: &Class) 
         if parent_class.constructor.is_some() {
             return None;
         }
-        if parent_class.extends_expr.is_some() {
+        if dynamic_edge(parent_class) {
             return Some(parent_class.name.clone());
         }
         parent = parent_class.extends_name.as_deref();

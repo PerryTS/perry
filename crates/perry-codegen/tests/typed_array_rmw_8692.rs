@@ -25,6 +25,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn rmw_function(rhs: Expr) -> Function {
     let read = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(BASE_TMP)),
@@ -61,6 +62,7 @@ fn rmw_function(rhs: Expr) -> Function {
                     left: Box::new(read),
                     right: Box::new(rhs),
                 }),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -112,6 +114,7 @@ fn rmw_module(name: &str, rhs: Expr) -> Module {
             args: vec![
                 Expr::LocalGet(1),
                 Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(2)),

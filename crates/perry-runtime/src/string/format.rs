@@ -391,8 +391,7 @@ fn to_integer_or_infinity(value: f64) -> f64 {
 
 fn throw_number_format_range_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cfg(test)]

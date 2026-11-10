@@ -8,8 +8,9 @@
 // a class-filtered `ws` Client row that registers the listener in a ws id
 // table nobody fires (N8: the upgraded socket never saw `data`).
 //
-// Sabotage: re-tag the parameter `("ws", "Client")` in the call pre-scans and
-// both assertions below go red (`module: "ws"` NativeMethodCalls reappear).
+// Sabotage: re-tag the parameter `("__websocket__", "Client")` in the call
+// pre-scans and both assertions below go red (`module: "__websocket__"`
+// NativeMethodCalls reappear).
 
 use perry_diagnostics::SourceCache;
 use perry_hir::{clear_current_module_source, fix_local_native_instances, lower_module};
@@ -53,7 +54,7 @@ fn upgrade_listener_socket_param_lowers_to_ordinary_method_calls() {
     );
 
     let dump = format!("{module:#?}");
-    let ws_dispatches = dump.matches("module: \"ws\"").count();
+    let ws_dispatches = dump.matches("module: \"__websocket__\"").count();
     assert_eq!(
         ws_dispatches, 0,
         "an upgrade listener's socket must not be lowered as a ws Client \

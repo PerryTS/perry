@@ -95,6 +95,7 @@ pub(super) fn compile_ordinary_method_artifacts(
         false,
         false,
         false,
+        None,
     )
     .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
 
@@ -141,6 +142,7 @@ pub(super) fn compile_ordinary_method_artifacts(
             false,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -182,6 +184,7 @@ pub(super) fn compile_ordinary_method_artifacts(
             true,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -230,6 +233,7 @@ pub(super) fn compile_ordinary_method_artifacts(
             false,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -270,6 +274,7 @@ pub(super) fn compile_ordinary_method_artifacts(
                 true,
                 false,
                 false,
+                None,
             )
             .with_context(|| {
                 format!(
@@ -311,6 +316,7 @@ pub(super) fn compile_ordinary_method_artifacts(
                 false,
                 false,
                 false,
+                None,
             )
             .with_context(|| {
                 format!(
@@ -359,6 +365,7 @@ pub(super) fn compile_ordinary_method_artifacts(
             false,
             true,
             false,
+            None,
         )
         .with_context(|| {
             format!(

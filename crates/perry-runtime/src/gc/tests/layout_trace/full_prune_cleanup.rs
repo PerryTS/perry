@@ -48,7 +48,7 @@ fn missing_full_death_prune_is_detected_and_regular_cleanup_still_removes_it() {
         let array = crate::array::js_array_alloc(1);
         let owner = array as usize;
         crate::array::test_seed_element_shape_record(owner);
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
             crate::gc::layout::layout_clear_after_full_prune(owner);
         }));
         assert!(

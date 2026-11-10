@@ -114,15 +114,13 @@ fn field(line: &str, name: &str) -> usize {
 #[test]
 fn restore_coverage_diagnostic_matches_walk_and_off_arm() {
     const CHILD: &str = "PERRY_TEST_RESTORE_COVERAGE_CHILD";
-    let thread = std::thread::current();
-    let name = thread.name().expect("libtest thread name");
+    let name = crate::test_support::current_test_name();
     if std::env::var(CHILD).ok().as_deref() == Some(name) {
         exercise_restore();
         return;
     }
     for enabled in ["0", "1"] {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        let output = crate::test_support::test_process(name)
             .env(CHILD, name)
             .env("PERRY_GC_DIAG", enabled)
             .output()
@@ -130,7 +128,8 @@ fn restore_coverage_diagnostic_matches_walk_and_off_arm() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            output.status.success() && stdout.contains("restore coverage witness completed"),
+            crate::test_support::passed(output.status)
+                && stdout.contains("restore coverage witness completed"),
             "witness failed (diag={enabled}): {}\n{stdout}\n{stderr}",
             output.status
         );

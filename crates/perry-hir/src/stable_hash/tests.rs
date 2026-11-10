@@ -518,3 +518,27 @@ fn enum_numbers_hash_fractional_and_signed_zero_values() {
     module.enums[0].members[0].value = EnumValue::Number(0.5);
     assert_ne!(zero, hash_module(&module));
 }
+
+#[test]
+fn element_identity_is_cloned_but_not_hashed() {
+    let base = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(Expr::LocalGet(2)),
+        element_offset: 17,
+        byte_offset: 0,
+        byte_end: 0,
+    };
+    let mut moved = base.clone();
+    let Expr::IndexGet {
+        element_offset,
+        byte_offset,
+        ..
+    } = &mut moved
+    else {
+        unreachable!()
+    };
+    assert_eq!(*element_offset, 17);
+    assert_eq!(*byte_offset, 0);
+    *element_offset = 93;
+    assert!(same_expr_structure(&base, &moved));
+}

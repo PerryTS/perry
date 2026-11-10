@@ -45,9 +45,9 @@ pub static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Acquire [`ARTIFACT_ENV_LOCK`] tolerating a poisoned mutex.
 ///
-/// Recovery is sound because the protected state — the `PERRY_NATIVE_REPS*`
-/// env vars — is restored by [`NativeRepsEnv`]'s `Drop` during the same unwind,
-/// before the mutex is released. One test's failure must fail that test alone.
+/// The tests run with `panic = "abort"`, one process per test, so a panic ends
+/// its process together with the lock it held and the `PERRY_NATIVE_REPS*` env
+/// vars it changed: one test's failure fails that test alone.
 pub fn artifact_env_lock() -> std::sync::MutexGuard<'static, ()> {
     ARTIFACT_ENV_LOCK
         .lock()
@@ -139,37 +139,73 @@ pub fn artifact_for_module(dir: &std::path::Path, name: &str) -> serde_json::Val
     panic!("native reps artifact for {name} not found in {dir:?}; skipped {skipped:?}");
 }
 
+/// libtest's runner names the one test a per-test process runs with this
+/// variable (the workspace's `panic-abort-tests`: every test runs in a process
+/// of its own, exits 50 (`TR_OK`) when it passes and aborts when it panics).
+const TEST_INVOKE: &str = "__RUST_TEST_INVOKE";
+
+/// A fresh per-test process of the `native_proof_support` test `test`, with
+/// `marker` set to `mode`.
+fn test_process(test: &str, marker: &str, mode: &str) -> std::process::Command {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.env(TEST_INVOKE, format!("native_proof_support::{test}"));
+    child.env(marker, mode);
+    child
+}
+
+/// Did `status` end the way a panicking test process ends (`process::abort`)?
+fn died_of_abort(status: std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(6) // SIGABRT
+    }
+    #[cfg(windows)]
+    {
+        // `process::abort` is `__fastfail(FAST_FAIL_FATAL_APP_EXIT)`.
+        status.code() == Some(0xC000_0409_u32 as i32)
+    }
+}
+
 /// Sabotage test for [`artifact_env_lock`]: a test that panics while holding
 /// the lock must fail *itself* and nothing else.
 ///
-/// This asserts its subject was live rather than merely that nothing threw — it
-/// plants the exact #7490 shape, proves the mutex really is poisoned
-/// afterwards, and only then demands the accessor still hand out a guard. It
-/// fails against a plain `ARTIFACT_ENV_LOCK.lock().unwrap()`, so a green run
-/// here is evidence.
-///
-/// `a` sorts first, so under `--test-threads=1` every other test in the
-/// including binary runs under a genuinely poisoned lock and the tolerance is
-/// exercised suite-wide rather than in one isolated case.
+/// The sabotage runs the exact #7490 shape (a panic while the lock is held) in
+/// a per-test process of its own, and this test asserts that the process died
+/// of that panic, not of anything before it. A panic aborts its process, so the
+/// lock it held ends with it: this test then takes the lock itself.
 #[test]
 fn artifact_env_lock_is_poison_tolerant_so_one_failure_cannot_cascade() {
-    let sabotage = std::panic::catch_unwind(|| {
+    const CHILD: &str = "PERRY_TEST_ARTIFACT_LOCK_PANIC_CHILD";
+    const PANIC: &str = "#7493 sabotage: panicking while holding ARTIFACT_ENV_LOCK";
+    if std::env::var_os(CHILD).is_some() {
         let _guard = artifact_env_lock();
-        panic!("#7493 sabotage: unwinding while holding ARTIFACT_ENV_LOCK");
-    });
-    assert!(sabotage.is_err(), "the sabotage panic should have unwound");
+        std::panic::panic_any(PANIC);
+    }
+    let output = test_process(
+        "artifact_env_lock_is_poison_tolerant_so_one_failure_cannot_cascade",
+        CHILD,
+        "1",
+    )
+    .output()
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        ARTIFACT_ENV_LOCK.is_poisoned(),
-        "unwinding out of a lock-holding test should poison ARTIFACT_ENV_LOCK — \
-         if it no longer does, this test is no longer exercising its subject"
+        died_of_abort(output.status) && stderr.contains(PANIC),
+        "the sabotage process must die of the sabotage panic ({}):\n{stderr}",
+        output.status,
     );
     let _guard = artifact_env_lock();
 }
 
-/// Sabotage test for [`NativeRepsEnv`]: the env must survive an unwind out of
-/// the compile it wraps. Run the sabotage in an isolated process: the mutex
-/// cannot hide its invalid directory from concurrent, lock-free compiles
-/// in either including suite (#11124).
+/// Sabotage test for [`NativeRepsEnv`]: the env set for one compile must never
+/// reach another. In a process of its own (the mutex cannot hide its invalid
+/// directory from concurrent, lock-free compiles in either including suite,
+/// #11124), with and without pre-existing values: a compile window that ends
+/// normally restores every variable, and one that panics ends its process
+/// after the guard installed exactly its values (the panic is the sabotage
+/// message, not an installation assertion). Only Command's child environment
+/// changes; this process never installs the sabotage values.
 #[test]
 fn artifact_env_is_restored_even_when_the_compile_unwinds() {
     const CHILD: &str = "PERRY_TEST_NATIVE_REPS_UNWIND_CHILD";
@@ -178,42 +214,11 @@ fn artifact_env_is_restored_even_when_the_compile_unwinds() {
         "PERRY_NATIVE_REPS_DIR",
         "PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS",
     ];
-    if std::env::var_os(CHILD).is_none() {
-        // Exercise both removal and restoration of pre-existing values. Only
-        // Command's child environment changes; the parent never installs the
-        // sabotage values, even while other tests are compiling.
-        for populated in [false, true] {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-            child.args([
-                "--exact",
-                "native_proof_support::artifact_env_is_restored_even_when_the_compile_unwinds",
-                "--test-threads=1",
-                "--nocapture",
-            ]);
-            child.env(CHILD, "1");
-            for key in VARS {
-                if populated {
-                    child.env(key, format!("before-{key}"));
-                } else {
-                    child.env_remove(key);
-                }
-            }
-            let output = child.output().unwrap();
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            assert!(
-                output.status.success() && stdout.contains("native reps unwind verified"),
-                "isolated sabotage failed (populated={populated}):\n{stdout}\n{}",
-                String::from_utf8_lossy(&output.stderr),
-            );
-        }
-        return;
-    }
-
-    let _guard = artifact_env_lock();
-    let before = VARS.map(std::env::var_os);
-    const PANIC: &str = "#7493 sabotage: unwinding inside the artifact env window";
-    let sabotage = std::panic::catch_unwind(|| {
-        let _env = NativeRepsEnv::install(std::path::Path::new("/nonexistent/perry7493"), false);
+    const PANIC: &str = "#7493 sabotage: panicking inside the artifact env window";
+    if let Some(mode) = std::env::var_os(CHILD) {
+        let _guard = artifact_env_lock();
+        let before = VARS.map(std::env::var_os);
+        let env = NativeRepsEnv::install(std::path::Path::new("/nonexistent/perry7493"), false);
         assert_eq!(
             std::env::var("PERRY_NATIVE_REPS").ok().as_deref(),
             Some("1"),
@@ -224,22 +229,55 @@ fn artifact_env_is_restored_even_when_the_compile_unwinds() {
             Some(std::ffi::OsString::from("/nonexistent/perry7493")),
         );
         assert!(std::env::var_os("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS").is_none());
-        std::panic::panic_any(PANIC);
-    });
-    let panic = sabotage.expect_err("the sabotage panic should have unwound");
-    assert_eq!(
-        panic.downcast_ref::<&str>(),
-        Some(&PANIC),
-        "an installation assertion failed before the intended sabotage",
-    );
-    for (key, value) in VARS.into_iter().zip(before) {
-        assert_eq!(
-            std::env::var_os(key),
-            value,
-            "{key} leaked out of a panicking compile window",
-        );
+        if mode == "panic" {
+            std::panic::panic_any(PANIC);
+        }
+        drop(env);
+        for (key, value) in VARS.into_iter().zip(before) {
+            assert_eq!(
+                std::env::var_os(key),
+                value,
+                "{key} leaked out of the compile window",
+            );
+        }
+        println!("native reps restore verified");
+        return;
     }
-    println!("native reps unwind verified");
+    let before = VARS.map(std::env::var_os);
+    for populated in [false, true] {
+        for mode in ["drop", "panic"] {
+            let mut child = test_process(
+                "artifact_env_is_restored_even_when_the_compile_unwinds",
+                CHILD,
+                mode,
+            );
+            for key in VARS {
+                if populated {
+                    child.env(key, format!("before-{key}"));
+                } else {
+                    child.env_remove(key);
+                }
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let ended_as_planned = if mode == "panic" {
+                died_of_abort(output.status) && stderr.contains(PANIC)
+            } else {
+                output.status.code() == Some(50) && stdout.contains("native reps restore verified")
+            };
+            assert!(
+                ended_as_planned,
+                "isolated sabotage failed (populated={populated}, mode={mode}, {}):\n{stdout}\n{stderr}",
+                output.status,
+            );
+        }
+    }
+    assert_eq!(
+        VARS.map(std::env::var_os),
+        before,
+        "this process never installs the sabotage values"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -535,7 +573,11 @@ entry.0:
 }
 
 /// …and a body with no buffer view at all is REFUSED, not reported clean.
+///
+/// A function with no Buffer view must not satisfy `no unchecked native
+/// buffer access`: that is the vacuous pass this reader exists to stop.
 #[test]
+#[should_panic(expected = "the fixture did not lower a buffer view at all")]
 fn a_body_with_no_buffer_view_refuses_to_certify_the_absence_of_one() {
     let no_buffer_probe = "\
 define double @perry_fn_m_ts__probe() {
@@ -543,14 +585,7 @@ entry.0:
   ret double 0.0
 }
 ";
-    let refused = std::panic::catch_unwind(|| {
-        assert_no_native_buffer_element_access(probe_body(no_buffer_probe), "self-test");
-    });
-    assert!(
-        refused.is_err(),
-        "a function with no Buffer view must not satisfy `no unchecked native \
-         buffer access` — that is the vacuous pass this reader exists to stop"
-    );
+    assert_no_native_buffer_element_access(probe_body(no_buffer_probe), "self-test");
 }
 
 /// The slice must be the function, not the first line that mentions it.

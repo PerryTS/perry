@@ -29,17 +29,13 @@ const ERR_NON_BASIC: &str = "Illegal input >= 0x80 (not a basic code point)";
 #[cold]
 fn throw_range_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_rangeerror_new(msg);
-    let bits = JSValue::pointer(error as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cold]
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(msg);
-    let bits = JSValue::pointer(error as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[cold]

@@ -170,7 +170,7 @@ fn census_rejects_a_producer_bypassing_the_funnel() {
         1,
         "retirement must not erase an overlap"
     );
-    assert!(std::panic::catch_unwind(|| capture.check()).is_err());
+    assert!(crate::test_support::child_unwind(|| capture.check()).is_err());
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn census_rejects_a_missing_facts_memo_entry() {
         1,
         "the negative control must be detected"
     );
-    assert!(std::panic::catch_unwind(|| capture.check()).is_err());
+    assert!(crate::test_support::child_unwind(|| capture.check()).is_err());
 }
 
 #[test]

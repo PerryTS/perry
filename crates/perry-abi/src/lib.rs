@@ -15,6 +15,7 @@ pub mod accessor_guards;
 mod builtin_proto;
 pub use builtin_proto::{BuiltinProto, FunctionProtoKind};
 pub mod intrinsic_serials;
+pub mod lock;
 pub mod object_meta_flags;
 mod shape_kind;
 pub use shape_kind::ShapeObjectKind;
@@ -55,6 +56,29 @@ pub const WEAKSET_BIRTH_LAYOUT: u32 = WEAKMAP_BIRTH_LAYOUT + 1;
 
 /// `array::ArrayHeader` size: element 0 follows it.
 pub const ARRAY_HEADER_SIZE: usize = 24;
+
+/// The longest fresh `new Array(k)` the runtime backs with a dense store
+/// (`js_array_constructor_single`): `capacity >= k`, every slot a hole. A
+/// longer one records length `k` over an empty store, as a sparse length
+/// extension does, so its capacity says nothing about its length. wpfacts
+/// proves an element read slot-addressable only up to this length
+/// (`bindings::element_read`).
+pub const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
+
+/// The packed `ArrayHeader` length/capacity word (length in the low 32 bits,
+/// capacity in the high 32) that generated code stores at an inline array
+/// birth (`perry-codegen` `expr/array_literal.rs`). A birth's capacity is at
+/// least its length: wpfacts records an array literal's birth length as a
+/// length floor that the element storage holds (`solve::arr_len`), and the
+/// runtime's own allocations keep the same bound
+/// (`perry-runtime/src/array/capacity_writes_tests.rs`).
+pub const fn array_birth_header(length: u32, capacity: u32) -> u64 {
+    assert!(
+        capacity >= length,
+        "an array birth's capacity is below its length"
+    );
+    length as u64 | (capacity as u64) << 32
+}
 
 /// `PerryLayoutKey.attrs` bit (the runtime's key entry byte, `ENTRY_OPTIONAL`):
 /// the key is a layout's optional or late member. Its slot may hold the hole
@@ -309,6 +333,17 @@ pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
 pub const GC_TYPE_CLOSURE: u8 = 4;
 /// `gc::GC_TYPE_OBJECT`: an ordinary object, e.g. a byte cell's property bag.
 pub const GC_TYPE_OBJECT: u8 = 2;
+/// `gc::GC_TYPE_ARRAY`: an ordinary array head (`ArrayHeader`).
+pub const GC_TYPE_ARRAY: u8 = 1;
+/// `gc::GC_ARRAY_RAW_F64_LAYOUT`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying
+/// its slots are canonical raw `f64` values.
+pub const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+/// `gc::GC_ARRAY_CUSTOM_PROTO`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying its
+/// `[[Prototype]]` was retargeted.
+pub const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+/// The largest capacity the packed-f64 counted loop admits
+/// (`typed_feedback::packed_f64_loop_admits_live_array`).
+pub const PACKED_F64_LOOP_MAX_CAPACITY: u32 = 16_000_000;
 /// `gc::GC_TYPE_BUFFER` and `gc::GC_TYPE_BUFFER_UINT8ARRAY`: the GcHeader type
 /// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
 /// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type

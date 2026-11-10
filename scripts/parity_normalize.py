@@ -1,56 +1,17 @@
 #!/usr/bin/env python3
 """The one definition of "Perry printed what Node printed".
 
-Two parity runners ask this question today:
-
-  * `run_parity_tests.sh` — the `all` / `node-suite` sweep that the release
-    gate and the per-PR gap suite both drive;
-  * `scripts/node_suite_run.py` — the per-module table the `node-suite-guard`
-    job scores against `test-parity/node_suite_baseline.json`.
-
-They asked it with two separate implementations, one written in a ~30-stage
-`sed` chain and one in Python, and each carried rules the other did not. Two
-implementations of one question can disagree, and a disagreement here is not a
-cosmetic bug: it decides whether a divergence between Perry and Node is
-reported at all, and the two runners gate different things.
-
-This module is that single implementation. It keeps **two named rule profiles**
-rather than one merged rule set, because the rule sets are not interchangeable
-in either direction:
-
-  * `parity` — the historical shell chain, byte for byte. It decodes
-    `<Buffer …>` dumps, folds whole-line `true`/`false` to `1`/`0`, truncates
-    float precision, normalizes `console.time` output, and strips Node's
-    process warnings and `console.trace` frame shapes.
-  * `node_suite` — the historical `node_suite_run.py` rules. It masks the
-    `node:test` reporter's own artefacts (`test at <location>`,
-    `(N.NNNms)`, `ℹ duration_ms`), which the parity chain never learned and
-    which are *not* safe to add there: `(N.NNNms)` matches ordinary output, so
-    applying it corpus-wide would hide real divergences behind a "duration"
-    that was never a duration.
-
-  * `unified` — both rule sets at once, for `scripts/parity.py`, the runner
-    that replaces the two above. The older profiles stay byte-for-byte while
-    their runners still exist.
-
-Merging them is a behaviour change in both lanes and needs measured evidence;
-until then the profiles are declared here, side by side, so the two can never
-drift apart silently. `tests/test_parity_normalize.py` pins both against
-fixtures captured from the implementations this module replaced.
-
-Usage (stdin is the captured output, exactly as the shell caller holds it):
-
-    parity_normalize.py output|failure
-
-The CLI serves only `run_parity_tests.sh`, so it applies the `parity` profile.
-`node_suite_run.py` imports `normalize_node_suite_output` directly and never
-runs a failure-signature pass.
+`scripts/parity.py` judges every case with `normalize_unified_output` and
+`normalize_parity_failure`. `unified` is the `parity` rules plus the masks for
+the `node:test` reporter's own artefacts (`test at <location>`, suite
+durations, clock-format timers).
+`tests/tooling/parity/test_parity_normalize.py` pins the `parity` rules against fixtures
+captured from the shell chain they replaced.
 """
 
 from __future__ import annotations
 
 import re
-import sys
 
 # ---------------------------------------------------------------------------
 # Profile: parity
@@ -266,49 +227,16 @@ def normalize_parity_failure(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Profile: node_suite
-# ---------------------------------------------------------------------------
-
-# Console timer output: Node renders a live hrtime delta as a raw float, so the
-# value is non-deterministic run to run AND has a variable decimal count. Only
-# the number is masked; the unit surviving keeps a dropped `ms` visible.
-_NS_DUR_MS = re.compile(r"(?<=: )\d+(?:\.\d+)?(ms|s)\b")
-_NS_DUR_CLOCK = re.compile(r"\b\d+:\d{2}\.\d{3} \((h:mm|m):ss\.mmm\)")
-_NS_FRAME = re.compile(r"^\s{4,}(at\s|\d+:\s)|… \d+ more identical frames")
-_NS_TEST_DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s)\)")
-_NS_TEST_LOCATION = re.compile(r"^(\s*)test at .+:\d+:\d+$")
-_NS_DURATION_MS_LINE = "ℹ duration_ms "
-
-
-def normalize_node_suite_output(text: str) -> str:
-    out: list[str] = []
-    for line in text.split("\n"):
-        if _NS_FRAME.search(line):
-            continue
-        location = _NS_TEST_LOCATION.match(line)
-        if location:
-            line = "%stest at <location>" % location.group(1)
-        line = _NS_DUR_MS.sub(lambda match: "<dur>" + match.group(1), line)
-        line = _NS_DUR_CLOCK.sub(lambda match: "<dur:" + match.group(1) + ">", line)
-        line = _NS_TEST_DURATION.sub("(<test-duration>)", line)
-        stripped = line.lstrip()
-        if stripped.startswith(_NS_DURATION_MS_LINE):
-            indent = line[: len(line) - len(stripped)]
-            line = indent + _NS_DURATION_MS_LINE + "<test-duration>"
-        out.append(line)
-    return "\n".join(out)
-
-
-# ---------------------------------------------------------------------------
 # Profile: unified (scripts/parity.py)
 # ---------------------------------------------------------------------------
 
-# The `parity` rules plus the `node:test` reporter artefacts the `node_suite`
-# profile masks. The duration mask stays scoped to reporter result lines
-# (`▶` suites here, `✔ ✖ ﹣` cases in the parity rules): a bare `(Nms)` is
-# ordinary program output elsewhere.
+# The duration mask stays scoped to reporter result lines (`▶` suites here,
+# `✔ ✖ ﹣` cases in the parity rules): a bare `(Nms)` is ordinary program
+# output elsewhere.
 _U_SUITE_DURATION = re.compile(r"^([ \t]*▶ .*) \([0-9]+(\.[0-9]+)?ms\)$")
 _U_ELLIPSIS_FRAMES = re.compile(r"… \d+ more identical frames")
+_U_TEST_LOCATION = re.compile(r"^(\s*)test at .+:\d+:\d+$")
+_U_DUR_CLOCK = re.compile(r"\b\d+:\d{2}\.\d{3} \((h:mm|m):ss\.mmm\)")
 
 
 def normalize_unified_output(text: str) -> str:
@@ -316,23 +244,11 @@ def normalize_unified_output(text: str) -> str:
     for line in normalize_parity_output(text).split("\n"):
         if _U_ELLIPSIS_FRAMES.search(line):
             continue
-        location = _NS_TEST_LOCATION.match(line)
+        location = _U_TEST_LOCATION.match(line)
         if location:
             line = "%stest at <location>" % location.group(1)
         line = _U_SUITE_DURATION.sub(r"\1 (<duration>)", line)
-        line = _NS_DUR_CLOCK.sub(lambda match: "<dur:" + match.group(1) + ">", line)
+        line = _U_DUR_CLOCK.sub(lambda match: "<dur:" + match.group(1) + ">", line)
         out.append(line)
     return "\n".join(out)
 
-
-def main(argv: list[str]) -> int:
-    modes = {"output": normalize_parity_output, "failure": normalize_parity_failure}
-    if len(argv) != 1 or argv[0] not in modes:
-        sys.stderr.write("usage: parity_normalize.py output|failure\n")
-        return 2
-    sys.stdout.write(modes[argv[0]](sys.stdin.read()))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

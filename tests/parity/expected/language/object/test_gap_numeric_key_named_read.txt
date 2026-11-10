@@ -1,0 +1,23 @@
+empty last undefined 7 undefined
+own neg neg neg undefined
+deleted neg undefined
+2^32-1 not-an-index 0 undefined undefined
+fraction undefined 1
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+inherited from Array.prototype undefined undefined undefined
+getter getter len 3 getter len 0
+after delete undefined undefined undefined
+custom proto custom proto proto index undefined
+record one twenty-two undefined undefined undefined
+record more minus seven big 1,22,name,-7,1099511627776
+accessor acc five
+chain proto nine proto minus nine own ten undefined
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+object proto index undefined undefined undefined
+object proto index gone undefined undefined
+dense dyn 780 39 undefined
+subclass s0 s1 undefined sub neg 2
+frozen four undefined
+proxy trap -1 trap 3
+proxy proto proto trap -2 proto trap 6
+loop 999 1

@@ -45,78 +45,6 @@
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/fetch_blob.rs"
     ],
-    "js_cheerio_load": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_load_fragment": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_select": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_attr": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_attrs": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_children": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_eq": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_find": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_first": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_has_class": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_html": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_is": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_last": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_length": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_parent": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_text": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_texts": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
-    "js_cheerio_selection_to_array": [
-      "crates/perry-ext-cheerio/src/lib.rs",
-      "crates/perry-stdlib/src/cheerio.rs"
-    ],
     "js_cron_timer_has_pending": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/lib.rs"
@@ -124,30 +52,6 @@
     "js_cron_timer_tick": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/lib.rs"
-    ],
-    "js_ethers_format_ether": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_format_units": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_get_address": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_parse_ether": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_parse_units": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_wallet_create_random": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
     ],
     "js_fetch_with_options": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
@@ -164,26 +68,6 @@
     "js_headers_new": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/fetch/headers.rs"
-    ],
-    "js_keccak256_native": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_keccak256_native_bytes": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_nodemailer_create_transport": [
-      "crates/perry-ext-nodemailer/src/lib.rs",
-      "crates/perry-stdlib/src/nodemailer.rs"
-    ],
-    "js_nodemailer_send_mail": [
-      "crates/perry-ext-nodemailer/src/lib.rs",
-      "crates/perry-stdlib/src/nodemailer.rs"
-    ],
-    "js_nodemailer_verify": [
-      "crates/perry-ext-nodemailer/src/lib.rs",
-      "crates/perry-stdlib/src/nodemailer.rs"
     ],
     "js_readline_set_raw_mode": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
@@ -356,6 +240,10 @@
       "crates/perry-stdlib/src/sqlite/better.rs"
     ],
     "js_sqlite_stmt_all": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_stmt_columns": [
       "crates/perry-ext-better-sqlite3/src/lib.rs",
       "crates/perry-stdlib/src/sqlite/better.rs"
     ],

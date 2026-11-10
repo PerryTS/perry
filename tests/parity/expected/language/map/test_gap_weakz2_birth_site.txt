@@ -1,0 +1,35 @@
+plain map [false,null,true,true,7,true,false,false]
+plain set [false,true,true,true,false]
+both true true false false
+split weak w
+channel ["has:false","ch:undefined",false,"has:true","ch:3","del","del","has:true"] ["has:true",false,"has:true","del","has:true"]
+split channel ch:undefined
+split channel 2 ch:s
+split null TypeError
+split prim TypeError
+own key [false,"own-get",true,true,"own-get",true,false,false]
+own set key ["own-has",true,"own-has",true,"own-has"] own-has
+reproto ["proto-has","proto-get",false,"proto-has","proto-get","proto-del","proto-del","proto-has"]
+null proto TypeError
+subclass [false,"sub:undefined",true,true,"sub:9",true,false,false]
+subset [false,true,true,true,false]
+newTarget ["nt-has","nt-get",false,"nt-has","nt-get","nt-del","nt-del","nt-has"]
+frozen [false,null,true,true,4,true,false,false]
+sealed set [false,true,true,true,false]
+ws.get TypeError
+wm.add TypeError
+bad key TypeError
+bad add TypeError
+prim get undefined false
+big 99990000
+DEC 250: Cannot replace built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+patched get [true,11,true,true,12,true,false,false] p
+DEC 250: Cannot replace built-in member WeakSet.prototype.has: built-in objects are read-only in a compiled program (adding a new member is allowed)
+patched has [true,true,true,true,false] false false
+DEC 250: Cannot add member Object.prototype.add: built-in objects are read-only in a compiled program
+objproto TypeError [false,true,true,true,false]
+direct own own-direct true
+direct proto dp-proto dp-has
+direct patched 21 true true true
+direct set true true true false
+name reuse 1 TypeError

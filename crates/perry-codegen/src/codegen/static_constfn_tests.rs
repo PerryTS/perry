@@ -935,9 +935,91 @@ fn final_literal_visitor_harvests_static_import_member_writes() {
         key: Box::new(Expr::String("loggingHost".into())),
         value: Box::new(Expr::Object(Vec::new())),
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }));
     let (_, writes) = crate::exported_object_literal_method_facts(&module);
     assert_eq!(writes, vec![("Debug".into(), "loggingHost".into())]);
+}
+
+/// RPG9f M4: the fused private-method call `o.#m()` of a class with a static
+/// completed id reaches its shape probe with an unprimed (0) site word. A zero
+/// shape word (a Proxy cell, a Date) names no shape, so the probe's site-word
+/// compare must carry the `word != 0` term: 0 == 0 must not be a hit.
+#[test]
+fn fused_private_method_probe_never_matches_a_zero_word() {
+    let mut c = user_class("C", 11791, 1);
+    c.fields[0].init = Some(Expr::Number(17.0));
+    c.fields[0].ty = Type::Number;
+    let mut hidden = c.fields[0].clone();
+    hidden.name = "hidden".into();
+    hidden.is_private = true;
+    c.fields.push(hidden);
+    let mut method = constructor(vec![Stmt::Return(Some(Expr::Number(2.0)))]);
+    method.id = 11792;
+    method.name = "#m".into();
+    c.methods.push(method);
+    let mut module = Module::new("private_probe.ts");
+    module.classes = vec![c];
+    module.init.push(Stmt::Let {
+        id: 1,
+        name: "o".into(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::New {
+            byte_end: 0,
+            class_name: "C".into(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+    });
+    module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
+        byte_offset: 0,
+        type_args: Vec::new(),
+        args: Vec::new(),
+        callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            property: "#m".into(),
+            object: Box::new(Expr::PrivateGuard {
+                class_name: "C".into(),
+                class_id: 11791,
+                field_name: "#m".into(),
+                kind: 1,
+                op: 0,
+                receiver_is_brand_owner: false,
+                object: Box::new(Expr::LocalGet(1)),
+            }),
+        }),
+    }));
+    let mut options = opts("executable");
+    let births = crate::module_birth_shapes(&module, options.clone()).unwrap();
+    options.static_shape_ids = super::super::static_shape_ids::assign_static_shape_ids(
+        births.iter().map(|birth| &birth.shape),
+    )
+    .into_iter()
+    .collect();
+    let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+    let start = ir
+        .lines()
+        .position(|l| l.starts_with("psite.shape"))
+        .unwrap_or_else(|| panic!("no fused private-method probe block:\n{ir}"));
+    let block: Vec<&str> = ir
+        .lines()
+        .skip(start + 1)
+        .take_while(|l| !l.is_empty() && !l.ends_with(':') && !l.starts_with("psite.miss"))
+        .collect();
+    let block = block.join("\n");
+    assert!(
+        block.matches("icmp eq i64").count() >= 2,
+        "the probe must carry the site-word and the static-id compares:\n{block}"
+    );
+    assert!(
+        block.contains("and i1"),
+        "the site-word compare must be gated by the word != 0 term:\n{block}"
+    );
 }

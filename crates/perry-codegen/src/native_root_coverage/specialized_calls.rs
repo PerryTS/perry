@@ -20,15 +20,19 @@ fn a_last_use_typed_array_is_live_across_the_specialized_call() {
             arguments_object: None,
         }],
         return_type: Type::Number,
-        body: vec![
-            Stmt::Expr(Expr::MapNew),
-            Stmt::Return(Some(Expr::IndexGet {
+        // Past the guarded-specialization pre-statepoint inline budget (20
+        // statements, 16 KiB of IR): a smaller clone flattens into `main`
+        // and leaves this test no call to inspect.
+        body: std::iter::repeat_with(|| Stmt::Expr(Expr::MapNew))
+            .take(400)
+            .chain([Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(10)),
                 index: Box::new(Expr::Integer(0)),
-            })),
-        ],
+            }))])
+            .collect(),
         is_async: false,
         is_generator: false,
         is_strict: true,

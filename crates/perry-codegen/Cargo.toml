@@ -47,6 +47,7 @@ testing = []
 
 [dependencies]
 perry-hir.workspace = true
+perry-realm-table.workspace = true
 # The sidecar table rows (`GcEffects::from_sidecar`); the format only, no analyzer.
 perry-gc-effects.workspace = true
 perry-dispatch.workspace = true
@@ -89,9 +90,7 @@ llvm-sys = { version = "221", features = ["no-llvm-linking"], optional = true }
 perry-codegen = { path = ".", features = ["testing"] }
 perry-diagnostics.workspace = true
 perry-parser.workspace = true
+perry-transform.workspace = true
 
 [build-dependencies]
-serde.workspace = true
-serde_json.workspace = true
-perry-runtime-manifest.workspace = true
 cc = "1"

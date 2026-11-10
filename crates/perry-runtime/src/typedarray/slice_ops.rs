@@ -145,9 +145,22 @@ pub extern "C" fn js_typed_array_reverse(ta: *mut TypedArrayHeader) -> *mut Type
     }
 }
 
+/// `ValidateTypedArray` for `fill`: a detached or out-of-bounds view throws.
+unsafe fn validate_fill_receiver(ta: *const TypedArrayHeader) {
+    let addr = ta as usize;
+    if crate::buffer::is_detached_buffer(crate::buffer::store::owner(addr))
+        || crate::buffer::store::out_of_bounds(addr)
+    {
+        throw_type_error(b"Cannot perform %TypedArray%.prototype.fill on a detached or out-of-bounds ArrayBuffer");
+    }
+}
+
 /// `ta.fill(value, start?, end?)` — in-place fill; returns the same typed
-/// array. `start`/`end` follow Array.prototype.fill index normalization; pass
-/// `has_start == 0` to fill the whole array.
+/// array. Follows %TypedArray%.prototype.fill: `value` is converted once
+/// (ToNumber / ToBigInt) before `start` and `end`, the range is clamped
+/// against the length seen at entry, then the receiver is validated again
+/// and the end is clamped to its current length. The elements are written
+/// in the array's own element width with the one `store_raw` conversion.
 #[no_mangle]
 pub extern "C" fn js_typed_array_fill(
     ta: *mut TypedArrayHeader,
@@ -162,17 +175,18 @@ pub extern "C" fn js_typed_array_fill(
         return ta;
     }
     unsafe {
+        validate_fill_receiver(ta);
         let len = crate::typedarray::element_length(ta) as isize;
-        // Spec order: convert `value` first (its `valueOf`/`ToBigInt` runs before
-        // the index args are coerced), then `ToIntegerOrInfinity` each index.
-        let v = bigint::coerce_for_kind(crate::typedarray::element_kind(ta), value);
-        // `ToIntegerOrInfinity` + RelativeIndex clamp. `jsvalue_to_f64` performs
-        // `ToNumber` (so `null` → 0, `true` → 1, an object → its `valueOf`, a
-        // numeric string → its value); `NaN`/`undefined` → 0, ±Infinity saturate
-        // to the array bounds. The previous `x.is_nan() ? default : x as isize`
-        // mis-handled every NaN-boxed non-number: `null`/`false`/`undefined` all
-        // looked like `NaN` and fell back to the *default* (so a `null` end
-        // became `len` instead of 0).
+        let kind = crate::typedarray::element_kind(ta);
+        // The conversions run user code that can collect and move objects:
+        // everything used after the first one is re-read from a root.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ta_root = scope.root_raw_mut_ptr(ta);
+        let start_root = scope.root_nanbox_f64(start);
+        let end_root = scope.root_nanbox_f64(end);
+        let v_root = scope.root_nanbox_f64(bigint::coerce_for_kind(kind, value));
+        // `ToIntegerOrInfinity` + RelativeIndex clamp (NaN/undefined -> 0, a
+        // null is the number 0).
         let rel = |x: f64| -> isize {
             let n = jsvalue_to_f64(x);
             let n = if n.is_nan() { 0.0 } else { n };
@@ -191,18 +205,59 @@ pub extern "C" fn js_typed_array_fill(
             idx.clamp(0, len)
         };
         let is_undef = |x: f64| crate::value::JSValue::from_bits(x.to_bits()).is_undefined();
-        let s = if has_start != 0 { rel(start) } else { 0 };
+        let s = if has_start != 0 {
+            rel(start_root.get_nanbox_f64())
+        } else {
+            0
+        };
         // An explicit `undefined` end defaults to `len` (spec step 8a), unlike a
-        // `null`/absent-coerced end which is `ToIntegerOrInfinity(null)` = 0.
-        let e = if has_end != 0 && !is_undef(end) {
-            rel(end)
+        // `null` end which is `ToIntegerOrInfinity(null)` = 0.
+        let e = if has_end != 0 && !is_undef(end_root.get_nanbox_f64()) {
+            rel(end_root.get_nanbox_f64())
         } else {
             len
         };
-        let mut i = s;
-        while i < e {
-            store_at(ta, i as usize, v);
-            i += 1;
+        // The conversions can run user code that detaches or resizes the buffer.
+        let ta = ta_root.get_raw_mut_ptr::<TypedArrayHeader>();
+        let v = v_root.get_nanbox_f64();
+        validate_fill_receiver(ta);
+        let e = (e as usize).min(crate::typedarray::element_length(ta) as usize);
+        let s = s as usize;
+        if s >= e {
+            return ta;
+        }
+        if typed_array_has_shared_backing(ta) {
+            // Shared memory keeps the per-element (atomic-width) store.
+            for i in s..e {
+                store_at(ta, i, v);
+            }
+            return ta;
+        }
+        let size = crate::typedarray::elem_size_for_kind(kind) as usize;
+        let base = data_ptr_mut(ta).add(s * size);
+        // Replicate the encoded element across one 64-bit word (the element
+        // width divides 8, so every word write keeps the element phase), then
+        // fill the byte range with word stores; the tail is one overlapping word.
+        let mut word = element_bits(kind, v);
+        let mut w = size * 8;
+        while w < 64 {
+            word |= word << w;
+            w *= 2;
+        }
+        let total = (e - s) * size;
+        if size == 1 {
+            std::ptr::write_bytes(base, word as u8, total);
+        } else if total < 8 {
+            let bytes = word.to_le_bytes();
+            for i in 0..total {
+                *base.add(i) = bytes[i];
+            }
+        } else {
+            let words = total / 8;
+            for i in 0..words {
+                (base.add(i * 8) as *mut u64).write_unaligned(word);
+            }
+            (base.add(total - 8) as *mut u64).write_unaligned(word);
         }
         ta
     }

@@ -147,20 +147,15 @@ fn proxy_arg_is_object(value: f64) -> bool {
     if top == 0 && bits > 0x10000 {
         return true;
     }
-    // Class refs (INT32-tagged constructors, top16 == 0x7FFE) are callable
-    // objects and are valid proxy targets/handlers.
-    if top == 0x7FFE {
-        return true;
-    }
     false
 }
 
 fn throw_proxy_non_object() -> ! {
     let msg = "Cannot create proxy with a non-object as target or handler";
     let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_handle);
-    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
-    crate::exception::js_throw(boxed)
+    let err = crate::error::CoreError::type_error(msg_handle);
+    let boxed = err;
+    crate::exception::throw_core(boxed)
 }
 
 /// Creation-time callability snapshot for a proxy's target: a nested proxy
@@ -378,9 +373,9 @@ fn revoked_return() -> f64 {
 
 fn revoked_return_with_message(msg: &str) -> f64 {
     let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_handle);
-    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
-    crate::exception::js_throw(boxed);
+    let err = crate::error::CoreError::type_error(msg_handle);
+    let boxed = err;
+    crate::exception::throw_core(boxed);
 }
 
 /// Invoke a present (already-confirmed-callable) handler trap with the handler

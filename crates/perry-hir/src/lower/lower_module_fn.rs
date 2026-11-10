@@ -332,194 +332,6 @@ fn enable_react_automatic_jsx(module: &mut Module, ctx: &mut LoweringContext) {
     });
 }
 
-fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> HashSet<String> {
-    fn collect_from_stmt(stmt: &ast::Stmt, out: &mut HashSet<String>) {
-        match stmt {
-            ast::Stmt::Block(block) => {
-                for stmt in &block.stmts {
-                    collect_from_stmt(stmt, out);
-                }
-            }
-            ast::Stmt::Expr(expr_stmt) => collect_from_expr(&expr_stmt.expr, out),
-            ast::Stmt::If(if_stmt) => {
-                collect_from_expr(&if_stmt.test, out);
-                collect_from_stmt(&if_stmt.cons, out);
-                if let Some(alt) = &if_stmt.alt {
-                    collect_from_stmt(alt, out);
-                }
-            }
-            ast::Stmt::While(while_stmt) => {
-                collect_from_expr(&while_stmt.test, out);
-                collect_from_stmt(&while_stmt.body, out);
-            }
-            ast::Stmt::DoWhile(do_while) => {
-                collect_from_stmt(&do_while.body, out);
-                collect_from_expr(&do_while.test, out);
-            }
-            ast::Stmt::For(for_stmt) => {
-                if let Some(init) = &for_stmt.init {
-                    match init {
-                        ast::VarDeclOrExpr::Expr(expr) => collect_from_expr(expr, out),
-                        ast::VarDeclOrExpr::VarDecl(_) => {}
-                    }
-                }
-                if let Some(test) = &for_stmt.test {
-                    collect_from_expr(test, out);
-                }
-                if let Some(update) = &for_stmt.update {
-                    collect_from_expr(update, out);
-                }
-                collect_from_stmt(&for_stmt.body, out);
-            }
-            ast::Stmt::ForIn(for_in) => {
-                collect_from_expr(&for_in.right, out);
-                collect_from_stmt(&for_in.body, out);
-            }
-            ast::Stmt::ForOf(for_of) => {
-                collect_from_expr(&for_of.right, out);
-                collect_from_stmt(&for_of.body, out);
-            }
-            ast::Stmt::Labeled(labeled) => collect_from_stmt(&labeled.body, out),
-            ast::Stmt::Switch(switch_stmt) => {
-                collect_from_expr(&switch_stmt.discriminant, out);
-                for case in &switch_stmt.cases {
-                    if let Some(test) = &case.test {
-                        collect_from_expr(test, out);
-                    }
-                    for stmt in &case.cons {
-                        collect_from_stmt(stmt, out);
-                    }
-                }
-            }
-            ast::Stmt::Try(try_stmt) => {
-                for stmt in &try_stmt.block.stmts {
-                    collect_from_stmt(stmt, out);
-                }
-                if let Some(handler) = &try_stmt.handler {
-                    for stmt in &handler.body.stmts {
-                        collect_from_stmt(stmt, out);
-                    }
-                }
-                if let Some(finalizer) = &try_stmt.finalizer {
-                    for stmt in &finalizer.stmts {
-                        collect_from_stmt(stmt, out);
-                    }
-                }
-            }
-            ast::Stmt::Return(ret) => {
-                if let Some(arg) = &ret.arg {
-                    collect_from_expr(arg, out);
-                }
-            }
-            ast::Stmt::Throw(throw_stmt) => collect_from_expr(&throw_stmt.arg, out),
-            ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
-                for decl in &var_decl.decls {
-                    if let Some(init) = &decl.init {
-                        collect_from_expr(init, out);
-                    }
-                }
-            }
-            ast::Stmt::Decl(_)
-            | ast::Stmt::Break(_)
-            | ast::Stmt::Continue(_)
-            | ast::Stmt::Debugger(_)
-            | ast::Stmt::Empty(_) => {}
-            _ => {}
-        }
-    }
-
-    fn collect_from_expr(expr: &ast::Expr, out: &mut HashSet<String>) {
-        match expr {
-            ast::Expr::Assign(assign) => {
-                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) =
-                    &assign.left
-                {
-                    let name = ident.id.sym.as_ref();
-                    let is_self_read = assign.op == ast::AssignOp::Assign
-                        && matches!(
-                            assign.right.as_ref(),
-                            ast::Expr::Ident(rhs) if rhs.sym.as_ref() == name
-                        );
-                    if !is_self_read {
-                        out.insert(name.to_string());
-                    }
-                }
-                collect_from_expr(&assign.right, out);
-            }
-            ast::Expr::Paren(paren) => collect_from_expr(&paren.expr, out),
-            ast::Expr::Seq(seq) => {
-                for expr in &seq.exprs {
-                    collect_from_expr(expr, out);
-                }
-            }
-            ast::Expr::Cond(cond) => {
-                collect_from_expr(&cond.test, out);
-                collect_from_expr(&cond.cons, out);
-                collect_from_expr(&cond.alt, out);
-            }
-            ast::Expr::Bin(bin) => {
-                collect_from_expr(&bin.left, out);
-                collect_from_expr(&bin.right, out);
-            }
-            ast::Expr::Unary(unary) => collect_from_expr(&unary.arg, out),
-            ast::Expr::Update(update) => {
-                if let ast::Expr::Ident(ident) = update.arg.as_ref() {
-                    out.insert(ident.sym.to_string());
-                }
-            }
-            ast::Expr::Call(call) => {
-                if let ast::Callee::Expr(callee) = &call.callee {
-                    collect_from_expr(callee, out);
-                }
-                for arg in &call.args {
-                    collect_from_expr(&arg.expr, out);
-                }
-            }
-            ast::Expr::New(new_expr) => {
-                collect_from_expr(&new_expr.callee, out);
-                if let Some(args) = &new_expr.args {
-                    for arg in args {
-                        collect_from_expr(&arg.expr, out);
-                    }
-                }
-            }
-            ast::Expr::Member(member) => {
-                collect_from_expr(&member.obj, out);
-                if let ast::MemberProp::Computed(computed) = &member.prop {
-                    collect_from_expr(&computed.expr, out);
-                }
-            }
-            ast::Expr::TsAs(ts_as) => collect_from_expr(&ts_as.expr, out),
-            ast::Expr::TsNonNull(ts_non_null) => collect_from_expr(&ts_non_null.expr, out),
-            ast::Expr::TsTypeAssertion(ts_assert) => collect_from_expr(&ts_assert.expr, out),
-            ast::Expr::TsSatisfies(ts_satisfies) => collect_from_expr(&ts_satisfies.expr, out),
-            ast::Expr::TsConstAssertion(ts_const) => collect_from_expr(&ts_const.expr, out),
-            _ => {}
-        }
-    }
-
-    let mut out = HashSet::new();
-    for item in &ast_module.body {
-        match item {
-            ast::ModuleItem::Stmt(stmt) => collect_from_stmt(stmt, &mut out),
-            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
-                if let ast::Decl::Var(var_decl) = &export_decl.decl {
-                    for decl in &var_decl.decls {
-                        if let Some(init) = &decl.init {
-                            collect_from_expr(init, &mut out);
-                        }
-                    }
-                }
-            }
-            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(default_expr)) => {
-                collect_from_expr(&default_expr.expr, &mut out);
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 /// Names introduced by `var` declarations in the module's var scope.
 ///
 /// A same-named top-level FunctionDeclaration and `var` declaration share one
@@ -553,19 +365,11 @@ fn collect_module_var_binding_names(ast_module: &ast::Module) -> HashSet<String>
 
 /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
 /// expression statement (module scope, not nested in any block/if/loop/
-/// function). Deliberately narrower than
-/// [`collect_assigned_function_binding_candidates`] — that scan is name-only
-/// (no scope tracking), so reusing it for the class-reassignment gate below
-/// would false-positive on a same-named binding shadowed in a nested block
-/// (`class Foo {}; { let Foo; Foo = 1; }` would wrongly mark the top-level
-/// `Foo` reassigned) and silently miss a reassignment inside a nested
-/// function body (which the deep scan doesn't walk into either). Scoping to
-/// only the shapes a genuine top-level class-binding reassignment can take
-/// avoids the false positive entirely; the false negative (reassigning a
-/// top-level class from inside a block or a nested function) simply falls
-/// back to the pre-existing behavior (the assignment is silently dropped,
-/// same as before this fix) rather than being newly and only partially
-/// correct.
+/// function). Narrower than the function-binding scan
+/// (`module_assigned_bindings`), which also sees stores from blocks and
+/// nested functions. A top-level class reassigned from a block or a nested
+/// function is not seen here (beyond the closure scan below), so that store
+/// is still dropped, as before #5833.
 fn collect_direct_top_level_reassigned_identifiers(ast_module: &ast::Module) -> HashSet<String> {
     fn target_name(target: &ast::AssignTarget) -> Option<&str> {
         match target {
@@ -934,8 +738,13 @@ pub fn lower_module_full_with_platform_globals(
     // bindings before any initializer/function body can reference them; the
     // declaration pass below still records the imports in source order.
     module_decl::pre_register_static_import_bindings(&mut ctx, ast_module);
-    // An import binding a local declaration repeats is an early error.
-    module_decl::import_redeclaration::check_import_redeclarations(ast_module)?;
+    // An import binding a local declaration repeats is an early error; a
+    // TypeScript import that may name a type waits for its export.
+    let locally_redeclared_imports =
+        module_decl::import_redeclaration::check_import_redeclarations(
+            ast_module,
+            source_file_path,
+        )?;
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.
@@ -958,6 +767,7 @@ pub fn lower_module_full_with_platform_globals(
     }
     let mut module = Module::new(name);
     module.requested_modules = requested_modules(ast_module);
+    module.locally_redeclared_imports = locally_redeclared_imports;
     // #9423: hand codegen the strictness lowering just computed. Set here, next
     // to `ctx.module_strict`, rather than at the end of lowering, so a later
     // early return cannot ship a module that claims to be sloppy.
@@ -1034,7 +844,8 @@ pub fn lower_module_full_with_platform_globals(
     // First pass: collect all function declarations (both exported and non-exported)
     // Skip 'declare function' statements (functions with no body) - they are external FFI
     // BUT: also skip overload signatures if an implementation exists
-    let reassigned_function_candidates = collect_assigned_function_binding_candidates(ast_module);
+    let reassigned_function_candidates =
+        super::module_assigned_bindings::collect_module_assigned_names(ast_module);
     let module_var_binding_names = collect_module_var_binding_names(ast_module);
     // #5833: a narrower, binding-aware-enough scan stashed on `ctx` so
     // `stmt.rs`'s top-level `Decl::Class` arm can gate its opt-in local-slot
@@ -1079,7 +890,7 @@ pub fn lower_module_full_with_platform_globals(
                 // `require("node:fs")` to a call to that nonexistent symbol.
                 // A `function require(...)` WITH a body (e.g. the CJS wrap's
                 // synthetic require) still shadows via `register_func` below.
-                if func_name == "require" {
+                if super::ambient::fn_decl_types_the_loader(fn_decl) {
                     continue;
                 }
 

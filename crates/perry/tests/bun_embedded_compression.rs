@@ -5,7 +5,7 @@ use std::{path::Path, process::Command};
 fn standalone_compressed_asset_regression() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new("node")
-        .arg(root.join("scripts/test-bun-embedded-compression.mjs"))
+        .arg(root.join("tests/integration/harnesses/test-bun-embedded-compression.mjs"))
         .env("PERRY_BIN", env!("CARGO_BIN_EXE_perry"))
         .env("PERRY_WORKSPACE_ROOT", &root)
         .env("PERRY_TEST_BUILD_RUNTIME", "1")

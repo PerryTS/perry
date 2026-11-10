@@ -161,6 +161,45 @@ pub(super) fn bundle_extensions_into_ctx(
     Ok(bundled_extensions)
 }
 
+/// A native addon reaches what its Node-API imports reach
+/// (`NativeAddonModule::reach`). An open one (`napi_get_global`, a property
+/// or prototype read, a script, a call result) reaches `Function` through
+/// `.constructor` and every built-in through the global object: it is a
+/// dynamic-code site with global reach, and it reaches every module as
+/// `process.getBuiltinModule` does. Records each open addon once; returns
+/// whether one was new.
+pub(super) fn admit_open_native_addons(ctx: &mut CompilationContext) -> bool {
+    let open = ctx
+        .native_addons
+        .values()
+        .filter(|addon| {
+            addon
+                .reach
+                .contains(&perry_runtime_manifest::NodeApiReach::World)
+        })
+        .map(|addon| {
+            format!(
+                "Node-API addon {} (its imports reach the world)",
+                addon.logical_id
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut recorded = false;
+    for site in open {
+        let reach = &mut ctx.patched_builtins.dynamic_code_reach;
+        if reach.sites.contains(&site) {
+            continue;
+        }
+        reach.record_global(site);
+        recorded = true;
+    }
+    if ctx.native_addons_reach(perry_runtime_manifest::NodeApiReach::World) {
+        perry_hir::eval_classifier::note_dynamic_function_reachable();
+        ctx.uses_get_builtin_module = true;
+    }
+    recorded
+}
+
 /// Cross-module class field type propagation pass. Pass 1 lowered every
 /// native module without knowledge of imported classes' field types, so
 /// for-of loops over fields like `someLocal.removes` (where `someLocal:
@@ -189,6 +228,19 @@ pub(super) fn rerun_collect_with_class_field_types(
     format: OutputFormat,
     mut prepared_sources: PreparedSources,
 ) -> Result<()> {
+    // An open addon is a dynamic-code site with global reach: lower every
+    // module against it.
+    let global_before = ctx.patched_builtins.dynamic_code_reach.globals;
+    if admit_open_native_addons(ctx) && !global_before && ctx.patched_builtins_lowered_modules > 0 {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
+    // The last collected graph member can be an addon, after every source
+    // module was lowered. Its definitions withdraw earlier create-add folds.
+    if perry_hir::install_lowering_proto_census(&super::foreign_native_census::census(ctx))
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     // Backstop for the pre-lowering scan: a source site that lowering left to
     // the interpreter but the scan did not record has the same reach.
     for site in perry_hir::interpreted_source_sites() {

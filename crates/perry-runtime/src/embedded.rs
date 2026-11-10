@@ -439,8 +439,7 @@ pub fn is_standalone_executable_value() -> f64 {
 /// `readEmbedded(): Buffer` contract honest.
 fn throw_embed_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 /// Throw for a `readEmbedded` miss — matches Node's `fs` "not found" semantics.

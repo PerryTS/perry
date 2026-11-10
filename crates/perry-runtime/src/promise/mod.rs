@@ -27,6 +27,8 @@ pub(crate) use job_queue::eligible_guest_jobs_pending;
 use job_queue::EnqueuePromiseJob;
 #[cfg(test)]
 mod cross_thread_pin_tests;
+#[cfg(test)]
+mod iter_result_number_tests;
 pub mod microtasks;
 pub mod native_async;
 pub(crate) mod operation_owner;
@@ -427,7 +429,9 @@ pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
     ITER_RESULT.with(|c| match c.kind.get() {
-        ITER_KIND_RAW_I32 => f64::from_bits(crate::value::JSValue::int32(c.value_i32.get()).bits()),
+        // Publish raw Int32 results in canonical f64 number form. Constructor
+        // identity is independent of either numeric representation.
+        ITER_KIND_RAW_I32 => c.value_i32.get() as f64,
         ITER_KIND_RAW_I1 => {
             f64::from_bits(crate::value::JSValue::bool(c.value_i32.get() != 0).bits())
         }
@@ -817,6 +821,8 @@ pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
 }
 
 pub(crate) fn enter_microtask_context(snapshot: AsyncContextSnapshot) {
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::job_enter(snapshot.snap_init);
     let previous = crate::async_context::enter_owned_context(snapshot);
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
@@ -825,6 +831,7 @@ pub(crate) fn restore_microtask_context() {
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         if let Some(previous) = stack.borrow_mut().pop() {
             restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }
@@ -834,6 +841,7 @@ pub(crate) fn restore_all_microtask_contexts() {
         let mut stack = stack.borrow_mut();
         while let Some(previous) = stack.pop() {
             restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }

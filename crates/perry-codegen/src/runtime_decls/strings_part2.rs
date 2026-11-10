@@ -773,6 +773,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #10873: `new ArrayBuffer(length, { maxByteLength })`.
     module.declare_function("js_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
+    module.declare_function("js_shared_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_json_parse_with_reviver", I64, &[I64, I64]);
@@ -1482,4 +1483,5 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_message_channel_new", DOUBLE, &[]);
     module.declare_function("js_message_port_constructor_error", DOUBLE, &[]);
     module.declare_function("js_broadcast_channel_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_broadcast_channel_new_counted", DOUBLE, &[DOUBLE, I32]);
 }

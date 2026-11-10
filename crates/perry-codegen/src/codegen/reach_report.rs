@@ -477,9 +477,7 @@ impl Census {
                 b.names.insert((mi, f.name.clone()), n);
                 // Module init registers the lifted well-known-symbol class hooks
                 // (see codegen static_fields), so evaluation of the module owns them.
-                if f.name.starts_with("__perry_wk_hasinstance_")
-                    || f.name.starts_with("__perry_wk_tostringtag_")
-                {
+                if f.name.starts_with("__perry_wk_hasinstance_") {
                     b.edge(init, n, "class-wellknown-hook", false);
                 }
             }

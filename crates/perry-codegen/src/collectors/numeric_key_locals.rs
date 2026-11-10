@@ -171,6 +171,7 @@ mod tests {
 
     fn read(view: u32, index: Expr) -> Expr {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(view)),

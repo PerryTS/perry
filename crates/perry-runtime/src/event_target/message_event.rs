@@ -88,7 +88,7 @@ fn sequence(value: f64) -> f64 {
         value.get_nanbox_f64(),
         &[],
     )
-    .unwrap_or_else(|error| crate::exception::js_throw(error));
+    .unwrap_or_else(|error| crate::exception::rethrow_caught(error));
     let iter = scope.root_nanbox_f64(crate::symbol::js_iterator_result_validate(iter));
     let next = scope.root_nanbox_f64(crate::collection_iter::require_callable(
         option(iter.get_nanbox_f64(), b"next"),
@@ -101,7 +101,7 @@ fn sequence(value: f64) -> f64 {
             iter.get_nanbox_f64(),
             &[],
         )
-        .unwrap_or_else(|error| crate::exception::js_throw(error));
+        .unwrap_or_else(|error| crate::exception::rethrow_caught(error));
         let result = scope.root_nanbox_f64(crate::symbol::js_iterator_result_validate(result));
         if crate::value::js_is_truthy(option(result.get_nanbox_f64(), b"done")) != 0 {
             break;
@@ -115,6 +115,14 @@ fn sequence(value: f64) -> f64 {
         index += 1;
     }
     crate::object::js_object_freeze(boxed_ptr(output.get_raw_mut_ptr::<ArrayHeader>()))
+}
+
+fn default_data(data: f64) -> f64 {
+    if is_undefined(data) {
+        null_value()
+    } else {
+        data
+    }
 }
 
 pub(crate) fn construct(args: &[f64]) -> f64 {
@@ -141,12 +149,7 @@ pub(crate) fn construct(args: &[f64]) -> f64 {
     {
         flags[index] = crate::value::js_is_truthy(option(options.get_nanbox_f64(), name)) != 0;
     }
-    let data = option(options.get_nanbox_f64(), b"data");
-    let data = scope.root_nanbox_f64(if is_undefined(data) {
-        null_value()
-    } else {
-        data
-    });
+    let data = scope.root_nanbox_f64(default_data(option(options.get_nanbox_f64(), b"data")));
     let mut strings = Vec::new();
     for name in [b"lastEventId".as_slice(), b"origin"] {
         let value = option(options.get_nanbox_f64(), name);
@@ -207,26 +210,37 @@ fn allocate(event_type: f64) -> *mut ObjectHeader {
     event.get_raw_mut_ptr()
 }
 
+pub(crate) fn node_delivery(data: f64, ports: Option<f64>) -> f64 {
+    let data = default_data(data);
+    match ports {
+        Some(ports) => delivery_with_ports(data, ports),
+        None => delivery(data),
+    }
+}
+
 pub(crate) fn delivery(data: f64) -> f64 {
+    delivery_with_ports(data, undefined_value())
+}
+
+pub(crate) fn delivery_with_ports(data: f64, ports: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let data = scope.root_nanbox_f64(data);
+    let ports = scope.root_nanbox_f64(ports);
     let event_type = string_value(b"message");
     let event = scope.root_raw_mut_ptr(allocate(event_type));
-    let ports = scope.root_raw_mut_ptr(js_array_alloc(0));
-    crate::object::js_object_freeze(boxed_ptr(ports.get_raw_mut_ptr::<ArrayHeader>()));
+    let ports = scope.root_nanbox_f64(if is_undefined(ports.get_nanbox_f64()) {
+        boxed_ptr(js_array_alloc(0))
+    } else {
+        ports.get_nanbox_f64()
+    });
+    crate::object::js_object_freeze(ports.get_nanbox_f64());
     event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_DATA, data.get_nanbox_f64()));
     for slot in [state::MESSAGE_ORIGIN, state::MESSAGE_ID] {
         let value = string_value(b"");
         event.with_mut_ptr(|ptr| state::set(ptr, slot, value));
     }
     event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_SOURCE, null_value()));
-    event.with_mut_ptr(|ptr| {
-        state::set(
-            ptr,
-            state::MESSAGE_PORTS,
-            boxed_ptr(ports.get_raw_mut_ptr::<ArrayHeader>()),
-        )
-    });
+    event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_PORTS, ports.get_nanbox_f64()));
     boxed_ptr(event.get_raw_mut_ptr::<ObjectHeader>())
 }
 

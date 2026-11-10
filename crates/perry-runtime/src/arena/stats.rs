@@ -259,7 +259,7 @@ pub(crate) fn inactive_survivor_space() -> HeapSpace {
 /// range side metadata so the runtime barrier does not scan every
 /// arena block on each heap store, while avoiding per-card metadata
 /// growth on low-pressure nursery churn.
-#[inline]
+#[inline(always)]
 pub fn pointer_in_nursery(addr: usize) -> bool {
     classify_heap_space(addr).is_nursery()
 }

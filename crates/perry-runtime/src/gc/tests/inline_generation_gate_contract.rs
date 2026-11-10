@@ -255,7 +255,7 @@ fn sabotaged_parent_gate_strands_a_young_child_the_shipped_gate_keeps() {
         !unsafe { gated_slot_store(old_obj2, fields2, ptr_bits(young2), never_needs_remembering) },
         "the sabotaged gate must skip the barrier — otherwise this arm proves nothing"
     );
-    let rejected = std::panic::catch_unwind(verify_old_to_young_edges_covered);
+    let rejected = crate::test_support::child_unwind(verify_old_to_young_edges_covered);
     assert!(
         rejected.is_err(),
         "a skipped barrier on an OLD parent must leave the old->young edge unrecorded — this is \

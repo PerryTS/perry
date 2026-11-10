@@ -29,17 +29,17 @@ pub(crate) fn coerce_trap_bool(value: f64) -> f64 {
 pub(crate) fn reflect_non_object_typeerror(op: &str) -> f64 {
     let msg = format!("Reflect.{op} called on non-object");
     let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_handle);
-    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
-    crate::exception::js_throw(boxed);
+    let err = crate::error::CoreError::type_error(msg_handle);
+    let boxed = err;
+    crate::exception::throw_core(boxed);
 }
 
 /// Throw a `TypeError` with an arbitrary message. Does not return.
 pub(crate) fn throw_type_error(msg: &str) -> f64 {
     let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_handle);
-    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
-    crate::exception::js_throw(boxed)
+    let err = crate::error::CoreError::type_error(msg_handle);
+    let boxed = err;
+    crate::exception::throw_core(boxed)
 }
 
 /// `String(value)` rendering of a JS value, for diagnostic messages that
@@ -92,15 +92,12 @@ pub(crate) fn reflect_value_is_object(value: f64) -> bool {
     // One shared Type(value) is Object answer: a POINTER_TAG word names a
     // GC-headed object (honest pointers), so its header byte decides, and
     // native ids are objects. Raw untagged words keep the allocator proof;
-    // class refs (INT32-tagged constructors) are callable objects.
+    // class constructors are callable function objects.
     if crate::builtins::arithmetic::js_value_is_object(value) {
         return true;
     }
     let top16 = value.to_bits() >> 48;
-    if top16 == 0 {
-        return crate::object::js_value_is_heap_object(value);
-    }
-    top16 == 0x7FFE
+    top16 == 0 && crate::object::js_value_is_heap_object(value)
 }
 
 /// `CreateListFromArrayLike(value)` — collect indexed `0..length` properties of

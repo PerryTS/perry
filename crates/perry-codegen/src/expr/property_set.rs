@@ -38,7 +38,7 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
-    class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
+    class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested_known,
     emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
     lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set,
     typed_feedback_emission_enabled, unbox_to_i64, FnCtx, TypedFeedbackContract, TypedFeedbackKind,
@@ -159,12 +159,6 @@ fn with_class_store_operands<'f, R>(
     rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
         body(ctx, vals[0].clone(), vals[1].clone())
     })
-}
-
-pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
-    ctx.classes
-        .get(class_name)
-        .is_some_and(|class| !class.computed_members.is_empty())
 }
 
 fn lower_runtime_property_set_by_name(
@@ -309,6 +303,7 @@ fn lower_static_key_store(
                 value_is_scalar,
                 matches!(object, Expr::This),
                 run.as_ref(),
+                super::layout_read::run_receiver(ctx, object),
             );
             Ok(result)
         },
@@ -438,8 +433,17 @@ pub(crate) fn emit_nullish_write_guard(
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    if let Expr::PropertySet { object, value, .. } = expr {
+        return super::write_barrier::with_static_child(ctx, object, value, |ctx| {
+            lower_store(ctx, expr, assignment_strict)
+        });
+    }
+    lower_store(ctx, expr, assignment_strict)
+}
+
+fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
-    let _consumed = crate::facts_consumed::enter(expr);
+    let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
     match expr {
         Expr::PropertySet {
             object,
@@ -863,7 +867,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                 // raw `ObjectHeader*`, which is only meaningful for an
                 // INSTANCE. A static body's `this` is the class ref, so the
                 // store landed on the bare class id and was lost.
-                if class_has_computed_runtime_members(ctx, &class_name)
+                if super::property_get::class_has_evaluated_accessor(ctx, &class_name)
                     && !ctx.is_static_class_this(object)
                 {
                     return lower_runtime_property_set_by_name(
@@ -1219,14 +1223,20 @@ fn emit_proven_class_field_store(
             // into a pointer-masked slot is deliberately
             // NOT elided, is on
             // `class_field_store_needs_layout_note`.
+            // A literal the pool atomises (or a choice of two) is a property
+            // atom on every lowering path (`js_string_pool_atom`, the image
+            // records), and every atom is born `refcount = 0`, already shared:
+            // the addref would find nothing to demote. The write barrier
+            // stays: an atom minted earlier at runtime can be young.
             let string_addref_needed = class_field_store_needs_string_addref(ctx, value)
-                && wpf.is_none_or(|w| w.proof.may_hold_string());
+                && wpf.is_none_or(|w| w.proof.may_hold_string())
+                && !super::helpers::expr_is_pool_atom_literal(value);
             let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
             // #7511: whatever these three flags could not
             // be proved away statically is decided by ONE
             // live test of the stored bits — see
             // `emit_jsvalue_slot_store_pointer_tested`.
-            emit_jsvalue_slot_store_pointer_tested(
+            emit_jsvalue_slot_store_pointer_tested_known(
                 ctx,
                 &field_ptr,
                 &val_double,
@@ -1236,6 +1246,7 @@ fn emit_proven_class_field_store(
                 &field_addr,
                 field_set_barrier_needed,
                 "class_field_set",
+                super::helpers::expr_is_pool_atom_literal(value),
             );
         }
         let (semantic, rep) = if requires_raw_f64 {

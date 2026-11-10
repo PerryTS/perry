@@ -299,6 +299,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         crate::expr::wpfacts_access::proves_static(ctx, cid, method_name)
                     });
                 let contracts = crate::verify_facts::witnesses();
+                if proven {
+                    crate::verify_facts::tick(ctx);
+                }
                 let static_cid = static_cid.filter(|_| !proven || contracts);
                 // The class whose ClassBody declares the body this call runs.
                 let owner_cid = {
@@ -495,16 +498,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let direct_pred = ctx.block().label.clone();
                 ctx.block().br(&join_label);
                 ctx.current_block = generic_idx;
+                if proven {
+                    crate::verify_facts::normal_call_miss(class_name, method_name);
+                }
                 if proven && contracts {
+                    crate::verify_facts::covered(
+                        crate::verify_facts::Fact::StaticGuard,
+                        || serde_json::json!({"class":static_cid,"key":method_name}),
+                    );
                     let site = crate::verify_facts::site_arg(
                         ctx,
                         &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
+                        crate::verify_facts::Fact::StaticGuard,
+                        static_cid.as_slice(),
                     );
                     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let _ = ctx.block().call(
+                    let observed = if crate::verify_facts::enabled() {
+                        &recv
+                    } else {
+                        &undefined
+                    };
+                    let _ = crate::verify_facts::check(
+                        ctx,
                         I32,
                         "perry_wpfacts_check_miss",
-                        &[(DOUBLE, &undefined), (I64, &site)],
+                        &[(DOUBLE, observed)],
+                        &site,
                     );
                 } else if proven {
                     let site = ctx.wpfacts_sites as i64;

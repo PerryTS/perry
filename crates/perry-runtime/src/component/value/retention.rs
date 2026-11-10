@@ -22,12 +22,16 @@ fn list(plan: f64) -> f64 {
     )
 }
 
-pub(super) fn retain(plan: f64, wrapper: f64, identity: &Value) -> Result<(), f64> {
+pub(super) fn retain(
+    plan: f64,
+    wrapper: f64,
+    identity: &Value,
+) -> Result<(), crate::exception::Caught> {
     let scope = RuntimeHandleScope::new();
     let plan = scope.root_nanbox_f64(plan);
     let wrapper = scope.root_nanbox_f64(wrapper);
     let encoded = serde_json::to_vec(identity).expect("native resource identity");
-    crate::exception::catch_js_throw(|| {
+    crate::exception::catch_thrown(|| {
         let identity = scope.root_string_ptr(crate::string::js_string_from_bytes(
             encoded.as_ptr(),
             encoded.len() as u32,

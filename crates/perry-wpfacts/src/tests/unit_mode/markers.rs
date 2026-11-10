@@ -1091,12 +1091,13 @@ pub(super) fn a_reader_that_exposes_a_typed_array_field_breaks_ta_stable() {
     );
     // ABM3: `mark` stores into ⊤ under `tag` in its first solve, before
     // `Arena`'s contract describes `a.left`; that write stays published (the
-    // driver's shared writes only grow). Under the static rule (CWN 10-27) a
-    // computed-key protocol touch of `right` in the reader finds
-    // `Object.prototype`'s written `tag`: an unknown callee with `right` as
-    // its receiver, so `right` is reported too. Imprecise, not unsound.
+    // driver's shared writes only grow). The console formats its arguments
+    // with the formatter's keys only (`Protocol::Inspect`), none of them
+    // `tag`, so `right` is no receiver of the written `tag` and stays
+    // stable (the any-key touch it replaced reported `right` too:
+    // imprecise, not unsound).
     assert!(
-        !field(tmpl(&u, "Arena"), "right").ta_stable,
+        field(tmpl(&u, "Arena"), "right").ta_stable,
         "{}",
         u.dump_text()
     );

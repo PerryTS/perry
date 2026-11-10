@@ -89,7 +89,7 @@ fn json_tojson_key_probe_rejects_inline_and_nonstring_values_without_allocation(
         for value in [
             JSValue::null(),
             JSValue::undefined(),
-            JSValue::int32(42),
+            JSValue::number(f64::from(42)),
             JSValue::bool(true),
             JSValue::from_bits(crate::value::TAG_HOLE),
             JSValue::string_ptr(std::ptr::null_mut()),
@@ -199,10 +199,10 @@ fn probe_test_class_id(n: u32) -> u32 {
     0x7EEE_0000 | n
 }
 
-/// A non-pointer JS value: enough to make the ordinary prototype read answer
+/// A canonical JS Number: enough to make the ordinary prototype read answer
 /// `Some`, and safe for the root store's write barrier.
 fn probe_test_method_bits() -> u64 {
-    JSValue::int32(1).bits()
+    JSValue::number(1.0).bits()
 }
 
 #[test]

@@ -1192,6 +1192,10 @@ fn emitter_inspect_label(target: f64) -> String {
 /// the builtin one does the reporting itself). An override that is not callable
 /// falls back to the runtime's own warning queue rather than dereferencing it.
 fn emit_process_warning(warning: f64, text: &str, scope: &crate::gc::RuntimeHandleScope) {
+    // The warning is raised by the runtime, not by a `process` reference in the
+    // program, so no `js_nm_install_process` need have run. Install the bucket
+    // the `emitWarning` property dispatches through (idempotent).
+    crate::object::js_nm_install_process();
     let process = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
         b"process".as_ptr(),
         7,
@@ -1256,9 +1260,7 @@ fn throw_invalid_listener_type(listener: f64) -> ! {
     let msg = b"The \"listener\" argument must be of type function";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    let bits = JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 fn emit_remove_listener_if_watched(target: f64, events: f64, event: f64, listener: f64) {
@@ -1311,7 +1313,7 @@ pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64)
         if adjust_events_count(target.get_nanbox_f64(), -1.0) == 0.0 {
             reset_events(target.get_nanbox_f64());
         } else {
-            let _ = crate::object::js_object_delete_dynamic_value(
+            let _ = crate::object::delete_dynamic_value(
                 events.get_nanbox_f64(),
                 event.get_nanbox_f64(),
             );
@@ -1399,7 +1401,7 @@ pub(super) fn remove_all_stream_listeners(stream: f64, event: f64, all: bool) {
             if adjust_events_count(target.get_nanbox_f64(), -1.0) == 0.0 {
                 reset_events(target.get_nanbox_f64());
             } else {
-                let _ = crate::object::js_object_delete_dynamic_value(
+                let _ = crate::object::delete_dynamic_value(
                     events.get_nanbox_f64(),
                     event.get_nanbox_f64(),
                 );

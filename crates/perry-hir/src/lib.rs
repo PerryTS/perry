@@ -18,6 +18,8 @@ pub use emitted_closures::emitted_closures;
 pub(crate) mod enums;
 pub mod error;
 pub mod eval_classifier;
+pub mod fn_proto;
+pub mod folded_call;
 pub mod fx;
 pub mod ir;
 pub mod js_transform;
@@ -32,6 +34,15 @@ pub mod monomorph;
 pub mod native_profile;
 mod number;
 pub use number::js_number_to_string;
+
+/// Whether `path` is TypeScript source, whose import specifiers that name only
+/// a type are elided (bind nothing). A JavaScript module binds every specifier.
+pub fn is_typescript_source(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("ts" | "tsx" | "mts" | "cts")
+    )
+}
 pub mod patched_builtins;
 pub mod private_names;
 pub mod solid_jsx;

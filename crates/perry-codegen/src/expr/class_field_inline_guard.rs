@@ -102,7 +102,7 @@ pub(crate) fn class_field_subclass_arms(
         }
         // A class with computed runtime members has keys the packed layout
         // does not describe; its sets route through the by-name path anyway.
-        if super::property_set::class_has_computed_runtime_members(ctx, sub_name) {
+        if super::property_get::class_has_evaluated_accessor(ctx, sub_name) {
             continue;
         }
         // The layout algorithm SHOULD put an inherited field at the same index
@@ -278,7 +278,7 @@ pub(crate) fn class_field_predicted_shape(
     let keys_global = ctx.class_keys_globals.get(class_name)?.clone();
     if !class_instances_keep_birth_shape(ctx, class_name)
         || !transitive_subclasses(ctx, class_name).is_empty()
-        || super::property_set::class_has_computed_runtime_members(ctx, class_name)
+        || super::property_get::class_has_evaluated_accessor(ctx, class_name)
     {
         return None;
     }
@@ -524,7 +524,7 @@ pub(crate) fn emit_proven_shape_recheck(
 /// this read gives: a class instance carries every declared field as an OWN
 /// data property from birth (the canonical keys array), and an own data
 /// property shadows any prototype accessor (scenario 3 of
-/// `test-files/test_gap_5654_class_field_inline_descriptor.ts`; the generic
+/// `tests/parity/language/class/test_gap_5654_class_field_inline_descriptor.ts`; the generic
 /// IC, which never had a switch, gives the same answer for the same ShapeId
 /// and slot). The other three are diagnostics that only decided whether the
 /// guard CALL observed the access.
@@ -538,7 +538,7 @@ pub(crate) fn emit_proven_shape_recheck(
 ///   number }`, `class BoolPt { x: boolean; y: number }` and `class SubPt
 ///   extends Pt {}` instances all carry `Pt`'s ShapeId, each with its own
 ///   class id (scenario 1 of
-///   `test-files/test_gap_class_field_read_guard_shape_authority.ts`).
+///   `tests/parity/language/class/test_gap_class_field_read_guard_shape_authority.ts`).
 /// * **raw-f64 sites: exact ShapeId birth rep.** The compared id carries
 ///   the F64 lane fact; a contradictory store moves to a sibling id.
 ///

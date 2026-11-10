@@ -48,6 +48,28 @@ pub(crate) fn with_slot_rep(rep: u64, slot: u32, value: u64) -> u64 {
     (rep & !(0b11 << shift)) | (value << shift)
 }
 
+/// `rep` with a SPECIAL lane at `slot`. A slot past word 0 has no bit in the
+/// word: its ConstFn lane is the shape's body-list entry, so `rep` is
+/// returned unchanged.
+#[inline]
+pub(crate) fn with_special_lane(rep: u64, slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        rep
+    } else {
+        with_slot_rep(rep, slot, REP_SPECIAL)
+    }
+}
+
+/// `rep` with the lane of `slot` set to `Any`; a slot past word 0 has no bit.
+#[inline]
+pub(crate) fn without_lane(rep: u64, slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        rep
+    } else {
+        with_slot_rep(rep, slot, REP_ANY)
+    }
+}
+
 /// The lanes of every slot below `slot` (the whole word past it): the part
 /// of a predecessor's rep a key-add at `slot` carries.
 #[inline]

@@ -664,20 +664,20 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
                 return false;
             }
         }
-        let holder = crate::array::array_property_bag(arr);
-        if holder.is_null() {
-            return true;
-        }
-        let keys = crate::object::object_keys(holder);
-        for i in 0..keys.count() {
-            let entry = crate::object::key_attrs::keys_entry(keys.arr(), i);
-            if crate::object::key_attrs::entry_is_private(entry) {
+        // The named own keys are the ones [[OwnPropertyKeys]] lists after the
+        // indices and `length` (both settled above), and each one's attributes
+        // are read BY KEY through the reader [[GetOwnProperty]] answers from,
+        // never by a bit at the key's position in the holder's key list.
+        for name in crate::array::array_named_property_names(arr, false) {
+            if name == "length" || super::canonical_array_index(&name).is_some() {
                 continue;
             }
-            if entry & crate::object::key_attrs::ENTRY_NON_CONFIGURABLE == 0
+            let attrs = get_property_attrs(arr as usize, &name)
+                .unwrap_or(PropertyAttrs::new(true, true, true));
+            if attrs.configurable()
                 || (frozen
-                    && entry & crate::object::key_attrs::ENTRY_ACCESSOR == 0
-                    && entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0)
+                    && attrs.writable()
+                    && get_accessor_descriptor(arr as usize, &name).is_none())
             {
                 return false;
             }

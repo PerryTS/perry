@@ -93,14 +93,20 @@ const DIRECT_ENTRY: u32 = 1 << 29;
 /// slot is the position's index word, and the hit is one load. Never with
 /// [`TEXT_ENTRY`] or [`ALIAS_ENTRY`], whose index words hold a hash or atom.
 const SLOT_ENTRY: u32 = 1 << 28;
-/// A bucket entry whose key is a public accessor stored at an inline slot of
-/// every receiver of the record: the slot is the position's index word, and
-/// the accessor pair is one load (`accessor_at` would read exactly that
-/// slot). A fact of the immutable list, its attributes and the inline slot
-/// count, like [`SLOT_ENTRY`]; never with [`TEXT_ENTRY`] or [`ALIAS_ENTRY`].
-/// The hit path reads such a key as it reads any accessor
-/// ([`accessor_answer_at`]): the pair is one load.
+/// A bucket entry whose key is a public accessor stored at the same storage
+/// slot of every receiver of the record: the position's index word names
+/// that slot, with [`PAIR_SPILLED`] when it lies past the record's inline
+/// slots (the receiver's spill holds the pair at that field index). The pair
+/// is one load, inline or from the spill ([`index_pair_bits`]). A fact of
+/// the immutable list, its attributes and the inline slot count, like
+/// [`SLOT_ENTRY`]; never with [`TEXT_ENTRY`] or [`ALIAS_ENTRY`].
 const ACCESSOR_ENTRY: u32 = 1 << 27;
+/// The flag of an [`ACCESSOR_ENTRY`] index word whose slot is no inline slot
+/// of the record (`slot >= live_inline_slot_count`, the rule `value_at`
+/// applies per read, decided once when the index is derived).
+const PAIR_SPILLED: u64 = 1 << 32;
+/// [`own_entry`]'s pair word when the index names no accessor slot.
+const NO_PAIR: u64 = u64::MAX;
 /// The position bits of a bucket entry.
 const POS_BITS: u32 = ACCESSOR_ENTRY - 1;
 /// [`hit_value`]'s slot when the hit is no single load.
@@ -206,15 +212,29 @@ unsafe fn pair_answer(pair_bits: u64) -> f64 {
     }
 }
 
-/// [`pair_answer`] for the public accessor whose pair is `obj`'s inline
-/// slot `slot` (the index's [`ACCESSOR_ENTRY`] word): one load, getter half
-/// only. Out of line and cold, so the indexed data path keeps its registers.
+/// The accessor pair `obj` stores where the index's [`ACCESSOR_ENTRY`] word
+/// `word` names it: one inline load, or with [`PAIR_SPILLED`] the spill's
+/// word at that field index (`None` when this receiver's spill holds none,
+/// as [`accessor_slot_bits`] answers).
+#[inline(always)]
+unsafe fn index_pair_bits(obj: *const ObjectHeader, word: u64) -> Option<u64> {
+    let slot = word as u32 as usize;
+    if word & PAIR_SPILLED != 0 {
+        return crate::object::spill::spill_get_present(obj as usize, slot);
+    }
+    Some(*((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot * 8) as *const u64))
+}
+
+/// [`pair_answer`] for the public accessor whose pair the index's
+/// [`ACCESSOR_ENTRY`] word `word` names: one load, getter half only. Out of
+/// line and cold, so the indexed data path keeps its registers.
 #[cold]
 #[inline(never)]
-unsafe fn accessor_answer_slot(obj: *const ObjectHeader, slot: u32) -> f64 {
-    let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-        as *const u64);
-    pair_answer(bits)
+unsafe fn accessor_answer_slot(obj: *const ObjectHeader, word: u64) -> f64 {
+    match index_pair_bits(obj, word) {
+        Some(bits) => pair_answer(bits),
+        None => hole(),
+    }
 }
 
 /// [`pair_answer`] for the overflow entry `entry` of `table` (an accessor
@@ -479,9 +499,7 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
         mask[(bit / 64) as usize] |= 1u64 << (bit % 64);
         if store_layout
             && entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0
-            && (storage >= crate::object::field_rep::REP_SLOTS
-                || crate::object::field_rep::slot_rep(rec.rep, storage)
-                    != crate::object::field_rep::REP_SPECIAL)
+            && rec.lane(storage) != crate::object::field_rep::REP_SPECIAL
         {
             store[(bit / 64) as usize] |= 1u64 << (bit % 64);
         }
@@ -632,10 +650,10 @@ unsafe fn own_position(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<
     own_entry(r, key_bits, hash).map(|(pos, _)| pos)
 }
 
-/// [`own_position`] and the inline slot of the accessor pair there when the
-/// index names one ([`ACCESSOR_ENTRY`]), else [`NO_LOAD`].
+/// [`own_position`] and the index word naming the accessor pair's slot
+/// there when the index names one ([`ACCESSOR_ENTRY`]), else [`NO_PAIR`].
 #[inline(always)]
-unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u32, u32), bool> {
+unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u32, u64), bool> {
     let word = probe_word(r);
     if word == 0 || word & PROBE_DECLINE != 0 {
         return Err(false);
@@ -651,7 +669,7 @@ unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u3
         let mut i = 0;
         while i < count {
             if *words.add(i as usize) == key_bits {
-                return Ok((i, NO_LOAD));
+                return Ok((i, NO_PAIR));
             }
             i += 1;
         }
@@ -668,9 +686,9 @@ unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u3
         }
         if let Some(p) = bucket_matches(table, list, pos, key_bits, hash) {
             let pair = if pos & ACCESSOR_ENTRY != 0 {
-                KeyIndex::word(table, p) as u32
+                KeyIndex::word(table, p)
             } else {
-                NO_LOAD
+                NO_PAIR
             };
             return Ok((p, pair));
         }
@@ -752,6 +770,15 @@ pub unsafe extern "C" fn perry_probe_get(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    // Census builds: a keyed read of a global property names its key
+    // (§2.10.13), like the binding read below.
+    #[cfg(perry_gc_instruments)]
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR),
+        || crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut scratch),
+    );
     probe_get::<true>(dir, obj_biased, key_bits, hash)
 }
 
@@ -768,6 +795,14 @@ pub unsafe extern "C" fn perry_probe_get_binding(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    // Census builds: a global binding's read names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR),
+        || crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut scratch),
+    );
     probe_get::<false>(dir, obj_biased, key_bits, hash)
 }
 
@@ -1633,22 +1668,19 @@ unsafe fn overflow_accessor(obj: *const ObjectHeader, key_bits: u64, hash: u64) 
 }
 
 /// The accessor slot word at key position `pos` of `obj` (record `r`): one
-/// load of inline slot `pair` when the record's index names it
-/// ([`ACCESSOR_ENTRY`]), else ([`NO_LOAD`]) [`accessor_slot_bits`].
+/// load where the record's index names the slot ([`ACCESSOR_ENTRY`] word
+/// `pair`, [`index_pair_bits`]), else ([`NO_PAIR`]) [`accessor_slot_bits`].
 #[inline(always)]
 unsafe fn accessor_in(
     obj: *const ObjectHeader,
     r: *const ShapeRecord,
     pos: u32,
-    pair: u32,
+    pair: u64,
 ) -> Option<u64> {
-    if pair == NO_LOAD {
+    if pair == NO_PAIR {
         return accessor_slot_bits(obj, r, pos);
     }
-    Some(
-        *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pair as usize * 8)
-            as *const u64),
-    )
+    index_pair_bits(obj, pair)
 }
 
 /// The slot value of the accessor at key position `pos` of `obj` (record
@@ -1951,6 +1983,38 @@ pub unsafe extern "C" fn perry_probe_set(
     }
 }
 
+/// The static-key store site's out-of-line path
+/// (`expr/put_value_store_ic.rs`): the store probe ([`perry_probe_set`]),
+/// and when it declines, the complete strict-aware `[[Set]]`
+/// (`js_put_value_set`, the receiver being the target). Returns the
+/// assignment's value: `value` after a probe store, else the `[[Set]]`'s
+/// re-read of it from its own root. May collect (the `[[Set]]` runs
+/// setters and adds keys), so it is the site's one statepoint.
+///
+/// # Safety
+/// As for [`perry_probe_set`].
+#[no_mangle]
+pub unsafe extern "C" fn perry_store_or_put(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    if perry_probe_set(dir, obj_bits, key_bits, hash, value) != 0 {
+        return value;
+    }
+    let obj = f64::from_bits(obj_bits);
+    crate::object::property_ops::put_value::js_put_value_set(
+        obj,
+        f64::from_bits(key_bits),
+        value,
+        obj,
+        strict,
+    )
+}
+
 /// What the store probe found: the store it made (1) or its decline (0),
 /// or a key its receiver's complete own list proves absent (an ordinary,
 /// unfrozen object with no overflow), with the value word to add.
@@ -2075,9 +2139,9 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 #[path = "layout_probe/computed.rs"]
 mod computed;
 use computed::computed_key;
-#[cfg(test)]
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
+pub(crate) use computed::probe_set_keyed;
 
 #[path = "layout_probe/diagnostics.rs"]
 mod diagnostics;

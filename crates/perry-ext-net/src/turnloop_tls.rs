@@ -214,6 +214,10 @@ impl TlsSession {
         Some(chain.iter().map(|c| c.as_ref().to_vec()).collect())
     }
 
+    pub fn is_client(&self) -> bool {
+        matches!(self.session, Session::Client(_))
+    }
+
     pub fn is_handshaking(&self) -> bool {
         self.handshaking
     }

@@ -32,6 +32,8 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// Canonical source path of this module, used by its static stack frame.
+    pub module_source_path: Option<String>,
     /// The module format Node declares for the entry before looking at its
     /// syntax: `Some(true)` for `.mjs`/`.mts` or a nearest package.json with
     /// `"type": "module"`, `Some(false)` for `.cjs`/`.cts` or
@@ -57,6 +59,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            module_source_path: None,
             entry_declared_esm: None,
             native_provider_installs: Vec::new(),
         }
@@ -304,16 +307,6 @@ pub struct CompileOptions {
     /// source graph before cache lookup. Shared with all import declarations.
     /// Empty for standalone codegen, which uses its local ancestor walk.
     pub constructor_param_counts: std::collections::BTreeMap<String, usize>,
-    /// Whole-program concrete method implementations eligible for the short
-    /// trailing-spread direct-call lowering (#8772). Unlike `imported_classes`,
-    /// this capability also flows from a consumer module back to a generic
-    /// library module: perform-ecs owns the hot `component.reset(...args)`
-    /// call, while benchmark adapters define the concrete Position/Velocity
-    /// classes. The producer publishes the exact class id, immutable ShapeId
-    /// global and public method ABI; the caller still guards every arm and
-    /// retains the generic apply fallback.
-    pub short_spread_method_candidates:
-        std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     /// Whole-program stable exported object-literal methods eligible for an
     /// exact guarded call from an otherwise dynamic receiver (#8775). This is
     /// reverse-flow metadata: the calling module need not import the producer.
@@ -507,6 +500,10 @@ pub struct CompileOptions {
     pub module_init_deps: Vec<String>,
     pub module_deferred_init_deps: Vec<String>,
     pub module_deferred_readiness: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
 
     /// Issue #842: true iff this module is the target of at least one
     /// `await import("./this_module.ts")` site anywhere in the program.
@@ -597,8 +594,8 @@ pub enum NamespaceEntryKind {
     /// Local user function exported as a value. Codegen calls
     /// `js_closure_alloc_singleton(@__perry_wrap_<scoped>)`.
     LocalFunction { wrap_symbol: String },
-    /// Local class exported as a value. Codegen emits the
-    /// INT32-tagged class-id NaN-box that matches `Expr::ClassRef`.
+    /// Local class exported as a value. Codegen fetches the constructor
+    /// function object that matches `Expr::ClassRef`.
     LocalClass { class_id: u32 },
     /// Re-exported variable from another module. Codegen calls
     /// `perry_fn_<source_prefix>__<source_local>()` as a 0-arg getter
@@ -805,18 +802,6 @@ impl ImportedClass {
     }
 }
 
-/// Producer-authored capability for one concrete class method that can be
-/// called by the guarded short trailing-spread lowering (#8772).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShortSpreadMethodCandidate {
-    pub class_id: u32,
-    pub method_name: String,
-    pub source_prefix: String,
-    pub target: String,
-    pub shape_id_global: String,
-    pub declared_count: usize,
-}
-
 /// One concise own method published by an exported object-literal capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedObjectLiteralMethod {
@@ -946,8 +931,6 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// `CompileOptions::namespace_member_origin_names`.
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     pub imported_async_funcs: std::collections::HashSet<String>,
-    pub short_spread_method_candidates:
-        std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
     /// FuncIds of locally-defined async functions in this module. Populated
@@ -1179,6 +1162,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// entry (internal linkage, named by `spec_function_name`). Mutually
     /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// P2 (DESIGN-p2 §3.2): typed class methods by HIR function id
+    /// (`signature_entry::select_methods`).
+    pub typed_methods: std::collections::HashMap<u32, super::signature_entry::TypedMethod>,
     /// Declared return types independently verified from the specialized
     /// body's guarded inputs and runtime-derived constructions. A direct call
     /// result may become a local proof only when its arguments also route to
@@ -1317,6 +1303,12 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// Untyped string accumulators, module-wide
     /// (`collectors::string_accumulator_locals`).
     pub string_accumulator_locals: std::collections::HashSet<u32>,
+    /// Bindings whose object no code writes for their whole life
+    /// (`collectors::contents_stable_bindings`), module-wide.
+    pub contents_stable_bindings: std::collections::HashSet<u32>,
+    /// Empty-literal bindings a later loop pushes into
+    /// (`collectors::loop_pushed_arrays`), module-wide.
+    pub loop_pushed_arrays: crate::collectors::PushedArrays,
     /// Bindings assigned before any reader can run
     /// (`collectors::definite_init`), module-wide.
     pub definite_init: crate::collectors::DefiniteInit,
@@ -1411,6 +1403,10 @@ pub(crate) struct CrossModuleCtx<'a> {
     pub module_init_deps: Vec<String>,
     pub module_deferred_init_deps: Vec<String>,
     pub module_deferred_readiness: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
     /// Issue #842: true iff this module is the target of at least one
     /// dynamic `import()` site in the program. Forces emission of
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`

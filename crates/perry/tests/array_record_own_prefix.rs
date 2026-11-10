@@ -24,7 +24,7 @@ fn record_own_prefix_preserves_mutation_protocol_and_moving_roots() {
     let binary = dir.path().join("main");
     std::fs::write(
         &entry,
-        include_str!("../../../test-files/test_parity_array_record_own_prefix.ts"),
+        include_str!("../../../tests/parity/language/array/test_parity_array_record_own_prefix.ts"),
     )
     .unwrap();
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))

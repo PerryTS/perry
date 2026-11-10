@@ -61,6 +61,7 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     coerce_numeric_fallback: bool,
     preserve_claimed_receiver_fallback: bool,
     receiver_slot: Option<&str>,
+    proven: Option<super::proven_array::Proven>,
 ) -> Result<String> {
     let element_idx = ctx.new_block("aidx.canonical");
     let runtime_idx = ctx.new_block("aidx.runtime_key");
@@ -75,15 +76,22 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
         .cond_br(&is_canonical_i32, &element_label, &runtime_label);
 
     ctx.current_block = element_idx;
-    let element_value = lower_guarded_array_index_get(
-        ctx,
-        arr_box,
-        &idx_i32,
-        "aidx.dynamic",
-        require_numeric_layout,
-        coerce_numeric_fallback,
-        receiver_slot,
-    )?;
+    // A canonical key under a wpfacts proof takes the proven tier
+    // (`proven_array`); every other key keeps its exact runtime arm.
+    let element_value = match proven {
+        Some(fact) => {
+            super::proven_array::lower(ctx, arr_box, &idx_i32, fact, coerce_numeric_fallback)
+        }
+        None => lower_guarded_array_index_get(
+            ctx,
+            arr_box,
+            &idx_i32,
+            "aidx.dynamic",
+            require_numeric_layout,
+            coerce_numeric_fallback,
+            receiver_slot,
+        )?,
+    };
     let element_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

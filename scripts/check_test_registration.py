@@ -10,7 +10,7 @@ compiles nowhere, runs nowhere, and reports nothing. The PR that added it is
 green, the reviewer sees a witness in the diff, and the defect it was written to
 catch stays uncovered.
 
-That has now happened four times, all against `test-parity/gc_repsel_corpus.txt`:
+That has now happened four times, all against `tests/parity/gc_repsel_corpus.txt`:
 
   * #7192 and #7216 — two `test_gap_gc_*` stale-root witnesses, each of which
     says in its own header that it is LIVE BY CONSTRUCTION, both dark from merge;
@@ -68,11 +68,14 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).parent))
+from gc_corpus_sources import SourceResolutionError, resolve_sources
+import parity
 
 
 class MissingRegistry(Exception):
@@ -139,8 +142,8 @@ class Tree:
 def _fnmatch_path(path: str, pattern: str) -> bool:
     """Match a repo-relative path against a `pathlib.glob` pattern.
 
-    `fnmatch` is wrong here: its `*` crosses `/`, so `test-files/*.ts` would
-    match `test-files/fixtures/a.ts`. Translate segment by segment instead, with
+    `fnmatch` is wrong here: its `*` crosses `/`, so `tests/fixtures/programs/*.ts` would
+    match `tests/fixtures/programs/fixtures/a.ts`. Translate segment by segment instead, with
     `**` as the only separator-crossing token.
     """
     parts = pattern.split("/")
@@ -298,15 +301,16 @@ MECHANISMS: tuple[Mechanism, ...] = (
             "unregistered, it is compiled by nothing and run by nothing."
         ),
         candidates=(
-            "test-files/test_gap_gc_*.ts",
-            "test-files/test_gap_repsel_*.ts",
-            "test-files/test_gap_specabi_*.ts",
+            "tests/fixtures/programs/test_gap_gc_*.ts",
+            "tests/fixtures/programs/test_gap_repsel_*.ts",
+            "tests/fixtures/programs/test_gap_specabi_*.ts",
+            *(f"tests/parity/{root}/**/*.ts" for root in parity.SUBJECT_ROOTS),
         ),
-        registry="test-parity/gc_repsel_corpus.txt",
+        registry="tests/parity/gc_repsel_corpus.txt",
         runner="scripts/gc_repsel_matrix.sh (gc-stress, gc-moving-witnesses, gc-ptr-shape-off-witness)",
         key=_stem,
-        registered=lambda t: _read_hash_list(t, "test-parity/gc_repsel_corpus.txt"),
-        entry_to_path=lambda e: "test-files/%s.ts" % e,
+        registered=lambda t: _read_hash_list(t, "tests/parity/gc_repsel_corpus.txt"),
+        entry_to_path=lambda e: "tests/fixtures/programs/%s.ts" % e,
         min_candidates=45,
     ),
     Mechanism(
@@ -316,12 +320,12 @@ MECHANISMS: tuple[Mechanism, ...] = (
             "generated from this manifest, so an unlisted probe is absent from "
             "the matrix as well as from the run."
         ),
-        candidates=("test-features/probes/**/*.ts",),
-        registry="test-features/feature_matrix.toml",
+        candidates=("tests/features/probes/**/*.ts",),
+        registry="tests/features/feature_matrix.toml",
         runner="scripts/gen_feature_matrix.py (feature-matrix.yml)",
-        key=lambda rel: rel[len("test-features/") :],
-        registered=lambda t: _read_toml_paths(t, "test-features/feature_matrix.toml", "path"),
-        entry_to_path=lambda e: "test-features/%s" % e,
+        key=lambda rel: rel[len("tests/features/") :],
+        registered=lambda t: _read_toml_paths(t, "tests/features/feature_matrix.toml", "path"),
+        entry_to_path=lambda e: "tests/features/%s" % e,
         min_candidates=20,
         exclusions={
             "probes/type_only_imports/model.ts": (
@@ -377,15 +381,15 @@ MECHANISMS: tuple[Mechanism, ...] = (
         id="wasip1-host-cases",
         what=(
             "wasm32-wasip1 reference-host fixtures. Each is a program the suite "
-            "compiles and runs under test-wasi/p1-host; one missing from the "
+            "compiles and runs under tests/integration/wasi/p1-host; one missing from the "
             "case list is compiled by nothing and run by nothing."
         ),
-        candidates=("test-wasi/p1-host/cases/*.ts",),
-        registry="test-wasi/p1-host/cases.txt",
-        runner="test-wasi/p1-host/suite.py (the wasi-execution job)",
+        candidates=("tests/integration/wasi/p1-host/cases/*.ts",),
+        registry="tests/integration/wasi/p1-host/cases.txt",
+        runner="tests/integration/wasi/p1-host/suite.py (the wasi-execution job)",
         key=_stem,
-        registered=lambda t: _read_hash_list(t, "test-wasi/p1-host/cases.txt"),
-        entry_to_path=lambda e: "test-wasi/p1-host/cases/%s.ts" % e,
+        registered=lambda t: _read_hash_list(t, "tests/integration/wasi/p1-host/cases.txt"),
+        entry_to_path=lambda e: "tests/integration/wasi/p1-host/cases/%s.ts" % e,
         min_candidates=10,
     ),
     Mechanism(
@@ -412,14 +416,14 @@ MECHANISMS: tuple[Mechanism, ...] = (
 # reader can tell "considered and safe" from "not looked at" — an unexplained
 # absence from MECHANISMS is exactly the silence this gate exists to remove.
 GLOB_DRIVEN = (
-    ("run_parity_tests.sh", "find test-files -maxdepth 1 -name '*.ts'; "
-     "find test-parity/node-suite -name '*.ts' -not -path '*/fixtures/*' "
-     "(scripts/node_suite_run.py applies the same rule; its --self-test pins it)"),
-    ("scripts/gc_root_dominance_corpus.sh", "PATTERNS globs over test-files/; "
+    ("scripts/parity.py", "every tests/fixtures/programs/*.{ts,cts,mts} and test_*.cjs; "
+     "every tests/parity/node-suite/**/*.ts outside a fixtures/ directory "
+     "(is_case; tests/tooling/parity/test_parity_runner.py pins it)"),
+    ("scripts/gc_root_dominance_corpus.sh", "PATTERNS globs over tests/fixtures/programs/; "
      "a pattern that matches nothing is already loud, and MIN_COMPILED floors "
      "the corpus size"),
     ("scripts/gc_root_dominance_dep_corpus.sh", "ONE fixed entry point; the "
-     "rest of test-files/gc-dep-corpus/ reaches the compiler only by being "
+     "rest of tests/fixtures/programs/gc-dep-corpus/ reaches the compiler only by being "
      "imported from it, so the registry is the import graph. The script "
      "itself asserts that every .ts in that directory produced a module — "
      "which is the check a size floor could NOT be, since ~90 modules of "
@@ -449,6 +453,12 @@ def evaluate(tree: Tree, m: Mechanism, exclusions: dict[str, str] | None = None)
     for pattern in m.candidates:
         paths.extend(tree.glob(pattern))
     paths = sorted(set(paths))
+    if m.id == "gc-repsel-corpus":
+        paths = [
+            p for p in paths
+            if Path(p).stem.startswith(("test_gap_gc_", "test_gap_repsel_", "test_gap_specabi_"))
+            and parity.is_case(tree.root, tree.root / p)
+        ]
     if m.id == "rust-test-modules":
         # cargo auto-discovers crates/<c>/tests/<suite>.rs; only deeper files
         # need a declaration. `mod.rs` names itself.
@@ -505,7 +515,19 @@ def evaluate(tree: Tree, m: Mechanism, exclusions: dict[str, str] | None = None)
     # either skips it silently or dies on a path that no longer exists. Reuse
     # registered_keys rather than re-reading the registry — a second raw call
     # to m.registered(tree) would also re-raise MissingRegistry above.
-    if m.check_reverse and m.entry_to_path is not None:
+    if m.id == "gc-repsel-corpus" and m.check_reverse:
+        try:
+            resolve_sources(tree.root, sorted(registered_keys), discover=tree.glob)
+        except SourceResolutionError as exc:
+            for issue in exc.issues:
+                if issue.kind == "unknown":
+                    res.problems.append(
+                        "ROTTED ENTRY %s lists %r but %s does not exist."
+                        % (m.registry, issue.case_id, m.entry_to_path(issue.case_id))
+                    )
+                else:
+                    res.problems.append(issue.diagnostic(tree.root))
+    elif m.check_reverse and m.entry_to_path is not None:
         for entry in sorted(registered_keys):
             rel = m.entry_to_path(entry)
             if not tree.exists(rel):
@@ -552,10 +574,10 @@ def run(tree: Tree, mechanisms: Iterable[Mechanism] = MECHANISMS) -> tuple[list[
 # so a pass here is evidence about this repo's registries, not about a fixture.
 # ---------------------------------------------------------------------------
 _PLANT = {
-    "gc-repsel-corpus": "test-files/test_gap_gc_selftest_planted_witness.ts",
-    "feature-matrix-probes": "test-features/probes/closures/selftest-planted.ts",
+    "gc-repsel-corpus": "tests/fixtures/programs/test_gap_gc_selftest_planted_witness.ts",
+    "feature-matrix-probes": "tests/features/probes/closures/selftest-planted.ts",
     "compiler-output-workloads": "benchmarks/compiler_output/fixtures/selftest_planted.ts",
-    "wasip1-host-cases": "test-wasi/p1-host/cases/selftest_planted.ts",
+    "wasip1-host-cases": "tests/integration/wasi/p1-host/cases/selftest_planted.ts",
     "rust-test-modules": "crates/perry-codegen/tests/native_proof_regressions/selftest_planted.rs",
 }
 
@@ -662,6 +684,48 @@ def _self_test(root: Path) -> int:
                 repr(missing.problems),
             )
 
+    # GC source ids stay bare basenames, but discovery may resolve them from a
+    # subject tree after a move. Keep these probes on Tree's virtual glob seam.
+    gc = next(m for m in MECHANISMS if m.id == "gc-repsel-corpus")
+    moved = "tests/parity/node-suite/http/test_gap_gc_moved_witness.ts"
+    legacy = "tests/fixtures/programs/test_gap_gc_moved_witness.ts"
+    gc_registry = gc.registry
+
+    def gc_tree(added: Iterable[str], manifest: str) -> Tree:
+        return Tree(Path("/synthetic/gc-check"), added=added, overrides={gc_registry: manifest})
+
+    registered_move = evaluate(
+        gc_tree([moved], "test_gap_gc_moved_witness\n"),
+        replace(gc, min_candidates=0),
+    )
+    check("GC subject-tree witness has a green registration result",
+          not registered_move.problems and registered_move.n_candidates == 1
+          and registered_move.n_registered == 1, repr(registered_move))
+    unregistered_move = evaluate(gc_tree([moved], ""), gc)
+    check("unregistered GC subject-tree witness is dark",
+          any("DARK TEST %s" % moved in p for p in unregistered_move.problems),
+          repr(unregistered_move.problems))
+    unknown_source = evaluate(gc_tree([], "test_gap_gc_unknown_witness\n"), gc)
+    check("GC unknown registry source remains rotted",
+          any("ROTTED ENTRY" in p and "tests/fixtures/programs/test_gap_gc_unknown_witness.ts" in p
+              for p in unknown_source.problems), repr(unknown_source.problems))
+    ambiguous_source = evaluate(gc_tree([moved, legacy], "test_gap_gc_moved_witness\n"), gc)
+    check("GC duplicate requested basenames are rejected as ambiguous",
+          any("ambiguous GC witness source" in p for p in ambiguous_source.problems),
+          repr(ambiguous_source.problems))
+    fixture = "tests/parity/node-suite/http/fixtures/test_gap_gc_fixture_only.ts"
+    fixture_result = evaluate(gc_tree([fixture], "test_gap_gc_fixture_only\n"), gc)
+    check("GC subject fixtures are not eligible sources",
+          any("ROTTED ENTRY" in p for p in fixture_result.problems)
+          and fixture_result.n_candidates == 0, repr(fixture_result.problems))
+    unrelated_duplicates = gc_tree([
+        "tests/parity/node-suite/http/basic.ts", "tests/parity/node-suite/net/basic.ts"
+    ], "")
+    duplicate_result = evaluate(unrelated_duplicates, gc)
+    check("unrelated duplicate subject basenames do not enter GC candidate lookup",
+          not any("ambiguous GC witness source" in p for p in duplicate_result.problems)
+          and duplicate_result.n_candidates == 0, repr(duplicate_result.problems))
+
     # 7. ★ FALSE-POSITIVE GUARD. `resolve/tests/declaration_sidecar_tests/
     #    compile_package.rs` IS declared — by `mod compile_package;` inside an
     #    inline `mod declaration_sidecar_tests { … }` block two levels up in
@@ -705,16 +769,16 @@ def _self_test(root: Path) -> int:
     #    that would silently widen every mechanism's candidate set.
     check(
         "glob `*` does not cross /",
-        not _fnmatch_path("test-files/fixtures/a.ts", "test-files/*.ts"),
+        not _fnmatch_path("tests/fixtures/programs/fixtures/a.ts", "tests/fixtures/programs/*.ts"),
     )
-    check("glob `*` matches in-segment", _fnmatch_path("test-files/a.ts", "test-files/*.ts"))
+    check("glob `*` matches in-segment", _fnmatch_path("tests/fixtures/programs/a.ts", "tests/fixtures/programs/*.ts"))
     check(
         "glob `**` crosses /",
-        _fnmatch_path("test-features/probes/x/y.ts", "test-features/probes/**/*.ts"),
+        _fnmatch_path("tests/features/probes/x/y.ts", "tests/features/probes/**/*.ts"),
     )
     check(
         "glob `**` matches zero segments",
-        _fnmatch_path("test-features/probes/y.ts", "test-features/probes/**/*.ts"),
+        _fnmatch_path("tests/features/probes/y.ts", "tests/features/probes/**/*.ts"),
     )
 
     if failures:
@@ -750,10 +814,10 @@ def main() -> int:
         for name, how in GLOB_DRIVEN:
             print("  %-40s %s" % (name, how))
         print(
-            "\nNOT covered: tests/*.sh|py|ts. Those have no registry to diff "
-            "against —\n143 of 171 are referenced by nothing in the tree. That "
-            "is a separate\narchaeology problem (triage or delete), not an "
-            "unregistered-file problem."
+            "\nNOT covered: standalone tests/integration and tests/tooling "
+            "sources outside the registries above. Their executable CI or "
+            "harness callers must be preserved; directory placement alone "
+            "does not register a test."
         )
         return 0
 

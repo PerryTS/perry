@@ -38,30 +38,12 @@ fn cleanup_supports_other_values_new_initializers_and_destroyed_errors() {
     assert_eq!(*ORDER.lock().unwrap(), [2, 1, 3]);
 }
 #[test]
-fn initializer_unwind_leaves_the_key_retryable() {
-    static ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
-    static RETRY: LocalKey<u8> = LocalKey::new(|| {
-        assert_ne!(
-            ATTEMPTS.fetch_add(1, Ordering::SeqCst),
-            0,
-            "first attempt fails"
-        );
-        17
-    });
-    std::thread::spawn(|| {
-        assert!(std::panic::catch_unwind(|| RETRY.with(|_| ())).is_err());
-        RETRY.with(|value| assert_eq!(*value, 17));
-    })
-    .join()
-    .unwrap();
-    assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 2);
-}
-#[test]
-fn recursive_initializer_is_rejected_without_poisoning_other_keys() {
+fn recursive_initializer_is_rejected() {
     static RECURSIVE: LocalKey<u8> = LocalKey::new(|| RECURSIVE.with(|_| 1));
     std::thread::spawn(|| {
-        assert!(std::panic::catch_unwind(|| RECURSIVE.with(|_| ())).is_err());
-        PLAIN.with(|v| assert_eq!(v.get(), 99));
+        crate::test_support::expect_child_panic("recursive thread-local initialization", || {
+            RECURSIVE.with(|_| ())
+        });
     })
     .join()
     .unwrap();

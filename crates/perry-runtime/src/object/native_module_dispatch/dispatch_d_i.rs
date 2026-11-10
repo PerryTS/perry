@@ -208,8 +208,7 @@ pub(crate) unsafe fn nm_dispatch_events(ctx: &NmCtx, module_name: &str, method_n
             let message =
                 b"Class constructor EventEmitterAsyncResource cannot be invoked without 'new'";
             let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-            let err = crate::error::js_typeerror_new(msg);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+            crate::exception::throw_core(crate::error::CoreError::type_error(msg))
         }
         // Module-level helpers. Their implementations live in perry-stdlib
         // (`js_events_*` in `events/module_helpers.rs`), which depends on this
@@ -277,55 +276,58 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
         ptr_to_f64,
         typed_kind
     );
+    // node: the synchronous fs mutators return undefined; the status the
+    // runtime fn reports (it throws on failure) is not a JS result.
+    let void_result = |_status: i32| -> f64 { f64::from_bits(crate::value::TAG_UNDEFINED) };
     match (module_name, method_name) {
         ("fs", "_toUnixTimestamp") => crate::fs::js_fs_to_unix_timestamp(arg(0)),
         ("fs", "existsSync") => bool_to_f64(crate::fs::js_fs_exists_sync(arg(0))),
         ("fs", "readFileSync") => crate::fs::js_fs_read_file_dispatch(arg(0), arg(1)),
-        ("fs", "writeFileSync") => bool_to_f64(crate::fs::js_fs_write_file_sync_options(
+        ("fs", "writeFileSync") => void_result(crate::fs::js_fs_write_file_sync_options(
             arg(0),
             arg(1),
             arg(2),
         )),
-        ("fs", "appendFileSync") => bool_to_f64(crate::fs::js_fs_append_file_sync_options(
+        ("fs", "appendFileSync") => void_result(crate::fs::js_fs_append_file_sync_options(
             arg(0),
             arg(1),
             arg(2),
         )),
-        ("fs", "mkdirSync") => bool_to_f64(crate::fs::js_fs_mkdir_sync_options(arg(0), arg(1))),
-        ("fs", "unlinkSync") => bool_to_f64(crate::fs::js_fs_unlink_sync(arg(0))),
-        ("fs", "rmSync") => bool_to_f64(crate::fs::js_fs_rm_recursive_options(arg(0), arg(1))),
-        ("fs", "rmdirSync") => bool_to_f64(crate::fs::js_fs_rmdir_sync_options(arg(0), arg(1))),
+        ("fs", "mkdirSync") => crate::fs::js_fs_mkdir_sync_options(arg(0), arg(1)),
+        ("fs", "unlinkSync") => void_result(crate::fs::js_fs_unlink_sync(arg(0))),
+        ("fs", "rmSync") => void_result(crate::fs::js_fs_rm_recursive_options(arg(0), arg(1))),
+        ("fs", "rmdirSync") => void_result(crate::fs::js_fs_rmdir_sync_options(arg(0), arg(1))),
         ("fs", "readdirSync") => {
             let raw = crate::fs::js_fs_readdir_sync(arg(0), arg(1));
             f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
         }
         ("fs", "statSync") => crate::fs::js_fs_stat_sync_options(arg(0), arg(1)),
         ("fs", "lstatSync") => crate::fs::js_fs_lstat_sync_options(arg(0), arg(1)),
-        ("fs", "renameSync") => bool_to_f64(crate::fs::js_fs_rename_sync(arg(0), arg(1))),
-        ("fs", "copyFileSync") => bool_to_f64(crate::fs::js_fs_copy_file_sync_flags(
+        ("fs", "renameSync") => void_result(crate::fs::js_fs_rename_sync(arg(0), arg(1))),
+        ("fs", "copyFileSync") => void_result(crate::fs::js_fs_copy_file_sync_flags(
             arg(0),
             arg(1),
             arg(2),
         )),
-        ("fs", "cpSync") => bool_to_f64(crate::fs::js_fs_cp_sync_options(arg(0), arg(1), arg(2))),
+        ("fs", "cpSync") => void_result(crate::fs::js_fs_cp_sync_options(arg(0), arg(1), arg(2))),
         ("fs", "accessSync") => crate::fs::js_fs_access_sync_throw_mode(arg(0), arg(1)),
         ("fs", "realpathSync") => crate::fs::js_fs_realpath_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempSync") => crate::fs::js_fs_mkdtemp_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempDisposableSync") => crate::fs::js_fs_mkdtemp_disposable_sync(arg(0), arg(1)),
-        ("fs", "chmodSync") => bool_to_f64(crate::fs::js_fs_chmod_sync(arg(0), arg(1))),
-        ("fs", "chownSync") => bool_to_f64(crate::fs::js_fs_chown_sync(arg(0), arg(1), arg(2))),
-        ("fs", "lchownSync") => bool_to_f64(crate::fs::js_fs_lchown_sync(arg(0), arg(1), arg(2))),
-        ("fs", "lchmodSync") => bool_to_f64(crate::fs::js_fs_lchmod_sync(arg(0), arg(1))),
-        ("fs", "truncateSync") => bool_to_f64(crate::fs::js_fs_truncate_sync(arg(0), arg(1))),
-        ("fs", "ftruncateSync") => bool_to_f64(crate::fs::js_fs_ftruncate_sync(arg(0), arg(1))),
-        ("fs", "fsyncSync") => bool_to_f64(crate::fs::js_fs_fsync_sync(arg(0))),
-        ("fs", "fdatasyncSync") => bool_to_f64(crate::fs::js_fs_fdatasync_sync(arg(0))),
-        ("fs", "fchmodSync") => bool_to_f64(crate::fs::js_fs_fchmod_sync(arg(0), arg(1))),
-        ("fs", "fchownSync") => bool_to_f64(crate::fs::js_fs_fchown_sync(arg(0), arg(1), arg(2))),
+        ("fs", "chmodSync") => void_result(crate::fs::js_fs_chmod_sync(arg(0), arg(1))),
+        ("fs", "chownSync") => void_result(crate::fs::js_fs_chown_sync(arg(0), arg(1), arg(2))),
+        ("fs", "lchownSync") => void_result(crate::fs::js_fs_lchown_sync(arg(0), arg(1), arg(2))),
+        ("fs", "lchmodSync") => void_result(crate::fs::js_fs_lchmod_sync(arg(0), arg(1))),
+        ("fs", "truncateSync") => void_result(crate::fs::js_fs_truncate_sync(arg(0), arg(1))),
+        ("fs", "ftruncateSync") => void_result(crate::fs::js_fs_ftruncate_sync(arg(0), arg(1))),
+        ("fs", "fsyncSync") => void_result(crate::fs::js_fs_fsync_sync(arg(0))),
+        ("fs", "fdatasyncSync") => void_result(crate::fs::js_fs_fdatasync_sync(arg(0))),
+        ("fs", "fchmodSync") => void_result(crate::fs::js_fs_fchmod_sync(arg(0), arg(1))),
+        ("fs", "fchownSync") => void_result(crate::fs::js_fs_fchown_sync(arg(0), arg(1), arg(2))),
         ("fs", "fstatSync") => crate::fs::js_fs_fstat_sync_options(arg(0), arg(1)),
-        ("fs", "utimesSync") => crate::fs::js_fs_utimes_sync(arg(0), arg(1), arg(2)) as f64,
-        ("fs", "lutimesSync") => crate::fs::js_fs_lutimes_sync(arg(0), arg(1), arg(2)) as f64,
-        ("fs", "futimesSync") => crate::fs::js_fs_futimes_sync(arg(0), arg(1), arg(2)) as f64,
+        ("fs", "utimesSync") => void_result(crate::fs::js_fs_utimes_sync(arg(0), arg(1), arg(2))),
+        ("fs", "lutimesSync") => void_result(crate::fs::js_fs_lutimes_sync(arg(0), arg(1), arg(2))),
+        ("fs", "futimesSync") => void_result(crate::fs::js_fs_futimes_sync(arg(0), arg(1), arg(2))),
         ("fs", "readvSync") => crate::fs::js_fs_readv_sync(arg(0), arg(1), arg(2)),
         ("fs", "writevSync") => crate::fs::js_fs_writev_sync(arg(0), arg(1), arg(2)),
         ("fs", "statfsSync") => crate::fs::js_fs_statfs_sync_options(arg(0), arg(1)),
@@ -337,12 +339,12 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
         ("fs", "watch") => crate::fs::js_fs_watch(arg(0), arg(1), arg(2)),
         ("fs", "watchFile") => crate::fs::js_fs_watch_file(arg(0), arg(1), arg(2)),
         ("fs", "unwatchFile") => crate::fs::js_fs_unwatch_file(arg(0), arg(1)),
-        ("fs", "linkSync") => bool_to_f64(crate::fs::js_fs_link_sync(arg(0), arg(1))),
-        ("fs", "symlinkSync") => bool_to_f64(crate::fs::js_fs_symlink_sync(arg(0), arg(1))),
+        ("fs", "linkSync") => void_result(crate::fs::js_fs_link_sync(arg(0), arg(1))),
+        ("fs", "symlinkSync") => void_result(crate::fs::js_fs_symlink_sync(arg(0), arg(1))),
         ("fs", "readlinkSync") => crate::fs::js_fs_readlink_dispatch(arg(0), arg(1)),
         ("fs", "openSync") => crate::fs::js_fs_open_sync(arg(0), arg(1)),
         ("fs", "openAsBlob") => crate::fs::js_fs_open_as_blob(arg(0), arg(1)),
-        ("fs", "closeSync") => bool_to_f64(crate::fs::js_fs_close_sync(arg(0))),
+        ("fs", "closeSync") => void_result(crate::fs::js_fs_close_sync(arg(0))),
         ("fs", "readSync") if args_len == 3 => {
             crate::fs::js_fs_read_sync_options(arg(0), arg(1), arg(2))
         }

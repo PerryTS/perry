@@ -1,9 +1,23 @@
 //! Copy edges subscribe to future deliveries; registration sends current values.
-use crate::delta::{Batch, Delta, Targets, Tokens};
+use crate::delta::{Batch, Delta, Tokens};
 use crate::model::*;
 impl Model {
+    pub(crate) fn prune_successors(&mut self, n: NodeId, keep: &[bool]) {
+        let node = &mut self.nodes[n as usize];
+        self.pending.remap(&node.delta, keep);
+        let mut it = keep.iter();
+        node.succ.retain(|_| *it.next().unwrap());
+        if node.succ_set.is_some() {
+            node.succ_set = Some(std::rc::Rc::new(node.succ.iter().copied().collect()));
+        }
+    }
+
     /// Copy edge a → b (pts(a) ⊆ pts(b)).
     pub fn edge(&mut self, a: NodeId, b: NodeId) {
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Edge(a, b)) {
+            return;
+        }
         self.edge_impl(a, b, true);
     }
 
@@ -26,6 +40,11 @@ impl Model {
         // a little propagation, a global edge set costs gigabytes.
         {
             let node = &mut self.nodes[a as usize];
+            // Pending batches retain long-set mutation-attempt boundaries,
+            // including duplicate insertions, so delivery work stays exact.
+            if node.succ.len() > 16 {
+                self.pending.split_tail(&node.delta);
+            }
             match &mut node.succ_set {
                 Some(set) => {
                     if !std::rc::Rc::make_mut(set).insert(b) {
@@ -57,50 +76,86 @@ impl Model {
             return;
         }
         let prim = self.nodes[a as usize].prim;
-        if self.copy_coverage(a, b).0 {
-            self.add(b, &[], prim);
+        let strs = self.nodes[a as usize].strs;
+        let mut toks = self.bufs.pop().unwrap_or_default();
+        toks.clear();
+        if self.nodes[a as usize]
+            .pts
+            .same_storage(&self.nodes[b as usize].pts)
+        {
+            self.nodes[a as usize].pts.sorted_into(&mut toks);
+        }
+        let covered = self.copy_coverage(a, b, Tokens::Slice(&toks)).0;
+        self.bufs.push(toks);
+        // Registration is a value-copy delivery: `a`'s Numbers arrive with
+        // `a`'s interval.
+        let saved_range = self.cur_range.replace(self.rg(a));
+        if covered {
+            self.add_s(b, &[], prim, strs);
+            self.cur_range = saved_range;
             return;
         }
         if self.nodes[a as usize].pts.is_empty() && prim == 0 {
+            self.cur_range = saved_range;
             return;
         }
         let mut toks = self.bufs.pop().unwrap_or_default();
         toks.clear();
         self.nodes[a as usize].pts.sorted_into(&mut toks);
         // Registration sends what `a` holds: solve work.
-        self.work += toks.len() as u64;
+        self.charge_work(toks.len() as u64);
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = a;
         self.cur_why = u32::MAX;
-        self.copy_to(a, b, Tokens::Slice(&toks), prim);
+        self.copy_to(a, b, Tokens::Slice(&toks), prim, strs);
         (self.cur_src, self.cur_why) = saved;
+        self.cur_range = saved_range;
         self.bufs.push(toks);
     }
 
-    pub(super) fn copy_to(&mut self, src: NodeId, dst: NodeId, toks: Tokens<'_>, prim: u16) -> u64 {
-        self.add_tokens(dst, toks, prim);
-        // Equal sizes prove equal sets only while `dst` holds all of `src`.
-        if !self.nodes[dst as usize].dropped
-            && self.nodes[src as usize].pts.len() > 1
-            && self.nodes[src as usize].pts.len() == self.nodes[dst as usize].pts.len()
-        {
-            let a = self.nodes[src as usize].pts.shared_owners();
-            let b = self.nodes[dst as usize].pts.shared_owners();
-            if a > b || (a == b && src < dst) {
-                self.nodes[dst as usize].pts = self.nodes[src as usize].pts.shared_clone();
-            } else {
-                self.nodes[src as usize].pts = self.nodes[dst as usize].pts.shared_clone();
-            }
-        }
+    /// Equal sets share storage through the solve's set table
+    /// (`SetTable::extend`, `SetTable::intern`), not here.
+    pub(super) fn copy_to(
+        &mut self,
+        _src: NodeId,
+        dst: NodeId,
+        toks: Tokens<'_>,
+        prim: u16,
+        strs: StrSet,
+    ) -> u64 {
+        self.add_tokens_s(dst, toks, prim, strs);
         0
     }
-    pub(super) fn copy_coverage(&self, src: NodeId, dst: NodeId) -> (bool, u64) {
-        (
-            self.nodes[src as usize]
-                .pts
-                .covered_by(&self.nodes[dst as usize].pts),
-            1,
-        )
+    /// Points-to storage: (logical entries summed over nodes, entries
+    /// stored, distinct stored sets of two or more members).
+    pub fn pts_storage(&self) -> (u64, u64, u64) {
+        let mut seen: crate::pts::FxHashSet<usize> = Default::default();
+        let (mut logical, mut stored, mut distinct) = (0u64, 0u64, 0u64);
+        for n in &self.nodes {
+            let len = n.pts.len() as u64;
+            logical += len;
+            match n.pts.storage_id() {
+                Some(id) if !seen.insert(id) => {}
+                _ => {
+                    stored += len;
+                    distinct += (len >= 2) as u64;
+                }
+            }
+        }
+        (logical, stored, distinct)
+    }
+    /// `dst` holds every member of `src` (a singleton it holds, or the same
+    /// interned set), so delivering `toks` (members of `src`) changes
+    /// nothing there: skipped. Equal storage also needs that no token
+    /// would cross into `dst` as its marker (`add_tokens`), the one effect a
+    /// held token can still have.
+    pub(super) fn copy_coverage(&self, src: NodeId, dst: NodeId, toks: Tokens<'_>) -> (bool, u64) {
+        let (a, b) = (&self.nodes[src as usize].pts, &self.nodes[dst as usize].pts);
+        let covered = a.covered_by(b)
+            && (!a.same_storage(b)
+                || self.param_marker.is_empty()
+                || !toks.iter().any(|&t| self.crosses(dst, t)));
+        (covered, 1)
     }
     /// Every member not addressed by this pending delivery reached the
     /// destination at registration or in an older delivery. Cardinality
@@ -109,10 +164,12 @@ impl Model {
         &mut self,
         src: NodeId,
         dst: NodeId,
+        successor: u32,
         delta: &Delta,
         prim: u16,
+        strs: StrSet,
     ) -> bool {
-        let count = delta.delivery_len(dst);
+        let count = delta.delivery_len(successor);
         let source = &self.nodes[src as usize];
         let target = &self.nodes[dst as usize];
         let len = source.pts.len();
@@ -122,22 +179,22 @@ impl Model {
         // A marker that reads as ⊤ is delivered by `add_tokens` (DECISIONS 42),
         // a marker crossing into the node too (MRK, `Model::crosses`).
         if !self.param_marker.is_empty()
-            && Tokens::Delivery(delta, dst)
+            && Tokens::Delivery(delta, successor)
                 .iter()
                 .any(|&t| self.crosses(dst, t))
         {
             return false;
         }
         if (!self.marker_top.is_empty() || !self.escaped.is_empty())
-            && Tokens::Delivery(delta, dst)
+            && Tokens::Delivery(delta, successor)
                 .iter()
                 .any(|&t| self.marker_is_top(t) || self.top_beside(t))
         {
             return false;
         }
-        let batch = delta.batch_for(dst);
-        let pts = self.nodes[src as usize].pts.shared_clone();
-        self.adopt_delivery(src, dst, pts, &batch, prim);
+        let batch = delta.batch_for(successor);
+        let pts = self.nodes[src as usize].pts.clone();
+        self.adopt_delivery(src, dst, pts, &batch, prim, strs);
         true
     }
     fn adopt_delivery(
@@ -147,16 +204,18 @@ impl Model {
         pts: crate::pts::Pts,
         batch: &Batch,
         prim: u16,
+        strs: StrSet,
     ) {
         let top = (self.explain || self.diagnostic.is_some())
             && self.nodes[src as usize].pts.contains_tok(TOP)
             && !self.nodes[dst as usize].pts.contains_tok(TOP);
-        let targets = Targets::capture(
-            &self.nodes[dst as usize].succ,
-            self.nodes[dst as usize].succ_set.as_ref(),
-        );
-        self.nodes[dst as usize].pts = pts;
-        self.work += self.nodes[dst as usize].delta.append_to(batch, &targets);
+        let boundary = self.nodes[dst as usize].succ.len() as u32;
+        let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
+        self.sets.release(old);
+        let extra = self
+            .pending
+            .append_to(&mut self.nodes[dst as usize].delta, batch, boundary);
+        self.charge_work(extra);
         let before = self.pts_entries;
         self.pts_entries += batch.len() as u64;
         if top && self.diagnostic.is_some() {
@@ -176,7 +235,7 @@ impl Model {
                 self.aborted = true;
             }
         }
-        self.add(dst, &[], prim);
+        self.add_s(dst, &[], prim, strs);
         let node = &mut self.nodes[dst as usize];
         if !node.in_wl {
             node.in_wl = true;

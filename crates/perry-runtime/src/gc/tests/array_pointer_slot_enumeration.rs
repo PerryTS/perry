@@ -128,7 +128,7 @@ extern "C" fn interrupt_species_copy(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(9983.0)
+    crate::exception::test_throw(9983.0)
 }
 
 // Even a private array prototype sets these process-wide fast-path latches.

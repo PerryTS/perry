@@ -45,12 +45,25 @@
 //!    a settable `V` has a write (the setter) and the getter is a reader
 //!    created where the eval runs.
 //!
+//! The typed-array rule widens step 1 to a write SET. When every write of `V`
+//! in the module (any body, any depth) is `V = new K(..)` of one numeric
+//! typed-array class `K` (`spec_abi_sites::typed_array_new_class`), `V` holds
+//! a fresh `K` after its first write and every later write replaces it with
+//! another `K`, so the binding is a `K` at every read once the first write
+//! ran. The first write is `S[k]`: the declarator's initializer, or, after
+//! hoisting seeds only (`let V; ... V = new K(n);`), the first top-level
+//! assignment statement `V = new K(..)`. Steps 2 and 3 are unchanged, with
+//! `S[k]`'s right-hand side in place of the initializer. Any other write (an
+//! `Update`, a `with` fallback, a value of another class or of no class)
+//! leaves the binding unproven.
+//!
 //! The type comes from the initializer by construction: an array literal, or
 //! an IIFE every return of which yields an array literal or a never-written
 //! local holding one. Such a binding holds one Array for its whole life (the
 //! object may grow or change elements; it stays an Array), so its readers get
 //! `Array` as a proof and pick the array lowering. Element types are not
-//! claimed: an out-of-bounds read is `undefined`.
+//! claimed: an out-of-bounds read is `undefined`. A typed-array construction
+//! gives its class (`Named("Float32Array")`, ...).
 //!
 //! The facts reach the readers through the body's one seed set
 //! (`typed_locals::outer_proofs`), together with Closed World 5d's capture
@@ -408,6 +421,9 @@ struct Model<'a> {
     let_counts: HashMap<u32, usize>,
     params: HashSet<u32>,
     writes: HashSet<u32>,
+    /// Reassigned bindings whose every write is `V = new K(..)` of one
+    /// typed-array class `K` (any body, any depth).
+    typed_array_writes: HashMap<u32, &'static str>,
     /// Binding -> what its written values carry.
     sources: HashMap<u32, Shallow>,
 }
@@ -505,9 +521,13 @@ impl<'a> Model<'a> {
             class_scan: Shallow::default(),
             let_counts: HashMap::new(),
             params: HashSet::new(),
-            writes: crate::collectors::reassigned_locals_in_module(hir),
+            writes: HashSet::new(),
+            typed_array_writes: HashMap::new(),
             sources: HashMap::new(),
         };
+        let write_sets = crate::collectors::spec_abi_sites::module_write_sets(hir);
+        model.writes = write_sets.writes;
+        model.typed_array_writes = write_sets.typed_array_writes;
         note_chunks(&hir.init, None, &mut chunk_owner);
         shallow_stmts(model.init.iter().copied(), &mut model.init_scan);
         record_lets_and_sources(&model.init, &mut model.let_counts, &mut model.sources);
@@ -837,6 +857,9 @@ fn initializer_kind(m: &Model<'_>, init: &Expr) -> Option<HirType> {
     if is_array_literal(init) {
         return Some(array);
     }
+    if let Some(class) = crate::collectors::spec_abi_sites::typed_array_new_class(init) {
+        return Some(HirType::Named(class.to_string()));
+    }
     if let Expr::Call { callee, args, .. } = init {
         if let Expr::Closure {
             params,
@@ -1073,8 +1096,10 @@ fn order_verdict(
         }
     }
     shallow_stmts(stmts[..k].iter().copied(), &mut pre);
-    if let Stmt::Let { init: Some(e), .. } = stmts[k] {
-        shallow_expr(e, &mut pre);
+    match stmts[k] {
+        Stmt::Let { init: Some(e), .. } => shallow_expr(e, &mut pre),
+        Stmt::Expr(Expr::LocalSet(_, e)) => shallow_expr(e, &mut pre),
+        _ => {}
     }
     if !sabotaged("early_read") && pre.locals.contains(&v) {
         return Verdict::EarlyRead;
@@ -1128,29 +1153,76 @@ pub(crate) fn collect(hir: &Module) -> DefiniteInit {
         }
     }
     for (body, stmts) in bodies {
+        // Bindings whose first top-level `V = new K(..)` was considered.
+        let mut first_set_seen: HashSet<u32> = HashSet::new();
         for (k, st) in stmts.iter().enumerate() {
-            let Stmt::Let {
-                id,
-                name,
-                init: Some(init),
-                ..
-            } = st
-            else {
-                continue;
+            let (v, name, init) = match st {
+                Stmt::Let {
+                    id,
+                    name,
+                    init: Some(init),
+                    ..
+                } if !matches!(init, Expr::Undefined) => {
+                    if m.params.contains(id)
+                        || sole_declarator(stmts, *id) != Some(k)
+                        || (m.let_counts.get(id).copied() != Some(top_level_let_count(stmts, *id))
+                            && !sabotaged("second_write"))
+                    {
+                        continue;
+                    }
+                    (*id, name, init)
+                }
+                // The write-set form: `let V; ...; V = new K(..)`. Every
+                // declarator of V is a seed at the top level of this body
+                // before the write, and this is the first top-level write.
+                Stmt::Expr(Expr::LocalSet(id, value)) => {
+                    if !first_set_seen.insert(*id) || m.params.contains(id) {
+                        continue;
+                    }
+                    let mut seed_name: Option<&String> = None;
+                    let mut seeds_only = true;
+                    for (i, s2) in stmts.iter().enumerate() {
+                        if let Stmt::Let {
+                            id: lid,
+                            name,
+                            init,
+                            ..
+                        } = s2
+                        {
+                            if lid == id {
+                                if i < k && is_seed(init) {
+                                    seed_name = Some(name);
+                                } else {
+                                    seeds_only = false;
+                                }
+                            }
+                        }
+                    }
+                    let Some(name) = seed_name else {
+                        continue;
+                    };
+                    if !seeds_only
+                        || m.let_counts.get(id).copied() != Some(top_level_let_count(stmts, *id))
+                    {
+                        continue;
+                    }
+                    (*id, name, &**value)
+                }
+                _ => continue,
             };
-            if matches!(init, Expr::Undefined) {
-                continue;
-            }
-            let v = *id;
-            if m.params.contains(&v)
-                || (m.writes.contains(&v) && !sabotaged("reassigned"))
-                || sole_declarator(stmts, v) != Some(k)
-                || (m.let_counts.get(&v).copied() != Some(top_level_let_count(stmts, v))
-                    && !sabotaged("second_write"))
-            {
-                continue;
-            }
             let kind = initializer_kind(&m, init);
+            // The write set: no write but this one, or (the typed-array
+            // rule) every write of V in the module constructs the same
+            // typed-array class as this first one, so V holds that class at
+            // every read once this statement ran.
+            let write_set_ok = !m.writes.contains(&v)
+                || matches!(
+                    (&kind, m.typed_array_writes.get(&v)),
+                    (Some(HirType::Named(k)), Some(c)) if k == c
+                );
+            if !write_set_ok && !sabotaged("reassigned") {
+                continue;
+            }
             // Function bindings are not data; count only data bindings.
             let is_fn = matches!(init, Expr::Closure { .. });
             if kind.is_none() && !(trace && !is_fn) {
@@ -1160,6 +1232,7 @@ pub(crate) fn collect(hir: &Module) -> DefiniteInit {
             let verdict = order_verdict(&m, r, v, name, body, stmts, k);
             let is_confined = verdict == Verdict::Proven
                 && kind.is_some()
+                && !m.writes.contains(&v)
                 && (sabotaged("confined") || confined(&m, v, init));
             if trace {
                 // `module` = the module's own top level or its CommonJS

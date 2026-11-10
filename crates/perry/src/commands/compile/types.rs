@@ -107,6 +107,10 @@ pub struct CompileArgs {
     #[arg(long, value_name = "PATH")]
     pub source_root_target: Option<String>,
 
+    /// Compiler-owned ancestry for recursive build-time macro expansion.
+    #[arg(long, hide = true)]
+    pub macro_import_stack: Vec<PathBuf>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
@@ -681,6 +685,10 @@ pub struct GeneratedAssetModule {
 
 /// Compilation context tracking all modules
 pub struct CompilationContext {
+    /// This compilation executed build-time code with external inputs.
+    pub(crate) has_build_time_execution: bool,
+    /// Active importing modules, forwarded to native macro compiler children.
+    pub(crate) macro_import_stack: Vec<PathBuf>,
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
@@ -694,6 +702,9 @@ pub struct CompilationContext {
     pub(crate) uses_os: bool,
     pub(crate) uses_messaging: bool,
     pub(crate) uses_event_target: bool,
+    /// The program may read `navigator` / `Navigator` (named, or through an
+    /// escaped global object): `Navigator.prototype` gets its getters.
+    pub(crate) uses_navigator: bool,
     pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
@@ -761,6 +772,10 @@ pub struct CompilationContext {
     /// addons. Unlike the older compile/native-library policy lists this set
     /// deliberately has no wildcard syntax.
     pub native_addon_packages: BTreeSet<String>,
+    /// The wasm32 archives of `perry.nativeAddons` packages whose addons a
+    /// WASI program links statically: package name -> addon entry (the
+    /// `.node` path inside the package) -> archives.
+    pub native_addon_wasm: BTreeMap<String, BTreeMap<String, Vec<PathBuf>>>,
     /// Approved `.node` entries reached by the compile graph, keyed by their
     /// relocatable package-relative logical id.
     pub native_addons: BTreeMap<String, NativeAddonModule>,
@@ -1037,6 +1052,11 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
+    /// Whether any TS module reaches `node:child_process` (detected like
+    /// `uses_dgram`: child_process is runtime-only too). A child's stdio pipes
+    /// are `net.Socket`s, so such a program links perry-ext-net
+    /// (`optimized_libs::well_known_iteration_set`).
+    pub uses_child_process: bool,
     /// Program imports `node:test` / `node:test/reporters` — installs
     /// `perry-runtime/mod-node-test`.
     pub uses_node_test: bool,
@@ -1044,6 +1064,10 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// Whether any module names `upgradeToTLS`, perry's TLS upgrade of a
+    /// `net.Socket`: such a program reaches TLS without importing `tls`
+    /// ([`super::optimized_libs::reaches_tls`]).
+    pub uses_upgrade_to_tls: bool,
     /// Whether any module imports, requires, or names (`getBuiltinModule`)
     /// `dns` / `dns/promises`. Arms the dns export router so a namespace
     /// created at runtime (a CommonJS `require('node:dns')`) reaches
@@ -1383,9 +1407,37 @@ impl std::fmt::Debug for CompilationContext {
 }
 
 impl CompilationContext {
+    /// Does a linked native addon reach `reach`? An addon reaches what its
+    /// Node-API imports reach; an open one (`World`) reaches everything.
+    pub fn native_addons_reach(&self, reach: perry_runtime_manifest::NodeApiReach) -> bool {
+        use perry_runtime_manifest::NodeApiReach;
+        self.native_addons
+            .values()
+            .any(|addon| addon.reach.contains(&NodeApiReach::World) || addon.reach.contains(&reach))
+    }
+
+    /// The Node-API symbols the host links and exports: what its addons
+    /// import. An open addon can look any export up at run time (`dlsym`, a
+    /// library of its own), so with one the host exports its whole inventory.
+    pub fn node_api_host_exports(&self) -> Vec<&'static str> {
+        let open = self.native_addons_reach(perry_runtime_manifest::NodeApiReach::World);
+        perry_runtime_manifest::node_api_host_symbols()
+            .filter(|symbol| {
+                !self.native_addons.is_empty()
+                    && (open
+                        || self
+                            .native_addons
+                            .values()
+                            .any(|addon| addon.node_api_imports.contains(*symbol)))
+            })
+            .collect()
+    }
+
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
+            has_build_time_execution: false,
+            macro_import_stack: Vec::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
             uses_thread_codec: false,
@@ -1394,6 +1446,7 @@ impl CompilationContext {
             uses_os: false,
             uses_messaging: false,
             uses_event_target: false,
+            uses_navigator: false,
             uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),
@@ -1412,6 +1465,7 @@ impl CompilationContext {
             project_root,
             native_libraries: Vec::new(),
             native_addon_packages: BTreeSet::new(),
+            native_addon_wasm: BTreeMap::new(),
             native_addons: BTreeMap::new(),
             native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
@@ -1485,8 +1539,10 @@ impl CompilationContext {
             uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
+            uses_child_process: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_upgrade_to_tls: false,
             uses_dns: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
@@ -1561,6 +1617,16 @@ pub struct NativeAddonModule {
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,
+    /// What the addon reaches beyond the values the program hands it: the
+    /// marks of its Node-API imports (`node_api_host_symbols.txt`).
+    /// `NodeApiReach::World` makes it open, a dynamic-code site.
+    pub reach: BTreeSet<perry_runtime_manifest::NodeApiReach>,
+    /// The Node-API symbols the addon imports (`napi_*`, `node_api_*`).
+    pub node_api_imports: BTreeSet<String>,
+    /// WASI: the addon's wasm32 archives, linked into the program; empty for
+    /// a loaded (sidecar) addon.
+    #[cfg(feature = "target-wasi")]
+    pub wasm_archives: Vec<PathBuf>,
 }
 
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field

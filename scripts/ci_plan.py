@@ -88,6 +88,8 @@ JOBS: dict[str, tuple[str, ...]] = {
     "gc_call_effects": ("pr", "sweep", "full"),
     "gc_stress": ("pr", "sweep", "full"),
     "e2e_scoped": ("pr",),  # scoped to the PR's diff; meaningless without one
+    # The subjects the PR's diff owns (scripts/test_owners.py), auto mode.
+    "parity_scoped": ("pr",),
     "security_audit": ("pr", "sweep", "full"),  # pr: only when `deps` changed
     "windows_build": ("sweep", "full"),
     "windows_arm64_build": ("sweep", "full"),
@@ -132,7 +134,7 @@ PARITY_SHARDS = 16
 # is ~1.1 CPU-s per case, so sixteen 4-core shards run about an hour each after
 # the build. `test262-aggregate` (not in JOBS: it keys off `jobs.test262`)
 # merges the shard reports and ratchets them against
-# test-compat/test262/baseline.json.
+# tests/compat/test262/baseline.json.
 TEST262_SHARDS = 16
 
 # The growing `perry` integration inventory cannot finish serially inside
@@ -178,7 +180,7 @@ NON_CORE_GLOBS = (
     ".claude/**",
     "skills/**",
     ".github/**",  # re-included below: the gate's own file and shared actions
-    "test-compat/**",  # node-core corpus, driven by its own scheduled workflow
+    "tests/compat/**",  # node-core corpus, driven by its own scheduled workflow
     "web/**",
     "www/**",
 )
@@ -190,9 +192,9 @@ CORE_OVERRIDES = (
     "scripts/actions_catalog.json",
     "scripts/actions_plan.py",
     "scripts/check_actions_topology.py",
-    "scripts/test_actions_plan.py",
+    "tests/tooling/infrastructure/test_actions_plan.py",
     "scripts/release_gate_runs.py",
-    "scripts/test_release_gate_runs.py",
+    "tests/tooling/infrastructure/test_release_gate_runs.py",
     ".github/actions/**",
     "docs/api/**",  # generated API docs are checked for drift by `check`
     "docs/src/api/**",
@@ -313,7 +315,7 @@ def plan(
                 on = scope["deps"]
             else:
                 on = on and scope["core"]
-        if job == "e2e_scoped":
+        if job in ("e2e_scoped", "parity_scoped"):
             # Reads the PR's complete file list via ci_pr_files.py; no PR on a
             # `workflow_dispatch --tier pr`, so the job would fail on a
             # missing PR number rather than skip.
@@ -420,6 +422,8 @@ def _self_test() -> int:
     check("docs-only PR: WASI execution off", not docs["jobs"]["wasi_execution"])
     check("core PR: gc-stress is one PR-subset shard", core["gc_stress"] == {"mode": "pr", "total": 1, "shards": [1]})
     check("core PR: e2e-scoped on", core["jobs"]["e2e_scoped"])
+    check("core PR: parity-scoped on", core["jobs"]["parity_scoped"])
+    check("docs-only PR: parity-scoped off", not docs["jobs"]["parity_scoped"])
     check("core PR: gc call-effects sidecar check on", core["jobs"]["gc_call_effects"])
     check("docs-only PR: gc call-effects sidecar check off", not docs["jobs"]["gc_call_effects"])
     check("core PR: windows off", not core["jobs"]["windows_build"])
@@ -447,8 +451,8 @@ def _self_test() -> int:
     check("other workflow change is not core", not is_core(".github/workflows/benchmark.yml"))
     check("nested .md is not core", not is_core("crates/perry/README.md"))
     check("AGENTS.md is core (lint doc-claim audits)", is_core("AGENTS.md"))
-    check("a .ts test file is core", is_core("test-files/test_gap_x.ts"))
-    check("scripts are core", is_core("scripts/run_gap_tests.sh"))
+    check("a .ts test file is core", is_core("tests/fixtures/programs/test_gap_x.ts"))
+    check("scripts are core", is_core("scripts/parity.py"))
     check("generated api docs are core", is_core("docs/api/perry.d.ts"))
 
     # 3. Sweep and full.
@@ -458,13 +462,16 @@ def _self_test() -> int:
     check("sweep: parity off", not sweep["jobs"]["parity"])
     check("sweep: perry integration shards off", not sweep["jobs"]["cargo_test_perry"])
     check("sweep: e2e-scoped off", not sweep["jobs"]["e2e_scoped"])
+    check("sweep: parity-scoped off", not sweep["jobs"]["parity_scoped"])
     check("sweep: 3 fast gap shards", sweep["gap"]["total"] == 3 and sweep["gap"]["mode"] == "fast")
     check("sweep: cargo-test full", sweep["cargo_test_scope"] == "full")
     check("sweep: security-audit on", sweep["jobs"]["security_audit"])
     check("sweep: full GC matrix has four shards", sweep["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
     full = plan("schedule", "refs/heads/main")
-    check("full: every job except e2e-scoped", all(v for k, v in full["jobs"].items() if k != "e2e_scoped"))
+    check("full: every job except the PR-scoped ones",
+          all(v for k, v in full["jobs"].items() if k not in ("e2e_scoped", "parity_scoped")))
+    check("full: no PR-scoped job", not full["jobs"]["e2e_scoped"] and not full["jobs"]["parity_scoped"])
     check(
         "full: perry integrations sharded",
         full["cargo_test_perry"]
@@ -484,6 +491,7 @@ def _self_test() -> int:
     snap = plan("workflow_dispatch", "refs/heads/x", tier_input="pr", update_gap_snapshot=True)
     check("snapshot update: one fast shard", snap["gap"] == {"mode": "fast", "total": 1, "shards": [1], "update_snapshot": True})
     check("dispatch --tier pr has no PR to scope e2e against", not snap["jobs"]["e2e_scoped"])
+    check("dispatch --tier pr has no PR to scope parity against", not snap["jobs"]["parity_scoped"])
     check("dispatch --tier pr runs cargo-test unscoped (no PR to read)", snap["cargo_test_scope"] == "full")
 
     # 4. The gc_gate_wiring_check contract: `gc-stress` is a registered

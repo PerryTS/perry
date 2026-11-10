@@ -53,7 +53,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
         exit 1
     fi
     for _expected in \
-        "PYTHONPATH=. python3 tests/test_public_baseline.py" \
+        "PYTHONPATH=. python3 tests/tooling/infrastructure/test_public_baseline.py" \
         "python3 benchmarks/ci_public_baseline_check.py"; do
         if [[ "$_self_ok" != *"$_expected"* ]]; then
             echo "run_lint_gates self-test FAILED: comment-led run block lost: $_expected" >&2
@@ -164,7 +164,7 @@ if fixture == "comment-led":
     workflow["jobs"]["lint"]["steps"] = [{
         "name": "Synthetic comment-led run step",
         "run": """# Leading comments must not hide the commands below.
-PYTHONPATH=. python3 tests/test_public_baseline.py
+PYTHONPATH=. python3 tests/tooling/infrastructure/test_public_baseline.py
 # Another comment between commands.
 python3 benchmarks/ci_public_baseline_check.py
 """,

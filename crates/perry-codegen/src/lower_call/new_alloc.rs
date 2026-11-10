@@ -602,8 +602,9 @@ fn emit_instance_alloc_inner(
             field_count,
         ) && image_size_agrees)
             || wide_birth_image;
-        // ILP32 (wasm32 WASI, #11378): the inline bump below reads
-        // `InlineArenaState` at LP64 offsets; take the outlined call.
+        // The inline bump below reads `InlineArenaState` at the target's
+        // offsets (`target_layout::inline_arena_layout`); ILP32 targets other
+        // than the wasm32 WASI lowering take the outlined call.
         // Small, exactly described births use the same emitted Eden bump
         // regardless of the caller's lexical loop visibility. The runtime's
         // small-birth cutoff is 16 KiB; retain the old admission for larger
@@ -617,7 +618,7 @@ fn emit_instance_alloc_inner(
             );
         if !descriptor_facts_exact
             || (!small_birth && !force_inline_new && !new_site_is_in_loop(ctx))
-            || crate::codegen::helpers::ilp32_target()
+            || !crate::target_layout::inline_births_admitted(ctx.target_triple)
         {
             let (keys_ptr, shape_id) = if deferred_keys {
                 let image_global = ctx.class_header_image_globals[class_name].0.clone();
@@ -682,6 +683,7 @@ fn emit_instance_alloc_inner(
             let total_size_str = total_size.to_string();
 
             // Inline bump-allocator IR.
+            let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
             let state_ptr = load_inline_arena_state(ctx);
             let blk = ctx.block();
 
@@ -693,16 +695,16 @@ fn emit_instance_alloc_inner(
             // state to `block.offset` which is also always 8-aligned. So we
             // skip the `(offset + 7) & -8` align-up step entirely — saves
             // 2 instructions per iter on the hot path.
-            let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-            let offset_val = blk.load(I64, &offset_field_ptr);
+            let (offset_field_ptr, offset_val) =
+                crate::expr::inline_birth::arena_load(blk, &arena, &state_ptr, arena.offset);
             let aligned_off = offset_val.clone();
 
             // new_offset = aligned + total_size
             let new_offset = blk.add(I64, &aligned_off, &total_size_str);
 
             // size = state.size (at byte offset 16)
-            let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-            let size_val = blk.load(I64, &size_field_ptr);
+            let (_, size_val) =
+                crate::expr::inline_birth::arena_load(blk, &arena, &state_ptr, arena.limit);
 
             // fits = new_offset <= size
             let fits = blk.icmp_ule(I64, &new_offset, &size_val);
@@ -805,8 +807,8 @@ fn emit_instance_alloc_inner(
             ctx.block().cond_br(&fits, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
             let blk = ctx.block();
-            // GC_STORE_AUDIT(INIT): arena allocator metadata, not a JS edge.
-            blk.store(I64, &new_offset, &offset_field_ptr);
+            // Arena allocator metadata, not a JS edge.
+            crate::expr::inline_birth::arena_store(blk, &arena, &new_offset, &offset_field_ptr);
             let data_ptr = blk.load(PTR, &state_ptr);
             let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
             let fast_handle = if let Some(slots) = compact_slots {

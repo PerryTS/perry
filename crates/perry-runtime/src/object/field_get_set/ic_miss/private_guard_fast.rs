@@ -200,8 +200,8 @@ fn private_lexical_brand_is_inert(class_id: u32) -> bool {
 /// Resolve `obj` to an ordinary shaped heap object, returning it with its
 /// ShapeId. `None` means "not proven".
 ///
-/// A plausible heap address is above the handle band, so it is never a Proxy
-/// (`proxy::lookup` only decodes ids inside that band). Closures share
+/// A Proxy receiver is a cell whose shape stamp is 0 (`proxy.rs`), which this
+/// returns `None` for below, so it goes to the checked guard. Closures share
 /// `GC_TYPE_OBJECT` but not the `ObjectHeader` layout, so they are rejected
 /// before the shape word is read.
 #[inline]
@@ -460,11 +460,7 @@ unsafe fn private_field_site_word(
     if slot >= d.live_inline_slot_count || slot > PRIVATE_FIELD_SITE_MAX_SLOT {
         return 0;
     }
-    let lane = if slot < crate::object::field_rep::REP_SLOTS {
-        crate::object::field_rep::slot_rep(d.rep, slot)
-    } else {
-        crate::object::field_rep::REP_ANY
-    };
+    let lane = d.lane(slot);
     let lane_bit = match lane {
         crate::object::field_rep::REP_ANY => 0,
         crate::object::field_rep::REP_F64 => PRIVATE_FIELD_SITE_F64,

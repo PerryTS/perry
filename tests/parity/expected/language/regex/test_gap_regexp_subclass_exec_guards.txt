@@ -1,0 +1,10 @@
+exec ["b","B"] 1
+test true false 3
+match ["b","B"] ["b","b"] 7
+replace a[B]cb a[B]c[B] 11
+search 1 -1 13
+objects 2 1
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+written proto exec 2 undefined
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+own exec ["a","c"]

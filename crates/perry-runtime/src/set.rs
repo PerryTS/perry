@@ -6,7 +6,6 @@
 
 use crate::string::StringHeader;
 use std::alloc::Layout;
-use std::cell::RefCell;
 use std::ptr;
 
 mod index;
@@ -27,14 +26,15 @@ pub(crate) fn test_string_value(string: *const StringHeader) -> f64 {
     boxed_heap_string_value(string)
 }
 
-crate::perry_thread_local! {
-    /// Backing Sets whose `forEach` raw-index walk is currently in flight.
-    /// Deletes may leave holes but must not compact them while a cursor still
-    /// names the old raw layout (#9082). Nested walks are kept as a stack so
-    /// exception savepoints can discard precisely the frames a throw skips.
-    static SET_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// Backing Sets whose `forEach` raw-index walk is currently in flight.
+/// Deletes may leave holes but must not compact them while a cursor still
+/// names the old raw layout (#9082). Nested walks are kept as a stack so
+/// exception savepoints can discard precisely the frames a throw skips.
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static SET_FOREACH_STACK: crate::exception::marks::CatchStackKey<usize> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.set_foreach);
 
 #[inline]
 fn set_foreach_is_active(set: *const SetHeader) -> bool {
@@ -86,7 +86,7 @@ pub(crate) fn set_foreach_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn set_foreach_depth() -> usize {
     SET_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
@@ -328,6 +328,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 16);
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
     assert!(std::mem::size_of::<SetHeader>() == 40);
@@ -339,6 +340,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 12);
     assert!(std::mem::offset_of!(SetHeader, used) == 16);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 20);
     assert!(std::mem::size_of::<SetHeader>() == 28);
@@ -1202,7 +1204,8 @@ fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
 
 #[inline(always)]
 fn boxed_i32_value(value: i32) -> f64 {
-    f64::from_bits(crate::value::JSValue::int32(value).bits())
+    // A Number has one encoding: the raw double (exact for every i32).
+    value as f64
 }
 
 // The `_i32`/`_u32`/`_f32`/`_bool` specializations delegate to `js_set_add`,
@@ -1834,7 +1837,7 @@ pub(crate) fn set_init_iterable(set: *mut SetHeader, value: f64) -> *mut SetHead
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     };
 
@@ -1863,9 +1866,12 @@ pub(crate) fn set_init_iterable(set: *mut SetHeader, value: f64) -> *mut SetHead
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter);
+                let next =
+                    crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(element) = next else {
                     break;
                 };
@@ -2714,15 +2720,21 @@ mod tests {
     }
 
     #[test]
-    fn test_set_i32_specialized_helpers_use_int32_keys() {
+    fn test_set_i32_specialized_helpers_use_number_keys() {
         let set = js_set_alloc(4);
         js_set_add_i32(set, 42);
         js_set_add_i32(set, 42);
         assert_eq!(js_set_size(set), 1);
         assert_eq!(js_set_has_i32(set, 42), 1);
         assert_eq!(js_set_has_i32(set, -7), 0);
+        // A Number has one encoding: the stored entry is the raw double.
+        let entries = js_set_to_array(set);
+        assert_eq!(
+            crate::array::js_array_get_f64(entries, 0).to_bits(),
+            42.0f64.to_bits()
+        );
 
-        let boxed = f64::from_bits(crate::value::JSValue::int32(42).bits());
+        let boxed = 42.0f64;
         assert_eq!(js_set_has(set, boxed), 1);
         assert_eq!(js_set_delete_i32(set, 42), 1);
         assert_eq!(js_set_has(set, boxed), 0);

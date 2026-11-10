@@ -172,7 +172,58 @@ fn string_method_call_returns_number(ctx: &FnCtx<'_>, object: &Expr, property: &
 /// "raw f64?" or "non-pointer?" about a `LocalGet` asks this.
 pub(crate) fn local_is_number(ctx: &FnCtx<'_>, id: u32) -> bool {
     ctx.number_by_construction_locals.contains(&id)
+        || ctx.facts_number_locals.contains(&id)
         || ctx.receiver_descriptors.local_is_number_in_scope(id)
+}
+
+/// `f` (a module function) cannot complete normally with anything but a
+/// numeric literal selection: its last statement is such a `return`, so it
+/// never falls off the end, and every `return` outside nested closures
+/// returns one. A `throw` completes abruptly and yields no value.
+/// `PERRY_UNBOXED_CLASS_FIELDS=0` answers false.
+fn function_returns_literal_number(ctx: &FnCtx<'_>, id: u32) -> bool {
+    use perry_hir::Stmt;
+    if crate::stmt::this_field_fast_off() {
+        return false;
+    }
+    let Some(f) = ctx.numeric_order_functions.iter().find(|f| f.id == id) else {
+        return false;
+    };
+    if f.is_async || f.is_generator || f.was_plain_async {
+        return false;
+    }
+    fn literal(e: &Expr) -> bool {
+        match e {
+            Expr::Unary {
+                op: perry_hir::UnaryOp::Neg,
+                operand,
+            } => matches!(operand.as_ref(), Expr::Integer(_) | Expr::Number(_)),
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => literal(then_expr) && literal(else_expr),
+            other => is_literal_number_selection(other),
+        }
+    }
+    fn returns_ok(stmts: &[Stmt]) -> bool {
+        stmts.iter().all(|s| match s {
+            Stmt::Return(Some(e)) => literal(e),
+            Stmt::Return(None) => false,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => returns_ok(then_branch) && else_branch.as_deref().is_none_or(returns_ok),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                returns_ok(body)
+            }
+            Stmt::Labeled { body, .. } => returns_ok(std::slice::from_ref(body.as_ref())),
+            Stmt::Try { .. } | Stmt::Switch { .. } => false,
+            _ => true,
+        })
+    }
+    matches!(f.body.last(), Some(Stmt::Return(Some(e))) if literal(e)) && returns_ok(&f.body)
 }
 
 /// A selection of numeric literals returns a canonical Number regardless of
@@ -419,7 +470,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // The value proof is stronger than an erased field annotation.
             // Keep Number selection in agreement with canonical-result and
             // declared-only queries, including an unannotated receiver.
-            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+            if crate::expr::wpfacts_access::proves_number(ctx, e) {
                 return true;
             }
             if crate::expr::contained_number_get(ctx, object, property) {
@@ -675,8 +726,8 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// is never a NaN-box tag (`0x7FF9..=0x7FFF` upper 16 with a set quiet-NaN
 /// payload in tag space). Such a value may be stored into a raw-f64 numeric
 /// array slot verbatim, skipping the `js_array_numeric_value_to_raw_f64`
-/// canonicalization call (whose INT32-unbox + `is_class_id_registered`
-/// registry probe cannot fire for a value this predicate admits).
+/// canonicalization call (whose INT32 unboxing cannot fire for a value
+/// this predicate admits).
 ///
 /// SOUNDNESS CONTRACT — a `true` return authorizes a raw slot store with no
 /// runtime value check, so the value must be a real number for EVERY input:
@@ -710,6 +761,16 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     if is_literal_number_selection(e) {
         return true;
+    }
+    // A direct call of a module function whose every completion returns a
+    // numeric literal selection (`return c === "w" ? 1 : -1;`): the value is
+    // one of those literals, whatever the arguments.
+    if let Expr::Call { callee, .. } = e {
+        if let Expr::FuncRef(id) = callee.as_ref() {
+            if function_returns_literal_number(ctx, *id) {
+                return true;
+            }
+        }
     }
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
@@ -797,8 +858,8 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
                 return true;
             }
             // wpfacts slice 2: the bare read of a slot the facts prove always
-            // holds a canonical double (`wpfacts_access::proves_raw_f64`).
-            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+            // holds a canonical double (`wpfacts_access::proves_number`).
+            if crate::expr::wpfacts_access::proves_number(ctx, e) {
                 return true;
             }
             // Object model step 1: a present literal-family key every store

@@ -113,6 +113,7 @@ pub(super) fn lower(
         }),
     };
     let element = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(array)),
@@ -573,6 +574,7 @@ mod tests {
                                 mode,
                                 Expr::LocalGet(3),
                                 Expr::IndexGet {
+                                    element_offset: 0,
                                     byte_offset: 0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(array_id)),
@@ -735,6 +737,7 @@ mod tests {
             right: Box::new(Expr::Bool(true)),
         };
         let element = Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(0)),
@@ -857,6 +860,119 @@ mod tests {
             ir.matches("@js_iterator_step(").count(),
             1,
             "one protocol step: {ir}"
+        );
+    }
+
+    /// The for-of source walk (`perry_hir` `for_of_guard`) over a Number
+    /// array: `arrayRecordNeedsIterator(t, true)` is one runtime call that
+    /// also admits the packed loop over `t`, and the loop's leading
+    /// `const x = t[k]` keeps `s += x` an unboxed Number add.
+    #[test]
+    fn source_walk_entry_admits_its_packed_loop_and_the_element_binding_is_a_number() {
+        let _pin = crate::codegen::helpers::NativeRootsPin::native();
+        let mut m = Module::new("source_walk");
+        let walk = Stmt::For {
+            init: Some(Box::new(local(2, Type::Number, Expr::Integer(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(2)),
+                right: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(0)),
+                    property: "length".into(),
+                }),
+            }),
+            update: Some(Expr::Update {
+                id: 2,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![
+                Stmt::Let {
+                    id: 3,
+                    name: "x".into(),
+                    ty: Type::Number,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
+                        element_offset: 0,
+                        object: Box::new(Expr::LocalGet(0)),
+                        index: Box::new(Expr::LocalGet(2)),
+                    }),
+                },
+                Stmt::Expr(Expr::LocalSet(
+                    1,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(1)),
+                        right: Box::new(Expr::LocalGet(3)),
+                    }),
+                )),
+            ],
+        };
+        m.init = vec![
+            local(
+                0,
+                Type::Array(Box::new(Type::Number)),
+                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
+            ),
+            local(1, Type::Number, Expr::Number(0.0)),
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(rt(
+                        "arrayRecordNeedsIterator",
+                        vec![Expr::LocalGet(0), Expr::Bool(true)],
+                    )),
+                    right: Box::new(Expr::Bool(false)),
+                },
+                then_branch: vec![walk],
+                else_branch: Some(vec![]),
+            },
+        ];
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &m,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    is_entry_module: true,
+                    target: Some("x86_64-unknown-linux-gnu".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let start = ir.find("define i32 @main()").unwrap();
+        let rest = &ir[start..];
+        let ir = &rest[..rest.find("\n}\n").unwrap()];
+        assert_eq!(
+            ir.matches("@js_array_record_enter_counted(").count(),
+            1,
+            "{ir}"
+        );
+        assert!(!ir.contains("@js_array_record_needs_iterator("), "{ir}");
+        assert!(
+            !ir.contains("@js_typed_feedback_packed_f64_array_loop_guard("),
+            "the walk consumes its entry's admission: {ir}"
+        );
+        let body = ir.find("\nfor.packed_f64_fast.body.").expect(ir);
+        let exit = ir[body..].find("\nfor.packed_f64_fast.exit.").expect(ir);
+        let fast = &ir[body..body + exit];
+        assert!(
+            !fast.contains("guarded_add.dynamic"),
+            "the element binding is a Number in the fast loop: {ir}"
+        );
+        assert!(
+            ir.contains("forof.walk.inline"),
+            "no iteration member is writable: the entry tests the header inline: {ir}"
+        );
+        assert!(
+            !fast.contains("ptr addrspace(1)"),
+            "the fast loop roots nothing and reloads no root (a laundered reload \
+             pins the element-base loads in the loop): {ir}"
         );
     }
 }

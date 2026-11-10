@@ -77,7 +77,9 @@ fn an_escaped_namespace_exposes_nested_result_objects() {
             .filter(|t| t.fields.iter().any(|f| f.key == "payload"))
             .collect();
         assert!(!lits.is_empty(), "live payload ({mode})");
-        assert!(lits.iter().all(|t| t.escape.is_some()), "{mode}: a possibly replaced namespace callee retains Core and can call its other fields\n{}", pf.dump_text());
+        // Both modes: DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there, so `Core.make` is not replaced and its result stays compiled.
+        let want_escaped = false;
+        assert!(lits.iter().all(|t| t.escape.is_some() == want_escaped), "{mode}: a possibly replaced namespace callee retains Core and can call its other fields\n{}", pf.dump_text());
     }
 }
 
@@ -102,13 +104,24 @@ fn an_unknown_function_import_on_a_cycle_backedge_exposes_its_result() {
 
 #[test]
 fn an_opaque_builtin_value_can_return_its_receiver() {
-    // reverse stored as a value is an opaque builtin callee. Returning
-    // the holder makes its fields available through the unknown result.
+    // reverse stored as a value is `Array.prototype.reverse`, generic over
+    // `this`: it returns the holder, so the result's fields are the
+    // holder's (`retained.child` is `child`, whose `payload` the store
+    // writes).
     let pf = facts("const reverse = [].reverse; const child = { payload: 1 }; const holder = { child, length: 0, f: reverse }; const retained: any = holder.f(); retained.child.payload = 9; console.log(child.payload);");
-    let child = pf
+    let holder = pf
         .templates
         .iter()
-        .find(|t| t.fields.iter().any(|f| f.key == "payload"))
-        .expect("child layout");
-    assert!(child.escape.is_some(), "{}", pf.dump_text());
+        .find(|t| t.fields.iter().any(|f| f.key == "f"))
+        .expect("holder layout");
+    let read = pf
+        .sites
+        .iter()
+        .find(|s| !s.is_call && s.key == "child")
+        .expect("retained.child");
+    assert!(
+        read.top || read.receivers.contains(&holder.display),
+        "{}",
+        pf.dump_text()
+    );
 }

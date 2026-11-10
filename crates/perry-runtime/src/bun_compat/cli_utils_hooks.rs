@@ -17,7 +17,8 @@ static TOML: Hook<fn() -> f64> = Hook::empty();
 static SEMVER: Hook<fn() -> f64> = Hook::empty();
 static JSONL: Hook<fn() -> f64> = Hook::empty();
 static DECORATE_HASH: Hook<fn(f64) -> f64> = Hook::empty();
-static TOML_PARSE: Hook<fn(&str) -> Result<f64, f64>> = Hook::empty();
+static TOML_PARSE: Hook<fn(&str) -> Result<f64, crate::builtin_value_support::DataError>> =
+    Hook::empty();
 
 fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -46,7 +47,9 @@ pub fn decorate_bun_hash(value: f64) -> f64 {
 /// `None` when TOML support is not installed: the loader then takes its
 /// deferred-error path, as a build without `bun-cli-utils` always did.
 pub(crate) fn toml_parse_result(source: &str) -> Option<Result<f64, f64>> {
-    TOML_PARSE.get().map(|f| f(source))
+    TOML_PARSE
+        .get()
+        .map(|f| f(source).map_err(|error| error.value()))
 }
 
 /// The `bun-cli-utils` install: fill every slot above from the real backends.

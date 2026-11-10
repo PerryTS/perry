@@ -1,0 +1,1 @@
+In whole-program facts, `arguments` in a function with a rest parameter is the arguments object holding every argument, so code handed it can change those objects (it was bound to one positional argument, which proved a field that the program changes).

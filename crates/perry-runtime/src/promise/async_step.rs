@@ -205,12 +205,30 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         let inner = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as *mut Promise;
         if !inner.is_null() {
             // PromiseResolve(%Promise%, x) performs Get(x, "constructor")
-            // before its identity short-cut.  An own accessor can throw, and
-            // an own non-intrinsic constructor prevents returning x itself.
+            // before its identity short-cut, and only that Get decides: x is
+            // reused exactly when the answer is %Promise%. An own accessor can
+            // throw, and an own non-intrinsic constructor prevents returning x
+            // itself. A recorded prototype answers through its chain (the
+            // generic getter per hop, accessors with x as receiver): a user
+            // prototype below Promise.prototype answers %Promise%, so x is
+            // reused and a `then` there is never called; a `class X extends
+            // Promise` answers X and takes the thenable path. A `then` on the
+            // chain plays no part.
             let addr = inner as usize;
             let same_intrinsic_constructor =
-                if super::then::promise_inherited_user_then(addr).is_some() {
-                    false
+                if crate::object::prototype_chain::object_static_prototype(addr).is_some()
+                    && !super::promise_has_own_constructor(addr)
+                {
+                    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                    // Allocating the key can move x: re-read it from its root.
+                    let addr = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+                    let ctor = if key.is_null() {
+                        None
+                    } else {
+                        crate::object::prototype_chain::resolve_inherited_field(addr, key)
+                    };
+                    let intrinsic = crate::object::builtin_constructor_value("Promise");
+                    ctor.is_some_and(|c| c.bits() == intrinsic.to_bits())
                 } else if super::promise_has_own_constructor(addr) {
                     let ctor = unsafe {
                         crate::object::exotic_expando::exotic_get_own_property(

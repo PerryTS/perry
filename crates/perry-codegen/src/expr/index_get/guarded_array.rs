@@ -282,6 +282,57 @@ pub(in crate::expr) fn emit_and_no_named_layout(
     blk.and(crate::types::I1, ok, &no_named)
 }
 
+/// The stack form of a call spread reads its parameters straight from the
+/// source array. The caller has the compile-time half of the proof: the
+/// program writes neither an iteration member nor
+/// `%ArrayIteratorPrototype%.next` (`array_iteration_facts == 0`), so an
+/// Array's iteration is the element walk. This is the run-time half, the
+/// guarded element read's own guard: an ordinary, unforwarded Array whose
+/// first `min(length, need)` slots lie in its dense prefix P (EK design §4:
+/// non-hole own data elements, no descriptor, below capacity). Those slots
+/// are then exactly the values the drain would produce. Emitted from the
+/// current block; every miss branches to `miss_l`. Returns the array handle,
+/// its length and its capacity, live in the (new) current block. Nothing
+/// between this test and the element loads allocates.
+pub(crate) fn emit_spread_stack_admission(
+    ctx: &mut FnCtx<'_>,
+    src_box: &str,
+    need: usize,
+    miss_l: &str,
+) -> (String, String, String) {
+    let deref_idx = ctx.new_block("spread.adm.deref");
+    let loads_idx = ctx.new_block("spread.adm.loads");
+    let hit_idx = ctx.new_block("spread.adm.hit");
+    let deref_l = ctx.block_label(deref_idx);
+    let loads_l = ctx.block_label(loads_idx);
+    let hit_l = ctx.block_label(hit_idx);
+    let bits = ctx.block().bitcast_double_to_i64(src_box);
+    let offset = ctx.block().sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+    let heap = ctx
+        .block()
+        .icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
+    ctx.block().cond_br(&heap, &deref_l, miss_l);
+    ctx.current_block = deref_idx;
+    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let typed = emit_array_guard_word_typed(ctx.block(), &word);
+    ctx.block().cond_br(&typed, &loads_l, miss_l);
+    ctx.current_block = loads_idx;
+    let blk = ctx.block();
+    let ptr = blk.inttoptr(I64, &handle);
+    let len = blk.load(I32, &ptr);
+    let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+    let cap = blk.load(I32, &cap_ptr);
+    let prefix = blk.array_ek_prefix(&handle);
+    let need = need.to_string();
+    let short = blk.icmp_ult(I32, &len, &need);
+    let read = blk.select(I1, &short, I32, &len, &need);
+    let dense = blk.icmp_ule(I32, &read, &prefix);
+    blk.cond_br(&dense, &hit_l, miss_l);
+    ctx.current_block = hit_idx;
+    (handle, len, cap)
+}
+
 /// Every caller already has a nonnegative signed-i32 index: the canonical
 /// runtime-key split, numeric_index_has_integer_array_index_proof, or the
 /// existing bounded receiver descriptor. No source-expression proof is added.
@@ -1108,6 +1159,7 @@ mod compact_read_tests {
     #[test]
     fn compact_array_read_guards_own_slot_and_sends_holes_cold() {
         let ll = ir(vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -1153,6 +1205,7 @@ mod compact_read_tests {
     #[test]
     fn rejected_keys_share_one_body_across_sites() {
         let read = || Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),

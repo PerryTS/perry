@@ -37,18 +37,6 @@ fn resolved<'a>(ctx: &'a CompilationContext, from: &Path, source: &str) -> Optio
         })
 }
 
-fn type_only(module: &perry_hir::Module, name: &str) -> bool {
-    let is_type = module.interfaces.iter().any(|t| t.name == name)
-        || module.type_aliases.iter().any(|t| t.name == name);
-    is_type
-        && !(module.functions.iter().any(|f| f.name == name)
-            || module.exported_functions.iter().any(|(n, _)| n == name)
-            || module.exported_objects.iter().any(|n| n == name)
-            || module.classes.iter().any(|c| c.name == name)
-            || module.enums.iter().any(|e| e.name == name)
-            || module.globals.iter().any(|g| g.name == name))
-}
-
 fn exports(
     ctx: &CompilationContext,
     path: &PathBuf,
@@ -67,7 +55,8 @@ fn exports(
         match e {
             perry_hir::Export::Named { local, exported } => {
                 n += usize::from(
-                    (include_default || exported != "default") && !type_only(module, local),
+                    (include_default || exported != "default")
+                        && !module.is_type_only_export_binding(local),
                 );
             }
             perry_hir::Export::ReExport { exported, .. } => {

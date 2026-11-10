@@ -55,7 +55,6 @@ fn ir_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -89,6 +88,8 @@ fn ir_opts() -> CompileOptions {
         module_init_deps: Vec::new(),
         module_deferred_init_deps: Vec::new(),
         module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -258,6 +259,7 @@ fn elem_field(array_id: u32, index: Expr) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),
@@ -500,6 +502,14 @@ fn fast_clone_slice(ir: &str) -> String {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in ir.split_inclusive('\n') {
         let trimmed = line.trim_end();
+        // The second copy may also be told apart by its function header: the
+        // specialised and the generic body of one source function number their
+        // blocks differently whenever one of them lowers extra straight-line
+        // blocks ahead of the loop (a guarded `x | 0` on an untyped value), so
+        // equal labels are not a reliable marker.
+        if line.starts_with("define ") && !owned.is_empty() {
+            break;
+        }
         // A block DEFINITION starts at column 0 and ends in `:`; anything else
         // belongs to whichever block was last opened.
         if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
@@ -665,13 +675,11 @@ fn element_shape_versioned_loop_declines_a_body_that_stores() {
     let ir = emit(&element_shape_module(
         vec![
             accumulate_stmt(SUM_ID, ARRAY_ID, Expr::LocalGet(COUNTER_ID)),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                index: Box::new(Expr::LocalGet(COUNTER_ID)),
-                value: Box::new(Expr::Number(1.0)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(ARRAY_ID)),
+                Box::new(Expr::LocalGet(COUNTER_ID)),
+                Box::new(Expr::Number(1.0)),
+            )),
         ],
         None,
     ));
@@ -1398,12 +1406,10 @@ fn binding_stmt(mutable: bool) -> Stmt {
         name: "r".to_string(),
         ty: Type::Named("Node".to_string()),
         mutable,
-        init: Some(Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(ARRAY_ID)),
-            index: Box::new(Expr::LocalGet(COUNTER_ID)),
-        }),
+        init: Some(Expr::synthetic_index_get(
+            Box::new(Expr::LocalGet(ARRAY_ID)),
+            Box::new(Expr::LocalGet(COUNTER_ID)),
+        )),
     }
 }
 
@@ -1565,12 +1571,10 @@ fn element_binding_declines_a_second_array() {
                 name: "r".to_string(),
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(OTHER_ID)),
-                    index: Box::new(Expr::LocalGet(COUNTER_ID)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(OTHER_ID)),
+                    Box::new(Expr::LocalGet(COUNTER_ID)),
+                )),
             },
             binding_accumulate(elem_field(ARRAY_ID, Expr::LocalGet(COUNTER_ID))),
         ],
@@ -1636,12 +1640,10 @@ fn an_element_binding_indexed_by_a_non_counter_declines() {
                 name: "r".to_string(),
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                    index: Box::new(Expr::Integer(0)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(ARRAY_ID)),
+                    Box::new(Expr::Integer(0)),
+                )),
             },
             binding_accumulate(binding_field("v")),
         ],
@@ -1717,12 +1719,10 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                         name: "r".to_string(),
                         ty: Type::Named("Node".to_string()),
                         mutable: false,
-                        init: Some(Expr::IndexGet {
-                            byte_offset: 0,
-                            byte_end: 0,
-                            object: Box::new(Expr::LocalGet(PS_ID)),
-                            index: Box::new(Expr::LocalGet(F_COUNTER_ID)),
-                        }),
+                        init: Some(Expr::synthetic_index_get(
+                            Box::new(Expr::LocalGet(PS_ID)),
+                            Box::new(Expr::LocalGet(F_COUNTER_ID)),
+                        )),
                     },
                     Stmt::Expr(Expr::LocalSet(
                         F_SUM_ID,

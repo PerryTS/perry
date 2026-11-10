@@ -36,6 +36,7 @@ impl SH for Module {
             extern_funcs,
             init_was_unrolled,
             has_top_level_await,
+            async_init_function,
             init_kind,
             async_step_closures,
             closure_display_names,
@@ -49,6 +50,7 @@ impl SH for Module {
             local_source_spans: _,
             gen_param_prologue_len,
             requested_modules,
+            locally_redeclared_imports,
         } = self;
         name.hash(h);
         match class_family_syntax {
@@ -78,6 +80,7 @@ impl SH for Module {
         imports.hash(h);
         exports.hash(h);
         requested_modules.hash(h);
+        locally_redeclared_imports.hash(h);
         classes.hash(h);
         interfaces.hash(h);
         type_aliases.hash(h);
@@ -110,6 +113,7 @@ impl SH for Module {
         extern_funcs.hash(h);
         init_was_unrolled.hash(h);
         has_top_level_await.hash(h);
+        async_init_function.hash(h);
         init_kind.hash(h);
         // HashSet has nondeterministic iteration order; sort for stable hashing.
         let mut ids: Vec<u32> = async_step_closures.iter().copied().collect();

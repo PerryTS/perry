@@ -558,16 +558,14 @@ fn emit_receiver_kind_branch(
             None
         }
         // A number is any IEEE double outside Perry's positive tag band
-        // 0x7FF9..=0x7FFF (`JSValue::is_number`), or an INT32-tagged value.
+        // 0x7FF9..=0x7FFF (`JSValue::is_number`).
         ReceiverKind::Number => {
             let blk = ctx.block();
             let bits = blk.bitcast_double_to_i64(recv);
             let tag = blk.lshr(I64, &bits, "48");
             let band_offset = blk.sub(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
             let in_tag_band = blk.icmp_ult(I64, &band_offset, "7");
-            let is_double = blk.xor(I1, &in_tag_band, "true");
-            let is_int32 = blk.icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
-            let is_number = blk.or(I1, &is_double, &is_int32);
+            let is_number = blk.xor(I1, &in_tag_band, "true");
             let is_number = blk.and(I1, &is_number, pristine);
             blk.cond_br(&is_number, builtin_label, generic_label);
             None

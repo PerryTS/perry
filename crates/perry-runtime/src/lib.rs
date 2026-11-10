@@ -148,9 +148,13 @@ pub mod color_parse;
 #[cfg(perry_contract_checks)]
 pub(crate) mod contracts;
 pub mod date;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dgram_reactor;
+// A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+#[cfg(target_os = "wasi")]
+#[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
@@ -188,6 +192,7 @@ pub mod messaging;
 pub mod mimalloc_os_tag;
 pub mod module_hooks;
 pub mod module_require;
+pub mod async_module;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
@@ -199,6 +204,7 @@ pub mod native_payload_stream_abi;
 mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;
+pub mod external_family;
 pub mod net_validate;
 pub mod node_api_host;
 mod param_type_guard;
@@ -516,16 +522,17 @@ pub(crate) mod stdlib_pump {
     /// the count is non-zero, other threads may join the same logical tick.
     static OUTER_PUMP_ENTRY: Mutex<()> = Mutex::new(());
 
-    crate::perry_thread_local! {
-        /// `await` inside a pump callback can synchronously re-enter the host
-        /// pump. Lifecycle hooks belong to the outer tick only.
-        /// One entry per pump level in flight, with the frame mark of the
-        /// level's owner (`crate::exception::marks`): a throw that abandons
-        /// a level skips its guard's drop, and the catching landing pad pops
-        /// the level instead.
-        static PUMP_DEPTH: std::cell::RefCell<crate::exception::CatchStack<()>> =
-            const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
-    }
+    /// `await` inside a pump callback can synchronously re-enter the host
+    /// pump. Lifecycle hooks belong to the outer tick only.
+    /// One entry per pump level in flight, with the frame mark of the
+    /// level's owner (`crate::exception::marks`): a throw that abandons
+    /// a level skips its guard's drop, and the catching landing pad pops
+    /// the level instead.
+    ///
+    /// A field of the per-thread record of frame-marked stacks
+    /// ([`crate::exception::marks::CatchStacks`]).
+    static PUMP_DEPTH: crate::exception::marks::CatchStackKey<()> =
+        crate::exception::marks::CatchStackKey::new(|stacks| &stacks.pump);
 
     struct PumpDepthGuard {
         depth_before: usize,
@@ -587,7 +594,7 @@ pub(crate) mod stdlib_pump {
     }
 
     /// The re-entrant stdlib-pump depth.
-    #[cfg(any(test, target_os = "wasi"))]
+    #[cfg(test)]
     pub(crate) fn pump_depth() -> u32 {
         PUMP_DEPTH.with(|depth| depth.borrow().len() as u32)
     }
@@ -1146,7 +1153,7 @@ pub(crate) mod stdlib_pump {
             let outcome = crate::exception::catch_js_throw(|| -> () {
                 let (_skipped_guard, outermost) = PumpDepthGuard::enter();
                 assert!(outermost);
-                crate::exception::js_throw(thrown);
+                crate::exception::test_throw(thrown);
             });
             match outcome {
                 Err(value) => assert_eq!(value.to_bits(), thrown.to_bits()),
@@ -1438,7 +1445,7 @@ mod node_test_hook_slots;
 pub mod temporal_hook_slots;
 mod temporal_layout;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 mod dgram_registry_owner;
 
 mod wasm_hook_slots;
@@ -1453,3 +1460,5 @@ mod diagnostic_report_roots;
 
 mod dyn_eval_hook_roots;
 mod interp_proto_guard;
+
+pub mod snap_census;

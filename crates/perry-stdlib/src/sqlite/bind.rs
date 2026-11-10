@@ -15,13 +15,7 @@ use std::os::raw::{c_char, c_int, c_void};
 pub(crate) unsafe fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JSValue {
     match value {
         SqliteValue::Null => JSValue::null(),
-        SqliteValue::Integer(n) => {
-            if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
-                JSValue::int32(*n as i32)
-            } else {
-                JSValue::number(*n as f64)
-            }
-        }
+        SqliteValue::Integer(n) => JSValue::number(*n as f64),
         SqliteValue::Real(n) => JSValue::number(*n),
         SqliteValue::Text(s) => {
             let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -413,13 +407,9 @@ pub(crate) unsafe fn node_sqlite_integer_value(value: i64, read_bigints: bool) -
             value
         ));
     }
-    // Always hand out a NUMBER-tagged double, never an INT32-tagged value
-    // (#6561). Node's node:sqlite returns plain JS numbers, and perry's
-    // INT32 tag shares its storage shape with `Expr::ClassRef`
-    // (`INT32_TAG | class_id`, see #618): when a small integer like a
-    // rowid `1` escapes into an any-typed context, `js_value_typeof`
-    // cannot tell it apart from a registered class id and reports
-    // "function" instead of "number".
+    // Return SQLite integers in the raw-f64 representation used by Node-API
+    // number producers (#6561). Both this form and INT32-tagged words are
+    // numbers; class constructors have their own function objects.
     JSValue::number(value as f64)
 }
 
@@ -656,6 +646,22 @@ pub(crate) fn build_packed_keys(column_names: &[String]) -> (Vec<u8>, u32) {
 #[cfg(test)]
 mod tests {
     use super::is_named_parameter_object;
+
+    #[test]
+    fn integer_columns_are_raw_double_numbers() {
+        // A Number has one encoding: every INTEGER column value (i32 range or
+        // not) is the raw f64, never an INT32 word, so a row field the facts
+        // prove to be a Number reads as a plain double.
+        for n in [0i64, 5, -1, i32::MAX as i64, i32::MIN as i64, 1 << 40] {
+            let v = unsafe { super::sqlite_value_to_jsvalue(&super::SqliteValue::Integer(n)) };
+            assert_eq!(v.bits(), (n as f64).to_bits(), "INTEGER {n}");
+            // node:sqlite's column reader (`sqlite3_column_int64` ->
+            // `node_sqlite_integer_value`): the same raw double (P3 B1 audit,
+            // NUM_SEEDS.md "int32-box producers").
+            let v = unsafe { super::node_sqlite_integer_value(n, false) };
+            assert_eq!(v.bits(), (n as f64).to_bits(), "node:sqlite INTEGER {n}");
+        }
+    }
 
     #[test]
     fn symbols_are_not_named_parameter_objects() {

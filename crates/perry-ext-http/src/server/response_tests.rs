@@ -3,6 +3,9 @@
 //! `#[path]` child module of `response` so `use super::*` resolves to it.
 
 use super::*;
+use crate::server::response_cork::{
+    chunked_buffer_wire_len, js_node_http_res_cork, js_node_http_res_uncork,
+};
 
 fn empty_response() -> ServerResponse {
     ServerResponse::new()
@@ -184,4 +187,29 @@ fn buffered_end_preserves_explicit_framing_after_write_head() {
             expected
         );
     }
+}
+
+// node f9175a212c: `cork()`/`uncork()` count on the message (`kCorked`), and a
+// buffered chunk adds its data, hex length line and two CRLFs to
+// `writableLength` (`5\r\nhello\r\n` is 10 bytes).
+#[test]
+fn cork_counts_on_the_message_and_buffered_chunks_count_their_framing() {
+    let h = register_handle(ServerResponse::new());
+    js_node_http_res_cork(h);
+    js_node_http_res_cork(h);
+    assert_eq!(response_state(h).map(|sr| sr.corked), Some(2));
+    response_state_mut(h)
+        .unwrap()
+        .chunked_buffer
+        .extend_from_slice(b"hello");
+    js_node_http_res_uncork(h);
+    assert_eq!(response_state(h).map(|sr| sr.corked), Some(1));
+    assert_eq!(response_state(h).map(|sr| sr.chunked_buffer.len()), Some(5));
+    // The last uncork takes the buffer; this handle has no connection to send it to.
+    js_node_http_res_uncork(h);
+    assert_eq!(response_state(h).map(|sr| sr.corked), Some(0));
+    assert_eq!(response_state(h).map(|sr| sr.chunked_buffer.len()), Some(0));
+    assert_eq!(chunked_buffer_wire_len(0), 0);
+    assert_eq!(chunked_buffer_wire_len(5), 10);
+    assert_eq!(chunked_buffer_wire_len(16), 22);
 }

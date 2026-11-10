@@ -847,10 +847,10 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
                 out.push_str(&format!("{pc:#x}"));
                 out.push(']');
             }
-            // A module's top-level frame is registered with its own location
-            // (`Object.<anonymous> (<path>)`, node's spelling); the name
-            // already carries the position, so do not append an unknown one.
-            if !name.starts_with("Object.<anonymous> (") {
+            // Module labels carry their location: a bare ESM file URL or
+            // CommonJS's Object.<anonymous> (path). Neither needs an unknown
+            // location appended to it.
+            if !name.starts_with("Object.<anonymous> (") && !name.starts_with("file://") {
                 out.push_str(" (<anonymous>)");
             }
             rendered += 1;
@@ -1030,6 +1030,7 @@ mod tests {
             .wrapping_add(17)
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn pcs_round_trip_through_the_ascii_blob() {
         let pcs = [0x1_0000_1234usize, 0x7fff_ffff_0000, 1, 0];
@@ -1064,9 +1065,15 @@ mod tests {
         all(target_arch = "x86_64", target_os = "linux"),
         link_section = "perry_js_text"
     )]
+    // The probe's own frame must be on the stack while the constructor
+    // captures: the result passes through `black_box`, so the construction
+    // is a call that returns here, never a tail call that pops this frame
+    // first (an optimized build turns `js_error_new()` in tail position into
+    // a jump once it inlines it). Compiled JS calls the constructor and uses
+    // its result, so it always keeps its frame.
     #[inline(never)]
     fn unread_error_probe() -> *mut ErrorHeader {
-        crate::error::js_error_new()
+        std::hint::black_box(crate::error::js_error_new())
     }
 
     #[cfg(all(
@@ -1111,6 +1118,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn new_image_replacement_is_visible_without_a_name_snapshot() {
         const START: usize = 0x0000_7d10_0010_0000;
@@ -1161,6 +1169,7 @@ mod tests {
     /// stack index must use only codegen's image registry, or the lower-bound
     /// lookup gives every nearby runtime function the thunk's JS name.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn describe_ip_does_not_name_runtime_code_after_a_builtin_thunk() {
         const THUNK_START: usize = 0x0000_7e00_0000_0000;
         const THUNK_NAME: &[u8] = b"get years";

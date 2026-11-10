@@ -1,46 +1,9 @@
 //! Actual pending deliveries: ordered values and the subscribers present
 //! when those values arrived. Later subscribers get the current value from
 //! edge registration, then receive only subsequent deliveries.
-use perry_hir::fx::FxHashSet;
-use std::{rc::Rc, sync::Arc};
-#[derive(Clone, Debug)]
-pub(crate) enum Targets {
-    Empty,
-    Small(Vec<u32>),
-    Shared(Rc<FxHashSet<u32>>),
-}
-impl Targets {
-    pub(crate) fn capture(order: &[u32], set: Option<&Rc<FxHashSet<u32>>>) -> Self {
-        if order.is_empty() {
-            Self::Empty
-        } else if order.len() <= 16 {
-            Self::Small(order.to_vec())
-        } else {
-            Self::Shared(
-                set.cloned()
-                    .unwrap_or_else(|| Rc::new(order.iter().copied().collect())),
-            )
-        }
-    }
-    fn contains(&self, n: u32) -> bool {
-        match self {
-            Self::Empty => false,
-            Self::Small(v) => v.contains(&n),
-            Self::Shared(v) => v.contains(&n),
-        }
-    }
-    fn same(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Empty, Self::Empty) => true,
-            (Self::Small(a), Self::Small(b)) => a == b,
-            (Self::Shared(a), Self::Shared(b)) => Rc::ptr_eq(a, b),
-            _ => false,
-        }
-    }
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
-}
+use std::sync::Arc;
+mod queue;
+pub(crate) use queue::{EventQueue, Pending};
 #[derive(Clone, Debug)]
 pub(crate) struct Sequence {
     chunks: Vec<Arc<Vec<u32>>>,
@@ -111,7 +74,18 @@ impl Values {
 #[derive(Clone, Debug)]
 struct Event {
     values: Values,
-    targets: Targets,
+    boundary: u32,
+    // Work counts the original nonempty batches, even after all their edges are pruned.
+    had_targets: bool,
+    mergeable: bool,
+}
+impl Event {
+    fn remap(&mut self, rank: &[u32]) {
+        let old = self.boundary;
+        self.boundary = rank[old as usize];
+        // Small snapshots compare contents; pruning replaces large snapshots' Rc identity.
+        self.mergeable &= old <= 16 && old == self.boundary;
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub struct Delta {
@@ -142,48 +116,76 @@ impl Delta {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-    pub fn capacity(&self) -> usize {
-        self.events.capacity() * std::mem::size_of::<Event>() / std::mem::size_of::<u32>()
-    }
     pub fn clear(&mut self) {
         self.events.clear();
         self.len = 0;
     }
+    #[cfg(test)]
     pub fn push(&mut self, t: u32) {
-        self.push_to(t, &Targets::Empty);
+        self.push_to(t, 0);
     }
-    pub(crate) fn push_to(&mut self, t: u32, targets: &Targets) {
+    #[cfg(test)]
+    pub(crate) fn push_to(&mut self, t: u32, boundary: u32) {
         self.len += 1;
         if let Some(last) = self.events.last_mut() {
-            if last.targets.same(targets) {
+            if last.mergeable && last.boundary == boundary {
                 last.values.push(t);
                 return;
             }
         }
         self.events.push(Event {
             values: Values::Owned(vec![t]),
-            targets: targets.clone(),
+            boundary,
+            had_targets: boundary != 0,
+            mergeable: true,
         });
     }
     #[cfg(test)]
     pub(crate) fn append_batch(&mut self, batch: &Batch) -> u64 {
-        self.append_to(batch, &Targets::Empty)
+        self.append_to(batch, 0)
     }
-    pub(crate) fn append_to(&mut self, batch: &Batch, targets: &Targets) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn append_to(&mut self, batch: &Batch, boundary: u32) -> u64 {
         if batch.len() == 0 {
             return 0;
         }
         self.len += batch.len();
         if let Some(last) = self.events.last_mut() {
-            if last.targets.same(targets) {
+            if last.mergeable && last.boundary == boundary {
                 return last.values.append(batch);
             }
         }
         self.events.push(Event {
             values: Values::Shared(batch.0.clone()),
-            targets: targets.clone(),
+            boundary,
+            had_targets: boundary != 0,
+            mergeable: true,
         });
         batch.0.chunks.len().saturating_sub(1) as u64
+    }
+    /// Drops the values `keep` refuses. Each event keeps its subscribers
+    /// (its boundary); its values are rebuilt, never changed in shared
+    /// storage. Returns how many were dropped.
+    pub(crate) fn retain(&mut self, keep: impl Fn(u32) -> bool) -> usize {
+        let mut len = 0;
+        for e in &mut self.events {
+            let v: Vec<u32> = match &e.values {
+                Values::Owned(v) => v.iter().copied().filter(|&t| keep(t)).collect(),
+                Values::Shared(s) => s
+                    .chunks
+                    .iter()
+                    .flat_map(|c| c.iter().copied())
+                    .filter(|&t| keep(t))
+                    .collect(),
+            };
+            if v.len() != e.values.len() {
+                e.values = Values::Owned(v);
+            }
+            len += e.values.len();
+        }
+        let dropped = self.len - len;
+        self.len = len;
+        dropped
     }
     pub(crate) fn prepare(&mut self) {
         for e in &mut self.events {
@@ -193,14 +195,14 @@ impl Delta {
     pub(crate) fn delivery_len(&self, dst: u32) -> usize {
         self.events
             .iter()
-            .filter(|e| e.targets.contains(dst))
+            .filter(|e| dst < e.boundary)
             .map(|e| e.values.len())
             .sum()
     }
     pub(crate) fn delivery_overhead(&self) -> u64 {
         self.events
             .iter()
-            .filter(|e| !e.targets.is_empty())
+            .filter(|e| e.had_targets)
             .count()
             .saturating_sub(1) as u64
     }
@@ -208,7 +210,7 @@ impl Delta {
         let mut chunks = Vec::new();
         let mut len = 0;
         for e in &self.events {
-            if e.targets.contains(dst) {
+            if dst < e.boundary {
                 let Values::Shared(v) = &e.values else {
                     unreachable!("prepare deliveries before copying")
                 };
@@ -240,7 +242,7 @@ impl<'a> Iterator for Iter<'a> {
                 continue;
             }
             let e = self.events.next()?;
-            if self.target.is_some_and(|n| !e.targets.contains(n)) {
+            if self.target.is_some_and(|n| n >= e.boundary) {
                 continue;
             }
             match &e.values {

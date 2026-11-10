@@ -1,13 +1,11 @@
 //! A class CONSTRUCTOR used as a value (#11414; the every-receiver-shape
 //! lane's class-constructor stage).
 //!
-//! Two forms name a class constructor while the migration runs:
-//!
-//! * the legacy INT32 immediate `0x7FFE_0000_0000_0000 | class_id` with bit 32
-//!   clear (bit 32 set is the `C.prototype` half — [`super::class_prototype_ref_id`]).
-//!   It is bit-identical to the int32 number equal to the class id, which is
-//!   #11414; the lane deletes it;
-//! * a class FUNCTION OBJECT: a `GC_TYPE_CLOSURE` cell whose code pointer is
+//! A class constructor value is its class FUNCTION OBJECT, and nothing else:
+//! an INT32 word is always a number, also when it equals a registered class
+//! id (#11414: the INT32 immediate `INT32_TAG | class_id` that once named a
+//! class is gone; it was bit-identical to that number). The function object
+//! is a `GC_TYPE_CLOSURE` cell whose code pointer is
 //!   [`js_class_constructor_called`] (its [[Call]], which throws), whose
 //!   capture slot 0 holds the class id as an INT32 value, and whose capture
 //!   slot 1 holds the class's `prototype` object ([`class_decl_prototype_link`]).
@@ -17,8 +15,9 @@
 //! else may test the INT32 tag or the code pointer to decide "is this a class".
 use crate::closure::ClosureHeader;
 
-/// The class a constructor VALUE names — either form — or `None`. A
-/// `C.prototype` reference is not a constructor and answers `None`.
+/// The class a constructor VALUE (a class function object) names, or `None`.
+/// An INT32 word is a number, and a `C.prototype` reference is not a
+/// constructor: both answer `None`.
 #[inline]
 pub(crate) fn class_value_id(value: f64) -> Option<u32> {
     class_value_id_bits(value.to_bits())
@@ -28,13 +27,6 @@ pub(crate) fn class_value_id(value: f64) -> Option<u32> {
 #[inline]
 pub(crate) fn class_value_id_bits(bits: u64) -> Option<u32> {
     match bits >> 48 {
-        0x7FFE => {
-            if bits & super::native_module::CLASS_PROTOTYPE_REF_FLAG != 0 {
-                return None;
-            }
-            let class_id = (bits & 0xFFFF_FFFF) as u32;
-            (class_id != 0 && super::is_class_id_registered(class_id)).then_some(class_id)
-        }
         0x7FFD => class_closure_id((bits & crate::value::POINTER_MASK) as usize),
         _ => None,
     }
@@ -124,31 +116,25 @@ pub(crate) static CLASS_CONSTRUCTOR_INFO: crate::closure::JsFunctionInfo =
         js_class_constructor_called as crate::codegen_abi::JsBody0<ClosureHeader>,
     );
 
-/// The PRE-MIGRATION gate spelling, kept exact for the legacy form while it
-/// also admits the function-object form: any INT32 word (registered or not,
-/// either half — those gates accepted every `0x7FFE` word, which is #11414)
-/// or a class function object. `bits` is a NaN-boxed VALUE word. Every caller
-/// is narrowed to [`class_value_id_bits`] when the INT32 form is deleted.
+/// The class a class-REF word names: a class function object (the
+/// constructor). `bits` is a NaN-boxed VALUE word. An INT32 number is none
+/// (#11414), and neither is a method's home word.
 #[inline]
-pub(crate) fn legacy_class_value_word(bits: u64) -> Option<u32> {
-    match bits >> 48 {
-        0x7FFE => Some((bits & 0xFFFF_FFFF) as u32),
-        0x7FFD => class_closure_id((bits & crate::value::POINTER_MASK) as usize),
-        _ => None,
-    }
+pub(crate) fn class_ref_word(bits: u64) -> Option<u32> {
+    class_value_id_bits(bits)
 }
 
-/// [`legacy_class_value_word`] for a word that arrived through a POINTER-typed
+/// [`class_ref_word`] for a word that arrived through a POINTER-typed
 /// parameter (`obj as u64`), which may be a raw untagged heap address.
 #[inline]
-pub(crate) fn legacy_class_ptr_word(bits: u64) -> Option<u32> {
+pub(crate) fn class_ref_ptr_word(bits: u64) -> Option<u32> {
     match bits >> 48 {
         0 => class_closure_id(bits as usize),
-        _ => legacy_class_value_word(bits),
+        _ => class_ref_word(bits),
     }
 }
 
-/// The NaN-boxed VALUE for a word [`legacy_class_ptr_word`] admitted: a raw
+/// The NaN-boxed VALUE for a word [`class_ref_ptr_word`] admitted: a raw
 /// heap address gets its POINTER tag, anything else is already a value.
 #[inline]
 pub(crate) fn boxed_class_word(bits: u64) -> f64 {
@@ -377,6 +363,9 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 #[cold]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
+    // A class function object is a static cell built on first use, the same
+    // whichever init asks first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::runtime_scope();
     // Any class id may own one: a native class whose prototype carries
     // registered members (fs.Stats' Date getters) keeps its prototype link
     // here like a compiled class. Its band, not its magnitude, places it.
@@ -754,14 +743,6 @@ pub unsafe extern "C" fn js_class_static_value_call_guard(
     let Some(cid) = class_value_id_bits(bits) else {
         return 0;
     };
-    if legacy_class_value_word(bits).is_none() {
-        let js = crate::JSValue::from_bits(bits);
-        if !js.is_pointer()
-            || class_value_cached(cid).map(|c| c as usize) != Some(js.as_pointer::<u8>() as usize)
-        {
-            return 0;
-        }
-    }
     js_class_static_call_guard(cid as i32, owner_id, name_ptr, name_len, body, memo)
 }
 
@@ -1349,74 +1330,6 @@ pub(crate) const CLASS_ACCESSOR_DEFAULT_ATTRS: (bool, bool) = (false, true);
 /// entry is unchanged keeps its closure, so reflection hands out the same
 /// function every time; attributes a `defineProperty` set are kept.
 /// Private (`#x`) accessors are not properties and are never installed.
-/// A ClassBody `static get [sym]()` / `static set [sym](v)` of class
-/// `class_id`: an own accessor property of the class function object, where
-/// ClassDefinitionEvaluation defines it (as for a string-keyed static
-/// accessor). [[Get]] and [[Set]] find it on the object: the ordinary walk
-/// runs an own or inherited setter with `this` = the class written to, and a
-/// getter-only accessor refuses the write instead of being shadowed by a new
-/// data member. A zero half adds nothing and keeps the half already defined.
-pub(crate) fn install_declared_static_symbol_accessor(
-    class_id: u32,
-    sym_key: usize,
-    raw_get: usize,
-    raw_set: usize,
-) {
-    if raw_get == 0 && raw_set == 0 {
-        return;
-    }
-    // The accessor function values allocate; the class closure is pinned.
-    let _no_collect = crate::gc::GcSuppressScope::new();
-    let closure = class_value_ptr(class_id) as usize;
-    // SetFunctionName: a symbol key names the function `[description]`
-    // (`""` for a symbol without one); the accessor adds `get ` / `set `.
-    // SAFETY: `sym_key` is the live symbol the member registered under.
-    let name = match unsafe {
-        crate::symbol::symbol_description_text(sym_key as *const crate::symbol::SymbolHeader)
-    } {
-        Some(desc) => {
-            let mut name = Vec::with_capacity(desc.len() + 2);
-            name.push(b'[');
-            name.extend_from_slice(&desc);
-            name.push(b']');
-            name
-        }
-        None => Vec::new(),
-    };
-    let (have_get, have_set) =
-        crate::symbol::symbol_accessor_descriptor_bits(closure, sym_key).unwrap_or((0, 0));
-    let half = |raw: usize, have: u64, is_setter: bool| -> u64 {
-        if raw == 0 {
-            have
-        } else {
-            super::class_registry::class_accessor_function_value_bytes(
-                raw, is_setter, true, &name, None,
-            )
-            .to_bits()
-        }
-    };
-    let get = half(raw_get, have_get, false);
-    let set = half(raw_set, have_set, true);
-    // SAFETY: a live class function object and a live symbol.
-    unsafe {
-        crate::symbol::set_symbol_accessor_property(
-            f64::from_bits(crate::value::POINTER_TAG | closure as u64),
-            f64::from_bits(crate::value::POINTER_TAG | sym_key as u64),
-            get,
-            set,
-        );
-    }
-    crate::symbol::set_symbol_property_attrs(
-        closure,
-        sym_key,
-        crate::object::PropertyAttrs::new(
-            true,
-            CLASS_ACCESSOR_DEFAULT_ATTRS.0,
-            CLASS_ACCESSOR_DEFAULT_ATTRS.1,
-        ),
-    );
-}
-
 fn install_declared_static_accessor_bytes(class_id: u32, name: &[u8]) {
     if name.starts_with(b"#") {
         return;

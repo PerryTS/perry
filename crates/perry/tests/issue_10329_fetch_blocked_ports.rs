@@ -11,7 +11,9 @@ fn fetch_rejects_blocked_ports_and_followed_redirects() {
     let binary = dir.path().join("fetch_blocked_ports");
     std::fs::write(
         &entry,
-        include_str!("../../../test-files/test_gap_10329_fetch_blocked_ports.ts"),
+        include_str!(
+            "../../../tests/parity/node-suite/fetch/test_gap_10329_fetch_blocked_ports.ts"
+        ),
     )
     .unwrap();
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))

@@ -81,6 +81,19 @@ impl MapStore {
     }
 }
 
+/// The SNAP census digest's view of a store: the payload words that are JS
+/// state (receiver word, entries alias, capacity, used; then the inline
+/// entries). The native indexes between them are derived from the entries,
+/// hold malloc pointers, and an absent index leaves its bytes uninitialized,
+/// so the digest leaves `[start, end)` out (payload offsets).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) const fn snap_native_index_range() -> (usize, usize) {
+    (
+        std::mem::offset_of!(MapStore, numeric),
+        std::mem::size_of::<MapStore>(),
+    )
+}
+
 /// Bounded native publication: a creating caller allocates the store before
 /// anything unrooted is live; a growing caller keeps its receiver and values in
 /// roots and holds a no-move scope until the new store is linked.

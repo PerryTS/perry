@@ -254,11 +254,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         let target = crate::closure::js_closure_get_capture_f64(closure, 0);
         return js_instanceof_dynamic(value, target);
     }
-    // `class_ref_id` requires `is_class_id_registered`, not just the tag —
-    // a user-crafted NaN payload sharing the 0x7FFE band (a real JS number
-    // constructed via `DataView.setFloat64`, not a codegen-emitted class
-    // ref) must fall through to the unresolved-RHS `TypeError` below
-    // instead of being dispatched into `js_instanceof` as a bogus class id.
+    // Class identity comes from the constructor function object. Numeric
+    // INT32 words never supply an instanceof RHS class id.
     if let RhsKind::Class(class_id) = rhs.kind {
         // #11759 (c′): the class function object is the first evaluation of a
         // declaration whose later evaluations share its template id. A value

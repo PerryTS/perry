@@ -75,9 +75,7 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         let msg = b"Cannot convert a Symbol value to a string";
         let m = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(m);
-        let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(bits));
+        crate::exception::throw_core(crate::error::CoreError::type_error(m));
     }
     crate::value::js_jsvalue_to_string(value)
 }

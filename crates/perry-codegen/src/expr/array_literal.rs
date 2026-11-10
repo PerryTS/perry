@@ -266,9 +266,12 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
     // Inline bump-allocator path for small literals. Size threshold matches
     // `MAX_SCALAR_ARRAY_LEN` in collectors.rs so every candidate the escape
     // pass rejects can still benefit from the inline alloc.
-    // ILP32 (wasm32 WASI, #11378): the inline bump reads `InlineArenaState`
-    // at LP64 offsets; take the runtime call below instead.
-    if n <= INLINE_ARRAY_MAX_ELEMENTS && !crate::codegen::helpers::ilp32_target() {
+    // The bump reads `InlineArenaState` at the target's offsets
+    // (`target_layout::inline_arena_layout`); other ILP32 targets take the
+    // runtime call below.
+    if n <= INLINE_ARRAY_MAX_ELEMENTS
+        && crate::target_layout::inline_births_admitted(ctx.target_triple)
+    {
         if n == 0 {
             return Ok(super::inline_birth::empty_array(ctx));
         }
@@ -294,14 +297,14 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // Load state + compute bump check. `total_size` is always a
         // multiple of 8, every prior alloc rounds offset to 8, and blocks
         // start 8-aligned, so no align-up step is needed.
+        let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
         let state_ptr = load_inline_arena_state(ctx);
         let blk = ctx.block();
-        let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-        let offset_val = blk.load(I64, &offset_field_ptr);
+        let (offset_field_ptr, offset_val) =
+            super::inline_birth::arena_load(blk, &arena, &state_ptr, arena.offset);
         let aligned_off = offset_val.clone();
         let new_offset = blk.add(I64, &aligned_off, &total_size_str);
-        let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-        let size_val = blk.load(I64, &size_field_ptr);
+        let (_, size_val) = super::inline_birth::arena_load(blk, &arena, &state_ptr, arena.limit);
         let fits = blk.icmp_ule(I64, &new_offset, &size_val);
 
         let fast_idx = ctx.new_block("arrlit.fast");
@@ -316,8 +319,8 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // Fast path: commit the bump, compute `data + offset`.
         ctx.current_block = fast_idx;
         let blk = ctx.block();
-        // GC_STORE_AUDIT(INIT): arena bump offset is allocator metadata, not a JS heap edge.
-        blk.store(I64, &new_offset, &offset_field_ptr);
+        // The arena bump offset is allocator metadata, not a JS heap edge.
+        super::inline_birth::arena_store(blk, &arena, &new_offset, &offset_field_ptr);
         let data_ptr = blk.load(PTR, &state_ptr);
         let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
         let fast_pred_label = blk.label.clone();
@@ -403,7 +406,9 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
         let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
-        let arr_header_packed = (n as u64) | ((capacity as u64) << 32);
+        // `capacity >= n` (asserted): wpfacts' length floor for a literal
+        // is its `n` slots (`solve::arr_len`).
+        let arr_header_packed = perry_abi::array_birth_header(n as u32, capacity as u32);
         // GC_STORE_AUDIT(INIT): freshly allocated ArrayHeader length/capacity, no child pointer.
         blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
         let named = blk.gep(I8, &raw, &[(I64, "16")]);

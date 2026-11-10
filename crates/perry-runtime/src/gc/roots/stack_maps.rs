@@ -276,9 +276,9 @@ static STACK_MAPS: StackMapIndexStore = StackMapIndexStore::new();
 /// before that image finished initializing).
 static STACK_MAPS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// A loaded image initialized after the last build: the next [`ensure_built`]
-/// rebuilds so its section is decoded too.
 per_test_global! {
+    /// A loaded image initialized after the last build: the next [`ensure_built`]
+    /// rebuilds so its section is decoded too.
     static STACK_MAPS_REBUILD_OWED: AtomicBool = AtomicBool::new(false);
 }
 

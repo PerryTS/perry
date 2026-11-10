@@ -136,7 +136,7 @@ fn unknown_code_cannot_write_an_escaped_module_namespace() {
     // `A` reaches unknown code (a call of an unknown function value), which
     // reads its exports but cannot store into it (ES 10.4.6): `A.g()` is
     // still the closure `g` returns, and the call of it is proven.
-    let m = "import * as A from './a'; declare const sink: any; sink(A); const h = A.g(); console.log(A.f({ k: 1 }), h(3));";
+    let m = "import \"unseen-host\"; import * as A from './a'; declare const sink: any; sink(A); const h = A.g(); console.log(A.f({ k: 1 }), h(3));";
     let mods = [("a", NS_A), ("m", m)];
     let (u, w) = (run(&mods, true), run(&mods, false));
     for pf in [&w, &u] {

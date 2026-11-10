@@ -11,6 +11,7 @@ members = [
     "crates/perry-api-manifest",
     "crates/perry-hir",
     "crates/perry-wpfacts",
+    "crates/perry-realm-table",
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
@@ -29,19 +30,15 @@ members = [
     "crates/perry-perex",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
-    "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
-    "crates/perry-ext-ethers",
-    "crates/perry-ext-nodemailer",
 
-    "crates/perry-ext-undici",
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
     "crates/perry-ext-http",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
     "crates/perry-ext-parcel-watcher",
-    "crates/perry-ext-typescript",
+    "crates/perry-ext-bun",
     "crates/perry-wasm-host",
     "crates/perry-wit",
     "crates/perry-component-host",
@@ -97,8 +94,7 @@ members = [
 exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
-    "third_party/turnloop",
-    "test-wasi/p1-host",
+    "tests/integration/wasi/p1-host",
 ]
 
 # Build only the host-independent product set by default: the compiler and
@@ -121,16 +117,12 @@ default-members = [
     "crates/perry-ext-argon2",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-better-sqlite3",
-    "crates/perry-ext-cheerio",
-    "crates/perry-ext-ethers",
     "crates/perry-ext-http",
     "crates/perry-ext-net",
-    "crates/perry-ext-nodemailer",
     "crates/perry-ext-parcel-watcher",
     "crates/perry-ext-pdf",
     "crates/perry-ext-sharp",
-    "crates/perry-ext-typescript",
-    "crates/perry-ext-undici",
+    "crates/perry-ext-bun",
     "crates/perry-ext-ws",
     "crates/perry-ext-zlib",
 ]
@@ -238,8 +230,6 @@ codegen-units = 1
 codegen-units = 1
 [profile.release.package.perry-ext-net]
 codegen-units = 1
-[profile.release.package.perry-ext-undici]
-codegen-units = 1
 [profile.release.package.perry-ext-ws]
 codegen-units = 1
 
@@ -264,6 +254,21 @@ codegen-units = 256
 
 [profile.dev.package.perry-stdlib]
 opt-level = 0
+
+# build-std (.cargo/config.toml) compiles core/alloc/std with this dev profile;
+# keep them optimized and assertion-free like the prebuilt std, or the debug
+# compiler runs ~2x slower (out-of-line ub_checks and fmt at opt-level 0).
+[profile.dev.package.core]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.alloc]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.std]
+opt-level = 3
+debug-assertions = false
 
 # Optimized local developer profile retained for existing tests and CI.
 [profile.perry-dev]
@@ -369,8 +374,6 @@ codegen-units = 1
 codegen-units = 1
 [profile.dist.package.perry-ext-net]
 codegen-units = 1
-[profile.dist.package.perry-ext-undici]
-codegen-units = 1
 [profile.dist.package.perry-ext-ws]
 codegen-units = 1
 
@@ -442,17 +445,20 @@ memchr = "2"
 # 0.1.18 walks one-pass captures off the lazy automaton in fewer instructions.
 # It retains format 16, complete captures and exact work charging.
 perex = "0.1.18"
-# The per-agent event-loop driver. alpha.10 adds owned TCP connect, live socket
-# controls and cancellation-safe shutdown used by the synchronous WASI adapter.
-# Release source: e31526b5399d00e94b1452ffe8a8e0e76e4824ad (turnloop PR #115).
-# Resolved once on 2026-10-24 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
-# before this release clears the 7-day publish-age window (bounded exception for
-# exactly this crate and version, first-party turnloop release for the no-tokio WASI
-# host, owner-approved 10-24; published 2026-10-24T08:07Z, expires 2026-10-31T08:07Z).
-# The global window is unchanged. Cargo.lock pins the published artifact, verified against the
-# crates.io sparse index and .cargo_vcs_info.json; SHA256:
-# f579fbcc6620a3bda7ea47135ea3c3e8ea0a10f110cd7206350ad78b136d26d2
-turnloop = "=0.1.0-alpha.10"
+# The per-agent event-loop driver. beta.2 carries every provider API Perry uses
+# (owned TCP connect, live socket controls, cancellation-safe shutdown, the h2
+# unsolicited-PING-ack switch, strict RFC 7932 Brotli, no epoll_pwait2 probe on
+# Android, whose seccomp filter kills it) in the published crates.
+# Release source: turnloop main 0df1277 (turnloop PR #137). Resolved once on
+# 2026-11-08 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow before this
+# release clears the 7-day publish-age window (bounded exception for exactly the
+# turnloop, turnloop-io, turnloop-http, turnloop-tls, turnloop-websocket,
+# turnloop-wasi-random and turnloop-zstd-decoder 0.1.0-beta.2 artifacts, first-party
+# turnloop release, owner-approved 2026-11-08; published 2026-11-08T20:22Z, expires
+# 2026-11-15T20:22Z). The global window is unchanged. Cargo.lock pins the published
+# artifacts; turnloop SHA256:
+# 49e2f1ca53e1247f717acf892f0f36d25b962f865e4e9d6b3c579ddc93d1b40f
+turnloop = "=0.1.0-beta.2"
 
 # The component provider uses its own LocalExecutor on the I/O owner thread.
 
@@ -481,8 +487,8 @@ turnloop = "=0.1.0-alpha.10"
 # rustls process-default provider, failing at RUNTIME ("no rustls crypto
 # provider") rather than at compile time. So this line restores exactly what
 # alpha.6 gave Perry; it does not opt into anything new.
-turnloop-http = { version = "=0.1.0-alpha.9", default-features = false }
-turnloop-tls = { version = "0.1.0-alpha.9", default-features = false, features = [
+turnloop-http = { version = "=0.1.0-beta.2", default-features = false }
+turnloop-tls = { version = "=0.1.0-beta.2", default-features = false, features = [
     "ring",
 ] }
 # turnloop WS lane: the sans-I/O WebSocket protocol + HTTP-upgrade helpers that
@@ -490,13 +496,7 @@ turnloop-tls = { version = "0.1.0-alpha.9", default-features = false, features =
 # the `turnloop` feature pulls turnloop-io's LocalExecutor, which Perry cannot
 # adopt for the same reason P5 recorded (it builds its own Driver and drops
 # every completion it did not issue). See docs/turnloop/ws-report.md.
-turnloop-websocket = { version = "0.1.0-alpha.9", default-features = false }
-# turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
-# replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
-# module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface
-# already uses, so only the transport changes
-# (docs/turnloop/p6-report.md).
-turnloop-smtp = { version = "0.1.0-alpha.9", default-features = false }
+turnloop-websocket = { version = "=0.1.0-beta.2", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
 # cores that replace sqlx on the
 # paths Perry's bindings own. Default features only, for the same reason as the
@@ -564,6 +564,7 @@ perry-parser = { path = "crates/perry-parser" }
 perry-api-manifest = { path = "crates/perry-api-manifest" }
 perry-hir = { path = "crates/perry-hir" }
 perry-wpfacts = { path = "crates/perry-wpfacts" }
+perry-realm-table = { path = "crates/perry-realm-table" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
@@ -621,19 +622,15 @@ perry-perex = { path = "crates/perry-perex" }
 perry-gc-effects = { path = "crates/perry-gc-effects", default-features = false }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
-perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
-perry-ext-ethers = { path = "crates/perry-ext-ethers" }
-perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
 
-perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
 perry-ext-parcel-watcher = { path = "crates/perry-ext-parcel-watcher" }
-perry-ext-typescript = { path = "crates/perry-ext-typescript" }
+perry-ext-bun = { path = "crates/perry-ext-bun" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
 perry-ui-model = { path = "crates/perry-ui-model" }
@@ -663,9 +660,3 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
-
-# Required provider APIs are not all present in published alpha.10. Keep the
-# exact sources qualified with the component engine; see vendor provenance.
-[patch.crates-io]
-turnloop = { path = "third_party/turnloop/turnloop" }
-turnloop-http = { path = "third_party/turnloop/turnloop-http" }

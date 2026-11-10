@@ -17,6 +17,7 @@ unsafe fn closure_bits() -> u64 {
     crate::value::js_nanbox_pointer(c as i64).to_bits()
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_pair_round_trips_both_forms() {
     let _lock = crate::gc::global_side_table_test_lock();

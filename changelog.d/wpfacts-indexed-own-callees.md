@@ -1,0 +1,1 @@
+Computed calls select a concrete object's own callees from the same key-value ranges as computed reads. Number and BigInt keys use numeric fields; arbitrary names, inherited numeric accessors, and the called function's receiver and effects remain modeled.

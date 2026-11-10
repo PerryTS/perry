@@ -3,6 +3,13 @@ use crate::feature_hooks::Hook;
 
 static GET: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
 static SET: Hook<extern "C" fn(f64, f64) -> f64> = Hook::empty();
+type CallableDispatch = unsafe extern "C" fn(*const u8, usize, *const f64, usize, *mut f64) -> bool;
+static CALL: Hook<CallableDispatch> = Hook::empty();
+
+#[no_mangle]
+pub extern "C" fn js_register_worker_threads_callable_dispatch(dispatch: CallableDispatch) {
+    CALL.set(dispatch);
+}
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_environment_data(
@@ -50,6 +57,20 @@ pub(crate) unsafe fn dispatch(ctx: &NmCtx, module: &str, method: &str) -> f64 {
             } else {
                 crate::value::TAG_FALSE
             });
+        }
+        "receiveMessageOnPort" | "postMessageToThread" => {
+            if let Some(call) = CALL.peek() {
+                let mut value = f64::from_bits(crate::value::TAG_UNDEFINED);
+                if call(
+                    method.as_ptr(),
+                    method.len(),
+                    ctx.args_ptr,
+                    ctx.args_len,
+                    &mut value,
+                ) {
+                    return value;
+                }
+            }
         }
         _ => {}
     }

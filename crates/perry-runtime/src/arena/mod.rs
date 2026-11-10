@@ -85,9 +85,9 @@ pub(crate) use block::{
     advance_block_pool_reuse_window, arena_cell_alloc, arena_cell_try_alloc_current,
     drain_block_pool_if_requested, new_object_start_bitmap, old_gen_in_use_bytes_sub,
     release_arena_block, request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease,
-    BlockPoolDrainStats, ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE,
-    FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE, LONGLIVED_ARENA, OBJECT_START_SHIFT,
-    OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
+    ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
+    INLINE_STATE, LONGLIVED_ARENA, OBJECT_START_SHIFT, OLD_ARENA, OLD_GEN_IN_USE_BYTES,
+    SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
 /// #7469 hot-TLS plumbing — see `crate::tls_hot`. The `*_hot_addr` half is
 /// consumed by `tls_hot::fill`; the `hot_*` half is the cached accessor the
@@ -231,3 +231,7 @@ pub(crate) use region::new_test_block_backing;
 pub(crate) use region::release_test_block_backing;
 
 pub(crate) use inline::refresh_inline_allocation_limit;
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use region::reservation::{
+    for_each_mapped as snap_reservation_regions, payload_bounds as snap_reservation_bounds,
+};

@@ -627,6 +627,7 @@ mod tests {
         assert!(!is_small_handle(HANDLE_BAND_MAX));
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn try_read_gc_header_rejects_handles_without_deref() {
         // Would SIGSEGV on Linux if dereferenced (#4665/#4800) — must be None
@@ -640,6 +641,7 @@ mod tests {
         assert!(unsafe { try_read_gc_header(0x7FFD_0000_0000_0000) }.is_none());
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// #10479: only a `POINTER_TAG` payload or a raw pointer names an address.
     /// Every primitive band answers 0 — in particular the SSO and INT32 bands,
     /// whose payloads decode into the heap window.
@@ -693,6 +695,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn tracked_gc_classifier_accepts_injected_low_arena_membership() {
         use std::cell::Cell;
 
@@ -845,6 +848,7 @@ mod tests {
 mod known_plausible_alignment_tests {
     use super::*;
 
+    #[cfg(target_pointer_width = "64")]
     /// The alignment guard must be reachable from the DIRECT call path, not
     /// only through [`try_read_gc_header`].
     ///
@@ -881,6 +885,7 @@ mod known_plausible_alignment_tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The same property through the wrapper, so both entry points are pinned.
     #[test]
     fn the_wrapper_also_rejects_a_misaligned_in_range_address() {
@@ -970,4 +975,34 @@ pub(crate) fn in_string_image_section_for_tests(addr: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn image_string_for_tests() -> *const crate::string::StringHeader {
     image_tests::image_string()
+}
+
+/// Linear memory starts at address 0, so on wasm32 the link decides whether a
+/// real address can fall in the small-handle band. The stack goes first and
+/// static data after it (`link/wasi.rs` `STACK_SIZE`, `build.rs` for the
+/// runtime's own test link): a property-key atom in the data segment below
+/// `HANDLE_BAND_MAX` was read as a handle id, and `JSON.parse` or a
+/// Writable's `write` read back undefined.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod linear_memory_layout_tests {
+    use super::HANDLE_BAND_MAX;
+
+    extern "C" {
+        /// wasm-ld: the end of the stack, where static data begins.
+        static __stack_high: u8;
+    }
+
+    #[test]
+    fn static_data_lies_above_the_handle_band() {
+        let data_start = unsafe { std::ptr::addr_of!(__stack_high) } as usize;
+        assert!(
+            data_start >= HANDLE_BAND_MAX,
+            "static data starts at {data_start:#x}, inside the handle band"
+        );
+        let atom = crate::string::intern_ascii_literal(b"write") as usize;
+        assert!(
+            atom >= HANDLE_BAND_MAX,
+            "key atom {atom:#x} in the handle band"
+        );
+    }
 }

@@ -8,14 +8,25 @@
 //! `arguments`), so the runtime's own plain call (`info.code(closure, this,
 //! args…)`, `closure::dispatch::calln`) is the call:
 //!
-//! * one body: a direct call of its symbol (a closure's
-//!   `perry_closure_<prefix>__<id>`, a declaration's `__perry_wrap_*`
-//!   value wrapper), the arguments padded with `undefined` to its
-//!   parameters or cut to them (it reads no `arguments`);
-//! * several bodies: one load of the callee's `info` word, one of the body's
-//!   `code` word, and an indirect call with the arguments padded to the
-//!   widest declaration (over-application is safe on native ABIs, which is
-//!   why a wasm target keeps the dispatcher).
+//! * one body: a direct call of it, the arguments padded with `undefined`
+//!   to its parameters or cut to them (it reads no `arguments`). A closure
+//!   is called as the closure-typed local's direct arm calls it
+//!   (`early_branches::emit_known_closure_body_call`): its typed entry
+//!   behind the guards of its typed parameters, the generic body on a miss,
+//!   or `perry_closure_<prefix>__<id>` when it has no typed entry for these
+//!   arguments; a declaration through its `__perry_wrap_*` value wrapper;
+//! * two to [`ARMS_CAP`] bodies: one load of the callee's `info` word and a
+//!   direct call of the body that info names. A body has exactly one info,
+//!   `@<body>$info`, defined by the module that defines the body and named
+//!   by every allocation of a function object of it (`fn_info.rs`), so two
+//!   closures of one body (two environments) are one arm. Each body but the
+//!   last is compared with the info; the set is complete, so the last body
+//!   is called without a compare and there is no other arm. Each arm is the
+//!   one-body call of its body;
+//! * more bodies: one load of the `info` word, one of the body's `code`
+//!   word, and an indirect call with the arguments padded to the widest
+//!   declaration (over-application is safe on native ABIs, which is why a
+//!   wasm target keeps the dispatcher).
 //!
 //! A set holding anything else has no facts here and keeps the complete
 //! generic call; nothing is guarded. A contract or facts-verification build
@@ -31,6 +42,11 @@ use crate::expr::body_call::{emit_js_body_call, JsBody, JS_THIS_UNDEFINED};
 use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I1, I64, PTR};
+
+/// The most bodies a proven call names arm by arm (one info compare per
+/// body but the last); a larger set is one indirect call through the code
+/// word.
+const ARMS_CAP: usize = 4;
 
 /// Whether the target's ABI lets a call pass more arguments than a body
 /// declares (wasm's `call_indirect` checks the signature).
@@ -110,6 +126,7 @@ pub(crate) fn try_lower_proven_value_call(
         &callee_box,
         JS_THIS_UNDEFINED,
         &lowered,
+        args,
     );
     group.release(ctx);
     Ok(Some(v))
@@ -186,7 +203,15 @@ pub(crate) fn try_lower_proven_field_call(
         lowered.push(group.reread(ctx, r)?);
     }
     let this_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-    let v = emit_proven_call(ctx, &bodies, &symbols, &callee_box, &this_bits, &lowered);
+    let v = emit_proven_call(
+        ctx,
+        &bodies,
+        &symbols,
+        &callee_box,
+        &this_bits,
+        &lowered,
+        args,
+    );
     group.release(ctx);
     Ok(Some(v))
 }
@@ -221,6 +246,10 @@ pub(crate) fn try_lower_proven_static_call(
     let Some(&cid) = ctx.wpfacts.local_classes.get(id) else {
         return Ok(None);
     };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ClassAlias,
+        || serde_json::json!({"local":id,"class":cid}),
+    );
     crate::facts_consumed::used();
     let Some(class_name) = crate::expr::wpfacts_access::class_name_of(ctx, cid) else {
         return Ok(None);
@@ -273,7 +302,7 @@ pub(crate) fn try_lower_proven_static_call(
 
 /// The call of the proven bodies `bodies` (symbols `symbols`) through the
 /// function object `callee_box`, receiver `this_bits`, over lowered
-/// arguments.
+/// arguments `args` (`hir_args` their HIR).
 fn emit_proven_call(
     ctx: &mut FnCtx<'_>,
     bodies: &[FactsBody],
@@ -281,8 +310,17 @@ fn emit_proven_call(
     callee_box: &str,
     this_bits: &str,
     args: &[String],
+    hir_args: &[Expr],
 ) -> String {
     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    // The arguments as a call of a body declaring `width` parameters
+    // receives them: cut to its parameters (it reads no `arguments`) or
+    // padded with `undefined`.
+    let fit = |width: usize| -> Vec<String> {
+        let mut call_args: Vec<String> = args.iter().take(width).cloned().collect();
+        call_args.resize(width, undefined.clone());
+        call_args
+    };
     let width = match bodies {
         [b] => b.params as usize,
         _ => bodies
@@ -292,40 +330,94 @@ fn emit_proven_call(
             .unwrap_or(0)
             .max(args.len()),
     };
-    let mut call_args: Vec<String> = args.iter().take(width).cloned().collect();
-    call_args.resize(width, undefined);
     if crate::verify_facts::witnesses() {
+        crate::verify_facts::bodies_checked(bodies, width);
         emit_call_witness(ctx, symbols, callee_box, width);
     }
     let handle = unbox_to_i64(ctx.block(), callee_box);
-    if let [sym] = symbols {
-        return emit_js_body_call(
-            ctx.block(),
-            JsBody::Symbol(sym),
-            &handle,
-            this_bits,
-            &call_args,
-        );
+    // The call of one known body: a closure's through its typed entry
+    // where it has one for these arguments (the closure-typed local's
+    // direct arm, decision 129), a declaration's value wrapper directly.
+    let body_call = |ctx: &mut FnCtx<'_>, b: &FactsBody, sym: &str| -> String {
+        let call_args = fit(b.params as usize);
+        if b.closure {
+            super::early_branches::emit_known_closure_body_call(
+                ctx, b.func_id, sym, &handle, this_bits, &call_args, hir_args,
+            )
+        } else {
+            emit_js_body_call(
+                ctx.block(),
+                JsBody::Symbol(sym),
+                &handle,
+                this_bits,
+                &call_args,
+            )
+        }
+    };
+    if let ([b], [sym]) = (bodies, symbols) {
+        return body_call(ctx, b, sym);
     }
     let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple);
     let blk = ctx.block();
     let info_addr = blk.add(I64, &handle, &info_offset.to_string());
     let info_ptr = blk.inttoptr(I64, &info_addr);
     let info = blk.load(PTR, &info_ptr);
-    // `JsFunctionInfo::code` is its first field.
-    let code = blk.load(PTR, &info);
-    emit_js_body_call(blk, JsBody::Pointer(&code), &handle, this_bits, &call_args)
+    if symbols.len() > ARMS_CAP {
+        // `JsFunctionInfo::code` is its first field.
+        let code = blk.load(PTR, &info);
+        return emit_js_body_call(blk, JsBody::Pointer(&code), &handle, this_bits, &fit(width));
+    }
+    // The body the info names: every body but the last is compared; the
+    // last is what the info is when no compare matched.
+    let join_idx = ctx.new_block("proven_call.join");
+    let join_label = ctx.block_label(join_idx);
+    let last = symbols.len() - 1;
+    let mut incoming: Vec<(String, String)> = Vec::with_capacity(symbols.len());
+    for (i, (b, sym)) in bodies.iter().zip(symbols).enumerate() {
+        if i < last {
+            let arm_idx = ctx.new_block("proven_call.arm");
+            let next_idx = ctx.new_block("proven_call.next");
+            let arm_label = ctx.block_label(arm_idx);
+            let next_label = ctx.block_label(next_idx);
+            let blk = ctx.block();
+            let want = blk.fn_info_ref(sym);
+            let is = blk.icmp_eq(PTR, &info, &want);
+            blk.cond_br(&is, &arm_label, &next_label);
+            ctx.current_block = arm_idx;
+            let v = body_call(ctx, b, sym);
+            incoming.push((v, ctx.block().label.clone()));
+            ctx.block().br(&join_label);
+            ctx.current_block = next_idx;
+        } else {
+            let v = body_call(ctx, b, sym);
+            incoming.push((v, ctx.block().label.clone()));
+            ctx.block().br(&join_label);
+        }
+    }
+    ctx.current_block = join_idx;
+    let incoming: Vec<(&str, &str)> = incoming
+        .iter()
+        .map(|(v, l)| (v.as_str(), l.as_str()))
+        .collect();
+    ctx.block().phi(DOUBLE, &incoming)
 }
 
 /// The contract witness of one elided call: the runtime validates the
 /// callee and its call form and returns its info, which must be one of the
 /// proven bodies' infos.
 fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, argc: usize) {
-    let site = crate::verify_facts::site_arg(ctx, &format!("proven call bodies={symbols:?}"));
-    let info = ctx.block().call(
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("proven call bodies={symbols:?}"),
+        crate::verify_facts::Fact::Bodies,
+        &[],
+    );
+    let info = crate::verify_facts::check(
+        ctx,
         PTR,
         "perry_wpfacts_check_call",
-        &[(DOUBLE, callee_box), (I64, &argc.to_string()), (I64, &site)],
+        &[(DOUBLE, callee_box), (I64, &argc.to_string())],
+        &site,
     );
     let mut hit: Option<String> = None;
     for sym in symbols {
@@ -344,10 +436,12 @@ fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, 
     let ok_label = ctx.block_label(ok_idx);
     ctx.block().cond_br(&hit, &ok_label, &miss_label);
     ctx.current_block = miss_idx;
-    let _ = ctx.block().call(
+    let _ = crate::verify_facts::check(
+        ctx,
         crate::types::I32,
         "perry_wpfacts_check_call_miss",
-        &[(PTR, &info), (I64, &site)],
+        &[(PTR, &info)],
+        &site,
     );
     ctx.block().br(&ok_label);
     ctx.current_block = ok_idx;

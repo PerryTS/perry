@@ -27,10 +27,10 @@ copy is current.
 
 The PR gap tier uses twelve fast-mode shards after a six-way shard exhausted
 the 110-minute job bound; the sweep and full tiers run the same lane in three.
-The full tier's `parity` job runs every case of `test-files/` and
-`test-parity/node-suite/` in auto-optimize mode through `scripts/parity.py`,
+The full tier's `parity` job runs every case of `tests/fixtures/programs/` and
+`tests/parity/node-suite/` in auto-optimize mode through `scripts/parity.py`,
 in sixteen shards. Compile-smoke
-partitions the complete top-level `test-files/*.ts` inventory into four stable
+partitions the complete top-level `tests/fixtures/programs/*.ts` inventory into four stable
 round-robin shards, with at most two smoke shards running concurrently. Each
 file is assigned once before the existing platform exclusions are applied.
 Every shard retains the default compiler invocation and failure markers;
@@ -51,6 +51,7 @@ must still establish the new margin.
 | `gc-call-effects` | yes | yes | yes |
 | `gc-stress` | 1x pr | 4x all | 4x all |
 | `e2e-scoped` | yes |  |  |
+| `parity-scoped` | yes |  |  |
 | `security-audit` | deps only | yes | yes |
 | `windows-build` |  | yes | yes |
 | `windows-arm64-build` |  | yes | yes |
@@ -76,6 +77,14 @@ unread-peer probe also checks that destroying a socket releases the drain's
 duplicated handle while the JavaScript process remains alive.
 These fixtures skip their Windows bodies on other hosts; use the full tier
 (`run-extended-tests`) when reviewing changes to this behavior.
+
+`scripts/ci_pr_files.py` binds scope to the expected PR head and stable
+head/base/file-count metadata. It validates paginated file lists for ordinary
+PRs. Above GitHub's 3,000-file listing cap it compares immutable merge-base
+and head Git trees, retaining both endpoints of renames. Partial recursive
+tree arrays are discarded and replaced by complete child-tree traversal;
+malformed, truncated fallback or raced responses fail before emitting scope.
+This keeps large layout migrations scoped without accepting a shortened list.
 
 Within the **pr** tier the changed-file list narrows the plan further:
 
@@ -130,6 +139,13 @@ crates while sharing unchanged compilations.
 nonempty, every core PR reruns each excluded exact test and fails if it no
 longer fails. This catches fixes made in HIR, transform, or another dependency
 without adding Rust setup to docs-only PRs.
+
+`parity-scoped` runs the program cases a PR owns, in auto mode against
+`tests/parity/snapshots/linux-auto/`: each changed case, the subject of each
+changed snapshot, and the node-suite modules that `scripts/test_owners.py`
+maps the changed source to. A source path no row owns is cross-cutting and adds
+nothing; the gap lane already runs for it. With nothing selected the job ends
+after computing the selection.
 
 An empty or failed file listing is treated as **core** and a failed `plan` job fails
 the gate outright — a broken planner must never turn into "everything skipped,
@@ -226,9 +242,10 @@ window (`previous sweep SHA .. this sweep SHA`), exactly as for the six-hourly g
 
 ## Re-baselining the gap snapshot
 
-The pull-request gap lane runs `scripts/parity.py run --suite test-files
---filter test_gap_ --mode fast` and is judged by
-`test-parity/snapshots/linux-fast/test-files.json`, a both-direction snapshot:
+The pull-request gap lane runs `scripts/parity.py run --suite all
+--filter test_gap_ --mode fast`, including migrated cases that retain their
+`test_gap_` basename. It is judged by the per-subject snapshots under
+`tests/parity/snapshots/linux-fast/`, each checked in both directions:
 any divergence — a case that started failing OR started passing — is red. When
 `main` has legitimately moved (a triaged regression, an oracle change),
 regenerate it **from CI**, not from a laptop (the required baseline is Linux,
@@ -238,14 +255,14 @@ regenerate it **from CI**, not from a laptop (the required baseline is Linux,
 gh workflow run test.yml --ref <branch> -f tier=pr -f update_gap_snapshot=true
 # wait for the run, then:
 gh run download <run-id> -n gap-snapshot-update -D /tmp/snap
-cp /tmp/snap/test-files.json test-parity/snapshots/linux-fast/test-files.json
+cp -R /tmp/snap/. tests/parity/snapshots/linux-fast/
 # fill in `issue` / `reason` for every new entry, then commit
 ```
 
 New entries land as `category: untriaged`; give each an issue and a reason before
 merging. A crash is never accepted into a snapshot (`parity.py` refuses).
 
-The full tier's `parity` job is judged by `test-parity/snapshots/linux-auto/`.
+The full tier's `parity` job is judged by `tests/parity/snapshots/linux-auto/`.
 Re-baseline it from a full run's shard reports:
 
 ```bash
@@ -273,10 +290,10 @@ Each shard compares its own cases with the snapshots in both directions, so its
 exit code is its verdict, and a shard that ran no case fails.
 
 `test262` runs every Test262 case (`scripts/test262_subset.py --full-corpus`) as
-16 shards at the SHA in `test-compat/test262/pinned-sha.txt`. `test262-aggregate`
+16 shards at the SHA in `tests/compat/test262/pinned-sha.txt`. `test262-aggregate`
 merges them with `scripts/test262_ratchet.py`, prints the pass rate over the
 whole corpus in the run summary, and fails on a new failure, on a known failure that now passes
-(remove it from `test-compat/test262/baseline.json`), or on a pass count below
+(remove it from `tests/compat/test262/baseline.json`), or on a pass count below
 the baseline. Re-baseline with `scripts/test262_ratchet.py --update <reports>`.
 
 

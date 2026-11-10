@@ -62,21 +62,14 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
     let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
     let mut infos: Vec<shapes_store::ConstFnSlotInfo> = Vec::new();
     let mut rep = crate::object::field_rep::REP_ANY;
-    for slot in 0..count.min(crate::object::field_rep::REP_SLOTS) {
+    for slot in 0..count {
         if !lane(slot) {
             continue;
         }
         let bits = std::ptr::read(base.add(slot as usize * 8) as *const u64);
         if let Some(info) = crate::object::field_rep_store::constfn_store_info(bits) {
-            infos.push(shapes_store::ConstFnSlotInfo {
-                slot: slot as u8,
-                info,
-            });
-            rep = crate::object::field_rep::with_slot_rep(
-                rep,
-                slot,
-                crate::object::field_rep::REP_SPECIAL,
-            );
+            infos.push(shapes_store::ConstFnSlotInfo { slot, info });
+            rep = crate::object::field_rep::with_special_lane(rep, slot);
         }
     }
     let summary =
@@ -191,6 +184,7 @@ pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) 
             && r.object_kind() == f.object_kind()
             && r.summary() == f.summary()
             && r.special_constfn_mask() == f.special_constfn_mask()
+            && r.has_tail_constfn() == f.has_tail_constfn()
             && crate::object::field_rep::identity_with_special(r.rep)
                 == crate::object::field_rep::identity_with_special(f.rep)
     }

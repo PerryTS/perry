@@ -617,7 +617,73 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     let Some(rest) = array_ptr_from_value(options_or_rest) else {
         return direct_stream_promises_pipeline(source, destination, options_or_rest);
     };
+    // Node's `pipeline(...streams, options)`: a trailing plain object that is
+    // no stream, iterable or function is the options bag (`{ signal, end }`),
+    // not a third stream.
+    let len = crate::array::js_array_length(rest);
+    if len >= 1 {
+        let last = crate::array::js_array_get_f64(rest, len - 1);
+        if is_pipeline_options(last) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source = scope.root_nanbox_f64(source);
+            let destination = scope.root_nanbox_f64(destination);
+            let rest_value = scope.root_nanbox_f64(options_or_rest);
+            let signal = options_signal(last).map(|v| scope.root_nanbox_f64(v));
+            if let Some(signal) = &signal {
+                if signal_aborted(signal.get_nanbox_f64()) {
+                    return promise_rejected(signal_reason(signal.get_nanbox_f64()));
+                }
+            }
+            let streams = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len - 1));
+            for i in 0..len - 1 {
+                let array = crate::value::js_nanbox_get_pointer(rest_value.get_nanbox_f64())
+                    as *const crate::array::ArrayHeader;
+                let stage = crate::array::js_array_get_f64(array, i);
+                streams.set_raw_mut_ptr(
+                    streams.with_mut_ptr(|list| crate::array::js_array_push_f64(list, stage)),
+                );
+            }
+            let promise = stream_list_pipeline(
+                source.get_nanbox_f64(),
+                destination.get_nanbox_f64(),
+                streams.with_mut_ptr(|list| list as *const crate::array::ArrayHeader),
+            );
+            // The signal aborts the pipeline's promise, as in Node.
+            if let Some(signal) = &signal {
+                let promise_ptr =
+                    crate::value::js_nanbox_get_pointer(promise) as *mut crate::promise::Promise;
+                register_abort_listener(signal.get_nanbox_f64(), promise_ptr);
+            }
+            return promise;
+        }
+    }
     stream_list_pipeline(source, destination, rest)
+}
+
+/// A plain options object (`{ signal, end }`) rather than a pipeline stage: an
+/// object without the stream / web-stream / iterator surface and not callable.
+fn is_pipeline_options(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if object_ptr_from_value(value).is_none() || array_ptr_from_value(value).is_some() {
+        return false;
+    }
+    if crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(value) as usize) {
+        return false;
+    }
+    let _ = jsval;
+    let callable = |name: &[u8]| {
+        get_object_property(value, name).is_some_and(|v| {
+            JSValue::from_bits(v.to_bits()).is_pointer()
+                && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(v) as usize)
+        })
+    };
+    !(callable(b"pipe")
+        || callable(b"on")
+        || callable(b"write")
+        || callable(b"next")
+        || callable(b"getReader")
+        || callable(b"getWriter")
+        || callable(b"then"))
 }
 
 /// `pipeline(source, destination, [...more])`: hand every stream and a

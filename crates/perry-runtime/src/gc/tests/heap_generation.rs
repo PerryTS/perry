@@ -253,6 +253,42 @@ fn old_page_compaction_advances_the_heap_generation() {
     assert_advanced(HeapChangeKind::Compaction, generation, kind);
 }
 
+/// Restores the pinned scan mode a test lifted to engage a valve's guard.
+struct RestoreScanOverride(Option<roots::ConservativeStackScanMode>);
+
+impl Drop for RestoreScanOverride {
+    fn drop(&mut self) {
+        roots::set_conservative_stack_scan_override(self.0);
+    }
+}
+
+/// An allocation-point valve asks for the conservative scan; where the target
+/// cannot run it (wasm, modelled by `ConservativeScanEffectiveTestGuard`) the
+/// collection is not at a precise point, so it moves no existing object: the
+/// forced fixture that `old_page_compaction_advances_the_heap_generation` moves
+/// stays put, and the policy names why.
+#[test]
+fn an_imprecise_point_moves_no_object() {
+    evacuation_setup!();
+    let _effective = crate::gc::roots::ConservativeScanEffectiveTestGuard::set(false);
+    let _restore = RestoreScanOverride(roots::set_conservative_stack_scan_override(None));
+    let _scan =
+        roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::OldReclaimAllocPoint);
+    assert!(matches!(
+        roots::conservative_stack_scan_decision(),
+        roots::ConservativeStackScanDecision::Scan
+    ));
+    let generation = heap_changes_of_kind(HeapChangeKind::Compaction);
+
+    let trace = forced_evacuating_minor();
+
+    assert_eq!(trace.evacuation_policy.reason, "imprecise_point");
+    assert!(!trace.evacuation_policy.enabled);
+    assert_eq!(trace.evacuation.objects, 0, "nothing may move");
+    assert_eq!(trace.evacuation.old_page_moved_objects, 0);
+    assert_eq!(heap_changes_of_kind(HeapChangeKind::Compaction), generation);
+}
+
 #[test]
 fn a_moving_realloc_advances_the_heap_generation() {
     let _isolation = copying_nursery_isolation_lock();
@@ -287,7 +323,7 @@ fn a_moving_realloc_advances_the_heap_generation() {
 // with assertions live, and is where this should be exercised under release.
 #[cfg_attr(not(debug_assertions), ignore = "asserts a debug_assert! fires")]
 fn a_free_or_move_outside_every_scope_is_caught_in_debug_builds() {
-    let caught = std::panic::catch_unwind(|| {
+    let caught = crate::test_support::child_unwind(|| {
         crate::gc::heap_generation::debug_assert_heap_change_open();
     });
     assert!(

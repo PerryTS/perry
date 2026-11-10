@@ -1,21 +1,49 @@
 use super::*;
 
+/// A live common handle with a wrapper lease held on it: `(id, lease)`.
+fn leased_live_handle() -> (Handle, impl Sized) {
+    let id = register_handle(29_u64);
+    let identity = common_handle_registration(id).unwrap();
+    let lease = acquire_common_handle_registration(identity, NativeLeaseKind::Wrapper).unwrap();
+    (id, lease)
+}
+
+/// What a rejected explicit registration must leave alone: the live payload,
+/// then the retirement. (The rejections are the `should_panic` tests below: a
+/// panic ends the test's process, so nothing can be observed after one.)
 #[test]
 fn explicit_registration_rejects_live_and_leased_retired_slots() {
     let _serial = REGISTRATION_TEST_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    let id = register_handle(29_u64);
-    let identity = common_handle_registration(id).unwrap();
-    let lease = acquire_common_handle_registration(identity, NativeLeaseKind::Wrapper).unwrap();
-    assert!(std::panic::catch_unwind(|| register_handle_with_id(31_u64, id)).is_err());
+    let (id, lease) = leased_live_handle();
     assert_eq!(with_handle::<u64, _, _>(id, |value| *value), Some(29));
     assert!(drop_handle(id));
     // No global drain in this shared-process adapter suite. The local native
     // core fixtures separately prove that a held lease blocks an eligible drain.
-    assert!(std::panic::catch_unwind(|| register_handle_with_id(31_u64, id)).is_err());
     assert!(common_handle_registration(id).is_none());
     drop(lease);
+}
+
+#[test]
+#[should_panic(expected = "common explicit native handle id is unavailable")]
+fn explicit_registration_rejects_a_live_leased_slot() {
+    let _serial = REGISTRATION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let (id, _lease) = leased_live_handle();
+    register_handle_with_id(31_u64, id);
+}
+
+#[test]
+#[should_panic(expected = "common explicit native handle id is unavailable")]
+fn explicit_registration_rejects_a_leased_retired_slot() {
+    let _serial = REGISTRATION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let (id, _lease) = leased_live_handle();
+    assert!(drop_handle(id));
+    register_handle_with_id(31_u64, id);
 }
 
 #[test]
@@ -86,7 +114,26 @@ fn dropped_common_ids_are_not_reused_after_a_shared_pool_drain() {
         assert_ne!(fresh, id, "a stale common id must never name a new payload");
         assert!(drop_handle(fresh));
     }
-    assert!(std::panic::catch_unwind(|| register_handle_with_id(9_u64, id)).is_err());
+}
+
+/// A common id retired and drained at a tick boundary is never registered
+/// again explicitly.
+#[test]
+#[should_panic(expected = "common explicit native handle id is unavailable")]
+fn explicit_registration_rejects_a_drained_retired_slot() {
+    let _serial = REGISTRATION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let id = register_handle(47_u64);
+    assert!(drop_handle(id));
+    perry_ffi::drain_quarantined_handles();
+    drain_quarantined_common_handles();
+    for n in 0..8_u64 {
+        let fresh = register_handle(n);
+        assert_ne!(fresh, id, "a stale common id must never name a new payload");
+        assert!(drop_handle(fresh));
+    }
+    register_handle_with_id(9_u64, id);
 }
 
 #[test]

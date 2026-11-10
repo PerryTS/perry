@@ -40,6 +40,9 @@ pub const CLASS_MEMBER_REST: u8 = 2;
 /// [`ClassMemberDecl::flags`]: the name bytes are valid UTF-8, proven by the
 /// emitter (see `perry_abi::layouts::CLASS_MEMBER_NAME_UTF8`).
 pub const CLASS_MEMBER_NAME_UTF8: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_UTF8;
+/// [`ClassMemberDecl::flags`]: the member is keyed by the symbol the compiler
+/// knows; `name` holds that symbol's `Symbol.for` spelling, never a string key.
+pub const CLASS_MEMBER_NAME_SYMBOL: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_SYMBOL;
 
 /// One instance ClassBody member. Layout shared with codegen
 /// (`{ ptr, ptr, ptr, i32, i32, i32, i8, i8, i16 }`, 40 bytes).
@@ -247,10 +250,29 @@ impl ClassMemberDecl {
         }
     }
 
-    /// The literal name's bytes, `None` for a computed member.
+    /// Is the member keyed by a symbol the compiler knows
+    /// ([`CLASS_MEMBER_NAME_SYMBOL`])? Such a member has no string name.
+    #[inline]
+    pub fn is_symbol_named(&self) -> bool {
+        self.flags & CLASS_MEMBER_NAME_SYMBOL != 0 && !self.name.is_null()
+    }
+
+    /// The symbol a known-symbol member is keyed by.
+    pub fn symbol_key(&self) -> Option<usize> {
+        if !self.is_symbol_named() {
+            return None;
+        }
+        // SAFETY: `name` addresses `name_len` bytes of the image.
+        let bytes = unsafe { std::slice::from_raw_parts(self.name, self.name_len as usize) };
+        let key = std::str::from_utf8(bytes).ok()?;
+        Some(crate::symbol::symbol_for_text(key)).filter(|&s| s != 0)
+    }
+
+    /// The literal name's bytes, `None` for a computed member or one keyed
+    /// by a symbol.
     #[inline]
     pub fn name_bytes(&self) -> Option<&[u8]> {
-        if self.name.is_null() {
+        if self.name.is_null() || self.flags & CLASS_MEMBER_NAME_SYMBOL != 0 {
             return None;
         }
         // SAFETY: `name` addresses `name_len` bytes of the image.
@@ -749,6 +771,11 @@ pub(super) fn computed_key_value(class_id: u32, definition_order: u32) -> Option
 
 /// The name of `member` of class `class_id`.
 pub(crate) fn class_member_name(class_id: u32, member: &ClassMemberDecl) -> MemberName {
+    if let Some(sym) = member.symbol_key() {
+        // The dispatch alias (`@@iterator`) until those consumers read the
+        // prototype's symbol key (THR1 b2).
+        return member_name_of_symbol(sym);
+    }
     match member.name_bytes() {
         Some(bytes) => MemberName::Str(bytes.to_vec()),
         None => computed_member_name(class_id, member),
@@ -758,6 +785,9 @@ pub(crate) fn class_member_name(class_id: u32, member: &ClassMemberDecl) -> Memb
 /// Does `member` of `class_id` have the name `name`?
 #[inline]
 fn member_is_named(class_id: u32, member: &ClassMemberDecl, name: &[u8]) -> bool {
+    if member.is_symbol_named() {
+        return matches!(class_member_name(class_id, member), MemberName::Str(s) if s == name);
+    }
     match member.name_bytes() {
         Some(literal) => literal == name,
         None => matches!(computed_member_name(class_id, member), MemberName::Str(s) if s == name),
@@ -822,7 +852,7 @@ pub(crate) fn class_accessor_decl_bytes(class_id: u32, name: &[u8]) -> Option<Ac
 }
 
 /// Index of the first member of `decl` the definition has not named.
-fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
+pub(super) fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
     if !decl.has_computed_members() {
         return None;
     }
@@ -884,6 +914,11 @@ pub(crate) fn class_declared_members(class_id: u32) -> (Vec<DeclaredMember>, Vec
     };
     let end = first_unnamed(class_id, decl).unwrap_or(decl.members().len());
     for (index, member) in decl.members().iter().enumerate() {
+        // A symbol-keyed member is not a string-keyed one
+        // ([`class_declared_symbol_members`]).
+        if member.is_symbol_named() {
+            continue;
+        }
         let list = if member.is_method() {
             &mut methods
         } else {
@@ -937,6 +972,59 @@ pub(crate) fn class_declared_members(class_id: u32) -> (Vec<DeclaredMember>, Vec
         }
     }
     (methods, accessors)
+}
+
+/// One known-symbol prototype member of a declaration: its symbol, whether
+/// its last definition is an accessor, whether it was defined as both kinds,
+/// and where it sits.
+pub(crate) struct DeclaredSymbolMember {
+    pub sym: usize,
+    pub accessor: bool,
+    pub mixed: bool,
+    pub at: DeclAt,
+}
+
+/// The known-symbol members of class `class_id` the decl prototype holds,
+/// each once, by its first definition (the order its symbol keys take after
+/// the string keys).
+pub(crate) fn class_declared_symbol_members(class_id: u32) -> Vec<DeclaredSymbolMember> {
+    let mut out: Vec<DeclaredSymbolMember> = Vec::new();
+    let Some(decl) = class_declaration(class_id) else {
+        return out;
+    };
+    for (index, member) in decl.members().iter().enumerate() {
+        let Some(sym) = member.symbol_key() else {
+            continue;
+        };
+        let hit = match out.iter().position(|e| e.sym == sym) {
+            Some(hit) => hit,
+            None => {
+                out.push(DeclaredSymbolMember {
+                    sym,
+                    accessor: member.is_accessor(),
+                    mixed: false,
+                    at: DeclAt::NONE,
+                });
+                out.len() - 1
+            }
+        };
+        let e = &mut out[hit];
+        if e.accessor != member.is_accessor() {
+            e.mixed = true;
+            e.accessor = member.is_accessor();
+        }
+        let index = index as u32;
+        if member.is_method() {
+            e.at.method = index;
+        } else if !member.code.is_null() {
+            if member.kind == CLASS_MEMBER_SETTER {
+                e.at.set = index;
+            } else {
+                e.at.get = index;
+            }
+        }
+    }
+    out
 }
 
 /// How many members class `class_id`'s declaration lists.
@@ -1119,7 +1207,12 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
     let mut installed: Vec<Vec<u8>> = Vec::new();
+    let owner = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     for member in &decl.members()[index..end] {
+        if super::parent_static::install_prototype_symbol_member(&proto_h, class_id, &owner, member)
+        {
+            continue;
+        }
         let MemberName::Str(name) = class_member_name(class_id, member) else {
             continue;
         };

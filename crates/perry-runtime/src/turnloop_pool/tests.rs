@@ -354,37 +354,6 @@ fn a_cancelled_job_still_delivers_exactly_once() {
     assert_eq!(outstanding(), 0);
 }
 
-#[test]
-fn a_panicking_job_is_reported_as_failed_and_does_not_poison_the_pool() {
-    let fixture = Fixture::start();
-    submit(
-        || panic!("deliberate panic inside a pool job"),
-        |delivery| match delivery {
-            Delivery::Failed(e) => record(Rec::Failed("panic", e.kind)),
-            other => panic!("expected Failed, got {other:?}"),
-        },
-    )
-    .expect("accepted");
-    assert!(pump_until_events(1), "the panic must be delivered");
-    assert_eq!(events(), vec![Rec::Failed("panic", ErrorKind::Other)]);
-    // The pool must still work afterwards — a panicking job kills its own
-    // delivery, not the worker.
-    submit(
-        || 7u8,
-        |d| {
-            let Delivery::Done(v) = d else {
-                panic!("expected Done")
-            };
-            record(Rec::Done("after", vec![v]));
-        },
-    )
-    .expect("accepted");
-    assert!(pump_until_events(2), "the pool survives a panicking job");
-    assert_eq!(events()[1], Rec::Done("after", vec![7]));
-    let (submitted, completed, _, failed) = fixture.delta();
-    assert_eq!((submitted, completed, failed), (2, 1, 1));
-}
-
 // ── Backpressure ────────────────────────────────────────────────────────────
 
 #[test]

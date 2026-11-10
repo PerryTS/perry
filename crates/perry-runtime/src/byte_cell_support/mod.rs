@@ -398,15 +398,13 @@ pub(crate) unsafe fn typed_array_for_byte_helper(
 #[cold]
 pub(crate) fn throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[cold]
 pub(crate) fn throw_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[inline]
@@ -510,7 +508,7 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
         crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
     }
     // INT32 tag
-    if top16 == 0x7FFE {
+    if crate::value::is_int32_bits(bits) {
         let n = (bits & 0xFFFF_FFFF) as i32;
         return n as f64;
     }

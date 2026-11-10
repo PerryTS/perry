@@ -130,11 +130,11 @@ fn unknown_named_module_does_not_install_unrelated_buckets() {
 
 #[test]
 fn native_package_reexport_emits_a_value_getter() {
-    let mut module = Module::new("ws.ts");
+    let mut module = Module::new("bcrypt.ts");
     module.imports.push(Import {
-        source: "ws".into(),
+        source: "bcrypt".into(),
         specifiers: vec![ImportSpecifier::Named {
-            imported: "WebSocket".into(),
+            imported: "hash".into(),
             local: "__perry_builtin_reexport_0".into(),
         }],
         is_native: true,
@@ -150,7 +150,7 @@ fn native_package_reexport_emits_a_value_getter() {
     });
     module.exports.push(Export::Named {
         local: "__perry_builtin_reexport_0".into(),
-        exported: "WebSocket".into(),
+        exported: "hash".into(),
     });
 
     let bytes = compile_module(
@@ -163,7 +163,7 @@ fn native_package_reexport_emits_a_value_getter() {
     .expect("compile native package re-export");
     let ir = String::from_utf8(bytes).expect("LLVM IR");
     let start = ir
-        .find("define double @perry_fn_ws_ts__WebSocket()")
+        .find("define double @perry_fn_bcrypt_ts__hash()")
         .expect("native re-export getter emitted");
     let tail = &ir[start..];
     let end = tail.find("\n}\n").expect("getter terminated");

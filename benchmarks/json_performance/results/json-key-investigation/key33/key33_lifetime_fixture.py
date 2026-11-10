@@ -2,7 +2,7 @@ from pathlib import Path
 import os,subprocess,json,re,hashlib
 art=Path('/Users/amlug/projects/perry/codex-json-fastpaths-artifacts')
 root=Path('/Users/amlug/projects/perry/codex-json-gc-deferral')
-source=root/'test-files/test_gap_json_gc_deferral.ts'
+source=root/'tests/fixtures/programs/test_gap_json_gc_deferral.ts'
 binary=art/'key33-lifetime-fixture';obj=art/'test_gap_json_gc_deferral.o'
 with (art/'key33-lifetime-fixture-link.log').open('w') as log:
  subprocess.run(['cc',str(obj),str(art/'key33-runtime/libperry_runtime.a'),'-lc','-Wl,-dead_strip','-Wl,-no_exported_symbols','-o',str(binary)],check=True,stdout=log,stderr=subprocess.STDOUT)

@@ -28,16 +28,21 @@ required-features = ["analyzer"]
 default = ["analyzer"]
 analyzer = [
     "dep:clap",
+    "dep:perry-abi",
     "dep:object",
     "dep:rustc-demangle",
     "dep:perry-perex",
     "dep:regex",
     "dep:walkdir",
     "dep:llvm-sys",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:perry-runtime-manifest",
 ]
 
 [dependencies]
 anyhow.workspace = true
+perry-abi = { workspace = true, optional = true }
 sha2 = "0.11"
 clap = { workspace = true, optional = true }
 object = { version = "0.37", default-features = false, features = ["read", "std"], optional = true }
@@ -45,6 +50,10 @@ rustc-demangle = { version = "0.1", optional = true }
 perry-perex = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
+# Effect declarations of realm natives (the `effects` check).
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+perry-runtime-manifest = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 llvm-sys = { version = "221", optional = true }

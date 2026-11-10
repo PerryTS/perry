@@ -3,13 +3,13 @@
 `perry/container` exposes the OCI primitives that operate on **one
 container at a time**: create, start, run, stop, remove, exec, logs,
 inspect, plus image management. For multi-service stacks, see
-[`perry/compose`](./compose.md) — but you can mix the two modules in the
+[`perry/compose`](compose.md) — but you can mix the two modules in the
 same program (a long-running compose stack plus one-off `run()` helpers
 against it is a normal pattern).
 
 Every async function returns a `Promise`. The runtime backend (docker,
 podman, apple/container, …) is auto-detected on first use; see
-[Overview](./overview.md#backend-auto-detection) for the probe order
+[Overview](overview.md#backend-auto-detection) for the probe order
 and override knobs.
 
 ## Running a container
@@ -50,7 +50,7 @@ automatically route through the engine's security-aware launch path
 (the same one `perry/compose` uses), which also normalizes the spec
 against the detected backend's capabilities — on apple/container the
 two flags have no equivalent and are dropped with a warning instead of
-crashing the CLI. See [Security](./security.md) for the security knobs
+crashing the CLI. See [Security](security.md) for the security knobs
 in depth.
 
 ### Hardened single-container run
@@ -100,7 +100,7 @@ is "drop everything, add back what you need":
 When `PERRY_CONTAINER_VERIFY_IMAGES=1` is set, every `run()`,
 `create()`, and `pullImage()` call routes through cosign keyless
 verification against the Chainguard identity. See
-[Security → Image verification](./security.md#image-verification).
+[Security → Image verification](security.md#image-verification).
 
 ## Container naming
 
@@ -138,7 +138,7 @@ your CLI / dashboard.
 
 ## See also
 
-- [Compose orchestration](./compose.md) — multi-service stacks.
-- [Networking](./networking.md) — port maps, networks, the
+- [Compose orchestration](compose.md) — multi-service stacks.
+- [Networking](networking.md) — port maps, networks, the
   cross-service DNS gotcha.
-- [Security](./security.md) — capability isolation patterns.
+- [Security](security.md) — capability isolation patterns.

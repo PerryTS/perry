@@ -383,6 +383,7 @@ fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_arm
     let starts_before = super::super::instruments::incremental_cycle_starts();
     let blocked_before = super::super::instruments::moving_safepoints_blocked_by_budgeted();
     let armed_before = super::super::instruments::mark_barrier_armed_us();
+    let arm_events_before = super::super::instruments::mark_barrier_arm_events();
 
     let started = gc_runtime_safepoint();
 
@@ -411,10 +412,6 @@ fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_arm
     // `>`: the window is measured in microseconds and a fast machine can open
     // and read it inside one tick. What must hold is that the instrument is
     // running at all, which the arm-event count states exactly.
-    assert!(
-        super::super::instruments::mark_barrier_arm_events() > 0,
-        "an active incremental cycle must have armed the SATB mark barrier"
-    );
     assert!(super::super::instruments::mark_barrier_armed_us() >= armed_before);
 
     // Drive it to completion so the shared thread state is left clean, and take
@@ -427,6 +424,11 @@ fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_arm
         completions_before + 1,
         "the instrument must count the completion too, or `starts > completions` \
          could never be read as a stall"
+    );
+    assert_eq!(
+        super::super::instruments::mark_barrier_arm_events(),
+        arm_events_before + 1,
+        "the cycle must arm the SATB mark barrier once"
     );
     assert!(!gc_budgeted_cycle_active());
 }

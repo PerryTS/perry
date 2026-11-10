@@ -1,0 +1,36 @@
+moving-snapshot saved 42 symbol 2 true
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+DEC 250: proxy defineProperty trap reported an incompatible descriptor for the target
+proxy-copy-recovery 0 1
+DEC 250: Cannot add member Object.prototype.value: built-in objects are read-only in a compiled program
+proxy-copy-own-fields 0 true:7:false

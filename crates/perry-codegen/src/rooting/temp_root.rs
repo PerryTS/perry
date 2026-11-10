@@ -365,6 +365,35 @@ pub(in crate::rooting) fn rooted_array_read(ctx: &mut FnCtx<'_>, idx: &str) -> S
 /// Deliberately one-sided: `false` must mean "provably allocates nothing", and
 /// everything unrecognized answers `true`. A wrong `false` is a
 /// use-after-free; a wrong `true` costs two runtime calls on a cold path.
+/// `this.p` reads a declared slot with no getter: `this` is proven to be
+/// exactly a class instance (a proven-`this` clone), the class has no evaluated accessor,
+/// and `p` is one of its field slots. `PERRY_UNBOXED_CLASS_FIELDS=0` answers
+/// false.
+fn this_field_read_is_load(ctx: &FnCtx<'_>, property: &str) -> bool {
+    if crate::stmt::this_field_fast_off() {
+        return false;
+    }
+    let Some(class) = ctx.ptr_shape_region_class(&Expr::This) else {
+        return false;
+    };
+    // No accessor with a computed key anywhere on the chain (the same rule
+    // `property_get`'s `class_has_evaluated_accessor` applies): a named one is
+    // shadowed by the declared own field.
+    let mut name = Some(class.as_str());
+    let mut depth = 0;
+    while let Some(n) = name {
+        let Some(c) = ctx.classes.get(n) else {
+            return false;
+        };
+        if c.has_evaluated_accessor() || depth > 64 {
+            return false;
+        }
+        depth += 1;
+        name = c.extends_name.as_deref();
+    }
+    crate::type_analysis::class_field_global_index(ctx, &class, property).is_some()
+}
+
 pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         // Immediates and plain slot reads. `LocalGet` reads an alloca,
@@ -391,6 +420,39 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         // enough — `a < b` over two plain `LocalGet`s recurses to `false`
         // while the comparison itself can call into user code. So these are
         // GC-capable unless every operand is a proven inert primitive.
+        // `x === "lit"` lowers to identity, tag and byte compares with no call
+        // for a literal of at most 16 bytes (`lower_string_literal_strict_eq`),
+        // and strict equality coerces nothing: it collects only if `x` does.
+        Expr::Compare {
+            op: perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne,
+            left,
+            right,
+        } if !crate::stmt::this_field_fast_off()
+            && match (left.as_ref(), right.as_ref()) {
+                (other, Expr::String(lit)) | (Expr::String(lit), other) => {
+                    lit.len() <= 16 && !expr_may_trigger_gc(ctx, other)
+                }
+                _ => false,
+            } =>
+        {
+            false
+        }
+        // In a proven-`this` body a declared field of an accessor-free class
+        // is a bare slot load.
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) && this_field_read_is_load(ctx, property) => {
+            false
+        }
+        // A field of a scalar-replaced object is an alloca load (or the
+        // constant undefined for a field the shape lacks): no getter, no
+        // helper call, nothing that allocates. Whether the VALUE read needs a
+        // slot across a later collecting window is the consumer's question.
+        Expr::PropertyGet { object, .. }
+            if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.scalar_replaced.contains_key(id)) =>
+        {
+            false
+        }
         Expr::Unary { .. } | Expr::Compare { .. } | Expr::Binary { .. } => {
             !expr_is_inert_primitive(ctx, expr)
         }
@@ -478,6 +540,28 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         // operand lists, where an embedded `Update` is vanishingly rare. The
         // loop-poll caller is the one that needs it (`for (…; …; i++)`).
         Expr::Update { id, .. } => local_is_inert_primitive(ctx, *id),
+        // c1: a Math intrinsic over proven Numbers.
+        e if crate::expr::math_intrinsic_operands(e).is_some() => {
+            crate::expr::math_intrinsic_operands(e)
+                .unwrap()
+                .iter()
+                .all(|x| {
+                    expr_is_inert_primitive(ctx, x)
+                        && crate::expr::math_operand_is_proven_number(ctx, x)
+                })
+        }
+        // c1: `c ? a : b` evaluates `c` (ToBoolean only: on a primitive it
+        // reads no property and runs no code) and then one arm. Inert when
+        // all three are, so ToBoolean never meets an object.
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } if crate::expr::inert_math_enabled() => {
+            expr_is_inert_primitive(ctx, condition)
+                && expr_is_inert_primitive(ctx, then_expr)
+                && expr_is_inert_primitive(ctx, else_expr)
+        }
         Expr::Unary { operand, .. } => expr_is_inert_primitive(ctx, operand),
         Expr::Compare { left, right, .. } => {
             expr_is_inert_primitive(ctx, left) && expr_is_inert_primitive(ctx, right)

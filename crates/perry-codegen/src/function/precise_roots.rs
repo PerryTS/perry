@@ -7,6 +7,7 @@
 //! `LlFunction::serialize`.
 
 mod decode_fold;
+pub(super) mod reload_reuse;
 mod remat;
 
 fn parse_shadow_bind(line: &str) -> Option<(usize, String)> {
@@ -691,7 +692,7 @@ entry:
         // — but they do not by themselves discriminate, because the fold this
         // guards against happens in the `-Os` pipeline that runs after the
         // rewrite, not inside it. The end-to-end discriminator is
-        // `test-files/test_gap_9499_rooted_key_across_closure_alloc.ts`.
+        // `tests/parity/language/object/test_gap_9499_rooted_key_across_closure_alloc.ts`.
         assert!(
             lowered.contains("asm \"\", \"=r,0\""),
             "every root reload must be laundered:\n{lowered}"

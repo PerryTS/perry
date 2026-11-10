@@ -939,7 +939,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             lazy_specs.contains(*spec)
                 && resolve_compiled_require_target(spec, source_path, compile_packages).is_some()
         })
-        .map(|(_, local)| format!("    let {local}__rec;"))
+        .map(|(_, local)| format!("    var {local}__rec;"))
         .collect::<Vec<_>>()
         .join("\n");
     // The first, registry-backed require of a deferred target (see the case
@@ -1664,19 +1664,24 @@ function __perry_require_static_{i}() {{
         );
     }
     // Hoisted classes run at module scope before the body: a target whose
-    // binding they can read (an alias of it) is evaluated first, as before.
-    // Its edge in the body then only links it.
+    // binding they can read is evaluated first, as before. That binding is an
+    // alias the wrap surfaced at module scope, whose declaration it blanked
+    // (`blanked_alias_ranges`); a function-local or conditional alias stays in
+    // the body, no class can read it, and its target loads when the body's
+    // edge runs. The edge in the body then only links it.
     if !hoisted_class_block.is_empty() {
         for i in 0..edge_targets.len() {
             if edge_fn[i] == Some(i)
-                && raw_aliases
-                    .iter()
-                    .any(|(_, spec, _)| spec == &require_specs[i])
+                && raw_aliases.iter().any(|(_, spec, range)| {
+                    spec == &require_specs[i] && blanked_alias_ranges.contains(range)
+                })
             {
                 let _ = writeln!(cjs_link_decls, "__perry_cjs_init(__perry_cjs_rec_{i});");
             }
         }
     }
+    // Hoisted require helpers capture private factory cells whose entry value
+    // is undefined. Lexical TDZ preallocations would block factory outlining.
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -1710,14 +1715,14 @@ function __perry_require_static_{i}() {{
     var exports = __cjs_module.exports;
     // The program's `require.cache` (the support module's object, whose keys
     // are the graph's module paths): this module's key is a slot.
-    const __perry_cjs_c = __perry_cjs_cache;
+    var __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c[{module_filename_literal}] = __cjs_module;
 {lazy_cache_decls}
     // This module's own loader for the cold paths of `require` (a computed
     // specifier outside the graph, relative to this module), created on
     // first use: `createRequire` costs ~117k instructions. Only a program
     // that is not closed can compute a specifier or reload.
-    let __perry_cjs_reload_require;
+    var __perry_cjs_reload_require;
     function __perry_cjs_reloader() {{
         if (__perry_cjs_open()) {{
             if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});

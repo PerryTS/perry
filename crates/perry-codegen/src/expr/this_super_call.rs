@@ -671,7 +671,11 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
             // in `codegen/method.rs`. Without this, `PQueue extends t` resolved
             // `t` to superstruct's `StructError` base and `super()` inlined its
             // destructuring ctor on the undefined options arg → HTTP 500.
-            let static_parent_lookup = if current_class.extends_expr.is_some() {
+            // DEC 251 B: unless the whole-program fact proves the evaluated
+            // value IS the named class (`static_parent_edge`, by class id).
+            let static_parent_lookup = if current_class.extends_expr.is_some()
+                && !super::super_constructor::static_parent_edge(ctx, current_class)
+            {
                 None
             } else {
                 ctx.classes.get(&parent_name).copied()
@@ -1700,6 +1704,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                 // inlined body itself.
                 let caller_try_depth = ctx.try_depth;
                 ctx.try_depth = 0;
+                crate::verify_facts::body_entry(ctx, parent_ctor.id, "");
                 let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
                 ctx.try_depth = caller_try_depth;
                 lower_result?;

@@ -18,7 +18,6 @@ fn canonical_native_parent_name<'a>(ctx: &'a LoweringContext, name: &str) -> Opt
         ))
         | Some(("events", Some(class @ ("EventEmitter" | "EventEmitterAsyncResource"))))
         | Some(("async_hooks", Some(class @ ("AsyncLocalStorage" | "AsyncResource"))))
-        | Some(("ws", Some(class @ "WebSocketServer")))
         | Some((
             "stream/web" | "node:stream/web",
             Some(class @ ("ReadableStream" | "WritableStream" | "TransformStream")),
@@ -62,7 +61,7 @@ use class_heritage::*;
 pub(crate) use from_ast::lower_class_from_ast;
 pub(crate) use member_helpers::capture_class_source;
 use member_helpers::{
-    generic_computed_member_key, lower_generic_computed_class_member,
+    define_named_method, generic_computed_member_key, lower_generic_computed_class_member,
     noncomputed_member_registration_name, record_class_accessor, runtime_instance_accessor_names,
 };
 use member_registration::*;
@@ -288,7 +287,6 @@ pub fn lower_class_decl(
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
                 // Issue #562: user classes extending the Web Streams
                 // base classes get a runtime-side subclass-init shim
                 // wired through `Expr::SuperCall` (codegen). The
@@ -532,19 +530,26 @@ pub fn lower_class_decl(
     // fresh class expression uses: the first evaluation's instances carry no
     // capture fields and read the environment directly while the class has
     // had one evaluation.
+    let evaluates_repeatedly = may_evaluate_repeatedly(
+        ctx,
+        class_decl.class.span,
+        extends_expr.is_some(),
+        native_extends.is_some(),
+    );
     let later_evaluations_fresh = self_binding_wanted
         && !decl_self_binding::class_body_has_private_names(&class_decl.class)
         && !decl_self_binding::class_body_has_computed_keys(&class_decl.class)
-        && may_evaluate_repeatedly(
-            ctx,
-            class_decl.class.span,
-            extends_expr.is_some(),
-            native_extends.is_some(),
-        );
+        && evaluates_repeatedly;
+    // #13965: a computed-key declaration that may run more than once is a
+    // fresh class object too (its captures or its shared-first evaluation make
+    // it one in `body_stmt`), so its own name in its body must be that
+    // evaluation. Without the self-binding `x instanceof C` in its constructor
+    // tested the template while the binding (and a CJS export) held the
+    // evaluated class (undici's `HeadersList` copy constructor).
     let class_self_binding = (self_binding_wanted
         && (extends_expr.is_some()
             || decl_self_binding::class_body_has_private_names(&class_decl.class)
-            || later_evaluations_fresh))
+            || evaluates_repeatedly))
         .then(|| {
             decl_self_binding::push_decl_self_binding(ctx, class_decl.ident.sym.as_ref(), &name)
         });
@@ -770,14 +775,15 @@ pub fn lower_class_decl(
                 if method.function.body.is_none() {
                     continue;
                 }
-                if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members.push(lower_generic_computed_class_member(
-                        ctx,
-                        method,
-                        computed,
-                        member_index,
-                    )?);
-                    seen_generic_computed_member = true;
+                if let Some(computed) =
+                    generic_computed_member_key(ctx, method, &class_decl.class.body[..member_index])
+                {
+                    let member =
+                        lower_generic_computed_class_member(ctx, method, computed, member_index)?;
+                    // Only an evaluated key moves later members to source-order
+                    // registration; a known symbol key is an ordinary member.
+                    seen_generic_computed_member |= member.is_evaluated();
+                    computed_members.push(member);
                     continue;
                 }
                 // Get the property name for getters/setters. Computed
@@ -798,19 +804,17 @@ pub fn lower_class_decl(
                     // method/accessor was silently dropped, so `C.prototype[0]`
                     // read `undefined` (Test262 accessor-name-inst/literal-numeric-*).
                     ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), true),
+                    ast::PropName::Computed(computed)
+                        if literal_computed_key(&computed.expr).is_some() =>
+                    {
+                        (
+                            literal_computed_key(&computed.expr).unwrap_or_default(),
+                            true,
+                        )
+                    }
                     ast::PropName::Computed(computed) => {
                         if is_symbol_iterator_key(&computed.expr) {
                             ("@@iterator".to_string(), false)
-                        } else if is_inspect_custom_key(ctx, &computed.expr)
-                            && !method.is_static
-                            && matches!(method.kind, ast::MethodKind::Method)
-                        {
-                            // `[util.inspect.custom]() {}` on a class — rename
-                            // to a stable string key so the class declaration
-                            // picks it up. `format_object_as_json` looks up
-                            // this name on the object's vtable when there is no
-                            // per-instance entry. Refs #1248.
-                            ("__perry_inspect_custom__".to_string(), false)
                         } else if let Some(outcome) =
                             lower_well_known_computed_method(ctx, method, &name)?
                         {
@@ -820,9 +824,7 @@ pub fn lower_class_decl(
                             // path (`lower_class_from_ast`); see the helper in
                             // helpers.rs for the per-symbol details.
                             match outcome {
-                                WellKnownComputedMethod::Rename(renamed) => (renamed, false),
-                                WellKnownComputedMethod::Lifted
-                                | WellKnownComputedMethod::Unsupported => continue,
+                                WellKnownComputedMethod::Unsupported => continue,
                             }
                         } else {
                             continue;
@@ -918,28 +920,6 @@ pub fn lower_class_decl(
                             });
                             continue;
                         }
-                        // `[Symbol.asyncIterator]()` (plain or `async *`) — the
-                        // same computed-symbol registration: the prototype holds
-                        // the method under its symbol, so `obj[Symbol.asyncIterator]`
-                        // reads it (React Flight's async-iterable test on Next.js's
-                        // VaryParamsAccumulator), and the registration installs the
-                        // `@@asyncIterator` dispatch alias `for await` uses.
-                        // Registered under the string name it was an own
-                        // "@@asyncIterator" key the source never declared, and the
-                        // symbol read found nothing.
-                        if prop_name == "@@asyncIterator" && !method.is_static {
-                            let ast::PropName::Computed(computed) = &method.key else {
-                                unreachable!("@@asyncIterator key must be computed");
-                            };
-                            computed_members.push(ClassComputedMember {
-                                key_expr: lower_expr(ctx, &computed.expr)?,
-                                function: func,
-                                is_static: false,
-                                kind: ClassComputedMemberKind::Method,
-                                source_order: member_index,
-                            });
-                            continue;
-                        }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx,
@@ -949,9 +929,9 @@ pub fn lower_class_decl(
                             )?);
                         }
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                 }
@@ -998,9 +978,9 @@ pub fn lower_class_decl(
                     ast::MethodKind::Method => {
                         let func = lower_private_method(ctx, method)?;
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                     ast::MethodKind::Getter => {
@@ -1387,6 +1367,17 @@ pub fn lower_class_decl(
         }
     }
 
+    // Loop-invariant `this.F` array reads in instance methods
+    // (`property_array_hoist::hoist_this_array_fields`).
+    crate::lower::property_array_hoist::hoist_this_array_fields(
+        ctx,
+        &name,
+        &fields,
+        &getters,
+        &setters,
+        !computed_members.is_empty(),
+        &mut methods,
+    );
     Ok(Class {
         id: class_id,
         name,

@@ -216,31 +216,76 @@ fn check_compact_birth(ir: &str, defaults: &str) {
     );
 }
 
-#[test]
-fn compact_birth_has_no_call_and_initializes_any_and_numeric_capacity_slots() {
+/// The compact birth of a numeric (`numeric = true`) or an any-typed field:
+/// its IR and the exact capacity-default store.
+fn compact_birth_case(numeric: bool) -> (String, String) {
     let undefined = crate::nanbox::TAG_UNDEFINED_I64;
-    for (ty, rhs, defaults) in [
+    let (ty, rhs, defaults) = if numeric {
         (
             Type::Number,
             Expr::Integer(2),
-            "store <2 x i64> <i64 0, i64 0>".into(),
-        ),
+            "store <2 x i64> <i64 0, i64 0>".to_string(),
+        )
+    } else {
         (
             Type::String,
             Expr::String("s".into()),
             format!("store <2 x i64> <i64 0, i64 {undefined}>"),
-        ),
-    ] {
-        let ir = emit(&loop_new_module("Compact", ty, rhs));
+        )
+    };
+    (emit(&loop_new_module("Compact", ty, rhs)), defaults)
+}
+
+/// Negative control: the birth no longer initializes its capacity slots.
+fn without_capacity_initialization(ir: &str, defaults: &str) -> String {
+    let broken = ir.replace(defaults, "; removed capacity initialization");
+    assert_ne!(broken, ir, "negative control must alter a real birth store");
+    broken
+}
+
+/// Negative control: the fast path's permission no longer comes from the
+/// canonical bump bound.
+fn without_canonical_bump_bound(ir: &str) -> String {
+    let broken = ir.replace(", i64 16\n", ", i64 24\n");
+    assert_ne!(
+        broken, ir,
+        "negative control must revoke the canonical bump-bound proof"
+    );
+    broken
+}
+
+#[test]
+fn compact_birth_has_no_call_and_initializes_any_and_numeric_capacity_slots() {
+    for numeric in [true, false] {
+        let (ir, defaults) = compact_birth_case(numeric);
         check_compact_birth(&ir, &defaults);
-        let broken = ir.replace(&defaults, "; removed capacity initialization");
-        assert_ne!(broken, ir, "negative control must alter a real birth store");
-        assert!(std::panic::catch_unwind(|| check_compact_birth(&broken, &defaults)).is_err());
-        let broken = ir.replace(", i64 16\n", ", i64 24\n");
-        assert_ne!(
-            broken, ir,
-            "negative control must revoke the canonical bump-bound proof"
-        );
-        assert!(std::panic::catch_unwind(|| check_compact_birth(&broken, &defaults)).is_err());
     }
+}
+
+#[test]
+#[should_panic(expected = "missing exact capacity defaults")]
+fn compact_numeric_birth_without_capacity_initialization_is_refused() {
+    let (ir, defaults) = compact_birth_case(true);
+    check_compact_birth(&without_capacity_initialization(&ir, &defaults), &defaults);
+}
+
+#[test]
+#[should_panic(expected = "missing exact capacity defaults")]
+fn compact_any_birth_without_capacity_initialization_is_refused() {
+    let (ir, defaults) = compact_birth_case(false);
+    check_compact_birth(&without_capacity_initialization(&ir, &defaults), &defaults);
+}
+
+#[test]
+#[should_panic(expected = "permission must come from InlineArenaState.size")]
+fn compact_numeric_birth_without_the_canonical_bump_bound_is_refused() {
+    let (ir, defaults) = compact_birth_case(true);
+    check_compact_birth(&without_canonical_bump_bound(&ir), &defaults);
+}
+
+#[test]
+#[should_panic(expected = "permission must come from InlineArenaState.size")]
+fn compact_any_birth_without_the_canonical_bump_bound_is_refused() {
+    let (ir, defaults) = compact_birth_case(false);
+    check_compact_birth(&without_canonical_bump_bound(&ir), &defaults);
 }

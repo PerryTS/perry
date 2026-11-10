@@ -41,23 +41,30 @@ pub(crate) fn is_typed_array_expr(ctx: &FnCtx<'_>, object: &Expr) -> bool {
         .is_some_and(is_typed_array_class)
 }
 
+/// `object.length` is a Number by the value `object` holds, not by its
+/// annotation: a literal, a binding whose stable initializer proof is a
+/// String, an Array or a numeric typed array, or one the whole-program facts
+/// prove holds only strings and ordinary Arrays
+/// (`ElisionFacts::length_number_inputs`). A declared `string[]` element or
+/// an `any` cast can hold a Number, whose `length` is `undefined`.
 pub(crate) fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
-    // A LocalGet's declared hint is only a candidate, but a stable initializer
-    // proof is runtime-derived evidence. String literals have a numeric
-    // length just like widened strings; consult that proof directly so a
-    // literal-typed binding does not fall back to a dynamic `+` consumer.
-    if let Expr::LocalGet(id) = object {
-        if matches!(
-            ctx.stable_local_type_proof(id),
-            Some(HirType::String | HirType::StringLiteral(_))
-        ) {
-            return true;
+    match object {
+        Expr::String(_) | Expr::WtfString(_) | Expr::Array(_, _) => true,
+        Expr::LocalGet(id) => {
+            let proven = match ctx.stable_local_type_proof(id) {
+                Some(
+                    HirType::String
+                    | HirType::StringLiteral(_)
+                    | HirType::Array(_)
+                    | HirType::Tuple(_),
+                ) => true,
+                Some(HirType::Named(name)) => {
+                    name == "Buffer" || is_numeric_typed_array_class(name)
+                }
+                _ => false,
+            };
+            proven || (!ctx.wpfacts_off && ctx.wpfacts.length_number_inputs.contains(id))
         }
-    }
-
-    match static_type_of(ctx, object) {
-        Some(HirType::Array(_)) | Some(HirType::Tuple(_)) | Some(HirType::String) => true,
-        Some(HirType::Named(name)) => name == "Buffer" || is_numeric_typed_array_class(&name),
         _ => false,
     }
 }
@@ -556,8 +563,8 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
             // The whole-program field contract already licenses a canonical
             // raw-f64 load. Carry that same proof through arithmetic instead
             // of reclassifying the value from its erased field annotation.
-            // Guarded/absent/non-F64 fields are refused by proves_raw_f64.
-            if crate::expr::wpfacts_access::proves_raw_f64(ctx, expr) {
+            // Guarded/absent/non-F64 fields are refused by proves_number.
+            if crate::expr::wpfacts_access::proves_number(ctx, expr) {
                 return false;
             }
 

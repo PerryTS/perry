@@ -1132,6 +1132,7 @@ fn try_extract(
             });
             for (k, id) in outs.iter().enumerate() {
                 let get = Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp)),

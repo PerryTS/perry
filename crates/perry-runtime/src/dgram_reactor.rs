@@ -566,22 +566,11 @@ pub(crate) fn pump() {
         let Some((socket_bits, context)) = live else {
             continue;
         };
-        let family = if datagram.src.is_ipv4() {
-            "IPv4"
-        } else {
-            "IPv6"
-        };
         let previous = crate::async_context::enter_context(&context);
         crate::async_context::push_context_guard(
             crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
         );
-        crate::dgram::dgram_emit_message(
-            socket_bits,
-            &datagram.data,
-            &datagram.src.ip().to_string(),
-            datagram.src.port(),
-            family,
-        );
+        crate::dgram::dgram_emit_message(socket_bits, &datagram.data, datagram.src);
         if let Some(action) = crate::async_context::pop_context_guard() {
             crate::async_context::apply_context_guard(action);
         }

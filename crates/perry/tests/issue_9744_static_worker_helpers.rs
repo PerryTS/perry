@@ -67,12 +67,18 @@ fn node_worker_starts_through_declarations_aliases_and_url_arguments() {
     std::fs::create_dir(dir.path().join("_helpers")).unwrap();
     std::fs::write(
         dir.path().join("_helpers/static_worker_9744.ts"),
-        include_str!("../../../test-files/_helpers/static_worker_9744.ts"),
+        include_str!("../../../tests/fixtures/programs/_helpers/static_worker_9744.ts"),
     )
     .unwrap();
     let stdout = compile_and_run(
         dir.path(),
-        include_str!("../../../test-files/test_gap_9744_static_worker_helpers.ts"),
+        &include_str!(
+            "../../../tests/parity/node-suite/worker_threads/test_gap_9744_static_worker_helpers.ts"
+        )
+        .replace(
+            "../../../fixtures/programs/_helpers/${name}.ts",
+            "./_helpers/${name}.ts",
+        ),
         false,
     );
     assert_eq!(stdout.trim(), "node ready");
@@ -84,7 +90,7 @@ fn helper_file_urls_decode_filesystem_paths() {
     let worker = dir.path().join("worker space.ts");
     std::fs::write(
         &worker,
-        include_str!("../../../test-files/_helpers/static_worker_9744.ts"),
+        include_str!("../../../tests/fixtures/programs/_helpers/static_worker_9744.ts"),
     )
     .unwrap();
     let url = url::Url::from_file_path(worker).unwrap();

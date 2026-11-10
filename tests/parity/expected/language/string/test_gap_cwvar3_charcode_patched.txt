@@ -1,0 +1,7 @@
+[null,null,[null,null]]
+DEC 250: Cannot replace built-in member String.prototype.charCodeAt: built-in objects are read-only in a compiled program (adding a new member is allowed)
+[null,null,[null,null],120]
+DEC 250: Cannot replace built-in member String.prototype.charCodeAt: built-in objects are read-only in a compiled program (adding a new member is allowed)
+[null,null,[null,null]]
+DEC 250: Cannot replace built-in member String.prototype.charCodeAt: built-in objects are read-only in a compiled program (adding a new member is allowed)
+[null,null,[null,null]]

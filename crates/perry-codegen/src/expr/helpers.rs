@@ -70,14 +70,22 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             UnaryOp::Not => false,
         },
-        // Non-add arithmetic has already applied its Number/BigInt/coercion
-        // rules. Consume its canonical-result proof, including closed raw
-        // field contracts, rather than requiring both syntax leaves to be
-        // literals or counters. Keep add's existing live-bits bookkeeping;
-        // concatenation can publish a pointer and is not this result contract.
-        Expr::Binary { op, .. } => {
-            !matches!(op, BinaryOp::Add)
-                && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+        // Arithmetic has already applied its Number/BigInt/coercion rules.
+        // Consume its canonical-result proof, including closed raw field
+        // contracts, rather than requiring both syntax leaves to be literals
+        // or counters. An add is admitted only when both operands are
+        // themselves numeric by construction: then it is an `fadd` of two
+        // canonical numbers, never a concatenation, and its NaN is canonical.
+        // `PERRY_NUMERIC_ADD_BITS=0` keeps every add on the live-bits test.
+        Expr::Binary { op, left, right } => {
+            if matches!(op, BinaryOp::Add) {
+                std::env::var("PERRY_NUMERIC_ADD_BITS").as_deref() != Ok("0")
+                    && expr_produces_numeric_bits_by_construction(ctx, left)
+                    && expr_produces_numeric_bits_by_construction(ctx, right)
+                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+            } else {
+                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+            }
         }
         Expr::Conditional {
             then_expr,
@@ -240,6 +248,28 @@ pub(crate) fn emit_string_addref_if_heap_string(ctx: &mut FnCtx<'_>, value: &str
         .call_void("js_string_addref_if_heap_string", &[(DOUBLE, value)]);
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
+}
+
+/// `"lit"` the string pool atomises (non-empty UTF-8 of at most
+/// `INTERN_MAX_BYTE_LEN` = 64 bytes, perry-runtime `string/intern.rs`), or a
+/// conditional choosing between such. `PERRY_UNBOXED_CLASS_FIELDS=0` answers
+/// false.
+pub(crate) fn expr_is_pool_atom_literal(value: &Expr) -> bool {
+    if crate::stmt::this_field_fast_off() {
+        return false;
+    }
+    fn walk(value: &Expr) -> bool {
+        match value {
+            Expr::String(s) => !s.is_empty() && s.len() <= 64,
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => walk(then_expr) && walk(else_expr),
+            _ => false,
+        }
+    }
+    walk(value)
 }
 
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {

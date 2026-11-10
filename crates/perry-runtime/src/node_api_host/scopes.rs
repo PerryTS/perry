@@ -5,25 +5,10 @@ fn open_scope(env: NapiEnv, escapable: bool, result: *mut *mut c_void) -> NapiSt
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let scope = with_env_mut(env, |env| {
-        let depth = env.scopes.len() as u32 + 1;
-        let mut token = Box::new(ScopeToken {
-            env_serial: env.serial,
-            depth,
-            escapable,
-            escaped: false,
-            closed: false,
-        });
-        let ptr = (&mut *token) as *mut ScopeToken;
-        env.scopes.push(env.scope_tokens.len());
-        env.scope_tokens.push(token);
-        ptr.cast::<c_void>()
-    });
-    let Some(scope) = scope else {
-        return NapiStatus::InvalidArg;
-    };
-    unsafe { *result = scope };
-    ok(env)
+    enter(env, |env| {
+        unsafe { *result = env.open_handle_scope(escapable) };
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
 fn close_scope(env: NapiEnv, scope: *mut c_void, escapable: bool) -> NapiStatus {
@@ -31,31 +16,19 @@ fn close_scope(env: NapiEnv, scope: *mut c_void, escapable: bool) -> NapiStatus 
         return set_status(env, NapiStatus::InvalidArg, "scope must not be null");
     }
     with_env_mut(env, |env| {
-        let Some(&top) = env.scopes.last() else {
+        let Some(record) = env.innermost_scope(scope) else {
             return env.set_status(
                 NapiStatus::HandleScopeMismatch,
                 "handle scopes must close in LIFO order",
             );
         };
-        let Some(token) = env.scope_tokens.get_mut(top).map(Box::as_mut) else {
-            return env.set_status(NapiStatus::InvalidArg, "unknown handle scope");
-        };
-        if !std::ptr::eq(token, scope.cast::<ScopeToken>()) {
-            return env.set_status(
-                NapiStatus::HandleScopeMismatch,
-                "handle scopes must close in LIFO order",
-            );
-        }
-        if token.closed || token.env_serial != env.serial || token.escapable != escapable {
+        if record.escapable != escapable {
             return env.set_status(
                 NapiStatus::HandleScopeMismatch,
                 "handle scope kind mismatch",
             );
         }
-        let depth = token.depth;
-        token.closed = true;
-        env.scopes.pop();
-        env.release_scope(depth);
+        env.close_innermost_scope();
         env.set_status(NapiStatus::Ok, "napi_ok")
     })
     .unwrap_or(NapiStatus::InvalidArg)
@@ -111,24 +84,19 @@ pub unsafe extern "C" fn napi_escape_handle(
         return set_status(env, NapiStatus::InvalidArg, "escapee is not a live handle");
     };
     let escaped = with_env_mut(env, |env| {
-        let Some(&top) = env.scopes.last() else {
+        let Some(record) = env.innermost_scope(scope) else {
             return Err(NapiStatus::HandleScopeMismatch);
         };
-        let Some(token) = env.scope_tokens.get_mut(top).map(Box::as_mut) else {
-            return Err(NapiStatus::InvalidArg);
-        };
-        if !std::ptr::eq(token, scope.cast::<ScopeToken>()) {
+        if !record.escapable {
             return Err(NapiStatus::HandleScopeMismatch);
         }
-        if !token.escapable || token.closed {
-            return Err(NapiStatus::HandleScopeMismatch);
-        }
-        if token.escaped {
+        if record.escaped {
             return Err(NapiStatus::EscapeCalledTwice);
         }
-        token.escaped = true;
-        let parent_depth = token.depth.saturating_sub(1);
-        Ok(env.add_handle_at_depth(bits, parent_depth))
+        record.escaped = true;
+        // The parent's reserved slot, just below this scope's base.
+        let reserved = record.base - 1;
+        Ok(env.write_slot(reserved, bits))
     });
     match escaped {
         Some(Ok(handle)) => {
@@ -158,17 +126,12 @@ pub unsafe extern "C" fn napi_create_reference(
     let Ok(bits) = value_bits(env, value) else {
         return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
     };
-    let weak_holder_bits = if initial_refcount == 0 && weak_reference_target(bits) {
-        let holder = crate::weakref::js_weakref_new(f64::from_bits(bits));
-        Some(crate::value::JSValue::pointer(holder.cast()).bits())
-    } else {
-        None
-    };
+    let weak = initial_refcount == 0 && weak_reference_target(bits);
     let reference = with_env_mut(env, |env| {
         let mut record = Box::new(ReferenceRecord {
             env_serial: env.serial,
             value_bits: bits,
-            weak_holder_bits,
+            weak,
             refcount: initial_refcount,
             deleted: false,
             finalizer_link: None,
@@ -195,7 +158,7 @@ pub unsafe extern "C" fn napi_delete_reference(env: NapiEnv, reference: NapiRef)
         let finalizer_link = reference.finalizer_link.take();
         reference.deleted = true;
         reference.value_bits = crate::value::TAG_UNDEFINED;
-        reference.weak_holder_bits = None;
+        reference.weak = false;
         Ok(finalizer_link)
     });
     match deleted {
@@ -216,39 +179,25 @@ pub unsafe extern "C" fn napi_reference_ref(
     reference: NapiRef,
     result: *mut u32,
 ) -> NapiStatus {
-    let holder_bits = with_env(env, |env| {
-        env.reference(reference).and_then(|record| {
-            (record.refcount == 0)
-                .then_some(record.weak_holder_bits)
-                .flatten()
-        })
-    });
-    let revived_bits = match holder_bits {
-        None => return set_status(env, NapiStatus::InvalidArg, "reference is not live"),
-        Some(Some(holder_bits)) => {
-            let value = crate::weakref::js_weakref_deref(f64::from_bits(holder_bits));
-            let bits = value.to_bits();
-            if crate::value::JSValue::from_bits(bits).is_undefined() {
-                if !result.is_null() {
-                    *result = 0;
-                }
-                return ok(env);
-            }
-            Some(bits)
-        }
-        Some(None) => None,
-    };
     with_env_mut(env, |env| {
         let Some(reference) = env.reference_mut(reference) else {
             return env.set_status(NapiStatus::InvalidArg, "reference is not live");
         };
+        if reference.weak {
+            // node: a collected weak reference stays empty and answers 0.
+            if crate::value::JSValue::from_bits(reference.value_bits).is_undefined() {
+                if !result.is_null() {
+                    *result = 0;
+                }
+                return env.set_status(NapiStatus::Ok, "napi_ok");
+            }
+            // The weak target becomes strong through a read: shade it (#7900).
+            crate::gc::gc_weak_read_shade(reference.value_bits);
+        }
         let Some(next) = reference.refcount.checked_add(1) else {
             return env.set_status(NapiStatus::GenericFailure, "reference count overflow");
         };
-        if let Some(bits) = revived_bits {
-            reference.value_bits = bits;
-            reference.weak_holder_bits = None;
-        }
+        reference.weak = false;
         reference.refcount = next;
         if !result.is_null() {
             *result = reference.refcount;
@@ -264,20 +213,6 @@ pub unsafe extern "C" fn napi_reference_unref(
     reference: NapiRef,
     result: *mut u32,
 ) -> NapiStatus {
-    let bits_to_weaken = with_env(env, |env| {
-        env.reference(reference).and_then(|record| {
-            (record.refcount == 1 && weak_reference_target(record.value_bits))
-                .then_some(record.value_bits)
-        })
-    })
-    .flatten();
-    let weak_holder_bits = match bits_to_weaken {
-        None => None,
-        Some(bits) => {
-            let holder = crate::weakref::js_weakref_new(f64::from_bits(bits));
-            Some(crate::value::JSValue::pointer(holder.cast()).bits())
-        }
-    };
     with_env_mut(env, |env| {
         let Some(reference) = env.reference_mut(reference) else {
             return env.set_status(NapiStatus::InvalidArg, "reference is not live");
@@ -290,7 +225,7 @@ pub unsafe extern "C" fn napi_reference_unref(
         }
         reference.refcount -= 1;
         if reference.refcount == 0 {
-            reference.weak_holder_bits = weak_holder_bits;
+            reference.weak = weak_reference_target(reference.value_bits);
         }
         if !result.is_null() {
             *result = reference.refcount;
@@ -311,27 +246,19 @@ pub unsafe extern "C" fn napi_get_reference_value(
     }
     let record = with_env(env, |env| {
         env.reference(reference)
-            .map(|record| (record.value_bits, record.refcount, record.weak_holder_bits))
+            .map(|record| (record.value_bits, record.weak))
     });
-    let Some(Some((strong_bits, refcount, weak_holder_bits))) = record else {
+    let Some(Some((bits, weak))) = record else {
         return set_status(env, NapiStatus::InvalidArg, "reference is not live");
     };
-    let bits = if refcount == 0 {
-        match weak_holder_bits {
-            Some(holder_bits) => {
-                let value = crate::weakref::js_weakref_deref(f64::from_bits(holder_bits));
-                let bits = value.to_bits();
-                if crate::value::JSValue::from_bits(bits).is_undefined() {
-                    *result = std::ptr::null_mut();
-                    return ok(env);
-                }
-                bits
-            }
-            None => strong_bits,
+    if weak {
+        if crate::value::JSValue::from_bits(bits).is_undefined() {
+            *result = std::ptr::null_mut();
+            return ok(env);
         }
-    } else {
-        strong_bits
-    };
+        // A weak target handed out as a handle is a strong read (#7900).
+        crate::gc::gc_weak_read_shade(bits);
+    }
     let Ok(handle) = add_handle(env, bits) else {
         return NapiStatus::InvalidArg;
     };

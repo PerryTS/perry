@@ -94,13 +94,23 @@ pub(super) fn scan_byob_roots<V: super::gc::StreamRootVisitor>(visitor: &mut V) 
     }
 }
 
+/// What a caller-supplied view IS, so the fulfilled value is a view of the
+/// same class (node: an Int8Array read yields an Int8Array, a Buffer read a
+/// Buffer, a DataView read a DataView).
+#[derive(Clone, Copy)]
+enum ViewClass {
+    /// A typed array of this element kind (`typedarray::KIND_*`).
+    Typed(u8),
+    /// A byte view in buffer storage: its brand (`buffer::buffer_brand`).
+    Bytes(perry_runtime::buffer::bytes::Brand),
+}
+
 /// A writable window over a caller-supplied view: TypedArray (any kind),
-/// DataView, or Node Buffer. `kind` is the typed-array element kind used
-/// to mint the fulfilled value (Uint8 for DataView/Buffer receivers).
+/// DataView, or Node Buffer. `class` mints the fulfilled value.
 struct ViewInfo {
     data: *mut u8,
     byte_len: usize,
-    kind: u8,
+    class: ViewClass,
     elem_size: usize,
     // Queue processing can allocate a remainder and invoke stream callbacks.
     // Keep the owner rooted and the address stable for the whole operation.
@@ -112,16 +122,21 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
     if addr < 0x1000 {
         return None;
     }
-    let (kind, elem_size) =
+    let (class, elem_size) =
         if let Some(kind) = perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr) {
             (
-                kind,
+                ViewClass::Typed(kind),
                 perry_runtime::typedarray_hook_slots::elem_size_for_kind(kind).max(1),
             )
-        } else if perry_runtime::buffer::is_registered_buffer(addr)
-            && !perry_runtime::buffer::is_any_array_buffer(addr)
-        {
-            (0, 1)
+        } else if perry_runtime::buffer::is_registered_buffer(addr) {
+            use perry_runtime::buffer::{bytes::Brand, BufferBrand};
+            let brand = match perry_runtime::buffer::buffer_brand(addr) {
+                Some(BufferBrand::Uint8Array) => Brand::Uint8Array,
+                Some(BufferBrand::NodeBuffer) => Brand::Buffer,
+                Some(BufferBrand::DataView) => Brand::DataView,
+                _ => return None,
+            };
+            (ViewClass::Bytes(brand), 1)
         } else {
             return None;
         };
@@ -130,7 +145,7 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
     Some(ViewInfo {
         data: pin.as_mut_ptr(),
         byte_len: pin.len(),
-        kind,
+        class,
         elem_size,
         _pin: pin,
     })
@@ -156,11 +171,14 @@ pub(super) unsafe fn chunk_byte_length(chunk_bits: u64) -> f64 {
 }
 
 /// Build the fulfilled `value` for a BYOB read: a fresh view of the same
-/// element kind holding `bytes` (already copied into the caller's view).
-unsafe fn alloc_view_of_kind(kind: u8, elem_size: usize, bytes: &[u8]) -> u64 {
-    if kind == 0 {
-        return alloc_uint8array_from_bytes(bytes);
-    }
+/// class holding `bytes` (already copied into the caller's view).
+unsafe fn alloc_view_of_kind(class: ViewClass, elem_size: usize, bytes: &[u8]) -> u64 {
+    let kind = match class {
+        ViewClass::Bytes(brand) => {
+            return perry_runtime::buffer::bytes::from_slice(brand, bytes).to_bits();
+        }
+        ViewClass::Typed(kind) => kind,
+    };
     let elems = bytes.len() / elem_size.max(1);
     let ta = perry_runtime::typedarray_hook_slots::typed_array_alloc(kind, elems as u32);
     if ta.is_null() {
@@ -232,15 +250,17 @@ pub unsafe extern "C" fn js_readable_stream_get_byob_reader(stream_handle: f64) 
         match g.get(&id) {
             Some(s) => s.is_byte_stream,
             None => {
-                throw_type_error(
-                    "ReadableStreamBYOBReader constructor requires a ReadableStream argument",
+                throw_type_error_with_code(
+                    "The \"stream\" argument must be an instance of ReadableStream.",
+                    "ERR_INVALID_ARG_TYPE",
                 );
             }
         }
     };
     if !is_byte_stream {
-        throw_type_error(
-            "Cannot construct a ReadableStreamBYOBReader for a stream not constructed with a byte source",
+        throw_type_error_with_code(
+            "The argument 'stream' must be a byte stream.",
+            "ERR_INVALID_ARG_VALUE",
         );
     }
     // Reuse the lock/closed-promise bookkeeping in the shared path; the
@@ -260,7 +280,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
     };
     if s.reader_handle.is_some() {
         drop(g);
-        throw_type_error("ReadableStream is locked");
+        throw_type_error_with_code("Invalid state: ReadableStream is locked", "ERR_INVALID_STATE");
     }
     let reader_id = next_stream_id();
     let closed_p = internal_promise();
@@ -345,7 +365,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
             return promise;
         }
         Outcome::Closed => {
-            let empty = alloc_view_of_kind(info.kind, info.elem_size, &[]);
+            let empty = alloc_view_of_kind(info.class, info.elem_size, &[]);
             let result = build_iter_result(empty, true);
             js_promise_resolve(promise, f64::from_bits(result));
             return promise;
@@ -360,7 +380,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
     super::transform::transform_release_writes(stream_id);
     if filled > 0 {
         let bytes = std::slice::from_raw_parts(info.data, filled);
-        let value = alloc_view_of_kind(info.kind, info.elem_size, bytes);
+        let value = alloc_view_of_kind(info.class, info.elem_size, bytes);
         let (closed_now, reader) = {
             let g = READABLE_STREAMS.lock().unwrap();
             match g.get(&stream_id) {
@@ -401,50 +421,32 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
 /// outstanding on this byte stream.
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handle: f64) -> f64 {
-    let id = stream_id(js_stream_unwrap_handle(stream_handle));
-    let view_bits = {
-        let g = BYOB_PENDING.lock().unwrap();
-        match g.get(&id).and_then(|q| q.front()) {
-            Some(p) => p.view_bits,
-            None => return f64::from_bits(TAG_NULL),
-        }
-    };
-
-    let obj = js_object_alloc(0, 3);
-    let keys = js_array_alloc(3);
-    let k_view = js_string_from_bytes(b"view".as_ptr(), 4);
-    let k_respond = js_string_from_bytes(b"respond".as_ptr(), 7);
-    let k_rwnv = js_string_from_bytes(b"respondWithNewView".as_ptr(), 18);
-    js_array_push(keys, JSValue::string_ptr(k_view));
-    js_array_push(keys, JSValue::string_ptr(k_respond));
-    js_array_push(keys, JSValue::string_ptr(k_rwnv));
-    js_object_set_field(obj, 0, JSValue::from_bits(view_bits));
-
-    let respond = perry_runtime::closure::js_closure_alloc(
-        perry_runtime::fn_info!(byob_request_respond, 1; with_declared(1)),
-        1,
-    );
-    perry_runtime::closure::js_closure_set_capture_f64(respond, 0, id as f64);
-    js_object_set_field(obj, 1, JSValue::pointer(respond as *const u8));
-
-    let rwnv = perry_runtime::closure::js_closure_alloc(
-        perry_runtime::fn_info!(byob_request_respond_with_new_view, 1; with_declared(1)),
-        1,
-    );
-    perry_runtime::closure::js_closure_set_capture_f64(rwnv, 0, id as f64);
-    js_object_set_field(obj, 2, JSValue::pointer(rwnv as *const u8));
-
-    js_object_set_keys(obj, keys);
-    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+    let id = controller_stream_id(stream_handle);
+    if parked_view(id).is_none() {
+        return f64::from_bits(TAG_NULL);
+    }
+    byob_request_value(id)
 }
 
-extern "C" fn byob_request_respond(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    bytes_written: f64,
-) -> f64 {
+/// The view of the read parked on byte stream `stream_id`, if any.
+fn parked_view(stream_id: usize) -> Option<u64> {
+    BYOB_PENDING
+        .lock()
+        .unwrap()
+        .get(&stream_id)
+        .and_then(|q| q.front())
+        .map(|p| p.view_bits)
+}
+
+/// `ReadableStreamBYOBRequest.prototype.view`: the parked read's view, else null.
+pub(super) fn byob_request_view(request: f64) -> f64 {
+    let id = byob_request_id_stream(stream_id(request));
+    parked_view(id).map_or(f64::from_bits(TAG_NULL), f64::from_bits)
+}
+
+/// `ReadableStreamBYOBRequest.prototype.respond` on byte stream `stream_id`'s request.
+pub(super) fn byob_request_respond(stream_id: usize, bytes_written: f64) -> f64 {
     unsafe {
-        let stream_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as usize;
         let n = JSValue::from_bits(bytes_written.to_bits()).to_number();
         if n.is_nan() || n < 0.0 || n.fract() != 0.0 {
             throw_range_error_with_code(
@@ -500,26 +502,22 @@ extern "C" fn byob_request_respond(
                     .push_front(pending);
                 throw_type_error("bytesWritten must be positive while the stream is readable");
             }
-            let empty = alloc_view_of_kind(info.kind, info.elem_size, &[]);
+            let empty = alloc_view_of_kind(info.class, info.elem_size, &[]);
             let result = build_iter_result(empty, true);
             js_promise_resolve(pending.promise, f64::from_bits(result));
             return f64::from_bits(TAG_UNDEFINED);
         }
         let bytes = std::slice::from_raw_parts(info.data, n);
-        let value = alloc_view_of_kind(info.kind, info.elem_size, bytes);
+        let value = alloc_view_of_kind(info.class, info.elem_size, bytes);
         let result = build_iter_result(value, false);
         js_promise_resolve(pending.promise, f64::from_bits(result));
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn byob_request_respond_with_new_view(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    view: f64,
-) -> f64 {
+/// `ReadableStreamBYOBRequest.prototype.respondWithNewView` on byte stream `stream_id`'s request.
+pub(super) fn byob_request_respond_with_new_view(stream_id: usize, view: f64) -> f64 {
     unsafe {
-        let stream_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as usize;
         let view_bits = view.to_bits();
         let info = match view_info(view_bits) {
             Some(info) => info,
@@ -608,7 +606,7 @@ pub(super) unsafe fn service_pending_with_chunk(stream_id: usize, chunk_bits: u6
         }
     }
     let filled = std::slice::from_raw_parts(info.data, take);
-    let value = alloc_view_of_kind(info.kind, info.elem_size, filled);
+    let value = alloc_view_of_kind(info.class, info.elem_size, filled);
     let result = build_iter_result(value, false);
     js_promise_resolve(pending.promise, f64::from_bits(result));
     true
@@ -622,11 +620,11 @@ pub(super) unsafe fn close_pending_byob(stream_id: usize) {
         None => return,
     };
     for pending in drained {
-        let (kind, elem_size) = match view_info(pending.view_bits) {
-            Some(info) => (info.kind, info.elem_size),
-            None => (0, 1),
+        let (class, elem_size) = match view_info(pending.view_bits) {
+            Some(info) => (info.class, info.elem_size),
+            None => (ViewClass::Bytes(perry_runtime::buffer::bytes::Brand::Uint8Array), 1),
         };
-        let empty = alloc_view_of_kind(kind, elem_size, &[]);
+        let empty = alloc_view_of_kind(class, elem_size, &[]);
         let result = build_iter_result(empty, true);
         js_promise_resolve(pending.promise, f64::from_bits(result));
     }

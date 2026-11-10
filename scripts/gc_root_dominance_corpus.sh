@@ -80,9 +80,9 @@
 # script writing 152 executables of ~11 MB each that nothing ever reads.
 #
 # A source that stops LINKING is still a finding -- just not THIS gate's.
-# `./run_parity_tests.sh` compiles AND RUNS every `test_gap_*.ts` under the
-# shipping (auto-optimize) configuration, which is where a broken link line
-# belongs. Codegen failures are unaffected: perry still exits non-zero, and
+# The full tier's `scripts/parity.py --mode auto` compiles AND RUNS every
+# `test_gap_*.ts` under the shipping (auto-optimize) configuration, which is
+# where a broken link line belongs. Codegen failures are unaffected: perry still exits non-zero, and
 # the skip ratchet below still fails the run.
 
 set -euo pipefail
@@ -253,8 +253,12 @@ fi
 shopt -s nullglob
 sources=()
 for pat in "${PATTERNS[@]}"; do
-  # shellcheck disable=SC2206
-  matches=(test-files/$pat)
+  source_rows="$(python3 scripts/gc_corpus_sources.py --root "$PWD" --pattern "$pat")" || exit 2
+  matches=()
+  while IFS="$(printf '\t')" read -r source_id source_path; do
+    [ -n "$source_path" ] || continue
+    matches+=("$source_path")
+  done <<< "$source_rows"
   if [ "${#matches[@]}" -eq 0 ]; then
     # Loud, because a stale pattern is how a corpus silently loses a whole
     # lowering: the run stays green and nobody re-reads the glob list.

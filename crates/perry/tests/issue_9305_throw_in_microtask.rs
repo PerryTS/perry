@@ -31,7 +31,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn throw_in_microtask_lands_safely_and_matches_node() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry = workspace_root().join("test-files/test_issue_9305_throw_in_microtask.ts");
+    let entry = workspace_root()
+        .join("tests/parity/language/promise/test_issue_9305_throw_in_microtask.ts");
     let output = dir.path().join("main_bin");
 
     let compile = Command::new(perry_bin())

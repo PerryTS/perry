@@ -1,0 +1,2 @@
+Perry builds on the published turnloop 0.1.0-beta.2 crates instead of a repository copy of patched alpha sources, and takes brotli 9.1.1 / brotli-decompressor 6.2.0, which fix decoder panics and a streaming bounds overflow on malformed input.
+`zlib.brotliDecompress`, `brotliDecompressSync` and `createBrotliDecompress` reject large-window Brotli streams (window up to 1 GiB) with `ERR__ERROR_FORMAT_WINDOW_BITS` unless `params[BROTLI_DECODER_PARAM_LARGE_WINDOW]` is set, as Node does; they previously accepted them, letting a small input claim a 1 GiB window.

@@ -478,15 +478,15 @@ pub use pipeline::{
     js_node_stream_duplex_pair, js_node_stream_finished, js_node_stream_pipeline,
 };
 
+pub(crate) use web_adapter::{
+    construct_web_stream, js_node_stream_duplex_to_web_method_value,
+    js_node_stream_readable_to_web_method_value, js_node_stream_writable_to_web_method_value,
+};
 pub use web_adapter::{
     js_node_stream_duplex_from_web, js_node_stream_duplex_to_web, js_node_stream_from_web,
     js_node_stream_readable_from_web, js_node_stream_readable_to_web, js_node_stream_to_web,
     js_node_stream_writable_from_web, js_node_stream_writable_to_web,
-    js_register_node_stream_web_adapter_callbacks,
-};
-pub(crate) use web_adapter::{
-    js_node_stream_duplex_to_web_method_value, js_node_stream_readable_to_web_method_value,
-    js_node_stream_writable_to_web_method_value,
+    js_register_node_stream_web_adapter_callbacks, js_register_web_stream_constructors,
 };
 
 pub use crate::array::subclass_init::js_array_subclass_init;

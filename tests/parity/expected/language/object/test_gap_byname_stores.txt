@@ -1,0 +1,23 @@
+DEC 250: Cannot add member Object.prototype.opSetter: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.opRo: built-in objects are read-only in a compiled program
+own 9018000
+heap a1,b22,c333,d4444:z0;a1,b22,c333,d4444:z999;a1,b22,c333,d4444:z1998;
+other g
+other g
+other g
+set 0|set 1|set 2
+late late||set 0,set 1,set 2,late setter 2
+["opSetter","opRo"] 9
+["opSetter","opRo"] 9
+set 0|set 1|set 2|late setter 2
+frozen threw TypeError {"a":1}
+sealed threw TypeError {"a":2}
+noext threw TypeError {"a":2}
+nonwritable threw TypeError {"a":1}
+proxy p,q,p 10,10
+numeric 1,2,10,b,a,01
+field 1 2 f,g
+field 1 2 f,g
+field 1 2 f,g
+setter ran 0
+gc 399980000

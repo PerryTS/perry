@@ -270,6 +270,11 @@ fn collect_function_graph(
     if visited.contains(&id) {
         return true;
     }
+    // Active and completed nodes share the discovery budget. Checking before
+    // descent bounds both graph work and recursion depth, even for long chains.
+    if visiting.len() + visited.len() >= MAX_CROSS_MODULE_FUNCTION_GRAPH {
+        return false;
+    }
     if !visiting.insert(id) {
         return false;
     }
@@ -293,15 +298,12 @@ fn collect_function_graph(
         // #10554: a dependency pulled in only because the body reads it as a
         // VALUE (`Expr::FuncRef`) -- not merely calls it -- must not be
         // bundled as a private clone when it is ALSO independently exported.
-        // `dependency != id` lets a function's own export status not block
-        // its (already-permitted) self-recursion.
+        // A self-reference reaches the cycle check rather than being refused
+        // merely because the root is exported.
         if dependency != id && exported_ids.contains(&dependency) {
             return false;
         }
         if !collect_function_graph(dependency, functions, visiting, visited, out, exported_ids) {
-            return false;
-        }
-        if visited.len() > MAX_CROSS_MODULE_FUNCTION_GRAPH {
             return false;
         }
     }
@@ -1381,3 +1383,7 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
     });
     referenced
 }
+
+#[cfg(test)]
+#[path = "cross_module_tests.rs"]
+mod graph_budget_tests;

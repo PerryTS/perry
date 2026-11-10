@@ -97,45 +97,53 @@ fn definition_line(ir: &str, reg: &str) -> Option<usize> {
     ir.lines().position(|l| l.trim_start().starts_with(&prefix))
 }
 
-/// Every `js_array_concat` in `ir` must read an accumulator register defined
-/// BELOW the `js_array_like_to_array` immediately above it.
+/// The register passed as argument `n` of the call on `line`.
+fn nth_operand(ir: &str, line: usize, n: usize) -> String {
+    let text = ir.lines().nth(line).expect("line index came from this IR");
+    let args = text
+        .split_once('(')
+        .unwrap_or_else(|| panic!("call has no argument list: {text}"))
+        .1;
+    args.split(',')
+        .nth(n)
+        .unwrap_or_else(|| panic!("call has no argument {n}: {text}"))
+        .trim()
+        .rsplit(' ')
+        .next()
+        .expect("an operand is a type followed by a register")
+        .trim_end_matches(')')
+        .to_string()
+}
+
+/// Every spread fold `js_array_spread_append(acc, part)` in `ir` must read an
+/// accumulator register defined BELOW `part`'s definition.
 ///
-/// That is the whole invariant. `js_array_like_to_array` allocates; a register
-/// defined above it and used below it is the `unrooted:alloc` hazard
-/// `--statepoints --moving-only` reports, because nothing in its cast chain
-/// appears in that safepoint's live bundle.
+/// That is the whole invariant. Evaluating the spread operand allocates (an
+/// array literal, a call); a register defined above it and used below it is
+/// the `unrooted:alloc` hazard `--statepoints --moving-only` reports, because
+/// nothing in its cast chain appears in that safepoint's live bundle.
 fn assert_every_fold_rereads_the_accumulator(ir: &str, what: &str) {
-    let folds = call_lines(ir, "js_array_concat");
+    let folds = call_lines(ir, "js_array_spread_append");
     assert!(
         !folds.is_empty(),
-        "{what}: no js_array_concat in the emitted IR, so this test asserts \
+        "{what}: no js_array_spread_append in the emitted IR, so this test asserts \
          nothing about the bundle it was written for. The lowering changed \
          shape — re-aim the test rather than deleting it.\n{ir}"
     );
-    let windows = call_lines(ir, "js_array_like_to_array");
-    assert!(
-        !windows.is_empty(),
-        "{what}: no js_array_like_to_array, so there is no window and the \
-         assertion below is vacuous.\n{ir}"
-    );
     for fold in folds {
-        let acc = first_operand(ir, fold);
+        let acc = nth_operand(ir, fold, 0);
+        let part = nth_operand(ir, fold, 1);
         let def = definition_line(ir, &acc)
             .unwrap_or_else(|| panic!("{what}: no definition for the accumulator {acc} in:\n{ir}"));
-        let window = windows
-            .iter()
-            .copied()
-            .filter(|&w| w < fold)
-            .next_back()
-            .unwrap_or_else(|| {
-                panic!("{what}: js_array_concat at line {fold} has no allocating conversion above it\n{ir}")
-            });
+        let window = definition_line(ir, &part).unwrap_or_else(|| {
+            panic!("{what}: no definition for the spread part {part} in:\n{ir}")
+        });
         assert!(
             def > window,
-            "{what}: js_array_concat at line {fold} reads {acc}, defined at line {def}, \
-             ABOVE the js_array_like_to_array at line {window}. That conversion allocates, \
-             so an evacuating minor inside it relocates the half-built argument array and \
-             this concat reads from-space. The accumulator must be rooted above the window \
+            "{what}: js_array_spread_append at line {fold} reads {acc}, defined at line {def}, \
+             ABOVE the spread operand {part} (line {window}). Evaluating it allocates, \
+             so an evacuating minor relocates the half-built argument array and \
+             the append writes from-space. The accumulator must be rooted above the window \
              and re-read below it.\n{ir}"
         );
     }
@@ -238,9 +246,8 @@ fn a_spread_new_rereads_its_callee_below_the_bundle() {
     let callee = first_operand(&ir, dispatch);
     let def = definition_line(&ir, &callee)
         .unwrap_or_else(|| panic!("no definition for the callee {callee} in:\n{ir}"));
-    let last_window = call_lines(&ir, "js_array_like_to_array")
+    let last_window = call_lines(&ir, "js_array_spread_append")
         .into_iter()
-        .chain(call_lines(&ir, "js_array_concat"))
         .chain(call_lines(&ir, "js_array_push_f64"))
         .filter(|&l| l < dispatch)
         .max()

@@ -27,7 +27,10 @@ mod ffi;
 mod listeners;
 mod net;
 mod ops;
+mod record;
 mod thunks;
+
+pub(crate) use record::Slot;
 
 // `#[no_mangle]` FFI entry points. Re-exported so the `crate::dgram::js_dgram_*`
 // path (used by `object::native_module_dispatch`) keeps resolving.
@@ -83,33 +86,29 @@ pub(crate) use thunks::{
     dgram_unref_thunk, dgram_zero_thunk,
 };
 
-pub(crate) const EVENT_LISTENERS_PREFIX: &[u8] = b"__perryDgramListeners:";
-pub(crate) const EVENT_ONCE_PREFIX: &[u8] = b"__perryDgramOnce:";
-
-pub(crate) const KEY_TYPE: &[u8] = b"__perryDgramType";
-pub(crate) const KEY_BOUND: &[u8] = b"__perryDgramBound";
-pub(crate) const KEY_CLOSED: &[u8] = b"__perryDgramClosed";
-pub(crate) const KEY_ADDRESS: &[u8] = b"__perryDgramAddress";
-pub(crate) const KEY_FAMILY: &[u8] = b"__perryDgramFamily";
-pub(crate) const KEY_PORT: &[u8] = b"__perryDgramPort";
-pub(crate) const KEY_CONNECTED: &[u8] = b"__perryDgramConnected";
-pub(crate) const KEY_REMOTE_ADDRESS: &[u8] = b"__perryDgramRemoteAddress";
-pub(crate) const KEY_REMOTE_FAMILY: &[u8] = b"__perryDgramRemoteFamily";
-pub(crate) const KEY_REMOTE_PORT: &[u8] = b"__perryDgramRemotePort";
-pub(crate) const KEY_RECV_BUFFER_SIZE: &[u8] = b"__perryDgramRecvBufferSize";
-pub(crate) const KEY_SEND_BUFFER_SIZE: &[u8] = b"__perryDgramSendBufferSize";
-pub(crate) const KEY_REUSE_ADDR: &[u8] = b"__perryDgramReuseAddr";
-pub(crate) const KEY_IPV6_ONLY: &[u8] = b"__perryDgramIpv6Only";
-pub(crate) const KEY_LOOKUP: &[u8] = b"__perryDgramLookup";
-pub(crate) const KEY_SEND_BLOCK_LIST: &[u8] = b"__perryDgramSendBlockList";
-pub(crate) const KEY_BIND_ATTEMPTED: &[u8] = b"__perryDgramBindAttempted";
-pub(crate) const KEY_ABORT_SIGNAL: &[u8] = b"__perryDgramAbortSignal";
-pub(crate) const KEY_ABORT_LISTENER: &[u8] = b"__perryDgramAbortListener";
-/// Reactor id for the live OS socket (real mode only); links a JS socket back
-/// to its `UdpSocket` + recv thread in [`crate::dgram_reactor`].
-pub(crate) const KEY_REACTOR_ID: &[u8] = b"__perryDgramReactorId";
-pub(crate) const KEY_ASYNC_ID: &[u8] = b"__perryDgramAsyncId";
-pub(crate) const KEY_TRIGGER_ASYNC_ID: &[u8] = b"__perryDgramTriggerAsyncId";
+pub(crate) const KEY_TYPE: Slot = Slot::Type;
+pub(crate) const KEY_BOUND: Slot = Slot::Bound;
+pub(crate) const KEY_CLOSED: Slot = Slot::Closed;
+pub(crate) const KEY_ADDRESS: Slot = Slot::Address;
+pub(crate) const KEY_FAMILY: Slot = Slot::Family;
+pub(crate) const KEY_PORT: Slot = Slot::Port;
+pub(crate) const KEY_CONNECTED: Slot = Slot::Connected;
+pub(crate) const KEY_REMOTE_ADDRESS: Slot = Slot::RemoteAddress;
+pub(crate) const KEY_REMOTE_FAMILY: Slot = Slot::RemoteFamily;
+pub(crate) const KEY_REMOTE_PORT: Slot = Slot::RemotePort;
+pub(crate) const KEY_RECV_BUFFER_SIZE: Slot = Slot::RecvBufferSize;
+pub(crate) const KEY_SEND_BUFFER_SIZE: Slot = Slot::SendBufferSize;
+pub(crate) const KEY_REUSE_ADDR: Slot = Slot::ReuseAddr;
+pub(crate) const KEY_IPV6_ONLY: Slot = Slot::Ipv6Only;
+pub(crate) const KEY_LOOKUP: Slot = Slot::Lookup;
+pub(crate) const KEY_SEND_BLOCK_LIST: Slot = Slot::SendBlockList;
+pub(crate) const KEY_BIND_ATTEMPTED: Slot = Slot::BindAttempted;
+pub(crate) const KEY_ABORT_SIGNAL: Slot = Slot::AbortSignal;
+pub(crate) const KEY_ABORT_LISTENER: Slot = Slot::AbortListener;
+pub(crate) const KEY_REACTOR_ID: Slot = Slot::ReactorId;
+pub(crate) const KEY_ASYNC_ID: Slot = Slot::AsyncId;
+pub(crate) const KEY_TRIGGER_ASYNC_ID: Slot = Slot::TriggerAsyncId;
+pub(crate) const KEY_EVENTS: Slot = Slot::Events;
 
 type MethodThunk = crate::closure::body_call::js_body_fn_ty!(a);
 
@@ -362,10 +361,6 @@ pub(crate) fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
-pub(crate) fn hidden_key(bytes: &[u8]) -> *mut crate::StringHeader {
-    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
-}
-
 pub(crate) fn boxed_pointer(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
 }
@@ -438,20 +433,14 @@ pub(crate) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     Some(raw as *mut ObjectHeader)
 }
 
-pub(crate) fn get_hidden_value(value: f64, key: &[u8]) -> Option<f64> {
-    let obj = object_ptr_from_value(value)?;
-    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(key));
-    if value.to_bits() == TAG_UNDEFINED {
-        None
-    } else {
-        Some(value)
-    }
+/// A socket's private state word (`record.rs`): `None` when absent.
+#[inline]
+pub(crate) fn get_hidden_value(value: f64, key: Slot) -> Option<f64> {
+    record::read(value, key)
 }
 
-pub(crate) fn set_hidden_value(value: f64, key: &[u8], field_value: f64) {
-    if let Some(obj) = object_ptr_from_value(value) {
-        js_object_set_field_by_name(obj, hidden_key(key), field_value);
-    }
+pub(crate) fn set_hidden_value(value: f64, key: Slot, field_value: f64) {
+    record::write(value, key, field_value)
 }
 
 pub(crate) fn get_prop(value: f64, name: &str) -> Option<f64> {
@@ -557,8 +546,15 @@ pub(crate) fn method_value(
 }
 
 pub(crate) fn socket_object(socket_type: &str) -> f64 {
-    let obj = js_object_alloc(0, SOCKET_METHODS.len() as u32 + 12);
+    let obj = js_object_alloc(0, SOCKET_METHODS.len() as u32 + 1);
     let socket = boxed_pointer(obj as *const u8);
+    let socket = {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let socket = scope.root_nanbox_f64(socket);
+        record::ensure(socket.get_nanbox_f64());
+        socket.get_nanbox_f64()
+    };
+    let obj = object_ptr_from_value(socket).expect("a fresh dgram socket object");
     set_hidden_value(socket, KEY_TYPE, str_value(socket_type));
     set_hidden_value(socket, KEY_BOUND, bool_value(false));
     set_hidden_value(socket, KEY_CLOSED, bool_value(false));
@@ -669,15 +665,15 @@ pub(crate) fn normalize_address(address: &str, socket: f64) -> String {
     }
 }
 
-pub(crate) fn hidden_string(socket: f64, key: &[u8]) -> Option<String> {
+pub(crate) fn hidden_string(socket: f64, key: Slot) -> Option<String> {
     string_to_rust(get_hidden_value(socket, key)?)
 }
 
-pub(crate) fn hidden_port(socket: f64, key: &[u8]) -> u16 {
+pub(crate) fn hidden_port(socket: f64, key: Slot) -> u16 {
     get_hidden_value(socket, key).unwrap_or(0.0) as u16
 }
 
-pub(crate) fn is_truthy_hidden(socket: f64, key: &[u8]) -> bool {
+pub(crate) fn is_truthy_hidden(socket: f64, key: Slot) -> bool {
     get_hidden_value(socket, key).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
@@ -774,8 +770,7 @@ pub(crate) fn throw_socket_errno(syscall: &'static str, code: &'static str) -> !
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, syscall);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 pub(crate) fn throw_socket_buffer_size(syscall: &'static str) -> ! {
@@ -784,8 +779,7 @@ pub(crate) fn throw_socket_buffer_size(syscall: &'static str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_SOCKET_BUFFER_SIZE");
     crate::node_submodules::register_error_syscall(msg, syscall);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 pub(crate) fn throw_invalid_arg_type(arg_name: &str, expected: &str, value: f64) -> ! {
@@ -808,6 +802,14 @@ pub(crate) fn throw_bad_buffer_size() -> ! {
         "Buffer size must be a positive integer",
         "ERR_SOCKET_BAD_BUFFER_SIZE",
     )
+}
+
+/// node's `healthCheck`: a closed socket has no handle, and the membership
+/// methods check that first, before any argument (`Not running`).
+pub(crate) fn health_check(socket: f64) {
+    if is_truthy_hidden(socket, KEY_CLOSED) {
+        crate::fs::validate::throw_error_with_code("Not running", "ERR_SOCKET_DGRAM_NOT_RUNNING")
+    }
 }
 
 pub(crate) fn ensure_running(socket: f64, syscall: &'static str) {
@@ -893,6 +895,7 @@ mod gc_type_for_ptr_tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn unmapped_heap_range_receiver_is_rejected_without_dereferencing() {
         // This is inside the permissive heap-magnitude window but outside

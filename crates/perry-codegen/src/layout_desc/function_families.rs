@@ -365,6 +365,7 @@ mod tests {
             key: Box::new(Expr::LocalGet(7)),
             value: Box::new(Expr::Undefined),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         });

@@ -1,0 +1,1 @@
+A builtin module's default object (`import buffer from "node:buffer"`, `require("util")`) and `process` now expose their inherited `Object.prototype` methods: `buffer.hasOwnProperty(key)` (safer-buffer, under iconv-lite) and `fs.propertyIsEnumerable(name)` run on the module object instead of throwing "is not implemented in Perry", and `typeof util.hasOwnProperty` is `"function"`.

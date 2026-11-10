@@ -52,6 +52,13 @@ fn finish_builtin_prototype(
 #[path = "declaration_tests.rs"]
 mod declaration_tests;
 
+#[cfg(test)]
+#[path = "declaration_keys_tests.rs"]
+mod declaration_keys_tests;
+#[cfg(test)]
+#[path = "lazy_family_tests.rs"]
+mod lazy_family_tests;
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -77,6 +84,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     if singleton_at_entry.is_null() {
         return;
     }
+    // The realm is the runtime's, whichever init first asks for it.
+    let _realm = crate::snap_census::runtime_scope();
     // #6982: this function installs several hundred builtins, and nearly every
     // step allocates (name strings, constructor closures, prototype objects).
     // Any of those allocations can trigger a collection, and an *evacuating*
@@ -184,8 +193,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // #4533: native error subclasses must link to `Error` / `Error.prototype`.
     // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,
     // so these are populated before the subclass iterations consume them.
-    let mut error_ctor_bits: Option<u64> = None;
-    let mut error_proto_bits: Option<u64> = None;
+    let mut birth = FamilyBirthState {
+        error_ctor_bits: None,
+        error_proto_bits: None,
+        typed_array_intrinsic_ctor,
+    };
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         let name = declaration.name;
         if name == "Buffer" {
@@ -257,337 +269,30 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         if closure_ptr.is_null() {
             continue;
         }
-        // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
-        // on the constructor closure so rebound usage like
-        // `const O = Object; O.keys(x)` dispatches through the real helpers.
-        // The prototype is an own static data property too. Include it in
-        // the initial attributed layout so adding name/length cannot spill it.
-        let proto_obj = if name == "Array" {
-            // A runtime with no compiled entry (the Rust tests) registers the
-            // static layouts at realm bootstrap, as `js_shape_run_static_seed`
-            // does before any user code (§6a); `%Array.prototype%` is born on
-            // one of them.
-            #[cfg(test)]
-            crate::object::layout_desc::register_static_layouts();
-            let arr = crate::realm_decl! { birth crate::array::realm_array_alloc(0, crate::array::ArrayElements::Scalars, false); realm { Array.prototype, kind = prototype, extends = Object.prototype, members = { length = 0.0, attrs = writable; constructor; slice; toString; entries; flatMap; keys; toLocaleString; toReversed; toSorted; toSpliced; with; flat; values; pop; shift; reverse; push; unshift; splice; fill; copyWithin; sort; forEach; map; filter; some; every; find; findIndex; findLast; findLastIndex; reduce; reduceRight; indexOf; lastIndexOf; includes; at; join; concat; valueOf; [Symbol.iterator] = ref(Array.prototype.values); }; } };
-            // SAFETY: the fresh intrinsic, under this bootstrap's no-move scope.
-            unsafe {
-                crate::array::array_prototype_property_bag_ensure(
-                    arr,
-                    super::proto_room::BUILTIN_PROTOTYPE_ROOM,
-                );
+        // A lazy family keeps only its constructor at setup: the realm's
+        // [[Intrinsics]] entry holds it (prototype half 0) and the global
+        // binds it below; `birth_lazy_family` births the rest on first ask.
+        // Only the realm that owns the thread's entries defers: a later realm
+        // on the same thread (a `vm` context) births its families here.
+        let ctor_value = if declaration.lazy
+            && crate::array::intrinsic_constructor_addr_if_bound(declaration.identity) == 0
+        {
+            crate::array::note_realm_intrinsic(declaration.identity, 0, closure_ptr as usize);
+            // Its declared statics are own keys its base Function shape does
+            // not list: FunctionDictionary, so no read site proves one absent
+            // (the read reaches the bag and births the family).
+            if !declaration.statics.is_empty() {
+                unsafe { crate::closure::shape::closure_become_dictionary(closure_ptr.cast()) };
             }
-            arr as *mut ObjectHeader
-        } else if name == "Function" {
-            // Born on its static layout (`runtime_layouts::FUNCTION_PROTOTYPE`,
-            // a callable ordinary kind); the population fills its slots.
-            // SAFETY: a registered runtime descriptor with the default prototype.
-            unsafe {
-                crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
-                    crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
-                    0,
-                ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; constructor; apply; bind; call; toString; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); caller = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
-            }
-        } else if name == "Iterator" {
-            crate::object::iterator_ctor::iterator_prototype_object()
+            crate::value::js_nanbox_pointer(closure_ptr as i64)
         } else {
-            crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype(); realm { AbortController.prototype, members = { constructor; signal = accessor(get = "AbortController.prototype.signal.<get>"), attrs = enumerable | configurable; abort, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "AbortController"; }; AbortSignal.prototype, extends = EventTarget.prototype, members = { constructor; aborted = accessor(get = "AbortSignal.prototype.aborted.<get>"), attrs = enumerable | configurable; reason = accessor(get = "AbortSignal.prototype.reason.<get>"); throwIfAborted; onabort = accessor(get = "AbortSignal.prototype.onabort.<get>", set = "AbortSignal.prototype.onabort.<set>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "AbortSignal"; }; AggregateError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "AggregateError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; ArrayBuffer.prototype, members = { constructor; slice; resize; transfer; transferToFixedLength; byteLength = accessor(get = "ArrayBuffer.prototype.byteLength.<get>"); resizable = accessor(get = "ArrayBuffer.prototype.resizable.<get>"); maxByteLength = accessor(get = "ArrayBuffer.prototype.maxByteLength.<get>"); detached = accessor(get = "ArrayBuffer.prototype.detached.<get>"); toLocaleString; valueOf; [Symbol.toStringTag] = "ArrayBuffer"; }; AsyncDisposableStack.prototype, members = { constructor; disposed = accessor(get = "AsyncDisposableStack.prototype.disposed.<get>"); use; adopt; defer; disposeAsync; move; toLocaleString; valueOf; [Symbol.asyncDispose] = ref(AsyncDisposableStack.prototype.disposeAsync); [Symbol.toStringTag] = "AsyncDisposableStack"; }; BigInt.prototype, members = { constructor; toString; valueOf; toLocaleString; }; Blob.prototype, members = { constructor; arrayBuffer; bytes; slice; stream; text; toLocaleString; valueOf; [Symbol.toStringTag] = "Blob"; }; Boolean.prototype, members = { constructor; toString; valueOf; toLocaleString; }; BroadcastChannel.prototype, members = { constructor; name = undefined, attrs = writable | enumerable | configurable; close, attrs = writable | enumerable | configurable; postMessage, attrs = writable | enumerable | configurable; ref, attrs = writable | enumerable | configurable; unref, attrs = writable | enumerable | configurable; onmessage = null, attrs = writable | enumerable | configurable; onmessageerror = null, attrs = writable | enumerable | configurable; }; CompressionStream.prototype, members = { constructor; }; Crypto.prototype, members = { constructor; subtle = accessor(get = "Crypto.prototype.subtle.<get>"), attrs = enumerable | configurable; getRandomValues, attrs = writable | enumerable | configurable; randomUUID, attrs = writable | enumerable | configurable; toLocaleString; valueOf; }; CryptoKey.prototype, members = { constructor; algorithm = accessor(get = "CryptoKey.prototype.algorithm.<get>"), attrs = enumerable | configurable; extractable = accessor(get = "CryptoKey.prototype.extractable.<get>"), attrs = enumerable | configurable; type = accessor(get = "CryptoKey.prototype.type.<get>"), attrs = enumerable | configurable; usages = accessor(get = "CryptoKey.prototype.usages.<get>"), attrs = enumerable | configurable; toLocaleString; valueOf; }; MessageEvent.prototype, extends = Event.prototype, members = { constructor; data = accessor(get = "MessageEvent.prototype.data.<get>"), attrs = enumerable | configurable; origin = accessor(get = "MessageEvent.prototype.origin.<get>"), attrs = enumerable | configurable; lastEventId = accessor(get = "MessageEvent.prototype.lastEventId.<get>"), attrs = enumerable | configurable; source = accessor(get = "MessageEvent.prototype.source.<get>"), attrs = enumerable | configurable; ports = accessor(get = "MessageEvent.prototype.ports.<get>"), attrs = enumerable | configurable; initMessageEvent, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "MessageEvent"; }; CustomEvent.prototype, extends = Event.prototype, members = { constructor; detail = accessor(get = "CustomEvent.prototype.detail.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "CustomEvent"; }; DOMException.prototype, extends = Error.prototype, members = { constructor; name = accessor(get = "DOMException.prototype.name.<get>"), attrs = enumerable | configurable; message = accessor(get = "DOMException.prototype.message.<get>"), attrs = enumerable | configurable; code = accessor(get = "DOMException.prototype.code.<get>"), attrs = enumerable | configurable; INDEX_SIZE_ERR = 1.0, attrs = enumerable; DOMSTRING_SIZE_ERR = 2.0, attrs = enumerable; HIERARCHY_REQUEST_ERR = 3.0, attrs = enumerable; WRONG_DOCUMENT_ERR = 4.0, attrs = enumerable; INVALID_CHARACTER_ERR = 5.0, attrs = enumerable; NO_DATA_ALLOWED_ERR = 6.0, attrs = enumerable; NO_MODIFICATION_ALLOWED_ERR = 7.0, attrs = enumerable; NOT_FOUND_ERR = 8.0, attrs = enumerable; NOT_SUPPORTED_ERR = 9.0, attrs = enumerable; INUSE_ATTRIBUTE_ERR = 10.0, attrs = enumerable; INVALID_STATE_ERR = 11.0, attrs = enumerable; SYNTAX_ERR = 12.0, attrs = enumerable; INVALID_MODIFICATION_ERR = 13.0, attrs = enumerable; NAMESPACE_ERR = 14.0, attrs = enumerable; INVALID_ACCESS_ERR = 15.0, attrs = enumerable; VALIDATION_ERR = 16.0, attrs = enumerable; TYPE_MISMATCH_ERR = 17.0, attrs = enumerable; SECURITY_ERR = 18.0, attrs = enumerable; NETWORK_ERR = 19.0, attrs = enumerable; ABORT_ERR = 20.0, attrs = enumerable; URL_MISMATCH_ERR = 21.0, attrs = enumerable; QUOTA_EXCEEDED_ERR = 22.0, attrs = enumerable; TIMEOUT_ERR = 23.0, attrs = enumerable; INVALID_NODE_TYPE_ERR = 24.0, attrs = enumerable; DATA_CLONE_ERR = 25.0, attrs = enumerable; [Symbol.toStringTag] = "DOMException"; }; DataView.prototype, members = { constructor; byteLength = accessor(get = "DataView.prototype.byteLength.<get>"); byteOffset = accessor(get = "DataView.prototype.byteOffset.<get>"); buffer = accessor(get = "DataView.prototype.buffer.<get>"); getInt8; getUint8; getInt16; getUint16; getInt32; getUint32; getFloat32; getFloat64; getBigInt64; getBigUint64; setInt8; setUint8; setInt16; setUint16; setInt32; setUint32; setFloat32; setFloat64; setBigInt64; setBigUint64; toLocaleString; valueOf; [Symbol.toStringTag] = "DataView"; }; Date.prototype, members = { constructor; getDate; getDay; getFullYear; getHours; getMilliseconds; getMinutes; getMonth; getSeconds; getTime; getTimezoneOffset; getUTCDate; getUTCDay; getUTCFullYear; getUTCHours; getUTCMilliseconds; getUTCMinutes; getUTCMonth; getUTCSeconds; getYear; setDate; setFullYear; setHours; setMilliseconds; setMinutes; setMonth; setSeconds; setTime; setUTCDate; setUTCFullYear; setUTCHours; setUTCMilliseconds; setUTCMinutes; setUTCMonth; setUTCSeconds; setYear; toDateString; toISOString; toJSON; toLocaleDateString; toLocaleString; toLocaleTimeString; toTimeString; toUTCString = ref(Date.prototype.toGMTString); valueOf; toTemporalInstant; toGMTString; isPrototypeOf; toString; [Symbol.toPrimitive], attrs = configurable; }; DecompressionStream.prototype, members = { constructor; }; DisposableStack.prototype, members = { constructor; disposed = accessor(get = "DisposableStack.prototype.disposed.<get>"); use; adopt; defer; dispose; move; toLocaleString; valueOf; [Symbol.dispose] = ref(DisposableStack.prototype.dispose); [Symbol.toStringTag] = "DisposableStack"; }; Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "Error", attrs = writable | configurable; message = "", attrs = writable | configurable; }; EvalError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "EvalError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; Event.prototype, members = { constructor; initEvent, attrs = writable | enumerable | configurable; stopImmediatePropagation, attrs = writable | enumerable | configurable; preventDefault, attrs = writable | enumerable | configurable; target = accessor(get = "Event.prototype.target.<get>"), attrs = enumerable | configurable; currentTarget = accessor(get = "Event.prototype.currentTarget.<get>"), attrs = enumerable | configurable; srcElement = accessor(get = "Event.prototype.srcElement.<get>"), attrs = enumerable | configurable; type = accessor(get = "Event.prototype.type.<get>"), attrs = enumerable | configurable; cancelable = accessor(get = "Event.prototype.cancelable.<get>"), attrs = enumerable | configurable; defaultPrevented = accessor(get = "Event.prototype.defaultPrevented.<get>"), attrs = enumerable | configurable; timeStamp = accessor(get = "Event.prototype.timeStamp.<get>"), attrs = enumerable | configurable; composedPath, attrs = writable | enumerable | configurable; returnValue = accessor(get = "Event.prototype.returnValue.<get>", set = "Event.prototype.returnValue.<set>"), attrs = enumerable | configurable; bubbles = accessor(get = "Event.prototype.bubbles.<get>"), attrs = enumerable | configurable; composed = accessor(get = "Event.prototype.composed.<get>"), attrs = enumerable | configurable; eventPhase = accessor(get = "Event.prototype.eventPhase.<get>"), attrs = enumerable | configurable; cancelBubble = accessor(get = "Event.prototype.cancelBubble.<get>", set = "Event.prototype.cancelBubble.<set>"), attrs = enumerable | configurable; stopPropagation, attrs = writable | enumerable | configurable; isTrusted = accessor(get = "Event.prototype.isTrusted.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "Event"; }; EventTarget.prototype, members = { constructor; addEventListener, attrs = writable | enumerable | configurable; removeEventListener, attrs = writable | enumerable | configurable; dispatchEvent, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "EventTarget"; }; File.prototype, members = { constructor; arrayBuffer; bytes; slice; stream; text; toLocaleString; valueOf; [Symbol.toStringTag] = "File"; }; FinalizationRegistry.prototype, members = { constructor; register; unregister; toLocaleString; valueOf; }; FormData.prototype, members = { constructor; append; delete; entries; forEach; get; getAll; has; keys; set; values; toLocaleString; valueOf; [Symbol.toStringTag] = "FormData"; }; Headers.prototype, members = { constructor; entries; append; delete; forEach; get; getSetCookie; has; keys; set; values; toLocaleString; valueOf; [Symbol.iterator] = ref(Headers.prototype.entries); [Symbol.toStringTag] = "Headers"; }; Map.prototype, members = { constructor; size = accessor(get = "Map.prototype.size.<get>"); clear; delete; entries; forEach; get; has; keys; set; values; toLocaleString; valueOf; [Symbol.iterator] = ref(Map.prototype.entries); [Symbol.toStringTag] = "Map"; }; MessageChannel.prototype, members = { constructor; }; MessagePort.prototype, members = { constructor; postMessage, attrs = writable | enumerable | configurable; start, attrs = writable | enumerable | configurable; ref, attrs = writable | enumerable | configurable; unref, attrs = writable | enumerable | configurable; hasRef, attrs = writable | enumerable | configurable; onmessage = null, attrs = writable | enumerable | configurable; onmessageerror = null, attrs = writable | enumerable | configurable; close, attrs = writable | enumerable | configurable; }; Navigator.prototype, members = { constructor; }; Number.prototype, members = { constructor; toExponential; toFixed; toLocaleString; toPrecision; toString; valueOf; }; Promise.prototype, members = { constructor; catch; finally; then; toLocaleString; valueOf; [Symbol.toStringTag] = "Promise"; }; Proxy.prototype, members = { constructor; }; RangeError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "RangeError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; ReadableStream.prototype, members = { constructor; }; ReferenceError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "ReferenceError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; RegExp.prototype, members = { constructor; flags = accessor(get = "RegExp.prototype.flags.<get>"); source = accessor(get = "RegExp.prototype.source.<get>"); global = accessor(get = "RegExp.prototype.global.<get>"); ignoreCase = accessor(get = "RegExp.prototype.ignoreCase.<get>"); multiline = accessor(get = "RegExp.prototype.multiline.<get>"); dotAll = accessor(get = "RegExp.prototype.dotAll.<get>"); sticky = accessor(get = "RegExp.prototype.sticky.<get>"); unicode = accessor(get = "RegExp.prototype.unicode.<get>"); unicodeSets = accessor(get = "RegExp.prototype.unicodeSets.<get>"); hasIndices = accessor(get = "RegExp.prototype.hasIndices.<get>"); exec; test; compile; toString; toLocaleString; valueOf; [Symbol.match]; [Symbol.search]; [Symbol.matchAll]; [Symbol.split]; [Symbol.replace]; }; Request.prototype, members = { constructor; arrayBuffer; blob; bytes; clone; formData; json; text; body = accessor(get = "Request.prototype.body.<get>"); bodyUsed = accessor(get = "Request.prototype.bodyUsed.<get>"); cache = accessor(get = "Request.prototype.cache.<get>"); credentials = accessor(get = "Request.prototype.credentials.<get>"); destination = accessor(get = "Request.prototype.destination.<get>"); duplex = accessor(get = "Request.prototype.duplex.<get>"); headers = accessor(get = "Request.prototype.headers.<get>"); integrity = accessor(get = "Request.prototype.integrity.<get>"); keepalive = accessor(get = "Request.prototype.keepalive.<get>"); method = accessor(get = "Request.prototype.method.<get>"); mode = accessor(get = "Request.prototype.mode.<get>"); redirect = accessor(get = "Request.prototype.redirect.<get>"); referrer = accessor(get = "Request.prototype.referrer.<get>"); referrerPolicy = accessor(get = "Request.prototype.referrerPolicy.<get>"); signal = accessor(get = "Request.prototype.signal.<get>"); url = accessor(get = "Request.prototype.url.<get>"); toLocaleString; valueOf; [Symbol.toStringTag] = "Request"; }; Response.prototype, members = { constructor; arrayBuffer; blob; bytes; clone; formData; json; text; body = accessor(get = "Response.prototype.body.<get>"); bodyUsed = accessor(get = "Response.prototype.bodyUsed.<get>"); headers = accessor(get = "Response.prototype.headers.<get>"); ok = accessor(get = "Response.prototype.ok.<get>"); redirected = accessor(get = "Response.prototype.redirected.<get>"); status = accessor(get = "Response.prototype.status.<get>"); statusText = accessor(get = "Response.prototype.statusText.<get>"); type = accessor(get = "Response.prototype.type.<get>"); url = accessor(get = "Response.prototype.url.<get>"); toLocaleString; valueOf; [Symbol.toStringTag] = "Response"; }; Set.prototype, members = { constructor; size = accessor(get = "Set.prototype.size.<get>"); add; clear; delete; entries; forEach; has; keys; values = ref(Set.prototype.keys); toLocaleString; valueOf; [Symbol.iterator] = ref(Set.prototype.keys); [Symbol.toStringTag] = "Set"; }; SharedArrayBuffer.prototype, members = { constructor; slice; byteLength = accessor(get = "SharedArrayBuffer.prototype.byteLength.<get>"); toLocaleString; valueOf; [Symbol.toStringTag] = "SharedArrayBuffer"; }; Storage.prototype, members = { constructor; clear, attrs = writable | enumerable | configurable; getItem, attrs = writable | enumerable | configurable; key, attrs = writable | enumerable | configurable; removeItem, attrs = writable | enumerable | configurable; setItem, attrs = writable | enumerable | configurable; length = accessor(get = "Storage.prototype.length.<get>"), attrs = enumerable; }; String.prototype, members = { constructor; at; charAt; charCodeAt; codePointAt; anchor; big; blink; bold; fixed; fontcolor; fontsize; italics; link; small; strike; sub; sup; concat; endsWith; includes; indexOf; isWellFormed; lastIndexOf; localeCompare; match; matchAll; normalize; padEnd; padStart; repeat; replace; replaceAll; search; slice; split; startsWith; substr; substring; toLocaleLowerCase; toLocaleUpperCase; toLowerCase; toUpperCase; toWellFormed; trim; trimEnd; trimStart = ref(String.prototype.trimLeft); trimLeft; trimRight = ref(String.prototype.trimEnd); toLocaleString; valueOf; toString; [Symbol.iterator]; }; SubtleCrypto.prototype, members = { constructor; encapsulateBits, attrs = writable | enumerable | configurable; decapsulateBits, attrs = writable | enumerable | configurable; encapsulateKey, attrs = writable | enumerable | configurable; decapsulateKey, attrs = writable | enumerable | configurable; toLocaleString; valueOf; }; SuppressedError.prototype, extends = Error.prototype, members = { constructor; name = "SuppressedError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; Symbol.prototype, members = { constructor; toString; valueOf; toLocaleString; }; SyntaxError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "SyntaxError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; TextDecoder.prototype, members = { constructor; decode, attrs = writable | enumerable | configurable; encoding = accessor(get = "TextDecoder.prototype.encoding.<get>"), attrs = enumerable | configurable; fatal = accessor(get = "TextDecoder.prototype.fatal.<get>"), attrs = enumerable | configurable; ignoreBOM = accessor(get = "TextDecoder.prototype.ignoreBOM.<get>"), attrs = enumerable | configurable; toLocaleString; valueOf; [Symbol.toStringTag] = "TextDecoder"; }; TextDecoderStream.prototype, members = { constructor; }; TextEncoder.prototype, members = { constructor; encode, attrs = writable | enumerable | configurable; encodeInto, attrs = writable | enumerable | configurable; encoding = accessor(get = "TextEncoder.prototype.encoding.<get>"), attrs = enumerable | configurable; toLocaleString; valueOf; [Symbol.toStringTag] = "TextEncoder"; }; TextEncoderStream.prototype, members = { constructor; }; TransformStream.prototype, members = { constructor; }; TypeError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "TypeError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; URIError.prototype, extends = Error.prototype, members = { constructor; toLocaleString; valueOf; toString; isPrototypeOf; hasOwnProperty; name = "URIError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; URL.prototype, members = { constructor; toString, attrs = writable | enumerable | configurable; href = accessor(get = "URL.prototype.href.<get>", set = "URL.prototype.href.<set>"), attrs = enumerable | configurable; origin = accessor(get = "URL.prototype.origin.<get>"), attrs = enumerable | configurable; protocol = accessor(get = "URL.prototype.protocol.<get>", set = "URL.prototype.protocol.<set>"), attrs = enumerable | configurable; username = accessor(get = "URL.prototype.username.<get>", set = "URL.prototype.username.<set>"), attrs = enumerable | configurable; password = accessor(get = "URL.prototype.password.<get>", set = "URL.prototype.password.<set>"), attrs = enumerable | configurable; host = accessor(get = "URL.prototype.host.<get>", set = "URL.prototype.host.<set>"), attrs = enumerable | configurable; hostname = accessor(get = "URL.prototype.hostname.<get>", set = "URL.prototype.hostname.<set>"), attrs = enumerable | configurable; port = accessor(get = "URL.prototype.port.<get>", set = "URL.prototype.port.<set>"), attrs = enumerable | configurable; pathname = accessor(get = "URL.prototype.pathname.<get>", set = "URL.prototype.pathname.<set>"), attrs = enumerable | configurable; search = accessor(get = "URL.prototype.search.<get>", set = "URL.prototype.search.<set>"), attrs = enumerable | configurable; searchParams = accessor(get = "URL.prototype.searchParams.<get>"), attrs = enumerable | configurable; hash = accessor(get = "URL.prototype.hash.<get>", set = "URL.prototype.hash.<set>"), attrs = enumerable | configurable; toJSON, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "URL"; }; URLPattern.prototype, members = { constructor; exec; test; hasRegExpGroups = undefined, attrs = configurable; hash = undefined, attrs = configurable; hostname = undefined, attrs = configurable; password = undefined, attrs = configurable; pathname = undefined, attrs = configurable; port = undefined, attrs = configurable; protocol = undefined, attrs = configurable; search = undefined, attrs = configurable; username = undefined, attrs = configurable; }; URLSearchParams.prototype, members = { constructor; append; delete; entries; forEach; get; getAll; has; keys; set; sort; toString; values; size = accessor(get = "URLSearchParams.prototype.size.<get>"), attrs = enumerable | configurable; toLocaleString; valueOf; [Symbol.toStringTag] = "URLSearchParams"; }; WeakMap.prototype, members = { constructor; delete; get; has; set; toLocaleString; valueOf; [Symbol.toStringTag] = "WeakMap"; }; WeakRef.prototype, members = { constructor; deref; toLocaleString; valueOf; }; WeakSet.prototype, members = { constructor; add; delete; has; toLocaleString; valueOf; [Symbol.toStringTag] = "WeakSet"; }; WebSocket.prototype, members = { constructor; close, attrs = writable | enumerable | configurable; send, attrs = writable | enumerable | configurable; toLocaleString; valueOf; CONNECTING = 0.0, attrs = enumerable; OPEN = 1.0, attrs = enumerable; CLOSING = 2.0, attrs = enumerable; CLOSED = 3.0, attrs = enumerable; }; WritableStream.prototype, members = { constructor; }; BigInt64Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 8.0; }; BigUint64Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 8.0; }; Float16Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 2.0; }; Float32Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 4.0; }; Float64Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 8.0; }; Int16Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 2.0; }; Int32Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 4.0; }; Int8Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 1.0; }; Uint16Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 2.0; }; Uint32Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 4.0; }; Uint8Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; toBase64; toHex; setFromBase64; setFromHex; BYTES_PER_ELEMENT = 1.0; }; Uint8ClampedArray.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 1.0; }; } }
+            birth_family(declaration, closure_ptr, &singleton, &mut birth)
         };
-        if declaration.prototype_callable {
-            // The declaration is immutable birth metadata, independent of the
-            // public name/property. Publish the callable shape and header fact.
-            unsafe {
-                crate::object::shapes::publish_callable_object_kind(
-                    proto_obj,
-                    crate::object::shapes::ShapeObjectKind::CallableOrdinary,
-                );
-            }
+        if name == "Storage" {
+            // Node: `localStorage` / `sessionStorage` are accessors whose
+            // getters make the areas; bound here, ahead of `Storage`.
+            crate::web_storage::install_global_accessors(singleton());
         }
-        install_builtin_constructor_statics(
-            name,
-            closure_ptr,
-            (!proto_obj.is_null()).then(|| crate::value::js_nanbox_pointer(proto_obj as i64)),
-        );
-        // #11193: `C[Symbol.species]` getter returning `this`.
-        if matches!(
-            name,
-            "Array" | "Map" | "Set" | "Promise" | "RegExp" | "ArrayBuffer" | "SharedArrayBuffer"
-        ) {
-            install_builtin_species_accessor(closure_ptr);
-        }
-        if name == "Error" {
-            install_error_static_methods(closure_ptr);
-        }
-        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-        // #4533: `Object.getPrototypeOf(TypeError) === Error`. The constructor's
-        // `[[Prototype]]` is `Error` itself (not `Function.prototype`).
-        if name == "Error" {
-            error_ctor_bits = Some(ctor_value.to_bits());
-        } else if is_native_error_subclass_constructor(name) {
-            if let Some(proto_bits) = error_ctor_bits {
-                crate::closure::closure_set_static_prototype(closure_ptr as usize, proto_bits);
-            }
-        }
-        if name == "Iterator" {
-            crate::object::iterator_ctor::bind_constructor(proto_obj, ctor_value);
-        } else if !proto_obj.is_null() {
-            let ctor_key = crate::string::js_string_from_bytes(
-                b"constructor".as_ptr(),
-                "constructor".len() as u32,
-            );
-            super::super::define_builtin_data_property(
-                proto_obj,
-                ctor_key,
-                ctor_value,
-                "constructor".to_string(),
-                super::super::PropertyAttrs::new(true, false, true),
-            );
-            if is_web_fetch_constructor(name) {
-                super::super::define_builtin_data_property(
-                    proto_obj,
-                    ctor_key,
-                    ctor_value,
-                    "constructor".to_string(),
-                    super::super::PropertyAttrs::new(true, false, true),
-                );
-            }
-            if name == "Array" {
-                let constructor_key =
-                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-                super::super::define_builtin_data_property(
-                    proto_obj,
-                    constructor_key,
-                    ctor_value,
-                    "constructor".to_string(),
-                    super::super::PropertyAttrs::new(true, false, true),
-                );
-            }
-            if matches!(
-                name,
-                "Navigator"
-                    | "TextEncoderStream"
-                    | "TextDecoderStream"
-                    | "CompressionStream"
-                    | "DecompressionStream"
-            ) {
-                let constructor_key =
-                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
-            }
-            // Populate well-known method properties on the prototype
-            // (currently just `Array.prototype.slice`). Methods are
-            // ClosureHeader-backed thunks that take their receiver as
-            // `this` and dispatch to the corresponding native entry
-            // point — works in tandem with `.call`/`.apply` since those
-            // arms (#970) pass the explicit receiver when forwarding.
-            populate_builtin_prototype_methods(name, proto_obj);
-            #[cfg(feature = "regex-engine")]
-            if name == "RegExp" {
-                // An intrinsic is a realm-private value, independent of the
-                // writable public constructor. Ordinary private storage keeps
-                // it alive and relocates it through the global object's trace.
-                crate::object::intrinsic_private_add(
-                    crate::value::js_nanbox_pointer(singleton() as i64),
-                    "[[RegExpPrototype]]",
-                    crate::value::js_nanbox_pointer(proto_obj as i64),
-                );
-            }
-            crate::event_target_hook_slots::prototype_install_constructor_constants(
-                name,
-                closure_ptr.cast(),
-            );
-            if let Some(serial) = declaration.prototype_serial {
-                // SAFETY: `proto_obj` is the live, just-populated prototype.
-                unsafe {
-                    crate::object::proto_validity::assign_intrinsic_prototype_serial(
-                        proto_obj as usize,
-                        serial,
-                    );
-                    name_first_realm_prototype(proto_obj, serial);
-                }
-            }
-            if let Some(serial) = declaration.named_serial {
-                // SAFETY: `proto_obj` is the live intrinsic array; its holder
-                // of named properties is the object the serial names.
-                unsafe {
-                    let holder = crate::array::array_property_bag(
-                        proto_obj as *const crate::array::ArrayHeader,
-                    );
-                    if !holder.is_null() {
-                        name_first_realm_prototype(holder, serial);
-                    }
-                }
-            }
-            if let Some(serial) = declaration.sealed_serial {
-                // SAFETY: as above; runtime layouts name it by this serial.
-                unsafe { crate::object::builtin_proto::seal_runtime_prototype(proto_obj, serial) };
-            }
-            if name == "Function" {
-                crate::closure::shape::FUNCTION_PROTOTYPE_PTR
-                    .store(proto_obj as i64, std::sync::atomic::Ordering::Release);
-            }
-            install_error_prototype_data_properties(name, proto_obj);
-            // ECMA-262 20.5.6.3: the [[Prototype]] of each NativeError prototype
-            // object is %Error.prototype% (not %Object.prototype%). `Error` is
-            // listed before its subclasses, so its prototype object is stashed
-            // here and linked into each subclass prototype's chain. Without this
-            // `Object.getPrototypeOf(TypeError.prototype) !== Error.prototype`
-            // (test262 NativeErrors/*/prototype/proto.js).
-            if name == "Error" {
-                error_proto_bits =
-                    Some(crate::value::js_nanbox_pointer(proto_obj as i64).to_bits());
-            } else if is_native_error_subclass_constructor(name) {
-                if let Some(proto_bits) = error_proto_bits {
-                    super::super::prototype_chain::object_set_static_prototype(
-                        proto_obj as usize,
-                        proto_bits,
-                    );
-                }
-            }
-            if super::super::native_module::is_worker_messaging_constructor(name) {
-                crate::messaging_hook_slots::populate_messaging_prototype(
-                    name, proto_obj, ctor_value,
-                );
-            }
-            if name == "Storage" {
-                crate::web_storage::install_storage_globals(
-                    singleton(),
-                    closure_ptr,
-                    proto_obj,
-                    ctor_value,
-                );
-            }
-            if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
-                super::super::native_module::install_webcrypto_constructor_proto(
-                    proto_obj, ctor_value,
-                );
-            }
-            if name == "WebSocket" {
-                websocket_global::install_constructor_shape(closure_ptr, proto_obj);
-            }
-            // #2145: link per-kind typed-array constructors into the
-            // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
-            // and `Object.getPrototypeOf(Int8Array.prototype) ===
-            // %TypedArray%.prototype`. Both reads are resolved off this
-            // wiring (closure static-prototype side-table for the ctor;
-            // `OBJ_FLAG_TYPED_ARRAY_PROTO` + the cached
-            // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` for the per-kind proto).
-            if !typed_array_intrinsic_ctor.is_null()
-                && matches!(
-                    name,
-                    "Int8Array"
-                        | "Uint8Array"
-                        | "Uint8ClampedArray"
-                        | "Int16Array"
-                        | "Uint16Array"
-                        | "Int32Array"
-                        | "Uint32Array"
-                        | "Float16Array"
-                        | "Float32Array"
-                        | "Float64Array"
-                        | "BigInt64Array"
-                        | "BigUint64Array"
-                )
-            {
-                if name == "Uint8Array" {
-                    crate::closure::js_closure_set_capture_f64(
-                        typed_array_intrinsic_ctor,
-                        0,
-                        crate::value::js_nanbox_pointer(proto_obj as i64),
-                    );
-                }
-                let intrinsic_bits =
-                    crate::value::js_nanbox_pointer(typed_array_intrinsic_ctor as i64).to_bits();
-                crate::closure::closure_set_static_prototype(closure_ptr as usize, intrinsic_bits);
-                unsafe {
-                    let gc = (proto_obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE)
-                        as *mut crate::gc::GcHeader;
-                    (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-                    // Charter step 3: a store-kind input.
-                    crate::object::shapes::store_kind::restamp_object_store_kind(
-                        proto_obj as *mut crate::object::ObjectHeader,
-                    );
-                }
-                // Record the per-kind proto's `[[Prototype]]` as the shared
-                // `%TypedArray%.prototype` so the ordinary property-get chain
-                // walk (`resolve_inherited_field`) finds the inherited methods
-                // (`map`, `filter`, `toString`, …) that no longer live on the
-                // per-kind proto as own properties. `Object.getPrototypeOf`
-                // already resolves via the flag above; this link drives value
-                // reads like `Int8Array.prototype.map`.
-                let intrinsic_proto =
-                    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
-                if intrinsic_proto != 0 {
-                    let proto_bits = crate::value::js_nanbox_pointer(intrinsic_proto).to_bits();
-                    super::super::prototype_chain::object_set_static_prototype(
-                        proto_obj as usize,
-                        proto_bits,
-                    );
-                }
-            }
-            // #6674: the TC39 base64/hex conversion methods
-            // (`toBase64`/`toHex`/`setFromBase64`/`setFromHex`) are Uint8Array-ONLY
-            // (they don't exist on other typed arrays), so install them as own
-            // methods on the `Uint8Array` per-kind prototype — not the shared
-            // `%TypedArray%.prototype` intrinsic. This materializes the value read
-            // `typeof Uint8Array.prototype.toBase64 === "function"`; the static
-            // factories `fromBase64`/`fromHex` are installed on the constructor by
-            // `install_builtin_constructor_statics`.
-            if name == "Uint8Array" {
-                super::super::typed_array_proto_thunks::install_uint8array_base64_hex_proto_methods(
-                    proto_obj,
-                );
-            }
-            // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
-            // constructor and its prototype, matching Node's descriptor
-            // `{ value, writable:false, enumerable:false, configurable:false }`.
-            // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
-            // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
-            // `hasOwnProperty`, and the chained `Float64Array.prototype
-            // .BYTES_PER_ELEMENT` — resolve off these installed own properties.
-            let ta_bytes_per_element = match name {
-                "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => Some(1.0),
-                "Int16Array" | "Uint16Array" | "Float16Array" => Some(2.0),
-                "Int32Array" | "Uint32Array" | "Float32Array" => Some(4.0),
-                "Float64Array" | "BigInt64Array" | "BigUint64Array" => Some(8.0),
-                _ => None,
-            };
-            if let Some(bytes) = ta_bytes_per_element {
-                let bpe_attrs = super::super::PropertyAttrs::new(false, false, false);
-                for target in [closure_ptr as *mut ObjectHeader, proto_obj] {
-                    let bpe_key = crate::string::js_string_from_bytes(
-                        b"BYTES_PER_ELEMENT".as_ptr(),
-                        b"BYTES_PER_ELEMENT".len() as u32,
-                    );
-                    super::super::define_builtin_data_property(
-                        target,
-                        bpe_key,
-                        bytes,
-                        "BYTES_PER_ELEMENT".to_string(),
-                        bpe_attrs,
-                    );
-                }
-            }
-            if name != "Array" {
-                // Its own keys are in: return the room it did not use.
-                // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
-                unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
-            }
-            finish_builtin_prototype(declaration, proto_obj);
-        }
-        // The realm's [[Intrinsics]] entry for this family: the constructor
-        // and what its instances inherit from, whatever `globalThis.<name>`
-        // later holds.
-        let ctor = JSValue::from_bits(ctor_value.to_bits());
-        crate::array::note_realm_intrinsic(
-            declaration.identity,
-            proto_obj as usize,
-            if ctor.is_pointer() {
-                ctor.as_pointer::<u8>() as usize
-            } else {
-                0
-            },
-        );
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         super::super::define_builtin_data_property(
@@ -605,12 +310,13 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     }
     // Interface inheritance carries prototype methods. DOMException has
     // Error.prototype as its instance parent, but no Error constructor parent.
-    for (child, parent, constructor_inherits) in [
-        ("AbortSignal", "EventTarget", true),
-        ("CustomEvent", "Event", true),
-        ("MessageEvent", "Event", true),
-        ("DOMException", "Error", false),
-    ] {
+    // A lazy child links in its own birth (`link_interface_parent`).
+    for (child, parent, constructor_inherits) in INTERFACE_PARENTS {
+        if crate::object::BuiltinConstructorIdentity::for_name(child)
+            .is_some_and(|identity| identity.declaration().lazy)
+        {
+            continue;
+        }
         let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
         let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
         let child_proto = builtin_prototype_value(child);
@@ -647,7 +353,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 false,
             ),
             "fetch" => (
-                crate::fn_info!(#[realm(fetch)] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), Iterate); coerce(elems(field(arg(1), headers)), Iterate); coerce(field(arg(1), headers), OwnKeys); coerce(elems(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype, slots = {bodyError: islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason)}), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
                 1,
                 true,
             ),
@@ -886,6 +592,43 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton(), key, value);
     }
+    // node: `class Performance extends EventTarget`. The singleton's chain is
+    // Performance.prototype -> EventTarget.prototype -> Object.prototype, and
+    // `Performance` inherits EventTarget's statics, among them the
+    // `Symbol.for("nodejs.event_target")` brand the listener methods check.
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let perf_ctor = scope.root_nanbox_f64(
+            super::super::native_module::bound_native_callable_export_value(
+                "perf_hooks",
+                "Performance",
+            ),
+        );
+        let target_ctor = scope.root_nanbox_f64(js_get_global_this_builtin_value(
+            b"EventTarget".as_ptr(),
+            11,
+        ));
+        let target_proto = scope.root_nanbox_f64(builtin_prototype_value("EventTarget"));
+        let is_ptr = |v: f64| JSValue::from_bits(v.to_bits()).is_pointer();
+        if is_ptr(perf_ctor.get_nanbox_f64()) && is_ptr(target_ctor.get_nanbox_f64()) {
+            let perf_addr =
+                crate::value::js_nanbox_get_pointer(perf_ctor.get_nanbox_f64()) as usize;
+            let perf_proto = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
+                perf_addr,
+                "prototype",
+            ));
+            crate::closure::closure_set_static_prototype(
+                perf_addr,
+                target_ctor.get_nanbox_f64().to_bits(),
+            );
+            if is_ptr(perf_proto.get_nanbox_f64()) && is_ptr(target_proto.get_nanbox_f64()) {
+                super::super::prototype_chain::object_set_static_prototype(
+                    crate::value::js_nanbox_get_pointer(perf_proto.get_nanbox_f64()) as usize,
+                    target_proto.get_nanbox_f64().to_bits(),
+                );
+            }
+        }
+    }
     let getter = crate::closure::js_closure_alloc(
         crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
         0,
@@ -980,6 +723,510 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
 
 /// Install `%TypedArray%.prototype.toString` as the same closure object as
 /// `Array.prototype.toString` (ECMA-262 §23.2.3.33).
+/// The realm state one family's birth reads from the families born before it.
+pub(super) struct FamilyBirthState {
+    pub(super) error_ctor_bits: Option<u64>,
+    pub(super) error_proto_bits: Option<u64>,
+    pub(super) typed_array_intrinsic_ctor: *mut crate::closure::ClosureHeader,
+}
+
+/// (child, parent, the constructor also inherits) for the interface families.
+const INTERFACE_PARENTS: [(&str, &str, bool); 5] = [
+    ("AbortSignal", "EventTarget", true),
+    ("BroadcastChannel", "EventTarget", true),
+    ("CustomEvent", "Event", true),
+    ("MessageEvent", "Event", true),
+    ("DOMException", "Error", false),
+];
+
+/// A lazy interface child's links to its (eager) parent, made in its birth:
+/// the same two links the population makes for an eager child.
+fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHeader, proto_obj: *mut ObjectHeader) {
+    let Some(&(_, parent, constructor_inherits)) =
+        INTERFACE_PARENTS.iter().find(|(child, _, _)| *child == name)
+    else {
+        return;
+    };
+    let Some(parent) = crate::object::BuiltinConstructorIdentity::for_name(parent) else {
+        return;
+    };
+    let parent_ctor = crate::array::intrinsic_constructor_addr_if_bound(parent);
+    let parent_proto = crate::array::intrinsic_prototype_addr(parent);
+    if constructor_inherits && parent_ctor != 0 {
+        crate::closure::closure_set_static_prototype(
+            closure_ptr as usize,
+            crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits(),
+        );
+    }
+    if parent_proto != 0 && !proto_obj.is_null() {
+        super::super::prototype_chain::object_set_static_prototype(
+            proto_obj as usize,
+            crate::value::js_nanbox_pointer(parent_proto as i64).to_bits(),
+        );
+    }
+}
+
+/// One builtin family's birth after its constructor exists: the prototype,
+/// the constructor's own properties, the prototype's members and hooks, and
+/// the realm's [[Intrinsics]] entry. Returns the constructor value.
+// Once per family, compacted like the population that calls it. One instance
+// for both callers (the population and `birth_lazy_family`): the realm global
+// comes as `&dyn Fn`, so the body is not monomorphized per caller.
+#[optimize(size)]
+fn birth_family(
+    declaration: &BuiltinConstructorDeclaration,
+    closure_ptr: *mut crate::closure::ClosureHeader,
+    singleton: &dyn Fn() -> *mut ObjectHeader,
+    state: &mut FamilyBirthState,
+) -> f64 {
+    let name = declaration.name;
+    let typed_array_intrinsic_ctor = state.typed_array_intrinsic_ctor;
+    // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
+    // on the constructor closure so rebound usage like
+    // `const O = Object; O.keys(x)` dispatches through the real helpers.
+    // The prototype is an own static data property too. Include it in
+    // the initial attributed layout so adding name/length cannot spill it.
+    let proto_obj = if name == "Array" {
+        // A runtime with no compiled entry (the Rust tests) registers the
+        // static layouts at realm bootstrap, as `js_shape_run_static_seed`
+        // does before any user code (§6a); `%Array.prototype%` is born on
+        // one of them.
+        #[cfg(test)]
+        crate::object::layout_desc::register_static_layouts();
+        let arr = crate::realm_decl! { birth crate::array::realm_array_alloc(0, crate::array::ArrayElements::Scalars, false); realm { Array.prototype, kind = prototype, extends = Object.prototype, members = { length = 0.0, attrs = writable; constructor; slice; toString; entries; flatMap; keys; toLocaleString; toReversed; toSorted; toSpliced; with; flat; values; pop; shift; reverse; push; unshift; splice; fill; copyWithin; sort; forEach; map; filter; some; every; find; findIndex; findLast; findLastIndex; reduce; reduceRight; indexOf; lastIndexOf; includes; at; join; concat; [Symbol.iterator] = ref(Array.prototype.values); }; } };
+        // SAFETY: the fresh intrinsic, under this bootstrap's no-move scope.
+        unsafe {
+            crate::array::array_prototype_property_bag_ensure(
+                arr,
+                super::proto_room::BUILTIN_PROTOTYPE_ROOM,
+            );
+        }
+        arr as *mut ObjectHeader
+    } else if name == "Function" {
+        // Born on its static layout (`runtime_layouts::FUNCTION_PROTOTYPE`,
+        // a callable ordinary kind); the population fills its slots.
+        // SAFETY: a registered runtime descriptor with the default prototype.
+        unsafe {
+            crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
+                crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
+                0,
+            ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; constructor; apply; bind; call; toString; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); caller = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
+        }
+    } else if name == "Iterator" {
+        crate::object::iterator_ctor::iterator_prototype_object()
+    } else {
+        let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype(); realm { AbortController.prototype, members = { constructor; signal = accessor(get = "AbortController.prototype.signal.<get>"), attrs = enumerable | configurable; abort, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "AbortController"; }; AbortSignal.prototype, extends = EventTarget.prototype, members = { constructor; aborted = accessor(get = "AbortSignal.prototype.aborted.<get>"), attrs = enumerable | configurable; reason = accessor(get = "AbortSignal.prototype.reason.<get>"); throwIfAborted; onabort = accessor(get = "AbortSignal.prototype.onabort.<get>", set = "AbortSignal.prototype.onabort.<set>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "AbortSignal"; }; AggregateError.prototype, extends = Error.prototype, members = { constructor; name = "AggregateError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; ArrayBuffer.prototype, members = { constructor; byteLength = accessor(get = "ArrayBuffer.prototype.byteLength.<get>"); slice; maxByteLength = accessor(get = "ArrayBuffer.prototype.maxByteLength.<get>"); resizable = accessor(get = "ArrayBuffer.prototype.resizable.<get>"); resize; transfer; transferToFixedLength; detached = accessor(get = "ArrayBuffer.prototype.detached.<get>"); [Symbol.toStringTag] = "ArrayBuffer"; }; AsyncDisposableStack.prototype, members = { constructor; disposed = accessor(get = "AsyncDisposableStack.prototype.disposed.<get>"); use; adopt; defer; disposeAsync; move; [Symbol.asyncDispose] = ref(AsyncDisposableStack.prototype.disposeAsync); [Symbol.toStringTag] = "AsyncDisposableStack"; }; BigInt.prototype, members = { constructor; toString; valueOf; toLocaleString; }; Blob.prototype, members = { constructor; arrayBuffer; bytes; slice; stream; text; [Symbol.toStringTag] = "Blob"; }; Boolean.prototype, members = { constructor; toString; valueOf; }; BroadcastChannel.prototype, extends = EventTarget.prototype, members = { constructor; name = undefined, attrs = writable | enumerable | configurable; close, attrs = writable | enumerable | configurable; postMessage, attrs = writable | enumerable | configurable; ref, attrs = writable | enumerable | configurable; unref, attrs = writable | enumerable | configurable; onmessage = accessor(get = "BroadcastChannel.prototype.onmessage.<get>", set = "BroadcastChannel.prototype.onmessage.<set>"), attrs = enumerable | configurable; onmessageerror = accessor(get = "BroadcastChannel.prototype.onmessageerror.<get>", set = "BroadcastChannel.prototype.onmessageerror.<set>"), attrs = enumerable | configurable; }; CompressionStream.prototype, members = { constructor; }; Crypto.prototype, members = { constructor; subtle = accessor(get = "Crypto.prototype.subtle.<get>"), attrs = enumerable | configurable; getRandomValues, attrs = writable | enumerable | configurable; randomUUID, attrs = writable | enumerable | configurable; }; CryptoKey.prototype, members = { constructor; algorithm = accessor(get = "CryptoKey.prototype.algorithm.<get>"), attrs = enumerable | configurable; extractable = accessor(get = "CryptoKey.prototype.extractable.<get>"), attrs = enumerable | configurable; type = accessor(get = "CryptoKey.prototype.type.<get>"), attrs = enumerable | configurable; usages = accessor(get = "CryptoKey.prototype.usages.<get>"), attrs = enumerable | configurable; }; MessageEvent.prototype, extends = Event.prototype, members = { constructor; data = accessor(get = "MessageEvent.prototype.data.<get>"), attrs = enumerable | configurable; origin = accessor(get = "MessageEvent.prototype.origin.<get>"), attrs = enumerable | configurable; lastEventId = accessor(get = "MessageEvent.prototype.lastEventId.<get>"), attrs = enumerable | configurable; source = accessor(get = "MessageEvent.prototype.source.<get>"), attrs = enumerable | configurable; ports = accessor(get = "MessageEvent.prototype.ports.<get>"), attrs = enumerable | configurable; initMessageEvent, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "MessageEvent"; }; CustomEvent.prototype, extends = Event.prototype, members = { constructor; detail = accessor(get = "CustomEvent.prototype.detail.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "CustomEvent"; }; DOMException.prototype, extends = Error.prototype, members = { constructor; name = accessor(get = "DOMException.prototype.name.<get>"), attrs = enumerable | configurable; message = accessor(get = "DOMException.prototype.message.<get>"), attrs = enumerable | configurable; code = accessor(get = "DOMException.prototype.code.<get>"), attrs = enumerable | configurable; INDEX_SIZE_ERR = 1.0, attrs = enumerable; DOMSTRING_SIZE_ERR = 2.0, attrs = enumerable; HIERARCHY_REQUEST_ERR = 3.0, attrs = enumerable; WRONG_DOCUMENT_ERR = 4.0, attrs = enumerable; INVALID_CHARACTER_ERR = 5.0, attrs = enumerable; NO_DATA_ALLOWED_ERR = 6.0, attrs = enumerable; NO_MODIFICATION_ALLOWED_ERR = 7.0, attrs = enumerable; NOT_FOUND_ERR = 8.0, attrs = enumerable; NOT_SUPPORTED_ERR = 9.0, attrs = enumerable; INUSE_ATTRIBUTE_ERR = 10.0, attrs = enumerable; INVALID_STATE_ERR = 11.0, attrs = enumerable; SYNTAX_ERR = 12.0, attrs = enumerable; INVALID_MODIFICATION_ERR = 13.0, attrs = enumerable; NAMESPACE_ERR = 14.0, attrs = enumerable; INVALID_ACCESS_ERR = 15.0, attrs = enumerable; VALIDATION_ERR = 16.0, attrs = enumerable; TYPE_MISMATCH_ERR = 17.0, attrs = enumerable; SECURITY_ERR = 18.0, attrs = enumerable; NETWORK_ERR = 19.0, attrs = enumerable; ABORT_ERR = 20.0, attrs = enumerable; URL_MISMATCH_ERR = 21.0, attrs = enumerable; QUOTA_EXCEEDED_ERR = 22.0, attrs = enumerable; TIMEOUT_ERR = 23.0, attrs = enumerable; INVALID_NODE_TYPE_ERR = 24.0, attrs = enumerable; DATA_CLONE_ERR = 25.0, attrs = enumerable; [Symbol.toStringTag] = "DOMException"; }; DataView.prototype, members = { constructor; buffer = accessor(get = "DataView.prototype.buffer.<get>"); byteLength = accessor(get = "DataView.prototype.byteLength.<get>"); byteOffset = accessor(get = "DataView.prototype.byteOffset.<get>"); getInt8; setInt8; getUint8; setUint8; getInt16; setInt16; getUint16; setUint16; getInt32; setInt32; getUint32; setUint32; getFloat32; setFloat32; getFloat64; setFloat64; getBigInt64; setBigInt64; getBigUint64; setBigUint64; getFloat16; setFloat16; [Symbol.toStringTag] = "DataView"; }; Date.prototype, members = { constructor; getDate; getDay; getFullYear; getHours; getMilliseconds; getMinutes; getMonth; getSeconds; getTime; getTimezoneOffset; getUTCDate; getUTCDay; getUTCFullYear; getUTCHours; getUTCMilliseconds; getUTCMinutes; getUTCMonth; getUTCSeconds; getYear; setDate; setFullYear; setHours; setMilliseconds; setMinutes; setMonth; setSeconds; setTime; setUTCDate; setUTCFullYear; setUTCHours; setUTCMilliseconds; setUTCMinutes; setUTCMonth; setUTCSeconds; setYear; toDateString; toISOString; toJSON; toLocaleDateString; toLocaleString; toLocaleTimeString; toTimeString; toUTCString = ref(Date.prototype.toGMTString); valueOf; toTemporalInstant; toGMTString; toString; [Symbol.toPrimitive], attrs = configurable; }; DecompressionStream.prototype, members = { constructor; }; DisposableStack.prototype, members = { constructor; disposed = accessor(get = "DisposableStack.prototype.disposed.<get>"); use; adopt; defer; dispose; move; [Symbol.dispose] = ref(DisposableStack.prototype.dispose); [Symbol.toStringTag] = "DisposableStack"; }; Error.prototype, members = { constructor; toString; name = "Error", attrs = writable | configurable; message = "", attrs = writable | configurable; }; EvalError.prototype, extends = Error.prototype, members = { constructor; name = "EvalError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; Event.prototype, members = { constructor; initEvent, attrs = writable | enumerable | configurable; stopImmediatePropagation, attrs = writable | enumerable | configurable; preventDefault, attrs = writable | enumerable | configurable; target = accessor(get = "Event.prototype.target.<get>"), attrs = enumerable | configurable; currentTarget = accessor(get = "Event.prototype.currentTarget.<get>"), attrs = enumerable | configurable; srcElement = accessor(get = "Event.prototype.srcElement.<get>"), attrs = enumerable | configurable; type = accessor(get = "Event.prototype.type.<get>"), attrs = enumerable | configurable; cancelable = accessor(get = "Event.prototype.cancelable.<get>"), attrs = enumerable | configurable; defaultPrevented = accessor(get = "Event.prototype.defaultPrevented.<get>"), attrs = enumerable | configurable; timeStamp = accessor(get = "Event.prototype.timeStamp.<get>"), attrs = enumerable | configurable; composedPath, attrs = writable | enumerable | configurable; returnValue = accessor(get = "Event.prototype.returnValue.<get>", set = "Event.prototype.returnValue.<set>"), attrs = enumerable | configurable; bubbles = accessor(get = "Event.prototype.bubbles.<get>"), attrs = enumerable | configurable; composed = accessor(get = "Event.prototype.composed.<get>"), attrs = enumerable | configurable; eventPhase = accessor(get = "Event.prototype.eventPhase.<get>"), attrs = enumerable | configurable; cancelBubble = accessor(get = "Event.prototype.cancelBubble.<get>", set = "Event.prototype.cancelBubble.<set>"), attrs = enumerable | configurable; stopPropagation, attrs = writable | enumerable | configurable; isTrusted = accessor(get = "Event.prototype.isTrusted.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "Event"; }; EventTarget.prototype, members = { constructor; addEventListener, attrs = writable | enumerable | configurable; removeEventListener, attrs = writable | enumerable | configurable; dispatchEvent, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "EventTarget"; }; File.prototype, members = { constructor; arrayBuffer; bytes; slice; stream; text; [Symbol.toStringTag] = "File"; }; FinalizationRegistry.prototype, members = { constructor; register; unregister; }; FormData.prototype, members = { constructor; append; delete; entries; forEach; get; getAll; has; keys; set; values; [Symbol.iterator] = ref(FormData.prototype.entries); [Symbol.toStringTag] = "FormData"; }; Headers.prototype, members = { constructor; entries; append; delete; forEach; get; getSetCookie; has; keys; set; values; [Symbol.iterator] = ref(Headers.prototype.entries); [Symbol.toStringTag] = "Headers"; }; Map.prototype, members = { constructor; size = accessor(get = "Map.prototype.size.<get>"); clear; delete; entries; forEach; get; has; keys; set; values; [Symbol.iterator] = ref(Map.prototype.entries); [Symbol.toStringTag] = "Map"; }; MessageChannel.prototype, members = { constructor; }; MessagePort.prototype, members = { constructor; postMessage, attrs = writable | enumerable | configurable; start, attrs = writable | enumerable | configurable; ref, attrs = writable | enumerable | configurable; unref, attrs = writable | enumerable | configurable; hasRef, attrs = writable | enumerable | configurable; onmessage = null, attrs = writable | enumerable | configurable; onmessageerror = null, attrs = writable | enumerable | configurable; close, attrs = writable | enumerable | configurable; }; Navigator.prototype, members = { constructor; hardwareConcurrency = accessor(get = "Navigator.prototype.hardwareConcurrency.<get>"), attrs = enumerable | configurable; locks = accessor(get = "Navigator.prototype.locks.<get>"), attrs = enumerable | configurable; language = accessor(get = "Navigator.prototype.language.<get>"), attrs = enumerable | configurable; languages = accessor(get = "Navigator.prototype.languages.<get>"), attrs = enumerable | configurable; userAgent = accessor(get = "Navigator.prototype.userAgent.<get>"), attrs = enumerable | configurable; platform = accessor(get = "Navigator.prototype.platform.<get>"), attrs = enumerable | configurable; }; Number.prototype, members = { constructor; toExponential; toFixed; toLocaleString; toPrecision; toString; valueOf; }; Promise.prototype, members = { constructor; catch; finally; then; [Symbol.toStringTag] = "Promise"; }; Proxy.prototype, members = { constructor; }; RangeError.prototype, extends = Error.prototype, members = { constructor; name = "RangeError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; ReadableByteStreamController.prototype, members = { constructor; byobRequest = accessor(get = "ReadableByteStreamController.prototype.byobRequest.<get>"), attrs = enumerable | configurable; desiredSize = accessor(get = "ReadableByteStreamController.prototype.desiredSize.<get>"), attrs = enumerable | configurable; close, attrs = writable | enumerable | configurable; enqueue, attrs = writable | enumerable | configurable; error, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "ReadableByteStreamController"; }; ReadableStream.prototype, members = { constructor; locked = accessor(get = "ReadableStream.prototype.locked.<get>"), attrs = enumerable | configurable; cancel, attrs = writable | enumerable | configurable; getReader, attrs = writable | enumerable | configurable; pipeThrough, attrs = writable | enumerable | configurable; pipeTo, attrs = writable | enumerable | configurable; tee, attrs = writable | enumerable | configurable; values, attrs = writable | enumerable | configurable; [Symbol.asyncIterator] = ref(ReadableStream.prototype.values); [Symbol.toStringTag] = "ReadableStream"; }; ReadableStreamBYOBReader.prototype, members = { constructor; closed = accessor(get = "ReadableStreamBYOBReader.prototype.closed.<get>"), attrs = enumerable | configurable; cancel, attrs = writable | enumerable | configurable; read, attrs = writable | enumerable | configurable; releaseLock, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "ReadableStreamBYOBReader"; }; ReadableStreamBYOBRequest.prototype, members = { constructor; view = accessor(get = "ReadableStreamBYOBRequest.prototype.view.<get>"), attrs = enumerable | configurable; respond, attrs = writable | enumerable | configurable; respondWithNewView, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "ReadableStreamBYOBRequest"; }; ReadableStreamDefaultController.prototype, members = { constructor; desiredSize = accessor(get = "ReadableStreamDefaultController.prototype.desiredSize.<get>"), attrs = enumerable | configurable; close, attrs = writable | enumerable | configurable; enqueue, attrs = writable | enumerable | configurable; error, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "ReadableStreamDefaultController"; }; ReadableStreamDefaultReader.prototype, members = { constructor; closed = accessor(get = "ReadableStreamDefaultReader.prototype.closed.<get>"), attrs = enumerable | configurable; cancel, attrs = writable | enumerable | configurable; read, attrs = writable | enumerable | configurable; releaseLock, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "ReadableStreamDefaultReader"; }; ReferenceError.prototype, extends = Error.prototype, members = { constructor; name = "ReferenceError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; RegExp.prototype, members = { constructor; flags = accessor(get = "RegExp.prototype.flags.<get>"); source = accessor(get = "RegExp.prototype.source.<get>"); global = accessor(get = "RegExp.prototype.global.<get>"); ignoreCase = accessor(get = "RegExp.prototype.ignoreCase.<get>"); multiline = accessor(get = "RegExp.prototype.multiline.<get>"); dotAll = accessor(get = "RegExp.prototype.dotAll.<get>"); sticky = accessor(get = "RegExp.prototype.sticky.<get>"); unicode = accessor(get = "RegExp.prototype.unicode.<get>"); unicodeSets = accessor(get = "RegExp.prototype.unicodeSets.<get>"); hasIndices = accessor(get = "RegExp.prototype.hasIndices.<get>"); exec; test; compile; toString; [Symbol.match]; [Symbol.search]; [Symbol.matchAll]; [Symbol.split]; [Symbol.replace]; }; Request.prototype, members = { constructor; arrayBuffer; blob; bytes; clone; formData; json; text; body = accessor(get = "Request.prototype.body.<get>"); bodyUsed = accessor(get = "Request.prototype.bodyUsed.<get>"); cache = accessor(get = "Request.prototype.cache.<get>"); credentials = accessor(get = "Request.prototype.credentials.<get>"); destination = accessor(get = "Request.prototype.destination.<get>"); duplex = accessor(get = "Request.prototype.duplex.<get>"); headers = accessor(get = "Request.prototype.headers.<get>"); integrity = accessor(get = "Request.prototype.integrity.<get>"); keepalive = accessor(get = "Request.prototype.keepalive.<get>"); method = accessor(get = "Request.prototype.method.<get>"); mode = accessor(get = "Request.prototype.mode.<get>"); redirect = accessor(get = "Request.prototype.redirect.<get>"); referrer = accessor(get = "Request.prototype.referrer.<get>"); referrerPolicy = accessor(get = "Request.prototype.referrerPolicy.<get>"); signal = accessor(get = "Request.prototype.signal.<get>"); url = accessor(get = "Request.prototype.url.<get>"); [Symbol.toStringTag] = "Request"; }; Response.prototype, members = { constructor; arrayBuffer; blob; bytes; clone; formData; json; text; body = accessor(get = "Response.prototype.body.<get>"); bodyUsed = accessor(get = "Response.prototype.bodyUsed.<get>"); headers = accessor(get = "Response.prototype.headers.<get>"); ok = accessor(get = "Response.prototype.ok.<get>"); redirected = accessor(get = "Response.prototype.redirected.<get>"); status = accessor(get = "Response.prototype.status.<get>"); statusText = accessor(get = "Response.prototype.statusText.<get>"); type = accessor(get = "Response.prototype.type.<get>"); url = accessor(get = "Response.prototype.url.<get>"); [Symbol.toStringTag] = "Response"; }; Set.prototype, members = { constructor; size = accessor(get = "Set.prototype.size.<get>"); add; clear; delete; entries; forEach; has; keys; values = ref(Set.prototype.keys); [Symbol.iterator] = ref(Set.prototype.keys); [Symbol.toStringTag] = "Set"; }; SharedArrayBuffer.prototype, members = { constructor; byteLength = accessor(get = "SharedArrayBuffer.prototype.byteLength.<get>"); slice; maxByteLength = accessor(get = "SharedArrayBuffer.prototype.maxByteLength.<get>"); growable = accessor(get = "SharedArrayBuffer.prototype.growable.<get>"); grow; [Symbol.toStringTag] = "SharedArrayBuffer"; }; Storage.prototype, members = { constructor; clear, attrs = writable | enumerable | configurable; getItem, attrs = writable | enumerable | configurable; key, attrs = writable | enumerable | configurable; removeItem, attrs = writable | enumerable | configurable; setItem, attrs = writable | enumerable | configurable; length = accessor(get = "Storage.prototype.length.<get>"), attrs = enumerable; }; String.prototype, members = { constructor; at; charAt; charCodeAt; codePointAt; anchor; big; blink; bold; fixed; fontcolor; fontsize; italics; link; small; strike; sub; sup; concat; endsWith; includes; indexOf; isWellFormed; lastIndexOf; localeCompare; match; matchAll; normalize; padEnd; padStart; repeat; replace; replaceAll; search; slice; split; startsWith; substr; substring; toLocaleLowerCase; toLocaleUpperCase; toLowerCase; toUpperCase; toWellFormed; trim; trimEnd; trimStart = ref(String.prototype.trimLeft); trimLeft; trimRight = ref(String.prototype.trimEnd); valueOf; toString; [Symbol.iterator]; }; SubtleCrypto.prototype, members = { constructor; encapsulateBits, attrs = writable | enumerable | configurable; decapsulateBits, attrs = writable | enumerable | configurable; encapsulateKey, attrs = writable | enumerable | configurable; decapsulateKey, attrs = writable | enumerable | configurable; }; SuppressedError.prototype, extends = Error.prototype, members = { constructor; name = "SuppressedError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; Symbol.prototype, members = { constructor; toString; valueOf; }; SyntaxError.prototype, extends = Error.prototype, members = { constructor; name = "SyntaxError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; TextDecoder.prototype, members = { constructor; decode, attrs = writable | enumerable | configurable; encoding = accessor(get = "TextDecoder.prototype.encoding.<get>"), attrs = enumerable | configurable; fatal = accessor(get = "TextDecoder.prototype.fatal.<get>"), attrs = enumerable | configurable; ignoreBOM = accessor(get = "TextDecoder.prototype.ignoreBOM.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "TextDecoder"; }; TextDecoderStream.prototype, members = { constructor; }; TextEncoder.prototype, members = { constructor; encode, attrs = writable | enumerable | configurable; encodeInto, attrs = writable | enumerable | configurable; encoding = accessor(get = "TextEncoder.prototype.encoding.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "TextEncoder"; }; TextEncoderStream.prototype, members = { constructor; }; TransformStream.prototype, members = { constructor; }; TypeError.prototype, extends = Error.prototype, members = { constructor; name = "TypeError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; URIError.prototype, extends = Error.prototype, members = { constructor; name = "URIError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; URL.prototype, members = { constructor; toString, attrs = writable | enumerable | configurable; href = accessor(get = "URL.prototype.href.<get>", set = "URL.prototype.href.<set>"), attrs = enumerable | configurable; origin = accessor(get = "URL.prototype.origin.<get>"), attrs = enumerable | configurable; protocol = accessor(get = "URL.prototype.protocol.<get>", set = "URL.prototype.protocol.<set>"), attrs = enumerable | configurable; username = accessor(get = "URL.prototype.username.<get>", set = "URL.prototype.username.<set>"), attrs = enumerable | configurable; password = accessor(get = "URL.prototype.password.<get>", set = "URL.prototype.password.<set>"), attrs = enumerable | configurable; host = accessor(get = "URL.prototype.host.<get>", set = "URL.prototype.host.<set>"), attrs = enumerable | configurable; hostname = accessor(get = "URL.prototype.hostname.<get>", set = "URL.prototype.hostname.<set>"), attrs = enumerable | configurable; port = accessor(get = "URL.prototype.port.<get>", set = "URL.prototype.port.<set>"), attrs = enumerable | configurable; pathname = accessor(get = "URL.prototype.pathname.<get>", set = "URL.prototype.pathname.<set>"), attrs = enumerable | configurable; search = accessor(get = "URL.prototype.search.<get>", set = "URL.prototype.search.<set>"), attrs = enumerable | configurable; searchParams = accessor(get = "URL.prototype.searchParams.<get>"), attrs = enumerable | configurable; hash = accessor(get = "URL.prototype.hash.<get>", set = "URL.prototype.hash.<set>"), attrs = enumerable | configurable; toJSON, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "URL"; }; URLPattern.prototype, members = { constructor; exec; test; hasRegExpGroups = undefined, attrs = configurable; hash = undefined, attrs = configurable; hostname = undefined, attrs = configurable; password = undefined, attrs = configurable; pathname = undefined, attrs = configurable; port = undefined, attrs = configurable; protocol = undefined, attrs = configurable; search = undefined, attrs = configurable; username = undefined, attrs = configurable; }; URLSearchParams.prototype, members = { constructor; append; delete; entries; forEach; get; getAll; has; keys; set; sort; toString; values; size = accessor(get = "URLSearchParams.prototype.size.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "URLSearchParams"; }; WeakMap.prototype, members = { constructor; delete; get; has; set; [Symbol.toStringTag] = "WeakMap"; }; WeakRef.prototype, members = { constructor; deref; }; WeakSet.prototype, members = { constructor; add; delete; has; [Symbol.toStringTag] = "WeakSet"; }; WebSocket.prototype, members = { constructor; close, attrs = writable | enumerable | configurable; send, attrs = writable | enumerable | configurable; CONNECTING = 0.0, attrs = enumerable; OPEN = 1.0, attrs = enumerable; CLOSING = 2.0, attrs = enumerable; CLOSED = 3.0, attrs = enumerable; }; WritableStream.prototype, members = { constructor; }; BigInt64Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 8.0; }; BigUint64Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 8.0; }; Float16Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 2.0; }; Float32Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 4.0; }; Float64Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 8.0; }; Int16Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 2.0; }; Int32Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 4.0; }; Int8Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 1.0; }; Uint16Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 2.0; }; Uint32Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 4.0; }; Uint8Array.prototype, extends = "%TypedArray%.prototype", members = { constructor; toBase64; toHex; setFromBase64; setFromHex; BYTES_PER_ELEMENT = 1.0; }; Uint8ClampedArray.prototype, extends = "%TypedArray%.prototype", members = { constructor; BYTES_PER_ELEMENT = 1.0; }; } };
+        // The realm seals this family prototype before any program code
+        // can reach it (`seal_realm`): it is born on the born-prototype
+        // lineage, so that seal's mark mints no shape.
+        if crate::object::builtin_proto::realm_seals_constructor_prototype(declaration) {
+            // SAFETY: the keyless newborn, unexposed, in this no-move window.
+            unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
+        }
+        proto
+    };
+    if declaration.prototype_callable {
+        // The declaration is immutable birth metadata, independent of the
+        // public name/property. Publish the callable shape and header fact.
+        unsafe {
+            crate::object::shapes::publish_callable_object_kind(
+                proto_obj,
+                crate::object::shapes::ShapeObjectKind::CallableOrdinary,
+            );
+        }
+    }
+    install_builtin_constructor_statics(
+        name,
+        closure_ptr,
+        (!proto_obj.is_null()).then(|| crate::value::js_nanbox_pointer(proto_obj as i64)),
+    );
+    // #11193: `C[Symbol.species]` getter returning `this`.
+    if matches!(
+        name,
+        "Array" | "Map" | "Set" | "Promise" | "RegExp" | "ArrayBuffer" | "SharedArrayBuffer"
+    ) {
+        install_builtin_species_accessor(closure_ptr);
+    }
+    let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+    // #4533: `Object.getPrototypeOf(TypeError) === Error`. The constructor's
+    // `[[Prototype]]` is `Error` itself (not `Function.prototype`).
+    if name == "Error" {
+        ERROR_CONSTRUCTOR_PTR.with(|cell| cell.set(closure_ptr as usize));
+        state.error_ctor_bits = Some(ctor_value.to_bits());
+    } else if is_native_error_subclass_constructor(name) {
+        if let Some(proto_bits) = state.error_ctor_bits {
+            crate::closure::closure_set_static_prototype(closure_ptr as usize, proto_bits);
+        }
+    }
+    if name == "Iterator" {
+        crate::object::iterator_ctor::bind_constructor(proto_obj, ctor_value);
+    } else if !proto_obj.is_null() {
+        let ctor_key = crate::string::js_string_from_bytes(
+            b"constructor".as_ptr(),
+            "constructor".len() as u32,
+        );
+        super::super::define_builtin_data_property(
+            proto_obj,
+            ctor_key,
+            ctor_value,
+            "constructor".to_string(),
+            super::super::PropertyAttrs::new(true, false, true),
+        );
+        if is_web_fetch_constructor(name) {
+            super::super::define_builtin_data_property(
+                proto_obj,
+                ctor_key,
+                ctor_value,
+                "constructor".to_string(),
+                super::super::PropertyAttrs::new(true, false, true),
+            );
+        }
+        if name == "Array" {
+            let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+            super::super::define_builtin_data_property(
+                proto_obj,
+                constructor_key,
+                ctor_value,
+                "constructor".to_string(),
+                super::super::PropertyAttrs::new(true, false, true),
+            );
+        }
+        if matches!(
+            name,
+            "Navigator"
+                | "ReadableStreamDefaultController"
+                | "ReadableStreamDefaultReader"
+                | "ReadableByteStreamController"
+                | "ReadableStreamBYOBReader"
+                | "ReadableStreamBYOBRequest"
+                | "TextEncoderStream"
+                | "TextDecoderStream"
+                | "CompressionStream"
+                | "DecompressionStream"
+        ) {
+            let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+            js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
+        }
+        // Populate well-known method properties on the prototype
+        // (currently just `Array.prototype.slice`). Methods are
+        // ClosureHeader-backed thunks that take their receiver as
+        // `this` and dispatch to the corresponding native entry
+        // point — works in tandem with `.call`/`.apply` since those
+        // arms (#970) pass the explicit receiver when forwarding.
+        if declaration.external {
+            crate::external_family::birth(declaration.identity, proto_obj);
+        }
+        populate_builtin_prototype_methods(name, proto_obj);
+        #[cfg(feature = "regex-engine")]
+        if name == "RegExp" {
+            // An intrinsic is a realm-private value, independent of the
+            // writable public constructor. Ordinary private storage keeps
+            // it alive and relocates it through the global object's trace.
+            crate::object::intrinsic_private_add(
+                crate::value::js_nanbox_pointer(singleton() as i64),
+                "[[RegExpPrototype]]",
+                crate::value::js_nanbox_pointer(proto_obj as i64),
+            );
+        }
+        crate::event_target_hook_slots::prototype_install_constructor_constants(
+            name,
+            closure_ptr.cast(),
+        );
+        if let Some(serial) = declaration.prototype_serial {
+            // SAFETY: `proto_obj` is the live, just-populated prototype.
+            unsafe {
+                crate::object::proto_validity::assign_intrinsic_prototype_serial(
+                    proto_obj as usize,
+                    serial,
+                );
+                name_first_realm_prototype(proto_obj, serial);
+            }
+        }
+        if let Some(serial) = declaration.named_serial {
+            // SAFETY: `proto_obj` is the live intrinsic array; its holder
+            // of named properties is the object the serial names.
+            unsafe {
+                let holder =
+                    crate::array::array_property_bag(proto_obj as *const crate::array::ArrayHeader);
+                if !holder.is_null() {
+                    name_first_realm_prototype(holder, serial);
+                }
+            }
+        }
+        if let Some(serial) = declaration.sealed_serial {
+            // SAFETY: as above; runtime layouts name it by this serial.
+            unsafe { crate::object::builtin_proto::seal_runtime_prototype(proto_obj, serial) };
+        }
+        if name == "Function" {
+            crate::closure::shape::FUNCTION_PROTOTYPE_PTR
+                .store(proto_obj as i64, std::sync::atomic::Ordering::Release);
+        }
+        install_error_prototype_data_properties(name, proto_obj);
+        // ECMA-262 20.5.6.3: the [[Prototype]] of each NativeError prototype
+        // object is %Error.prototype% (not %Object.prototype%). `Error` is
+        // listed before its subclasses, so its prototype object is stashed
+        // here and linked into each subclass prototype's chain. Without this
+        // `Object.getPrototypeOf(TypeError.prototype) !== Error.prototype`
+        // (test262 NativeErrors/*/prototype/proto.js).
+        if name == "Error" {
+            state.error_proto_bits =
+                Some(crate::value::js_nanbox_pointer(proto_obj as i64).to_bits());
+        } else if is_native_error_subclass_constructor(name) {
+            if let Some(proto_bits) = state.error_proto_bits {
+                super::super::prototype_chain::object_set_static_prototype(
+                    proto_obj as usize,
+                    proto_bits,
+                );
+            }
+        }
+        if super::super::native_module::is_worker_messaging_constructor(name) {
+            crate::messaging_hook_slots::populate_messaging_prototype(name, proto_obj, ctor_value);
+            if name == "BroadcastChannel" {
+                crate::event_target_hook_slots::install_web_event_proto_methods(name, proto_obj);
+            }
+        }
+        if declaration.lazy {
+            link_interface_parent(name, closure_ptr, proto_obj);
+        }
+        if name == "Storage" {
+            crate::web_storage::install_storage_prototype(proto_obj, ctor_value);
+        }
+        if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+            super::super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
+        }
+        if name == "WebSocket" {
+            websocket_global::install_constructor_shape(closure_ptr, proto_obj);
+        }
+        // #2145: link per-kind typed-array constructors into the
+        // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
+        // and `Object.getPrototypeOf(Int8Array.prototype) ===
+        // %TypedArray%.prototype`. Both reads are resolved off this
+        // wiring (closure static-prototype side-table for the ctor;
+        // `OBJ_FLAG_TYPED_ARRAY_PROTO` + the cached
+        // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` for the per-kind proto).
+        if !typed_array_intrinsic_ctor.is_null()
+            && matches!(
+                name,
+                "Int8Array"
+                    | "Uint8Array"
+                    | "Uint8ClampedArray"
+                    | "Int16Array"
+                    | "Uint16Array"
+                    | "Int32Array"
+                    | "Uint32Array"
+                    | "Float16Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            )
+        {
+            if name == "Uint8Array" {
+                crate::closure::js_closure_set_capture_f64(
+                    typed_array_intrinsic_ctor,
+                    0,
+                    crate::value::js_nanbox_pointer(proto_obj as i64),
+                );
+            }
+            let intrinsic_bits =
+                crate::value::js_nanbox_pointer(typed_array_intrinsic_ctor as i64).to_bits();
+            crate::closure::closure_set_static_prototype(closure_ptr as usize, intrinsic_bits);
+            unsafe {
+                let gc = (proto_obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE)
+                    as *mut crate::gc::GcHeader;
+                (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                // Charter step 3: a store-kind input.
+                crate::object::shapes::store_kind::restamp_object_store_kind(
+                    proto_obj as *mut crate::object::ObjectHeader,
+                );
+            }
+            // Record the per-kind proto's `[[Prototype]]` as the shared
+            // `%TypedArray%.prototype` so the ordinary property-get chain
+            // walk (`resolve_inherited_field`) finds the inherited methods
+            // (`map`, `filter`, `toString`, …) that no longer live on the
+            // per-kind proto as own properties. `Object.getPrototypeOf`
+            // already resolves via the flag above; this link drives value
+            // reads like `Int8Array.prototype.map`.
+            let intrinsic_proto =
+                crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+            if intrinsic_proto != 0 {
+                let proto_bits = crate::value::js_nanbox_pointer(intrinsic_proto).to_bits();
+                super::super::prototype_chain::object_set_static_prototype(
+                    proto_obj as usize,
+                    proto_bits,
+                );
+            }
+        }
+        // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
+        // constructor and its prototype, matching Node's descriptor
+        // `{ value, writable:false, enumerable:false, configurable:false }`.
+        // On the prototype it precedes `Uint8Array`'s base64/hex methods,
+        // node's own-key order.
+        // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
+        // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
+        // `hasOwnProperty`, and the chained `Float64Array.prototype
+        // .BYTES_PER_ELEMENT` — resolve off these installed own properties.
+        let ta_bytes_per_element = match name {
+            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => Some(1.0),
+            "Int16Array" | "Uint16Array" | "Float16Array" => Some(2.0),
+            "Int32Array" | "Uint32Array" | "Float32Array" => Some(4.0),
+            "Float64Array" | "BigInt64Array" | "BigUint64Array" => Some(8.0),
+            _ => None,
+        };
+        if let Some(bytes) = ta_bytes_per_element {
+            let bpe_attrs = super::super::PropertyAttrs::new(false, false, false);
+            for target in [closure_ptr as *mut ObjectHeader, proto_obj] {
+                let bpe_key = crate::string::js_string_from_bytes(
+                    b"BYTES_PER_ELEMENT".as_ptr(),
+                    b"BYTES_PER_ELEMENT".len() as u32,
+                );
+                super::super::define_builtin_data_property(
+                    target,
+                    bpe_key,
+                    bytes,
+                    "BYTES_PER_ELEMENT".to_string(),
+                    bpe_attrs,
+                );
+            }
+        }
+        // #6674: the TC39 base64/hex conversion methods
+        // (`toBase64`/`toHex`/`setFromBase64`/`setFromHex`) are Uint8Array-ONLY
+        // (they don't exist on other typed arrays), so install them as own
+        // methods on the `Uint8Array` per-kind prototype — not the shared
+        // `%TypedArray%.prototype` intrinsic. This materializes the value read
+        // `typeof Uint8Array.prototype.toBase64 === "function"`; the static
+        // factories `fromBase64`/`fromHex` are installed on the constructor by
+        // `install_builtin_constructor_statics`.
+        if name == "Uint8Array" {
+            super::super::typed_array_proto_thunks::install_uint8array_base64_hex_proto_methods(
+                proto_obj,
+            );
+        }
+        if name != "Array" {
+            // Its own keys are in: return the room it did not use.
+            // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
+            unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
+        }
+        finish_builtin_prototype(declaration, proto_obj);
+    }
+    // The realm's [[Intrinsics]] entry for this family: the constructor
+    // and what its instances inherit from, whatever `globalThis.<name>`
+    // later holds.
+    let ctor = JSValue::from_bits(ctor_value.to_bits());
+    crate::array::note_realm_intrinsic(
+        declaration.identity,
+        proto_obj as usize,
+        if ctor.is_pointer() {
+            ctor.as_pointer::<u8>() as usize
+        } else {
+            0
+        },
+    );
+    ctor_value
+}
+
+crate::perry_thread_local! {
+    /// The lazy family this thread is birthing (its identity), 0 when none:
+    /// the birth's own bag install must not ask for the birth again.
+    static BIRTHING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Birth the `lazy` family `identity` (`BuiltinConstructorDeclaration::lazy`)
+/// in this thread's realm: everything realm setup did not do, by the same
+/// `birth_family` as an eager family, so the members are in declaration
+/// order whatever observation came first. Entered only from
+/// `array::realm_intrinsic_addr`, when the family's intrinsic prototype is
+/// still 0 after the realm exists. No-op while the realm has not bound the
+/// constructor yet (realm setup itself).
+#[cold]
+#[inline(never)]
+pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {
+    let declaration = identity.declaration();
+    debug_assert!(declaration.lazy);
+    let ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
+    if ctor == 0 || crate::array::intrinsic_prototype_addr_if_bound(identity) != 0 {
+        return;
+    }
+    // A member install that asks for its own family's prototype is a
+    // programming error: it would read the unfinished birth.
+    debug_assert_ne!(
+        BIRTHING.with(|c| c.get()),
+        identity as u8,
+        "{} asked for its own prototype during its birth",
+        declaration.name
+    );
+    let outer = BIRTHING.with(|c| c.replace(identity as u8));
+    // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
+    let _realm = crate::snap_census::realm_build();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let global = (js_get_global_this().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let bits =
+        |addr: usize| (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits());
+    let error = crate::object::BuiltinConstructorIdentity::Error;
+    let mut state = FamilyBirthState {
+        error_ctor_bits: bits(crate::array::intrinsic_constructor_addr_if_bound(error)),
+        error_proto_bits: bits(crate::array::intrinsic_prototype_addr_if_bound(error)),
+        typed_array_intrinsic_ctor: ensure_typed_array_intrinsic().0,
+    };
+    super::super::own_override::as_builtin_definition(|| {
+        birth_family(
+            declaration,
+            ctor as *mut crate::closure::ClosureHeader,
+            &|| global,
+            &mut state,
+        );
+    });
+    BIRTHING.with(|c| c.set(outer));
+}
+
+/// Birth the family of the closure at `ptr` when `ptr` is its realm's still
+/// unborn `lazy` constructor (which has no own property bag until then);
+/// true when it did. Every path that needs that constructor's bag or its
+/// `prototype` value asks this first; presence and key listing need neither.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn birth_unborn_family_of(ptr: usize) -> bool {
+    let word = (*(ptr as *const crate::closure::ClosureHeader)).capture_count;
+    word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK != 0 && birth_unborn_family_slow(ptr, word)
+}
+
+#[cold]
+#[inline(never)]
+fn birth_unborn_family_slow(ptr: usize, word: u32) -> bool {
+    unborn_lazy_identity(ptr, word)
+        .is_some_and(|identity| crate::array::intrinsic_prototype_addr(identity) != 0)
+}
+
+/// The declared static keys of the closure at `ptr` while it is its realm's
+/// still unborn `lazy` constructor (`BuiltinConstructorDeclaration::statics`),
+/// else none. Presence and key listing answer them without a birth; reading
+/// one's value births the family ([`birth_unborn_family_of`]).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'static str] {
+    let word = (*(ptr as *const crate::closure::ClosureHeader)).capture_count;
+    if word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK == 0 {
+        return &[];
+    }
+    unborn_lazy_identity(ptr, word).map_or(&[], |identity| identity.declaration().statics)
+}
+
+/// The identity of the closure at `ptr` (header word `word`) while it is its
+/// realm's still unborn `lazy` constructor, outside that family's own birth.
+fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
+    let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
+    (identity.declaration().lazy
+        && BIRTHING.with(|c| c.get()) != identity as u8
+        && crate::array::intrinsic_prototype_addr_if_bound(identity) == 0
+        && crate::array::intrinsic_constructor_addr_if_bound(identity) == ptr)
+        .then_some(identity)
+}
+
 fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
     if ta_proto_addr == 0 {
@@ -1066,7 +1313,6 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
         return;
     }
     let ctor_handle = scope.root_raw_mut_ptr(ctor_ptr);
-
     let static_key = super::global_name_key(name);
     let ctor_ptr = ctor_handle.get_raw_mut_ptr::<ObjectHeader>();
     js_object_set_field_by_name(
@@ -1080,7 +1326,6 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
         super::super::PropertyAttrs::new(true, false, true),
     );
 }
-
 crate::perry_thread_local! {
     /// Raw address of THIS thread's `Error` constructor closure, captured at
     /// install. Read by `error::error_prepare_stack_trace_override` so
@@ -1116,81 +1361,6 @@ pub(crate) fn scan_error_constructor_root_mut(visitor: &mut crate::gc::RuntimeRo
 /// user override apart from Perry's built-in default.
 pub(crate) fn default_prepare_stack_trace_func_ptr() -> usize {
     global_this_error_prepare_stack_trace_thunk as *const u8 as usize
-}
-
-fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
-    if ctor.is_null() {
-        return;
-    }
-    ERROR_CONSTRUCTOR_PTR.with(|c| c.set(ctor as usize));
-    let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
-        0,
-    );
-    if closure.is_null() {
-        return;
-    }
-    super::super::native_module::set_bound_native_closure_name(closure, "captureStackTrace");
-
-    let key = crate::string::js_string_from_bytes(b"captureStackTrace".as_ptr(), 17);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        key,
-        value,
-        "captureStackTrace".to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
-    );
-
-    // #2904: `Error.isError` — V8/Node Error duck-check.
-    install_error_static_fn(
-        ctor,
-        "isError",
-        crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
-    );
-
-    // #2904: `Error.prepareStackTrace` — default stack-formatting hook.
-    install_error_static_fn(
-        ctor,
-        "prepareStackTrace",
-        crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
-    );
-
-    // #2904: `Error.stackTraceLimit` — writable number controlling captured
-    // frame count. Node's default is 10; Perry's stacks are coarse but the
-    // property must read as a number and be writable.
-    let limit_key = crate::string::js_string_from_bytes(b"stackTraceLimit".as_ptr(), 15);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        limit_key,
-        10.0,
-        "stackTraceLimit".to_string(),
-        super::super::PropertyAttrs::new(true, true, true),
-    );
-}
-
-/// #2904: install a callable static method on the `Error` constructor closure
-/// as a non-enumerable, writable, configurable data property (matching Node's
-/// property descriptors for the V8 static helpers).
-fn install_error_static_fn(
-    ctor: *mut crate::closure::ClosureHeader,
-    name: &str,
-    info: *const crate::closure::JsFunctionInfo,
-) {
-    let closure = crate::closure::js_closure_alloc(info, 0);
-    if closure.is_null() {
-        return;
-    }
-    super::super::native_module::set_bound_native_closure_name(closure, name);
-    let key = super::global_name_key(name);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        key,
-        value,
-        name.to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
-    );
 }
 
 // =====================================================================

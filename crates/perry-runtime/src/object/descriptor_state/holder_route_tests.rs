@@ -1,19 +1,28 @@
 //! Routing must refuse internal GC cells without creating native handle roots.
 use super::*;
 
+/// Release builds return the refusal; debug builds also diagnose the bad
+/// caller with a panic, observed from a child process (every test build is
+/// `panic = "abort"`), whose hook reports whether a native bag was created.
+#[track_caller]
+fn refuses(owner: usize, refusal: impl FnOnce() -> bool) -> bool {
+    if !cfg!(debug_assertions) {
+        return refusal();
+    }
+    let (_, bag) = crate::test_support::expect_child_panic_then("", refusal, move || {
+        let bag = super::super::handle_expando::handle_property_bag(owner as i64);
+        format!("native_bag={}", !bag.is_null())
+    });
+    bag == "native_bag=false"
+}
+
 fn assert_refused(owner: usize) {
-    // Release builds return absence; debug builds also diagnose the bad caller.
-    let edit = std::panic::catch_unwind(|| HolderEdit::new(owner).is_none());
     assert!(
-        edit.unwrap_or(cfg!(debug_assertions)),
+        refuses(owner, || HolderEdit::new(owner).is_none()),
         "install admitted an internal cell"
     );
-    let read = std::panic::catch_unwind(|| unsafe {
-        let bag = descriptor_route(owner).bag;
-        bag.is_null()
-    });
     assert!(
-        read.unwrap_or(cfg!(debug_assertions)),
+        refuses(owner, || unsafe { descriptor_route(owner).bag.is_null() }),
         "query admitted an internal cell"
     );
     assert!(
@@ -103,15 +112,11 @@ fn descriptor_holder_refusal_reads_ignore_a_native_registry_collision() {
     let capture = crate::r#box::js_box_alloc(1.0) as usize;
     // An allocator-owned capture is not an admitted native payload.
     assert!(super::super::handle_expando::handle_property_bag(capture as i64).is_null());
-    let result = std::panic::catch_unwind(|| unsafe {
-        let bag = descriptor_route(capture).bag;
-        bag.is_null()
+    let refused = refuses(capture, || unsafe {
+        descriptor_route(capture).bag.is_null()
     });
     super::super::handle_expando::handle_expando_clear(capture as i64);
-    assert!(
-        result.unwrap_or(cfg!(debug_assertions)),
-        "query used an address-keyed native bag"
-    );
+    assert!(refused, "query used an address-keyed native bag");
 }
 
 #[test]

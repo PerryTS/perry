@@ -93,13 +93,130 @@ PAT = re.compile(
 # and rise every time a combinator is added. Exclude it.
 EXCLUDE = {"crates/perry-runtime/src/gc/roots/runtime_handles.rs"}
 
+# Test code is out of scope (owner decision 2026-11-04): a raw read in a test
+# is not a rooting hazard in the shipped runtime. Three shapes are recognised,
+# all cheap and purely syntactic:
+#   * test FILES by name or location: `tests.rs`, `*_tests.rs`, `*_tests_*.rs`,
+#     `*_test.rs`, anything under a `tests/` or `*_tests/` directory;
+#   * test MODULES declared out of line, `#[cfg(test)] mod foo;` (the file
+#     `foo.rs` / `foo/mod.rs` and everything below `foo/`), and `#![cfg(test)]`;
+#   * `#[cfg(test)]` ITEMS in a production file (inline `mod tests { .. }`,
+#     helper fns, impls): the attribute plus the item that follows it.
+CFG_TEST = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+INNER_CFG_TEST = re.compile(r"#!\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+ATTR_START = re.compile(r"\s*#\[")
+OUTLINE_MOD = re.compile(
+    r"\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;"
+)
+# Comments, strings and char literals hide braces from the item matcher.
+LEX = re.compile(
+    r"//[^\n]*|/\*[\s\S]*?\*/"
+    r"|b?r(#*)\"[\s\S]*?\"\1"
+    r"|b?\"(?:[^\"\\]|\\[\s\S])*\""
+    r"|'(?:\\(?:u\{[0-9A-Fa-f_]+\}|x[0-9A-Fa-f]{2}|[\s\S])|[^\\'\n])'"
+)
+
+
+def is_test_path(rel):
+    parts = rel.split("/")
+    name = parts[-1]
+    stem = name[:-3] if name.endswith(".rs") else name
+    return (
+        any(d == "tests" or d.endswith("_tests") for d in parts[:-1])
+        or stem in ("tests", "test")
+        or stem.endswith(("_tests", "_test"))
+        or "_tests_" in stem
+    )
+
+
+def blank_literals(text):
+    """`text` with comments/strings/char literals blanked (same length)."""
+    return LEX.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+
+
+def strip_cfg_test_items(text):
+    """`text` without the items a `#[cfg(test)]` attribute gates.
+
+    An item ends at its first `;` or at the `}` matching its first `{`.
+    Out-of-line `mod foo;` is handled at file level by `test_only_paths`.
+    """
+    blank = blank_literals(text)
+    out, pos = [], 0
+    for m in CFG_TEST.finditer(blank):
+        if m.start() < pos:
+            continue  # inside an item already dropped
+        i = m.end()
+        while True:  # further attributes on the same item
+            a = ATTR_START.match(blank, i)
+            if not a:
+                break
+            depth, j = 0, a.end() - 1
+            while j < len(blank):
+                if blank[j] == "[":
+                    depth += 1
+                elif blank[j] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            i = j + 1
+        k = i
+        while k < len(blank) and blank[k] not in "{;":
+            k += 1
+        if k >= len(blank):
+            continue
+        if blank[k] == "{":
+            depth = 0
+            while k < len(blank):
+                if blank[k] == "{":
+                    depth += 1
+                elif blank[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                k += 1
+        out.append(text[pos:m.start()])
+        pos = k + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def test_only_paths(files):
+    """Relative paths of files that are test code by name or by their `mod` line."""
+    skipped = set()
+    for f in files:
+        rel = f.relative_to(ROOT).as_posix()
+        if is_test_path(rel):
+            skipped.add(rel)
+            continue
+        text = blank_literals(f.read_text(encoding="utf-8", errors="replace"))
+        if INNER_CFG_TEST.search(text):
+            skipped.add(rel)
+        base = f.parent if f.name in ("mod.rs", "lib.rs", "main.rs") else f.parent / f.stem
+        for m in CFG_TEST.finditer(text):
+            d = OUTLINE_MOD.match(text, m.end())
+            if d:
+                name = d.group(1)
+                for cand in (base / f"{name}.rs", base / name / "mod.rs"):
+                    skipped.add(cand.relative_to(ROOT).as_posix())
+                sub = base / name
+                if sub.is_dir():
+                    skipped.update(
+                        q.relative_to(ROOT).as_posix() for q in sub.rglob("*.rs")
+                    )
+    return skipped
+
+
 def count():
     total, per_file = 0, {}
-    for f in sorted(SRC.rglob("*.rs")):
+    files = sorted(SRC.rglob("*.rs"))
+    skipped = test_only_paths(files)
+    for f in files:
         rel = f.relative_to(ROOT).as_posix()
-        if rel in EXCLUDE:
+        if rel in EXCLUDE or rel in skipped:
             continue
-        n = len(PAT.findall(f.read_text(encoding="utf-8", errors="replace")))
+        text = strip_cfg_test_items(f.read_text(encoding="utf-8", errors="replace"))
+        n = len(PAT.findall(text))
         if n:
             per_file[rel] = n
             total += n
@@ -367,6 +484,27 @@ def self_test():
     for line in must_not_match:
         if PAT.search(line):
             print(f"self-test FAILED: pattern wrongly matches: {line}")
+            return 1
+    # Test code is out of scope; production code beside it is not.
+    sample = (
+        "fn prod() { a.get_raw_mut_ptr::<T>(); }\n"
+        "#[cfg(test)]\n#[allow(dead_code)]\n"
+        "mod tests { fn t() { let s = \"}\"; b.get_raw_mut_ptr::<T>(); { } } }\n"
+        "#[cfg(test)]\nfn helper() { c.get_raw_const_ptr::<T>(); }\n"
+        "fn prod2() { d.get_raw_const_ptr::<T>(); }\n"
+    )
+    if len(PAT.findall(strip_cfg_test_items(sample))) != 2:
+        print("self-test FAILED: #[cfg(test)] items are not skipped exactly")
+        return 1
+    for rel, want in (
+        ("crates/perry-runtime/src/set_tests.rs", True),
+        ("crates/perry-runtime/src/a/tests.rs", True),
+        ("crates/perry-runtime/src/tests/x.rs", True),
+        ("crates/perry-runtime/src/set.rs", False),
+        ("crates/perry-runtime/src/contests.rs", False),
+    ):
+        if is_test_path(rel) != want:
+            print(f"self-test FAILED: is_test_path({rel}) != {want}")
             return 1
     if not SRC.is_dir():
         print(f"self-test FAILED: source tree missing at {SRC}")

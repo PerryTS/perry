@@ -93,7 +93,7 @@ unsafe fn settle(pointer: *mut c_void, value: u32, reject: bool) -> i32 {
             als::apply_context_guard(action);
         }
     });
-    if owner.failed {
+    if owner.is_failed() {
         -1
     } else {
         0

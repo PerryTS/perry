@@ -39,7 +39,7 @@ use crate::object::shapes::shape_rep_of_receiver;
 #[inline]
 pub(crate) unsafe fn object_slot_rep(obj: *const ObjectHeader, field_index: usize) -> u64 {
     if field_index >= REP_SLOTS as usize {
-        return REP_ANY;
+        return object_slot_rep_past_word(obj, field_index as u32);
     }
     // An unstamped receiver (0) or an id with no record reads the absent
     // record's word: `Any` in every lane.
@@ -47,6 +47,16 @@ pub(crate) unsafe fn object_slot_rep(obj: *const ObjectHeader, field_index: usiz
         shape_rep_of_receiver((object_shape_stamp(obj)).0),
         field_index as u32,
     )
+}
+
+/// The lane of a slot past the `rep` word: SPECIAL for a ConstFn body-list
+/// entry of the receiver's shape, `Any` otherwise (also for an unshaped
+/// receiver). Out of line: a store to a slot below 32 never reaches it.
+#[inline(never)]
+#[optimize(size)]
+unsafe fn object_slot_rep_past_word(obj: *const ObjectHeader, field_index: u32) -> u64 {
+    shape_record_of_receiver((object_shape_stamp(obj)).0)
+        .map_or(REP_ANY, |record| record.lane(field_index))
 }
 
 /// The store check of the runtime slot funnel (`slot_store`): the bits to
@@ -143,7 +153,7 @@ pub(crate) unsafe fn object_store_generalize(obj: *mut ObjectHeader, slot: u32) 
 /// normalized shape and new objects are born into it (DESIGN §1.5 step 4).
 /// Bounded like generalization itself: once per lane of a lineage.
 fn deprecate_lane(record: super::shapes::ShapeRecordRef, slot: u32) {
-    let changed = if record.special_constfn_mask() & (1u32 << slot) != 0 {
+    let changed = if record.lane_is_constfn(slot) {
         record.deprecate_special_to_any(slot)
     } else {
         record.deprecate_rep_slot(slot)
@@ -274,11 +284,12 @@ pub(crate) fn completed_shape_matches_layout(actual: LayoutWord, expected: Layou
     if a.proto_id != b.proto_id {
         return linked_shape_matches_layout(&a, &b);
     }
-    let base_rep = a.constfn_infos().iter().fold(a.rep, |rep, i| {
-        field_rep::with_slot_rep(rep, i.slot as u32, REP_ANY)
-    });
-    a.special_constfn_mask != 0
-        && b.special_constfn_mask == 0
+    let base_rep = a
+        .constfn_infos()
+        .iter()
+        .fold(a.rep, |rep, i| field_rep::without_lane(rep, i.slot));
+    a.has_constfn_lane()
+        && !b.has_constfn_lane()
         && a.object_kind == super::shapes::ShapeObjectKind::Ordinary
         && a.object_kind == b.object_kind
         && a.keys == b.keys
@@ -315,6 +326,7 @@ fn linked_shape_matches_layout(
         && b.hole_count == 0
         && a.summary == b.summary
         && a.special_constfn_mask == b.special_constfn_mask
+        && a.constfn_infos().iter().map(|i| i.slot).eq(b.constfn_infos().iter().map(|i| i.slot))
         && field_rep::identity_with_special(a.rep) == field_rep::identity_with_special(b.rep)
 }
 
@@ -535,7 +547,7 @@ unsafe fn publish_key_add_rep(
     };
     let rep = key_add_rep(pred_rep, slot, value_bits, inline);
     let rep = if constfn_info.is_some() {
-        field_rep::with_slot_rep(rep, slot, field_rep::REP_SPECIAL)
+        field_rep::with_special_lane(rep, slot)
     } else {
         rep
     };
@@ -543,7 +555,7 @@ unsafe fn publish_key_add_rep(
         return id;
     }
     let infos = constfn_info.map(|info| super::shapes::ConstFnSlotInfo {
-        slot: slot as u8,
+        slot,
         info,
     });
     let target = normalized_shape(publish_shape_result(
@@ -590,7 +602,10 @@ pub(crate) unsafe fn private_field_lanes_target(
     }
     let id = object_shape_stamp(obj);
     let d = shape_descriptor_of_receiver((id).0)?;
-    if field_rep::has_deprecated(d.rep) || field_rep::special_lane_slots(d.rep) != 0 {
+    if field_rep::has_deprecated(d.rep)
+        || field_rep::special_lane_slots(d.rep) != 0
+        || d.has_tail_constfn()
+    {
         return None;
     }
     let inline = slot < d.live_inline_slot_count;
@@ -738,10 +753,15 @@ pub(crate) unsafe fn assert_field_rep_lanes(
         return;
     };
     let rep = record.rep();
-    if rep == REP_ANY {
+    if rep == REP_ANY && !record.has_tail_constfn() {
         return;
     }
     let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    for slot in REP_SLOTS as usize..live {
+        if record.lane_is_constfn(slot as u32) {
+            assert_constfn_slot_body(obj, record, slot, *fields.add(slot));
+        }
+    }
     for slot in 0..live.min(REP_SLOTS as usize) {
         let bits = *fields.add(slot);
         match slot_rep(rep, slot as u32) {
@@ -798,6 +818,7 @@ pub(crate) unsafe fn assert_constfn_slot_body(
 /// with may itself have learned a deprecated lane since, so this follows the
 /// normalization until it is a fixed point; each hop drops at least one
 /// `F64` lane from identity, so there are at most [`REP_SLOTS`] hops.
+#[optimize(size)]
 pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
     loop {
         let Some(d) = shape_descriptor_of_receiver((id).0) else {
@@ -805,7 +826,17 @@ pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
         };
         let (to_nopointer, to_any) = d.deprecation_targets();
         let rep = field_rep::normalized_with_special(d.rep, to_nopointer, to_any);
-        if rep == d.rep {
+        // A body past word 0 learned `to_any` in its tail word: its lane is
+        // dropped from the successor's list, exactly as word 0's lanes are
+        // dropped from its `rep`.
+        let tail_gone = |slot: u32| {
+            slot >= field_rep::REP_SLOTS
+                && d.tail_deprecation((slot / field_rep::REP_SLOTS - 1) as usize)
+                    & (1u32 << (slot % field_rep::REP_SLOTS))
+                    != 0
+        };
+        let tail_changes = d.has_tail_constfn() && d.constfn_infos().iter().any(|e| tail_gone(e.slot));
+        if rep == d.rep && !tail_changes {
             return id;
         }
         let infos: Vec<_> = d
@@ -813,7 +844,11 @@ pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
             .iter()
             .copied()
             .filter(|entry| {
-                field_rep::slot_rep(rep, u32::from(entry.slot)) == field_rep::REP_SPECIAL
+                if entry.slot < field_rep::REP_SLOTS {
+                    field_rep::slot_rep(rep, entry.slot) == field_rep::REP_SPECIAL
+                } else {
+                    !tail_gone(entry.slot)
+                }
             })
             .collect();
         let next = publish_shape_result(super::shapes::shape_descriptor_intern_with_special(
@@ -843,6 +878,6 @@ pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
 }
 
 #[inline]
-fn object_slot_rep_of(id: LayoutWord, slot: u32) -> u64 {
-    slot_rep(shape_rep_of_receiver((id).0), slot)
+pub(crate) fn object_slot_rep_of(id: LayoutWord, slot: u32) -> u64 {
+    shape_record_of_receiver((id).0).map_or(REP_ANY, |record| record.lane(slot))
 }

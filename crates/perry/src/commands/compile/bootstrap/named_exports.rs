@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Availability {
+    /// The export binds a value.
     Present,
+    /// The export resolves only to an interface or type alias: a TypeScript
+    /// importer's specifier for it binds nothing.
+    TypeOnly,
     Absent,
     // Builtin/runtime-backed exports have no complete HIR export list.
     Unknown,
@@ -32,7 +36,15 @@ fn availability(
     let mut result = Availability::Absent;
     for export in exports {
         let (source, imported) = match export {
-            Export::Named { exported, .. } if exported == name => return Availability::Present,
+            Export::Named { local, exported } if exported == name => {
+                if !ctx.native_modules[path].is_type_only_export_binding(&local) {
+                    return Availability::Present;
+                }
+                if result == Availability::Absent {
+                    result = Availability::TypeOnly;
+                }
+                continue;
+            }
             Export::NamespaceReExport { name: exported, .. } if exported == name => {
                 return Availability::Present;
             }
@@ -53,10 +65,58 @@ fn availability(
         match found {
             Availability::Present => return found,
             Availability::Unknown => result = found,
-            Availability::Absent => {}
+            Availability::TypeOnly if result == Availability::Absent => result = found,
+            Availability::TypeOnly | Availability::Absent => {}
         }
     }
     result
+}
+
+/// `Module::locally_redeclared_imports`: a TypeScript import that a local
+/// declaration repeats is the early SyntaxError only when it binds, that is
+/// when the export it resolves to has a value meaning. An interface or type
+/// alias binds nothing and merges with the local declaration, as tsc emits it
+/// (`function Symbol` beside `import { Symbol }` in TypeScript's own
+/// `utilities.ts`). An export perry cannot see (a builtin, a package without
+/// HIR) is not proven to bind, so tsc-accepted input keeps compiling.
+fn enforce_import_redeclarations(ctx: &mut CompilationContext) -> Result<()> {
+    let mut edges = Vec::new();
+    for (importer, module) in &ctx.native_modules {
+        for local in &module.locally_redeclared_imports {
+            for import in &module.imports {
+                let Some(target) = &import.resolved_path else {
+                    continue;
+                };
+                if import.type_only || import.module_kind != ModuleKind::NativeCompiled {
+                    continue;
+                }
+                for specifier in &import.specifiers {
+                    let imported = match specifier {
+                        ImportSpecifier::Named { imported, local: l } if l == local => imported,
+                        ImportSpecifier::Default { local: l } if l == local => "default",
+                        _ => continue,
+                    };
+                    edges.push((
+                        importer.clone(),
+                        PathBuf::from(target),
+                        imported.to_owned(),
+                        local.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    edges.sort();
+    for (importer, target, imported, local) in edges {
+        if availability(ctx, &target, &imported, &mut HashSet::new()) == Availability::Present {
+            bail!(
+                "SyntaxError: Identifier '{}' has already been declared (in {})",
+                local,
+                importer.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// TypeScript elides an import specifier whose binding is never used as a
@@ -68,10 +128,7 @@ fn availability(
 /// reads as values. JavaScript importers keep Node's static-ESM rule: every
 /// named specifier must resolve, used or not.
 fn is_typescript_importer(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|ext| ext.to_str()),
-        Some("ts" | "tsx" | "mts" | "cts")
-    )
+    perry_hir::is_typescript_source(path)
 }
 
 /// A user module's static named/default import of a bare package that did
@@ -204,6 +261,7 @@ fn package_name(source: &str) -> &str {
 /// available, instead of inventing a perry_fn symbol that fails in the linker.
 pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
     enforce_resolved_bare_imports(ctx)?;
+    enforce_import_redeclarations(ctx)?;
     for (importer, source, target, name, local) in static_named_edges(ctx) {
         if availability(ctx, Path::new(&target), &name, &mut HashSet::new()) == Availability::Absent
         {
@@ -411,7 +469,7 @@ fn visit_function(function: &Function, out: &mut Refs) {
 }
 
 fn visit_expr(expr: &Expr, out: &mut Refs) {
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::NewDynamicSpread { callee, .. } = expr {
         if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
             out.called_or_constructed.insert(name.clone());
         }
@@ -521,6 +579,36 @@ fn visit_stmt(stmt: &Stmt, out: &mut Refs) {
 #[cfg(test)]
 mod unresolved_import_tests {
     use super::{is_bare_package_specifier, package_name};
+
+    fn constructed_imports(source: &str) -> std::collections::HashSet<String> {
+        let parsed = perry_parser::parse_typescript(source, "import-new.ts").unwrap();
+        let hir = perry_hir::lower::lower_module(&parsed, "import-new", "import-new.ts").unwrap();
+        super::called_or_constructed_import_names(&hir)
+    }
+
+    #[test]
+    fn imported_spread_construction_is_a_constructed_reference() {
+        for declaration in ["{ Plain }", "Plain"] {
+            for package in ["missing-package", "@scope/missing/subpath"] {
+                let names = constructed_imports(&format!(
+                    "import {declaration} from '{package}'; new Plain(...['kind']);"
+                ));
+                assert_eq!(names, ["Plain".to_owned()].into_iter().collect());
+            }
+        }
+    }
+
+    #[test]
+    fn value_reads_and_shadowed_spread_constructors_do_not_call_the_import() {
+        for source in [
+            "import { Plain } from 'missing'; console.log(typeof Plain, Plain.name);",
+            "import type { Plain } from 'missing'; let value: Plain;",
+            "import { Plain } from 'missing'; function make(Plain: any) { return new Plain(...[]); }",
+            "import { Plain } from 'missing'; function make() { class Plain {} return new Plain(...[]); }",
+        ] {
+            assert!(constructed_imports(source).is_empty(), "{source}");
+        }
+    }
 
     #[test]
     fn bare_specifiers_are_the_packages_node_would_look_up() {

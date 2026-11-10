@@ -9,7 +9,7 @@ pub(super) fn initialize_channel(fd: Option<String>, mode: &str) {
 }
 static PROCESS_IPC_PROPERTY: Hook<fn(&str) -> Option<f64>> = Hook::empty();
 pub(crate) fn process_ipc_property(property: &str) -> Option<f64> {
-    if super::worker_restrictions::worker_process_member_hidden("process", property) {
+    if crate::object::native_namespace_member_absent("process", property) {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
     if super::worker_restrictions::in_node_worker() {

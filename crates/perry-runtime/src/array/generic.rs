@@ -71,8 +71,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
     if b == TAG_UNDEFINED || b == TAG_NULL {
         let msg = b"Cannot convert undefined or null to object";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
     // A symbol is `POINTER_TAG`-shaped (heap-allocated), so it must be boxed
     // BEFORE the generic pointer early-return below — otherwise `ToObject` would
@@ -102,7 +101,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
     // Numbers: real f64 values (`is_number`) and INT32-tagged small integers
     // (0x7FFE), which `is_number` excludes because the tag sits in the
     // string/special band.
-    if top16(b) == 0x7FFE || JSValue::from_bits(b).is_number() {
+    if crate::value::is_int32_bits(b) || JSValue::from_bits(b).is_number() {
         return crate::builtins::js_boxed_number_new(recv);
     }
     // BigInt boxes into a `BigInt` wrapper object (`ToObject`): no indexed
@@ -114,6 +113,24 @@ pub(super) fn to_object(recv: f64) -> f64 {
         return crate::builtins::js_boxed_bigint_new(recv);
     }
     recv
+}
+
+/// The receiver of an `Array.prototype` method value: step 1 of every method
+/// is `O = ToObject(this value)`. The method value runs it at its receiver
+/// boundary, because a reflective call (`Array.prototype.m.call(prim, ...)`,
+/// a held `m.call(...)`, `Reflect.apply`) hands it the raw `this`. A heap value
+/// is already an object and keeps every dense and typed path (one tag compare);
+/// anything else goes through [`to_object`]: `null` / `undefined` throw, a
+/// primitive boxes into its wrapper. The wrapper's shape decides the rest: a
+/// `String` wrapper's indices and `length` are non-writable (the mutators
+/// throw), `Number` / `Boolean` wrappers are ordinary length-0 objects.
+#[inline(always)]
+pub(crate) fn array_receiver(this: f64) -> f64 {
+    if top16(this.to_bits()) == 0x7FFD {
+        this
+    } else {
+        to_object(this)
+    }
 }
 
 /// Validate `cb` is callable, returning its `ClosureHeader*` (throws a
@@ -1473,14 +1490,10 @@ pub fn dispatch_arraylike_read_method(
 /// engine; any other receiver yields `undefined`. `recv` is the call-site
 /// `this` (the receiver parameter) the thunk read.
 pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
-    // #6908: every mutator's step 1 is `ToObject(this value)`, which throws
-    // for a nullish receiver. This is the receiver-less thunk invocation
-    // (`const f = arr.push; f(3)` — a plain call passes `undefined`), which previously fell through every normalization below and
-    // silently no-opped; node throws.
-    let bits = recv.to_bits();
-    if bits == TAG_UNDEFINED || bits == TAG_NULL {
-        crate::collection_iter::throw_type_error("Cannot convert undefined or null to object");
-    }
+    // #6908: every mutator's step 1 is `ToObject(this value)`: a nullish
+    // receiver (`const f = arr.push; f(3)`) throws, and a primitive one
+    // (`Array.prototype.push.call(true, 1)`) mutates its wrapper.
+    let recv = array_receiver(recv);
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { real_array_mutator(arr, method, args_ptr, args_len) };
@@ -1515,10 +1528,7 @@ pub(super) unsafe fn real_array_mutator(
         "push" => {
             // Spec §23.1.3.21 step 6 calls Set(O,"length",…) even with 0 args,
             // so frozen / non-writable-length throws regardless of arg count.
-            if crate::array::array_is_frozen(arr) {
-                crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
-            }
-            crate::array::guard_writable_length(arr);
+            crate::array::push_guard(arr, args_len as u32);
             let mut a = arr;
             for i in 0..args_len {
                 a = crate::array::js_array_push_f64_spec(a, arg_or_undef(args_ptr, args_len, i));
