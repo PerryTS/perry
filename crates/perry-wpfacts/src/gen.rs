@@ -368,6 +368,20 @@ pub struct Gen<'a> {
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves past
+    /// the narrowing's code does not end its narrowed reads after the branch
+    /// (`gen::narrow`, "Writes on a leaving path";
+    /// `FactsConfig::no_leaving_writes`).
+    pub leaving_writes: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
+    /// branch's writes are dropped from the reads after it, also a branch
+    /// that falls through to them.
+    pub leaving_write_sabotage: bool,
+    /// The loops and `switch`es (`jumps`) and `try` statements (`tries`)
+    /// the walk is inside: where an unlabeled `break`/`continue` lands, and
+    /// whether a `throw` or a `finally` stays inside a narrowing's code.
+    pub jumps: u32,
+    pub tries: u32,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -694,6 +708,10 @@ impl<'a> Gen<'a> {
             new_array_site: None,
             guard_ranges: true,
             guard_presence: true,
+            leaving_writes: true,
+            leaving_write_sabotage: false,
+            jumps: 0,
+            tries: 0,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),

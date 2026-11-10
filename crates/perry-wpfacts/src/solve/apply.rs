@@ -1511,6 +1511,10 @@ impl Model {
                     let (l, r) = if right { (ot, me) } else { (me, ot) };
                     if self.range_sabotage && op == RangeOp::Add {
                         l
+                    } else if self.exact_rule_sabotage && op == RangeOp::Add {
+                        // Negative control (`exactrule`): a sum is the hull
+                        // of its operands, not their sum.
+                        l.join(r)
                     } else {
                         self.const_numbers
                             .then(|| crate::model::range::eval_exact(op, l, r))
@@ -1518,7 +1522,13 @@ impl Model {
                             .unwrap_or_else(|| crate::model::range::eval(op, l, r))
                     }
                 };
-                if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
+                let d = &mut self.nodes[dst as usize];
+                let grew = if self.exact_rules {
+                    crate::solve::grow_rule_range(d, iv)
+                } else {
+                    crate::solve::grow_range(d, iv)
+                };
+                if grew {
                     let d = &mut self.nodes[dst as usize];
                     if !d.in_wl {
                         d.in_wl = true;
