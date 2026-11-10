@@ -847,10 +847,10 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
                 out.push_str(&format!("{pc:#x}"));
                 out.push(']');
             }
-            // A module's top-level frame is registered with its own location
-            // (`Object.<anonymous> (<path>)`, node's spelling); the name
-            // already carries the position, so do not append an unknown one.
-            if !name.starts_with("Object.<anonymous> (") {
+            // Module labels carry their location: a bare ESM file URL or
+            // CommonJS's Object.<anonymous> (path). Neither needs an unknown
+            // location appended to it.
+            if !name.starts_with("Object.<anonymous> (") && !name.starts_with("file://") {
                 out.push_str(" (<anonymous>)");
             }
             rendered += 1;

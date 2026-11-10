@@ -865,6 +865,8 @@ fn compute_act<'a>(
     tests::delivery_boundaries::record(&g.m);
     #[cfg(test)]
     tests::computed_key_members::record(&g.m);
+    #[cfg(test)]
+    tests::box_computed_read::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));

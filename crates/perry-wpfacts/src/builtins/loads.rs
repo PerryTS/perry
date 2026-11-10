@@ -787,6 +787,22 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     _ if what == "require.cache" || what == "require.extensions" => {
                         m.add_prim(dst, prim::UNDEF)
                     }
+                    // A computed key on an ordinary object a builtin makes
+                    // (`box_chain` Object: a `JSON.parse` object, a
+                    // descriptor, an `Object.fromEntries` result): its own
+                    // values, or what `Object.prototype` holds: `constructor`
+                    // (`Object`), its methods, `__proto__` (the prototype)
+                    // and what a store into ⊤ wrote (`family_any`). A
+                    // prototype the program gave it is read on the chain
+                    // (`Model::load_from`, ordinary box).
+                    (_, None) if ordinary_box(m, t) => {
+                        m.add_prim(dst, prim::ALL);
+                        if m.key_may_name_str(key, "__proto__") {
+                            let op = m.tok(TokKind::ObjectProto);
+                            m.add_tok(dst, op);
+                        }
+                        family_any(m, t, Family::Object, dst);
+                    }
                     // A computed key: any member of the chain, and the
                     // container's own values (primitives, or an iterator
                     // result's `value`/`done`: all it has).

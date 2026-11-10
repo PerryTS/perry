@@ -1,0 +1,1 @@
+- Fix ES module evaluation order around top-level await: independent siblings evaluate while an async dependency is suspended, and dependent and error ordering match node (#14413).
