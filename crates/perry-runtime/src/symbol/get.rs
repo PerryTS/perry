@@ -299,13 +299,12 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         let async_iterator_f64 =
             f64::from_bits(crate::value::JSValue::pointer(async_iterator as *const u8).bits());
         if sym_key == sym_key_from_f64(async_iterator_f64) {
+            // RSTREAM R5: the prototype's own member (`=== P.values`).
             if kind == 1 {
-                let mname = b"values";
-                return Some(crate::object::js_class_method_bind(
-                    obj_f64,
-                    mname.as_ptr(),
-                    mname.len(),
-                ));
+                let proto = crate::object::builtin_prototype_value("ReadableStream");
+                if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+                    return Some(js_object_get_symbol_property(proto, sym_f64));
+                }
             }
             return Some(f64::from_bits(TAG_UNDEFINED));
         }
@@ -316,11 +315,8 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         let to_string_tag_f64 =
             f64::from_bits(crate::value::JSValue::pointer(to_string_tag as *const u8).bits());
         if sym_key == sym_key_from_f64(to_string_tag_f64) {
-            let tag = match kind {
-                1 => "ReadableStream",
-                2 => "WritableStream",
-                5 => "TransformStream",
-                _ => return Some(f64::from_bits(TAG_UNDEFINED)),
+            let Some(tag) = crate::object::web_stream_interface_name(id) else {
+                return Some(f64::from_bits(TAG_UNDEFINED));
             };
             let str_ptr = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
             return Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)));
@@ -709,6 +705,27 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     }
     if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64) {
         return v;
+    }
+    // An `ArrayBuffer` / `SharedArrayBuffer` / `DataView` has no symbol
+    // members of its own beyond the ones read above, and none of the
+    // built-in arms below describe it: the read continues on its
+    // [[Prototype]] (the intrinsic buffer prototype, or the newTarget
+    // prototype it was constructed with), so a member the program wrote
+    // there (`ArrayBuffer.prototype[Symbol.iterator] = function* () {}`)
+    // is found, with the original receiver.
+    let raw_view = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize;
+    if raw_view >= 0x10000 && crate::buffer::is_non_indexed_buffer_view(raw_view) {
+        // Materializing the intrinsic prototype can allocate; `obj_h`,
+        // `sym_h` and `receiver_h` keep the operands rooted across it.
+        let proto = crate::object::js_object_get_prototype_of(obj_h.get_nanbox_f64());
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return js_object_get_symbol_property_with_receiver(
+            proto,
+            sym_h.get_nanbox_f64(),
+            receiver_h.get_nanbox_f64(),
+        );
     }
     // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
     // is inherited from Map/Set.prototype, so it is NOT an own symbol prop.

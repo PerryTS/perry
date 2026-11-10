@@ -1466,7 +1466,7 @@ fn make_instance_this(
                 bound_instance_function(
                     obj,
                     "",
-                    crate::fn_info!(collator_bound_compare_thunk, 2; with_declared(2)),
+                    crate::fn_info!(#[realm(realm_decl! { "%CollatorCompare%", provider = closure, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); returns(prim(num)) } })] export crate::intl::date_collator::collator_bound_compare_thunk, 2; with_declared(2)),
                     2,
                 )
             });
@@ -1827,7 +1827,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "Collator",
-        crate::fn_info!(#[realm(Intl.Collator, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::collator_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.Collator, kind = constructor, members = { supportedLocalesOf; }, effects = { reads(elems(arg(0))); coerce(elems(arg(0)), ToPrimitive); reads(field(arg(1), usage), field(arg(1), localeMatcher), field(arg(1), collation), field(arg(1), numeric), field(arg(1), caseFirst), field(arg(1), sensitivity), field(arg(1), ignorePunctuation)); coerce(field(arg(1), usage), ToPrimitive); coerce(field(arg(1), localeMatcher), ToPrimitive); coerce(field(arg(1), collation), ToPrimitive); coerce(field(arg(1), caseFirst), ToPrimitive); coerce(field(arg(1), sensitivity), ToPrimitive); stores(fresh); returns(fresh(Intl.Collator.prototype, slots = {boundCompare: native("%CollatorCompare%")})) })] export crate::intl::constructor_thunks::collator_constructor_thunk, 1; with_rest(0)),
         0,
         &[(
             "resolvedOptions",
@@ -1836,7 +1836,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         )],
         &[(
             "compare",
-            crate::fn_info!(#[realm("Intl.Collator.prototype.compare.<get>")] export crate::intl::date_collator::collator_compare_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.Collator.prototype.compare.<get>", effects = { returns(islot(this, boundCompare)) })] export crate::intl::date_collator::collator_compare_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(

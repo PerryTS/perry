@@ -61,7 +61,7 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     coerce_numeric_fallback: bool,
     preserve_claimed_receiver_fallback: bool,
     receiver_slot: Option<&str>,
-    proven: Option<crate::codegen::FactsElementRead>,
+    proven: Option<super::proven_array::Proven>,
 ) -> Result<String> {
     let element_idx = ctx.new_block("aidx.canonical");
     let runtime_idx = ctx.new_block("aidx.runtime_key");

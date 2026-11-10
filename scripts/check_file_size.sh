@@ -20,15 +20,15 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 # comments OK; `--update` rewrites it).
 ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
-crates/perry/src/commands/compile/run_pipeline.rs	6210
+crates/perry/src/commands/compile/run_pipeline.rs	6191
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2063
 # Representation-aware codegen core; further decomposition is tracked in #1435.
-crates/perry-codegen/src/codegen/mod.rs	3623
+crates/perry-codegen/src/codegen/mod.rs	4772
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2760
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2831
+crates/perry-codegen/src/expr/mod.rs	2830
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8290
 # Representation-aware map core; further decomposition is tracked in #1435.
@@ -40,7 +40,7 @@ crates/perry-runtime/src/typed_feedback.rs	2437
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	3572
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	15689
+crates/perry-codegen/tests/native_proof_regressions.rs	17011
 # Representation feedback regression cases; test organization is a separate follow-up.
 crates/perry-runtime/src/typed_feedback/tests.rs	2304
 # Lowering report schema and its emitters; split emitters in a follow-up.

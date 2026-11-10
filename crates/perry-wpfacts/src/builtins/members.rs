@@ -727,6 +727,19 @@ fn realm_key_is(p: &RealmOwn, name: &str) -> bool {
     }
 }
 
+/// The realm constructor a realm constructor's declared [[Prototype]] names
+/// (`node:stream.Readable` -> `node:stream.Stream`); `None` for the default
+/// `Function.prototype` or a non-constructor.
+pub(crate) fn realm_parent_constructor(identity: &str) -> Option<&'static str> {
+    let entry = realm_entry(identity)?;
+    if entry.kind != RealmKind::Constructor {
+        return None;
+    }
+    let parent = realm_entry(entry.proto?)?;
+    (parent.kind == RealmKind::Constructor).then_some(parent.name)
+}
+
+
 /// What a method lookup of a named key finds on the [[Prototype]] chain of
 /// an object a realm declaration made (`fresh(P)`, builtin object kind `P`):
 /// the own property of the first declaration on `P`'s declared chain that
@@ -775,7 +788,7 @@ pub(super) fn realm_chain_find(born: &'static perry_hir::realm_manifest::RealmEn
     }
 }
 
-pub(super) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
+pub(crate) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
     let realm = crate::native_effects::realm();
     // The runtime's realm source sorts its declarations by name.
     realm

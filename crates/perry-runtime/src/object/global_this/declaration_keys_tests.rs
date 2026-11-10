@@ -26,11 +26,9 @@ fn own_string_keys(proto: f64) -> std::collections::BTreeSet<String> {
 #[test]
 fn live_builtin_prototype_own_keys_equal_the_realm_declaration() {
     let _gc = crate::gc::GcSuppressScope::new();
-    let realm: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("OUT_DIR"),
-        "/realm-v1.json"
-    )))
-    .expect("realm-v1.json");
+    let realm: serde_json::Value =
+        serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/realm-v1.json")))
+            .expect("realm-v1.json");
     let mut checked = 0usize;
     let mut mismatches = Vec::new();
     for decl in realm["declarations"].as_array().expect("declarations") {
@@ -39,6 +37,14 @@ fn live_builtin_prototype_own_keys_equal_the_realm_declaration() {
             continue;
         };
         if decl["kind"] != "prototype" || ctor.contains(['%', '.']) {
+            continue;
+        }
+        // External families' members are their provider's (the stdlib's
+        // streams install, not linked here): perry-stdlib's
+        // `stream_prototypes_hold_the_declared_keys` checks them.
+        if crate::object::BuiltinConstructorIdentity::for_name(ctor)
+            .is_some_and(|identity| identity.declaration().external)
+        {
             continue;
         }
         let proto = builtin_prototype_value(ctor);

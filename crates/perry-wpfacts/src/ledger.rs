@@ -365,6 +365,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("__lookupGetter__ result")
+            || starts("result of a getter the realm does not declare")
             || starts("accessor descriptor")
             || starts("unrepresented native accessor descriptor")
             || starts("accessor lookup without a receiver")

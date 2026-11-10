@@ -492,12 +492,7 @@ pub(super) fn compile_method(
                 format!("%arg{}", p.id)
             };
             let number = facts_number_params.contains(&p.id);
-            let value = if number {
-                super::facts_number_locals::emit_entry_number(blk, &arg_name)
-            } else {
-                arg_name.clone()
-            };
-            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &value);
+            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
             if number {
                 shadow_slot_map.remove(&p.id);
             } else if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
@@ -509,11 +504,9 @@ pub(super) fn compile_method(
             map.insert(p.id, slot);
             if index_param_ids.contains(&p.id) {
                 // Every route proved the signed-i32 value class before this
-                // body. A raw parameter is that value; otherwise a statically
-                // proven route normally passes a plain double and the guarded
-                // stable public entry may also pass Perry's canonical INT32
-                // NaN-box, so use the shared already-guarded conversion rather
-                // than `fptosi` (which cannot consume a tagged INT32 value).
+                // body. A raw parameter is that value; otherwise every route
+                // passes an exact int32 double, which the shared
+                // already-guarded conversion reads with one `fptosi`.
                 let raw_i32 = if raw_index {
                     super::index_entry::raw_param_name(p.id)
                 } else {

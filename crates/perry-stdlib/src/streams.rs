@@ -26,7 +26,6 @@ mod statics;
 use errors::{stream_range_error_with_code, stream_type_error, stream_type_error_with_code};
 use perry_runtime::closure::{JsFunctionInfo, JsThis};
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
-pub(crate) use statics::install_readable_stream_from_static;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 // Calls that allocate or mutate runtime-owned values must cross the stable C ABI. A shared stdlib still contains fallback Rust runtime glue for generic
@@ -353,6 +352,7 @@ pub(crate) use native::{
     alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,
 };
 mod strategy;
+mod prototypes;
 mod subclass;
 mod tee;
 #[cfg(test)]
@@ -385,10 +385,12 @@ pub(crate) use self::expando::stream_expando_get;
 pub(crate) use self::expando::stream_expando_set_hook;
 use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
+pub(crate) use self::prototypes::install_stream_prototypes;
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
-    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_handle_is_registered,
-    js_stream_handle_kind, js_transform_stream_subclass_init, js_writable_stream_subclass_init,
+    drain_readable_into_bytes, js_readable_stream_subclass_init,
+    js_stream_handle_is_registered, js_stream_handle_kind, js_transform_stream_subclass_init,
+    js_writable_stream_subclass_init,
 };
 #[cfg(test)]
 pub(crate) use self::transform::transform_side_tables_hold_for_test;
@@ -580,6 +582,62 @@ unsafe impl Send for WriterData {}
 pub(crate) const STREAM_HANDLE_ID_START: usize =
     perry_runtime::value::addr_class::STREAM_ID_BAND_START;
 pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class::STREAM_ID_BAND_END;
+
+/// RSTREAM R1: a ReadableStream's controller is its own value, not the stream
+/// handle. Its id is the stream id with this bit set, so the controller needs
+/// no registry: stream/reader/writer/transform ids are allocated below
+/// `STREAM_ALLOC_END`, and `id | STREAM_CONTROLLER_BIT` fills the top half.
+pub(crate) const STREAM_CONTROLLER_BIT: usize = (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 2;
+/// A byte stream's BYOB request is its own value the same way (no object, no
+/// registry): `id | STREAM_BYOB_REQUEST_BIT` fills the second quarter.
+pub(crate) const STREAM_BYOB_REQUEST_BIT: usize =
+    (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 4;
+/// End of the allocator's range: the first quarter of the stream band.
+pub(crate) const STREAM_ALLOC_END: usize = STREAM_HANDLE_ID_START + STREAM_BYOB_REQUEST_BIT;
+const _: () = assert!(STREAM_CONTROLLER_BIT.is_power_of_two());
+const _: () = assert!(STREAM_BYOB_REQUEST_BIT.is_power_of_two());
+const _: () = assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
+const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1);
+const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1);
+
+/// The controller value of readable stream `id`.
+#[inline]
+pub(crate) fn controller_value(id: usize) -> f64 {
+    stream_value(id | STREAM_CONTROLLER_BIT)
+}
+
+/// The readable stream id a controller value controls; 0 (a registry miss)
+/// for every other value, a stream handle included.
+#[inline]
+pub(crate) fn controller_stream_id(value: f64) -> usize {
+    controller_id_stream(stream_id(value))
+}
+
+/// The readable stream id of controller id `id`, else 0.
+#[inline]
+pub(crate) fn controller_id_stream(id: usize) -> usize {
+    if (STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT..STREAM_HANDLE_ID_END).contains(&id) {
+        id & !STREAM_CONTROLLER_BIT
+    } else {
+        0
+    }
+}
+
+/// The BYOB request value of byte stream `id`.
+#[inline]
+pub(crate) fn byob_request_value(id: usize) -> f64 {
+    stream_value(id | STREAM_BYOB_REQUEST_BIT)
+}
+
+/// The byte stream id of BYOB request id `id`, else 0.
+#[inline]
+pub(crate) fn byob_request_id_stream(id: usize) -> usize {
+    if (STREAM_ALLOC_END..STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT).contains(&id) {
+        id & !STREAM_BYOB_REQUEST_BIT
+    } else {
+        0
+    }
+}
 
 /// The JS value of a stream-family registry id (stream, reader, writer,
 /// transform): a `POINTER_TAG` handle in the stream band, like every other
@@ -1084,7 +1142,7 @@ unsafe fn invoke_start(stream_id: usize) {
         match g.get_mut(&stream_id) {
             Some(s) if !s.started => {
                 s.started = true;
-                (s.start_cb, stream_value(stream_id))
+                (s.start_cb, controller_value(stream_id))
             }
             _ => return,
         }
@@ -1135,7 +1193,7 @@ extern "C" fn readable_pull_microtask(
                     js_closure_call1(
                         cb as *const ClosureHeader,
                         perry_runtime::closure::plain_call_receiver(),
-                        stream_value(stream_id),
+                        controller_value(stream_id),
                     )
                 }
             });
@@ -1312,9 +1370,9 @@ unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
         perry_runtime::closure::plain_call_receiver(),
     );
     if chunk.to_bits() == TAG_UNDEFINED {
-        let _ = js_readable_stream_controller_close(stream_value(stream_id));
+        let _ = js_readable_stream_controller_close(controller_value(stream_id));
     } else {
-        let _ = js_readable_stream_controller_enqueue(stream_value(stream_id), chunk);
+        let _ = js_readable_stream_controller_enqueue(controller_value(stream_id), chunk);
     }
 }
 
@@ -2075,7 +2133,7 @@ fn readable_controller_enqueue_error(stream_id: usize) -> Option<&'static str> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// ReadableStreamDefaultController FFI (controller is the stream handle)
+// ReadableStreamDefaultController FFI (receiver: a controller value, R1)
 // ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -2094,7 +2152,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
             );
         }
     }
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     if let Some(message) = readable_controller_enqueue_error(id) {
         throw_type_error_with_code(message, "ERR_INVALID_STATE");
     }
@@ -2170,7 +2228,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64) -> f64 {
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -2228,7 +2286,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
     stream_handle: f64,
     reason: f64,
 ) -> f64 {
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     // #5989: erroring a tee'd source errors both branches.
     if tee_branches_of(id).is_some() {
         tee_error_branches(id, reason.to_bits());
@@ -2240,7 +2298,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handle: f64) -> f64 {
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     let g = READABLE_STREAMS.lock().unwrap();
     match g.get(&id) {
         Some(s) if s.state == ReadableState::Readable => s.high_water_mark - s.queue_total_size,

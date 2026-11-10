@@ -27,13 +27,22 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
-/// The value of the global object's declared constructor that class `tm`'s
-/// built-in parent names (`extends Error`: the realm's `Error`); `None`
-/// when the class has no built-in parent or the global declares none
-/// under that name (`EventEmitter` is a module export).
+/// The value of the declared constructor that class `tm`'s built-in parent
+/// names, read where the heritage binding reads it: the global object's
+/// (`extends Error`: the realm's `Error`) or the node module's export
+/// (`import { EventEmitter } from "events"`: the module's `EventEmitter`,
+/// the value the class object's [[Prototype]] holds). `None` when the class
+/// has no built-in parent or its holder declares none under that name.
 pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
-    let (_, name) = m.tmpls[tm as usize].native_parent.clone()?;
-    let identity = m.namespace_property(BuiltinNs::GlobalThis, &name)?.native?;
+    let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let ns = if module == "builtin" {
+        BuiltinNs::GlobalThis
+    } else {
+        let ns = node_module_ns(&module)?;
+        m.tok(TokKind::Builtin(ns));
+        ns
+    };
+    let identity = m.namespace_property(ns, &name)?.native?;
     Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
 }
 
@@ -495,6 +504,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
                     m.sink_node(f, r);
                 }
+                NativeMiss::Store(src, site) => {
+                    let prev = m.store_at.take();
+                    m.store_into(np, Key::Named(a), src, site);
+                    m.store_at = prev;
+                }
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
                     let name = m.atoms[a as usize].clone();
@@ -540,6 +554,20 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     m.add_tok(cache, c);
     m.add_tok(ext, e);
     (c, e)
+}
+
+/// The realm's `navigator` (runtime navigator.rs: `realm { navigator, kind =
+/// namespace, extends = Navigator.prototype }`), the one object the global
+/// getter returns: an object of `Navigator.prototype`, as a declaration's
+/// `fresh(Navigator.prototype)` makes, whose loads read the getters'
+/// declared results (`effects::declared_getter`).
+pub(super) fn navigator_object(m: &mut Model) -> Tok {
+    if let Some(t) = m.navigator {
+        return t;
+    }
+    let t = anon_tmpl(m, "Navigator.prototype");
+    m.navigator = Some(t);
+    t
 }
 
 pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {

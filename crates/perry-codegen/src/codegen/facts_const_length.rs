@@ -15,7 +15,7 @@ use std::cell::Cell;
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32};
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -67,14 +67,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> anyhow::Result<Option<S
         let actual = crate::expr::property_get::lower(ctx, expr);
         WITNESSING.with(|w| w.set(false));
         let actual = actual?;
-        // The ordinary read may hand back an INT32 box.
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(&actual);
-        let is_int = super::emit_int32_box_test(blk, &actual);
-        let low = blk.trunc(I64, &bits, I32);
-        let widened = blk.sitofp(I32, &low, DOUBLE);
-        let number = blk.select(crate::types::I1, &is_int, DOUBLE, &widened, &actual);
-        let same = blk.fcmp("oeq", &number, &constant);
+        let same = ctx.block().fcmp("oeq", &actual, &constant);
         crate::verify_facts::tick(ctx);
         let miss = ctx.new_block("const.length.verify_miss");
         let next = ctx.new_block("const.length.admitted");
