@@ -1446,4 +1446,170 @@ fn package_aliases_apply_to_every_reexport_form() {
         assert!(!collected(path), "unaliased package collected: {path:?}");
     }
     assert!(collected(&untouched), "non-aliased re-export source lost");
+    let module = &ctx.native_modules[&entry.canonicalize().unwrap()];
+    for (source, kind) in [("to-all", 0), ("to-named", 1), ("to-ns", 2), ("plain", 1)] {
+        assert!(
+            module.exports.iter().any(|export| match export {
+                perry_hir::Export::ExportAll { source: actual } => kind == 0 && actual == source,
+                perry_hir::Export::ReExport { source: actual, .. } => kind == 1 && actual == source,
+                perry_hir::Export::NamespaceReExport { source: actual, .. } =>
+                    kind == 2 && actual == source,
+                _ => false,
+            }),
+            "stored export source missing: {source}"
+        );
+    }
+}
+
+#[test]
+fn package_aliases_preserve_reexport_initialization_order() {
+    for aliased in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let target = if aliased {
+            root.join("node_modules/to/index.js")
+        } else {
+            root.join("a.ts")
+        };
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        if aliased {
+            std::fs::write(
+                target.parent().unwrap().join("package.json"),
+                r#"{"name":"to","main":"index.js","type":"module"}"#,
+            )
+            .unwrap();
+            let original = root.join("node_modules/from");
+            std::fs::create_dir_all(&original).unwrap();
+            std::fs::write(
+                original.join("package.json"),
+                r#"{"name":"from","main":"index.js","type":"module"}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                original.join("index.js"),
+                "console.log('wrong'); export const x = 0;",
+            )
+            .unwrap();
+        }
+        std::fs::write(&target, "console.log('a'); export const x = 1;").unwrap();
+        let b = root.join("b.ts");
+        std::fs::write(&b, "console.log('b');").unwrap();
+        let source = if aliased { "from" } else { "./a" };
+        let hub = root.join("hub.ts");
+        std::fs::write(
+            &hub,
+            format!("export * from \"{source}\";\nimport \"./b\";\nconsole.log('hub');"),
+        )
+        .unwrap();
+        let entry = root.join("entry.ts");
+        std::fs::write(&entry, "import { x } from './hub'; console.log(x);").unwrap();
+        let before: Vec<_> = [&target, &b, &hub, &entry]
+            .into_iter()
+            .map(|p| (p.clone(), std::fs::read(p).unwrap()))
+            .collect();
+        let mut ctx = CompilationContext::new(root.to_path_buf());
+        ctx.allow_compile_packages.push("*".into());
+        if aliased {
+            ctx.package_aliases.insert("from".into(), "to".into());
+        }
+        ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut class_id = 1;
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+        collect_modules(
+            &entry,
+            &mut ctx,
+            &mut visited,
+            OutputFormat::Text,
+            None,
+            &mut class_id,
+            false,
+            &progress,
+            None,
+        )
+        .unwrap();
+        let hub_module = &ctx.native_modules[&hub.canonicalize().unwrap()];
+        let expected = if aliased { "to" } else { "./a" };
+        assert_eq!(hub_module.requested_modules, [expected, "./b"]);
+        assert!(hub_module.exports.iter().any(|e| matches!(
+            e, perry_hir::Export::ExportAll { source } if source == expected
+        )));
+        let order = super::super::init_order::topo_sort_non_entry_modules(
+            &ctx,
+            &entry.canonicalize().unwrap(),
+            OutputFormat::Text,
+            0,
+        );
+        let position = |path: &std::path::Path| {
+            let module = &ctx.native_modules[&path.canonicalize().unwrap()];
+            order.iter().position(|name| name == &module.name).unwrap()
+        };
+        assert!(
+            position(&target) < position(&b),
+            "export must initialize before the later import"
+        );
+        assert!(position(&b) < position(&hub));
+        for (path, bytes) in before {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
+fn package_aliases_keep_first_request_and_erase_type_only_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let package = root.join("node_modules/to");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"to","main":"index.js","type":"module"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("index.js"),
+        "console.log('target'); export const x = 1;",
+    )
+    .unwrap();
+    let b = root.join("b.ts");
+    std::fs::write(&b, "console.log('b');").unwrap();
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        "import 'from'; import './b'; import 'second'; import type { T } from 'types';",
+    )
+    .unwrap();
+    let input = std::fs::read(&entry).unwrap();
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.allow_compile_packages.push("*".into());
+    ctx.package_aliases.insert("from".into(), "to".into());
+    ctx.package_aliases.insert("second".into(), "to".into());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut class_id = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut class_id,
+        false,
+        &progress,
+        None,
+    )
+    .unwrap();
+    let module = &ctx.native_modules[&entry.canonicalize().unwrap()];
+    assert_eq!(module.requested_modules, ["to", "./b"]);
+    assert_eq!(
+        module
+            .imports
+            .iter()
+            .filter(|i| !i.type_only)
+            .map(|i| i.source.as_str())
+            .collect::<Vec<_>>(),
+        ["to", "./b", "to"]
+    );
+    assert_eq!(std::fs::read(&entry).unwrap(), input);
 }
