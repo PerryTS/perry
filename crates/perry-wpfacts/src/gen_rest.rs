@@ -130,6 +130,21 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
+                } else if let (true, Some(o)) = (
+                    matches!(module.as_str(), "readable_stream" | "readable_stream_reader"),
+                    o,
+                ) {
+                    // The HIR's dispatch of a member of a stream or reader it
+                    // tracked (`s.getReader()`, `r.read()`, `s.locked`): the
+                    // member access itself (node: a lookup on the receiver's
+                    // chain), which the realm's stream families declare. A
+                    // getter (`locked`, `closed`) is a read of the key.
+                    let key = Key::Named(self.m.atom(method));
+                    if matches!(method.as_str(), "locked" | "closed") && a.is_empty() {
+                        self.load(o, key)
+                    } else {
+                        self.mcall(o, key, a, vec![])
+                    }
                 } else if let (true, Some(o)) =
                     (module == "array" && method == "push_field_single", o)
                 {

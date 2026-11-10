@@ -317,8 +317,11 @@ impl<'a> Gen<'a> {
                 let (Some(it), Some(next)) = (arg(0), arg(1)) else {
                     return self.prim_node(prim::BOOL);
                 };
-                let res =
-                    self.call_value(next, ThisArg::Node(it), vec![self.m.top_tok_node], vec![]);
+                // IteratorStep is IteratorNext with no value: `Call(next,
+                // iterator, «»)` (ECMA-262 7.4.4, 7.4.7), as `js_iterator_step`
+                // does it (a generator resumes with `undefined`, any other
+                // `next` gets argc 0). Nothing unknown is passed.
+                let res = self.call_value(next, ThisArg::Node(it), vec![], vec![]);
                 // The step output: the value of a result that is not done,
                 // or `undefined` the runtime publishes at done
                 // (`js_iterator_step`), which destructuring reads.

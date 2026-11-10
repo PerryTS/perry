@@ -270,6 +270,7 @@ impl Model {
         if self.nodes[n as usize].obs {
             let dst = match *c {
                 Cons::TopIfAny { dst, .. }
+                | Cons::TopIfTop { dst, .. }
                 | Cons::Guard { dst, .. }
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
