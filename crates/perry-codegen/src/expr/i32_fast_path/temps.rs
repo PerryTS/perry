@@ -211,3 +211,7 @@ pub(crate) fn try_lower_compare(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<
         _ => blk.icmp_ne(I32, &l, &r),
     }))
 }
+
+#[cfg(test)]
+#[path = "temps_tests.rs"]
+mod tests;
