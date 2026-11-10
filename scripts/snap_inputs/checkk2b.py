@@ -87,6 +87,13 @@ elif name == "f12":
     jq = [kv(v) for v in vals("job_queue")]
     info = f"rows={jq}"
     need(len(jq) >= 1 and all(r["policy"] == "STOP" for r in jq), "no job_queue STOP row")
+    # SNAPK3c: each row names its jobs (kind:owner:code); f12's one job is the
+    # m.ts reaction, queued by an init before the row's, with a callback.
+    for r in jq:
+        js = [j.split(":") for j in r.get("jobs", "").split(",") if j and not j.startswith("+")]
+        need(r.get("pending") == str(len(js)), "job_queue jobs= does not list every pending job")
+        need(all(len(j) == 3 and int(j[1]) not in (0, int(r["init"])) and int(j[2], 16) != 0 for j in js),
+             "a job without its queueing init or callback")
 elif name in ("f13", "f13s"):
     rp = [kv(v) for v in vals("stack.runtime_pc")]
     m_init = inits("stack.runtime_pc")

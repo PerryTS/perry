@@ -41,6 +41,8 @@ mod rejection_gc_tests;
 mod rejection_loop_tests;
 #[cfg(test)]
 mod resolving_function_kind_tests;
+#[cfg(all(test, perry_gc_instruments))]
+mod snap_pending_job_tests;
 pub mod scanners;
 mod settled_step;
 pub use settled_step::js_async_step_resume_now;
@@ -734,6 +736,67 @@ pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
 #[cfg(perry_gc_instruments)]
 pub(crate) fn snap_pending_jobs() -> Option<usize> {
     TASK_QUEUE.with(|q| q.try_borrow().ok().map(|q| q.len()))
+}
+
+/// SNAPK3c census: one queued job as the census names it, read from the job
+/// itself: its kind, its callback's code address (`JsFunctionInfo::code`; 0
+/// for a reaction with no callback, which only settles its `next`) and the
+/// init that queued it (`AsyncContextSnapshot::snap_init`, set at enqueue).
+#[cfg(perry_gc_instruments)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SnapPendingJob {
+    pub kind: &'static str,
+    pub code: usize,
+    pub owner: u32,
+}
+
+/// SNAPK3c census: the queued jobs in queue order (None while the queue is
+/// being changed).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_pending_job_list() -> Option<Vec<SnapPendingJob>> {
+    TASK_QUEUE.with(|q| {
+        q.try_borrow()
+            .ok()
+            .map(|q| q.iter().map(snap_pending_job).collect())
+    })
+}
+
+#[cfg(perry_gc_instruments)]
+fn snap_pending_job(task: &Task) -> SnapPendingJob {
+    fn code(callback: ClosurePtr) -> usize {
+        if callback.is_null() {
+            return 0;
+        }
+        let info = unsafe { (*callback).info };
+        if info.is_null() {
+            0
+        } else {
+            unsafe { (*info).code as usize }
+        }
+    }
+    let (kind, callback, owner) = match task {
+        Task::Promise(promise, _, is_fulfilled, context) => {
+            let callback = if promise.is_null() {
+                ptr::null()
+            } else if *is_fulfilled {
+                unsafe { (**promise).on_fulfilled }
+            } else {
+                unsafe { (**promise).on_rejected }
+            };
+            ("promise", callback, context.snap_init)
+        }
+        Task::PromiseAll(_, _, _, context) => ("all", ptr::null(), context.snap_init),
+        Task::Inline(callback, _, _, _, context) => ("inline", *callback, context.snap_init),
+        Task::AsyncStep(callback, _, _, _, context, ..) => ("step", *callback, context.snap_init),
+        Task::Microtask {
+            callback, context, ..
+        } => ("microtask", *callback, context.snap_init),
+    };
+    SnapPendingJob {
+        kind,
+        code: code(callback),
+        owner,
+    }
 }
 
 pub(crate) fn enqueue_queue_microtask(callback: i64) {

@@ -5371,6 +5371,26 @@ pub(super) fn compare_literal(op: i32, left: u64, right: u64, literal: i32) {
     );
 }
 
+/// SNAPK3c: the `jobs=` field of a `job_queue` row, one
+/// `kind:owner:code` entry per queued job in queue order (`owner` = the init
+/// that queued it, `code` = the callback's code address in hex, 0 for a
+/// reaction without a callback). The first 64 jobs; `+N` counts the rest.
+fn pending_jobs_field() -> String {
+    const SHOWN: usize = 64;
+    let Some(jobs) = crate::promise::snap_pending_job_list() else {
+        return "busy".to_owned();
+    };
+    let mut out: Vec<String> = jobs
+        .iter()
+        .take(SHOWN)
+        .map(|j| format!("{}:{}:{:x}", j.kind, j.owner, j.code))
+        .collect();
+    if jobs.len() > SHOWN {
+        out.push(format!("+{}", jobs.len() - SHOWN));
+    }
+    out.join(",")
+}
+
 /// SNAPK2b checks at a candidate cut, `init_enter` of the init just pushed
 /// (DESIGN27 §1.1, §1.2). Open frames: every open ancestor resumes at its
 /// flag test (R1: static dependency or eager entry import, before the
@@ -5417,9 +5437,10 @@ fn k2b_enter_rows(st: &mut State) {
                     st,
                     "job_queue",
                     format!(
-                        "init={};pending={};policy=STOP",
+                        "init={};pending={};policy=STOP;jobs={}",
                         st.frames.last().map_or(0, |f| f.init),
-                        n.map_or("busy".to_owned(), |n| n.to_string())
+                        n.map_or("busy".to_owned(), |n| n.to_string()),
+                        pending_jobs_field()
                     ),
                 );
             }
