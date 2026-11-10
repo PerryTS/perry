@@ -157,6 +157,11 @@ pub enum Cons {
         from: NodeId,
         reason: Option<u32>,
     },
+    /// Once ⊤ reaches the node, `dst` holds ⊤ (all kinds) for `reason`; a
+    /// data value or a marker leaves it inert (an instance's ⊤ arrives as
+    /// ⊤). The result of a rule that is unknown only when the node is: an
+    /// accessor walk over a holder whose any-key node holds ⊤.
+    TopIfTop { dst: NodeId, reason: u32 },
     /// `from` flows into `dst` once the node may hold a value `test`
     /// admits (`guard`): a conditional's branch, a logical operator's right
     /// operand, a destructuring default reach the result only when their
@@ -627,6 +632,7 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::TopIfTop { .. } => "topiftop",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
