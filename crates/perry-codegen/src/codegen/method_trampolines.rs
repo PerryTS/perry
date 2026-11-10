@@ -6,14 +6,11 @@ use crate::module::LlModule;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 
 use super::typed_abi::{
-    typed_f64_method_name, typed_i1_method_name, typed_i32_method_name,
+    emit_typed_arg_to_raw, typed_f64_method_name, typed_i1_method_name, typed_i32_method_name,
     typed_param_reps_for_params, typed_string_method_name, TypedFunctionTrampolineKind,
     TypedParamRep,
 };
-use super::typed_entry::{
-    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
-    EntryArgGuard,
-};
+use super::typed_entry::{emit_tiered_entry_dispatch, typed_entry_arg_guard, EntryArgGuard};
 
 fn emit_typed_fast_value(
     blk: &mut crate::block::LlBlock,
@@ -27,7 +24,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -40,7 +37,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -54,7 +51,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -69,7 +66,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -243,10 +240,10 @@ pub(super) fn emit_guarded_nonnegative_index(
     let mut raw_index_values: Vec<String> = Vec::with_capacity(index_param_ids.len());
     for (index, param_id) in index_param_ids.iter().enumerate() {
         let arg = format!("%arg{param_id}");
-        let (exact_i32, raw_i32) = super::typed_abi::emit_typed_i32_guard_and_raw(
-            wf.block_mut(guard_block_idx).unwrap(),
-            &arg,
-        );
+        let guard_block = wf.block_mut(guard_block_idx).unwrap();
+        let bits = guard_block.bitcast_double_to_i64(&arg);
+        let (exact_i32, raw_i32) =
+            super::typed_abi::emit_typed_i32_plain_guard_and_raw(guard_block, &arg, &bits);
         raw_index_values.push(raw_i32.clone());
         let admitted_idx = wf.num_blocks();
         let admitted_label = wf

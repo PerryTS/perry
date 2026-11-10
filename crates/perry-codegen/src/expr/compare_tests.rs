@@ -707,19 +707,13 @@ fn dynamic_strict_eq_against_number_compares_both_encodings_without_js_eq() {
         Expr::LocalGet(X),
         Expr::Number(7.0),
     );
-    // The exact int32 test (`emit_int32_bits_test`): the identity mask
-    // (bits 32..63) compared with the whole INT32 tag word. A test of the
-    // top 16 bits alone (`lshr 48`, `icmp eq 32766`) reads a `C.prototype`
-    // ref or an internal marker as an int32 Number.
-    let mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
+    // A Number has one encoding: no test of the 0x7FFE word, whole or top 16
+    // bits (`lshr 48`, `icmp eq 32766`), and no int-to-double decode.
     assert!(
-        ir.contains(&mask) && ir.contains(crate::nanbox::INT32_TAG_I64),
-        "the compact-INT32 normalization guard is absent or inexact:\n{ir}"
+        !ir.contains(crate::nanbox::INT32_TAG_I64) && !ir.contains(", 32766"),
+        "a strict equality against a Number tests the INT32 tag:\n{ir}"
     );
-    assert!(
-        !ir.contains(&format!(", {}", crate::nanbox::INT32_TAG_TOP16_I64)),
-        "an int32 test compares only the top 16 bits:\n{ir}"
-    );
+    assert!(!ir.contains("sitofp i32"), "{ir}");
     assert!(
         ir.contains("fcmp oeq double"),
         "dynamic-vs-number equality did not become numeric fcmp:\n{ir}"
@@ -927,8 +921,8 @@ fn integer_literal_equality_has_one_numeric_compare() {
         assert_eq!(ir.matches("fcmp ").count(), 1, "one numeric compare: {ir}");
         assert!(ir.contains(&format!("fcmp {pred} double")), "{ir}");
         assert!(
-            ir.contains("sitofp i32"),
-            "compact numbers still normalize: {ir}"
+            !ir.contains("sitofp i32"),
+            "a Number has one encoding, nothing to normalize: {ir}"
         );
         assert!(
             !ir.contains("llvm.fptosi.sat"),
