@@ -248,6 +248,7 @@ fn held(m: &Model, n: NodeId, cand: &FxHashSet<TmplId>, buf: &mut Vec<Tok>) -> V
     if node.pts.is_empty() {
         return Vec::new();
     }
+    buf.clear();
     node.pts.sorted_into(buf);
     let mut out: Vec<TmplId> = buf
         .iter()
@@ -264,6 +265,7 @@ fn only(m: &Model, n: NodeId, cand: &FxHashSet<TmplId>, buf: &mut Vec<Tok>) -> b
     if node.prim != 0 {
         return false;
     }
+    buf.clear();
     node.pts.sorted_into(buf);
     buf.iter()
         .all(|&t| t != TOP && m.tmpl_of(t).is_some_and(|tm| cand.contains(&tm)))
@@ -416,6 +418,7 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
         if !only(m, r, &m.rest_tmpls, &mut buf) {
             return None;
         }
+        buf.clear();
         m.nodes[r as usize].pts.sorted_into(&mut buf);
         for &t in &buf {
             let tm = m.tmpl_of(t)?;
