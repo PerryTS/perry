@@ -477,10 +477,24 @@ pub(crate) fn probe(m: &Model) -> Vec<String> {
         let what = tpl.display.replace(' ', "_");
         if m.rest_tmpls.contains(&tm) {
             out.push(format!("# rest arr {what} at_rest=1"));
-        } else if let Some(why) = m.rest_refused.get(&tm) {
+        } else if let Some(refusal) = m.rest_refused.get(&tm) {
+            // The length interval over the template's tokens (`solve::arr_len`).
+            let mut len = crate::model::Iv::EMPTY;
+            for t in m.tmpl_toks(tm) {
+                if let Some(&n) = m.arr_len.get(&t) {
+                    len = len.join(m.nodes[n as usize].range);
+                }
+            }
+            let len = if len.is_top() {
+                "top".to_string()
+            } else if len.is_empty() {
+                "birth".to_string()
+            } else {
+                format!("[{},{}]", len.lo, len.hi)
+            };
             out.push(format!(
-                "# rest arr {what} at_rest=0 why={}",
-                why.replace(' ', "_")
+                "# rest arr {what} at_rest=0 why={} len={len}",
+                refusal.replace(' ', "_")
             ));
         }
     }

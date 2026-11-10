@@ -97,7 +97,7 @@ fn a_site_shared_with_another_array_keeps_both_double() {
     let line = arr_line(&program(
         "const b = [1, 2, 3]; const c = s > 5 ? a : b; s += c[1] | 0;",
     ));
-    assert!(line.ends_with(" at_rest=0 why=mixed_site"), "{line}");
+    assert!(line.contains(" at_rest=0 why=mixed_site "), "{line}");
 }
 
 #[test]
