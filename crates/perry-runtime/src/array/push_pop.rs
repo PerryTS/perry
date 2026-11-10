@@ -7,17 +7,17 @@ use std::ptr;
 #[path = "push_pop/growth.rs"]
 mod growth;
 use growth::initialize_growth_slack;
+pub(super) use growth::install_array_growth_forwarding_with;
 #[cfg(test)]
 pub(crate) use growth::GrowInPlaceTestGuard;
-pub(super) use growth::install_array_growth_forwarding_with;
 
 #[path = "push_pop/guards.rs"]
 mod guards;
 pub(crate) use guards::array_length_is_non_writable;
 pub(super) use guards::throw_cannot_delete_array_index;
 use guards::throw_frozen_array_mutation;
-pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 use guards::throw_non_writable_length;
+pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 
 #[inline]
 pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {

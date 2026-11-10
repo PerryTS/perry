@@ -469,6 +469,7 @@ js_bigint_warn	void	ptr
 js_bigint_xor	ptr	ptr,ptr
 js_blob_array_buffer	ptr	f64
 js_blob_bytes	ptr	f64
+js_blob_from_raw_bytes_v1	f64	ptr,usize,ptr,usize
 js_blob_new	f64	f64,f64
 js_blob_size	f64	f64
 js_blob_slice	f64	f64,f64,f64,ptr
@@ -3530,6 +3531,7 @@ js_register_path_module	void	f64,f64
 js_register_path_module_partial	void	f64,f64,f64
 js_register_prototype_method	void	i32u,ptr,usize,f64
 js_register_readable_handle_predicate	void	ptr
+js_register_sea_profile	void	
 js_register_set_text_handler	void	ptr
 js_register_show_toast_handler	void	ptr
 js_register_stdin_flow_ops	void	ptr,ptr
@@ -3673,6 +3675,7 @@ js_sea_get_asset	f64	f64,f64
 js_sea_get_asset_as_blob	f64	f64,f64
 js_sea_get_asset_keys	f64	
 js_sea_get_raw_asset	f64	f64
+js_sea_install_blob_factory	void	usize
 js_sea_is_sea	f64	
 js_segments_view_code_point_at	f64	f64,f64
 js_segments_view_next	f64	f64

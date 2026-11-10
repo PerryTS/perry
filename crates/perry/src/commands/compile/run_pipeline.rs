@@ -1270,7 +1270,9 @@ pub fn run_with_parse_cache(
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     for site in &ctx.patched_builtins.dynamic_code_reach.sites {
-        eprintln!("perry: dynamic code {site}: builtin prototype/namespace members are treated as replaceable (each direct site tests its holder's shadow bit), and the whole-program field facts are guarded by the runtime's interpreted-prototype-write word");
+        eprintln!(
+            "perry: dynamic code {site}: builtin prototype/namespace members are treated as replaceable (each direct site tests its holder's shadow bit), and the whole-program field facts are guarded by the runtime's interpreted-prototype-write word"
+        );
     }
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
         &ctx.patched_builtins,
@@ -2167,7 +2169,7 @@ pub fn run_with_parse_cache(
                 perry_hir::Export::Named { local, .. }
                     if hir_module.is_type_only_export_binding(local) =>
                 {
-                    continue
+                    continue;
                 }
                 perry_hir::Export::Named { exported, .. }
                 | perry_hir::Export::ReExport { exported, .. } => exported,
@@ -4000,12 +4002,12 @@ pub fn run_with_parse_cache(
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
             if !program_has_tla {
-            if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
-                deps.retain(|dep| {
-                    deferred_module_prefixes.contains(dep)
-                        || init_pos.get(dep).map_or(true, |&p| p < self_pos)
-                });
-            }
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| {
+                        deferred_module_prefixes.contains(dep)
+                            || init_pos.get(dep).map_or(true, |&p| p < self_pos)
+                    });
+                }
             }
             if program_has_tla {
                 let mut ordered = super::init_order::static_requested_paths(&ctx, path);
@@ -4019,8 +4021,11 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
-                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
-                    .map(|m| sanitize_name(&m.name)).collect();
+                deps = ordered
+                    .iter()
+                    .filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name))
+                    .collect();
             }
             deps
         };
@@ -6904,16 +6909,16 @@ pub fn run_with_parse_cache(
                 if std::fs::create_dir_all(&dump_dir).is_ok() {
                     let dump_path = dump_dir.join(format!("{:016x}.txt", k));
                     let _ = std::fs::write(
-                            &dump_path,
-                            format!(
-                                "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
-                                hir_module.name,
-                                path.display(),
-                                hh,
-                                k,
-                                hir_module,
-                            ),
-                        );
+                        &dump_path,
+                        format!(
+                            "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
+                            hir_module.name,
+                            path.display(),
+                            hh,
+                            k,
+                            hir_module,
+                        ),
+                    );
                 }
             }
         }
@@ -7769,7 +7774,13 @@ pub fn run_with_parse_cache(
                 }
             }
             if let OutputFormat::Text = format {
-                eprintln!("  Generating stubs for {} missing symbols ({} data, {} functions, {} identity)", missing.len(), md.len(), mf.len(), mi.len());
+                eprintln!(
+                    "  Generating stubs for {} missing symbols ({} data, {} functions, {} identity)",
+                    missing.len(),
+                    md.len(),
+                    mf.len(),
+                    mi.len()
+                );
                 for s in &missing {
                     eprintln!("    - {}", s);
                 }
@@ -8058,12 +8069,14 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
-    if !embedded_assets.is_empty() {
+    if !embedded_assets.is_empty() || args.sea || args.output_type == "staticlib" {
         if let Some(obj) = embed::generate_embedded_asset_object(
             &embedded_assets,
             &object_output_dir,
             &bunfs_text_modules,
             ctx.bun_platform,
+            args.sea,
+            target.as_deref(),
         )? {
             obj_cleanup_paths.push(obj.clone());
             obj_paths.push(obj);
@@ -8073,12 +8086,14 @@ pub fn run_with_parse_cache(
             .iter()
             .filter_map(|(_, p)| fs::metadata(p).ok().map(|m| m.len()))
             .sum();
-        if let OutputFormat::Text = format {
-            println!(
-                "Embedding {} asset(s) ({} bytes) into the executable",
-                embedded_assets.len(),
-                total
-            );
+        if !embedded_assets.is_empty() {
+            if let OutputFormat::Text = format {
+                println!(
+                    "Embedding {} asset(s) ({} bytes) into the executable",
+                    embedded_assets.len(),
+                    total
+                );
+            }
         }
     }
 

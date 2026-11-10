@@ -140,8 +140,11 @@ fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
     }
     let star = m.atom(crate::STAR_KEY);
     if native_written(m, holder, star) {
-        m.add_top(dst, |_| "accessor descriptor of a written intrinsic key".into());
+        m.add_top(dst, |_| {
+            "accessor descriptor of a written intrinsic key".into()
+        });
         return;
     }
-    m.native_missing.push((holder, star, NativeMiss::Lookup(dst)));
+    m.native_missing
+        .push((holder, star, NativeMiss::Lookup(dst)));
 }

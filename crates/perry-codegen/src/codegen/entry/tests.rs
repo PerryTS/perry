@@ -119,6 +119,29 @@ fn empty_module() -> Module {
     }
 }
 
+#[test]
+fn staticlib_entry_retains_embedded_asset_registration_member() {
+    let ir = emitted_ir("staticlib");
+    assert!(ir.contains("declare void @perry_embedded_assets_link_anchor()"));
+    assert!(ir.contains("call void @perry_embedded_assets_link_anchor()"));
+}
+
+#[test]
+fn wasi_staticlib_entry_does_not_reference_native_embedded_asset_anchor() {
+    assert!(!super::staticlib_asset_anchor_enabled(
+        "staticlib",
+        "wasm32-wasip1"
+    ));
+    assert!(super::staticlib_asset_anchor_enabled(
+        "staticlib",
+        "aarch64-apple-macosx"
+    ));
+    assert!(!super::staticlib_asset_anchor_enabled(
+        "dylib",
+        "aarch64-apple-macosx"
+    ));
+}
+
 fn emitted_ir(output_type: &str) -> String {
     String::from_utf8(compile_module(&empty_module(), entry_opts(output_type)).unwrap())
         .expect("LLVM IR should be UTF-8")
@@ -733,7 +756,9 @@ fn tla_program_emits_record_owned_dependency_visitor_in_source_order() {
     opts.program_has_tla = true;
     opts.module_init_deps = vec!["first".into(), "second".into()];
     let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
-    let start = ir.find("__async_dependencies(i64 %walk, i64 %parent)").unwrap();
+    let start = ir
+        .find("__async_dependencies(i64 %walk, i64 %parent)")
+        .unwrap();
     let body = &ir[start..];
     let first = body.find("call i64 @first__async_record()").unwrap();
     let second = body.find("call i64 @second__async_record()").unwrap();

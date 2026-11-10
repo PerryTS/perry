@@ -101,7 +101,13 @@ fn group_array_elements(
     }
     let max_line_length: Vec<usize> = (0..columns)
         .map(|column| {
-            data_len.iter().skip(column).step_by(columns).copied().max().unwrap_or(0)
+            data_len
+                .iter()
+                .skip(column)
+                .step_by(columns)
+                .copied()
+                .max()
+                .unwrap_or(0)
                 + SEPARATOR_SPACE
         })
         .collect();
@@ -250,13 +256,27 @@ mod tests {
     fn short_numbers_group_into_right_aligned_columns() {
         let numbers: Vec<String> = (0..30).map(|i| (i * 1000).to_string()).collect();
         let body = reduce_array_entries(numbers, 0, true, true);
-        assert!(body.starts_with("[\n      0,  1000,  2000,  3000,  4000,\n   5000,"), "{body}");
-        assert!(body.ends_with("\n  25000, 26000, 27000, 28000, 29000\n]"), "{body}");
+        assert!(
+            body.starts_with("[\n      0,  1000,  2000,  3000,  4000,\n   5000,"),
+            "{body}"
+        );
+        assert!(
+            body.ends_with("\n  25000, 26000, 27000, 28000, 29000\n]"),
+            "{body}"
+        );
     }
 
     #[test]
     fn long_strings_print_one_per_line() {
-        let entries = texts(&["'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'", "'c'", "'d'", "'e'", "'f'", "'g'"]);
+        let entries = texts(&[
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+            "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
+            "'c'",
+            "'d'",
+            "'e'",
+            "'f'",
+            "'g'",
+        ]);
         let body = reduce_array_entries(entries, 0, false, true);
         assert_eq!(body.lines().count(), 9, "{body}");
     }
@@ -264,7 +284,10 @@ mod tests {
     #[test]
     fn six_entries_never_group_and_fit_on_one_line() {
         let entries = texts(&["1", "2", "3", "4", "5", "6"]);
-        assert_eq!(reduce_array_entries(entries, 0, true, true), "[ 1, 2, 3, 4, 5, 6 ]");
+        assert_eq!(
+            reduce_array_entries(entries, 0, true, true),
+            "[ 1, 2, 3, 4, 5, 6 ]"
+        );
         assert_eq!(reduce_array_entries(Vec::new(), 0, true, true), "[]");
     }
 
@@ -272,13 +295,19 @@ mod tests {
     fn mixed_short_entries_group_left_aligned() {
         let entries = texts(&["1", "'a'", "true", "null", "2", "'bb'", "3", "'c'"]);
         let body = reduce_array_entries(entries, 0, false, true);
-        assert_eq!(body, "[\n  1,    'a', true,\n  null, 2,   'bb',\n  3,    'c'\n]");
+        assert_eq!(
+            body,
+            "[\n  1,    'a', true,\n  null, 2,   'bb',\n  3,    'c'\n]"
+        );
     }
 
     #[test]
     fn compact_false_is_one_entry_per_line() {
         let entries = texts(&["1", "2"]);
-        assert_eq!(reduce_array_entries(entries, 0, true, false), "[\n  1,\n  2\n]");
+        assert_eq!(
+            reduce_array_entries(entries, 0, true, false),
+            "[\n  1,\n  2\n]"
+        );
     }
 
     #[test]

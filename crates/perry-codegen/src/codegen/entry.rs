@@ -22,9 +22,9 @@ use super::opts::CrossModuleCtx;
 mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
+mod async_module;
 mod module_frame;
 mod module_init;
-mod async_module;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
 
@@ -155,6 +155,8 @@ pub(super) fn compile_module_entry(
     // executable. The variable name stays for diff hygiene with the
     // historical dylib-only branches downstream.
     let is_dylib = output_type == "dylib" || output_type == "staticlib";
+    let has_native_staticlib_anchor =
+        staticlib_asset_anchor_enabled(output_type, &llmod.target_triple);
 
     // A worker evaluates the program entry as a module on its own thread.
     // Share the ordinary initializer (including its per-thread guard and
@@ -234,6 +236,12 @@ pub(super) fn compile_module_entry(
         // `runtime_decls`) because most builds don't link geisterhand.
         if cross_module.needs_geisterhand && !is_dylib {
             llmod.declare_function("perry_geisterhand_start", VOID, &[I32]);
+        }
+        // A static archive does not extract members that contain only
+        // constructors. Keep Perry's generated embedded-asset object in the
+        // final host link by making the module entry reference its anchor.
+        if has_native_staticlib_anchor {
+            llmod.declare_function("perry_embedded_assets_link_anchor", VOID, &[]);
         }
         // #1178 — bake `[ios] app_group` from perry.toml into a single
         // `perry_app_group_init(ptr, len)` call at the top of `main`,
@@ -499,6 +507,11 @@ pub(super) fn compile_module_entry(
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
+        if has_native_staticlib_anchor {
+            main.block_mut(0)
+                .unwrap()
+                .call_void("perry_embedded_assets_link_anchor", &[]);
+        }
         if crate::verify_facts::enabled() {
             main.block_mut(0)
                 .unwrap()
@@ -876,7 +889,7 @@ pub(super) fn compile_module_entry(
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
-        program_has_tla: cross_module.program_has_tla,
+            program_has_tla: cross_module.program_has_tla,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1204,10 +1217,14 @@ pub(super) fn compile_module_entry(
                 if entry_evaluates_as_esm(hir, cross_module) {
                     ctx.block().call_void("js_mark_entry_module_esm", &[]);
                 }
-                let record = ctx.block().call(I64, &format!("{}__async_record", module_prefix), &[]);
-                ctx.block().call_void("js_async_module_entry", &[(I64, &record)]);
+                let record =
+                    ctx.block()
+                        .call(I64, &format!("{}__async_record", module_prefix), &[]);
+                ctx.block()
+                    .call_void("js_async_module_entry", &[(I64, &record)]);
             } else {
-                ctx.block().call_void(&format!("{}__init", module_prefix), &[]);
+                ctx.block()
+                    .call_void(&format!("{}__init", module_prefix), &[]);
             }
         } else {
             // Register every module-level global's ADDRESS as a GC root so
@@ -1629,6 +1646,10 @@ pub(super) fn compile_module_entry(
         }
     }
     Ok(())
+}
+
+fn staticlib_asset_anchor_enabled(output_type: &str, target_triple: &str) -> bool {
+    output_type == "staticlib" && !target_triple.starts_with("wasm32")
 }
 
 #[cfg(test)]

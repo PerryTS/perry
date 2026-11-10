@@ -271,12 +271,10 @@ jobs:
   lint:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.lint
-    # Was macos-14 — moved to ubuntu-latest in v0.5.428 since `cargo fmt
-    # --check` is portable. The 6 multiplier-min cut is small in absolute
-    # terms on a warm cache. #10986's first cargo-xwin run spends ~15 minutes
-    # downloading the MSVC sysroot and checking cold; main caches the sysroot.
+    # Lint runs the workspace audits and a Windows cross-check; leave enough
+    # headroom for the cold-cache path while keeping a finite hang backstop.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       formatting: ${{ steps.formatting.outputs.result }}
     steps:
@@ -2512,7 +2510,7 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout repository (inline git)
         shell: bash

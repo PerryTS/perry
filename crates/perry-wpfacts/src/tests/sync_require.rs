@@ -95,7 +95,11 @@ fn program(main: &str, paths: &[&str], sync: bool) -> ProgramFacts {
 
 /// The `key` read sites of main.ts, in source order.
 fn reads<'p>(pf: &'p ProgramFacts, key: &str) -> Vec<&'p SiteFacts> {
-    let main = pf.module_paths.iter().position(|p| p == "main.ts").expect("main.ts") as u32;
+    let main = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "main.ts")
+        .expect("main.ts") as u32;
     let mut v: Vec<&SiteFacts> = pf
         .sites
         .iter()
@@ -109,7 +113,12 @@ fn reads<'p>(pf: &'p ProgramFacts, key: &str) -> Vec<&'p SiteFacts> {
 fn then_runs(pf: &ProgramFacts) -> bool {
     let module = perry_parser::parse_typescript(T, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let id = hir.functions.iter().find(|f| f.name == "then").expect("then").id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "then")
+        .expect("then")
+        .id;
     pf.body_reach
         .bodies
         .iter()
@@ -175,7 +184,8 @@ fn a_sync_require_never_calls_the_modules_then() {
     // The value is the namespace itself.
     let v = reads(&pf, "V");
     assert!(
-        v.iter().any(|s| s.receivers.iter().any(|r| r.starts_with("ns:"))),
+        v.iter()
+            .any(|s| s.receivers.iter().any(|r| r.starts_with("ns:"))),
         "m.V reads t's namespace: {:?}",
         v.iter().map(|s| &s.receivers).collect::<Vec<_>>()
     );
@@ -190,7 +200,12 @@ fn an_esm_import_of_the_fallback_still_adopts() {
     let pf = program(FIXTURE, &[], false);
     let m = reads(&pf, "message");
     assert_eq!(m.len(), 2, "two e.message sites\n{}", pf.dump_text());
-    assert!(m[1].top, "f's catch not ⊤: {:?}\n{}", m[1].receivers, pf.dump_text());
+    assert!(
+        m[1].top,
+        "f's catch not ⊤: {:?}\n{}",
+        m[1].receivers,
+        pf.dump_text()
+    );
 }
 
 /// Control: an ESM `import()` of a module exporting `then` adopts it (node:
@@ -198,5 +213,9 @@ fn an_esm_import_of_the_fallback_still_adopts() {
 #[test]
 fn an_esm_import_calls_the_modules_then() {
     let pf = program(THEN, &["./t.js"], false);
-    assert!(then_runs(&pf), "t.then did not run\n{:?}", pf.body_reach.bodies);
+    assert!(
+        then_runs(&pf),
+        "t.then did not run\n{:?}",
+        pf.body_reach.bodies
+    );
 }

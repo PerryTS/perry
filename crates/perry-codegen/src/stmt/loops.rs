@@ -7298,9 +7298,8 @@ fn lower_overflow_exit_for(
             let go_label = ctx.block_label(go_idx);
             ctx.block().cond_br(&past, &skip_label, &go_label);
             ctx.current_block = go_idx;
-            let result = lower_overflow_exit_for_after_skip(
-                ctx, init, condition, update, body, &state,
-            );
+            let result =
+                lower_overflow_exit_for_after_skip(ctx, init, condition, update, body, &state);
             result?;
             // The skip arm and the loop's exit meet after the loop.
             let after_idx = ctx.new_block("for.counter.after");

@@ -153,6 +153,7 @@ pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dgram_reactor;
 // A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+pub mod async_module;
 #[cfg(target_os = "wasi")]
 #[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
@@ -174,6 +175,7 @@ pub mod error;
 pub mod event_pump;
 pub mod event_target;
 pub mod exception;
+pub mod external_family;
 pub mod fast_hash;
 pub mod ffi;
 pub mod frame;
@@ -193,7 +195,6 @@ pub mod messaging;
 pub mod mimalloc_os_tag;
 pub mod module_hooks;
 pub mod module_require;
-pub mod async_module;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
@@ -205,7 +206,6 @@ pub mod native_payload_stream_abi;
 mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;
-pub mod external_family;
 pub mod net_validate;
 pub mod node_api_host;
 mod param_type_guard;

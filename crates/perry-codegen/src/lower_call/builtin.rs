@@ -345,11 +345,9 @@ pub(super) fn lower_builtin_new<'a>(
             } else {
                 "js_array_buffer_new_with_options"
             };
-            let handle = ctx.block().call(
-                I64,
-                runtime,
-                &[(DOUBLE, &size_box), (DOUBLE, &options_box)],
-            );
+            let handle =
+                ctx.block()
+                    .call(I64, runtime, &[(DOUBLE, &size_box), (DOUBLE, &options_box)]);
             Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
         }
         "ArrayBuffer" | "SharedArrayBuffer" => {

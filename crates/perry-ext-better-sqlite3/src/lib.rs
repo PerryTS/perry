@@ -328,12 +328,10 @@ pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut Arr
     // origin names; they are indexed alike, so zip them by position.
     let decl_types: Vec<Option<String>> = prepared
         .columns()
-        .iter()
         .map(|c| c.decl_type().map(str::to_string))
         .collect();
     let origins: Vec<(String, Option<String>, Option<String>, Option<String>)> = prepared
         .columns_with_metadata()
-        .iter()
         .map(|c| {
             (
                 c.name().to_string(),
@@ -558,11 +556,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
                     sqlite_params.iter().map(|p| p.as_ref()).collect();
                 if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                    let column_names: Vec<String> = prepared
-                        .column_names()
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
+                    let column_names: Vec<String> =
+                        prepared.column_names().map(|s| s.to_string()).collect();
                     let column_refs: Vec<&str> = column_names.iter().map(String::as_str).collect();
 
                     let shape = (!raw).then(|| build_object_shape(&column_refs));
@@ -609,11 +604,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
                     sqlite_params.iter().map(|p| p.as_ref()).collect();
                 if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                    let column_names: Vec<String> = prepared
-                        .column_names()
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
+                    let column_names: Vec<String> =
+                        prepared.column_names().map(|s| s.to_string()).collect();
                     let column_refs: Vec<&str> = column_names.iter().map(String::as_str).collect();
                     // Only build the object shape in non-raw mode — raw rows
                     // skip the per-row object allocation entirely.
