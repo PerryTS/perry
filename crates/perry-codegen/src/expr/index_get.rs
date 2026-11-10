@@ -41,6 +41,7 @@ use super::{
 };
 
 pub(crate) mod array_rep;
+pub(crate) mod field_base;
 mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;

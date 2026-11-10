@@ -148,7 +148,7 @@ pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
 pub(crate) use receiver_regions::{region_enders_in_expr, region_enders_in_stmts_classified};
 pub(crate) use receiver_regions::{
-    region_enders_in_stmts_with_trusted_operations, ByteViewParamAccess,
+    region_enders_in_stmts_with_trusted_operations, ByteViewParamAccess, FieldBase,
     ReceiverArrayValidationKind, ReceiverDescriptorTable, RegionEnder,
 };
 pub(crate) use refs::{
