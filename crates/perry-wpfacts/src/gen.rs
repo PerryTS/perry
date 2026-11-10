@@ -24,6 +24,7 @@ mod private_methods;
 mod shared_closures;
 mod view;
 mod walk;
+pub(crate) mod zero_sign;
 pub(crate) use walk::variant_name;
 
 /// A read site the precision report can match against the dynamic census:
@@ -373,6 +374,11 @@ pub struct Gen<'a> {
     /// (`gen::narrow`, "Writes on a leaving path";
     /// `FactsConfig::no_leaving_writes`).
     pub leaving_writes: bool,
+    /// −0 tolerance (`zero_sign`): the expression `expr` evaluates next is
+    /// an operand whose parent classifies its use (a compare, an integer
+    /// rule, a copy, a store, a call argument); any other is a
+    /// sign-observing use (`gen/zero_sign.rs`). Taken by `expr`.
+    pub zs_ok: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
     /// branch's writes are dropped from the reads after it, also a branch
     /// that falls through to them.
@@ -709,6 +715,7 @@ impl<'a> Gen<'a> {
             guard_ranges: true,
             guard_presence: true,
             leaving_writes: true,
+            zs_ok: false,
             leaving_write_sabotage: false,
             jumps: 0,
             tries: 0,

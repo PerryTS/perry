@@ -10,6 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 mod coverage;
+pub(crate) mod zero_sign;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
 #[cfg(feature = "llvm-inprocess")]

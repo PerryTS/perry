@@ -171,11 +171,13 @@ impl<'a> Gen<'a> {
         for (kind, bound) in clips {
             let b = self.bound_node(mi, bound);
             let dst = self.tmp("narrow");
+            self.zs_carrier(dst);
             self.m.edge(start, dst);
             self.range_rule(crate::model::RangeOp::Clip(kind), start, Some(b), dst);
             start = dst;
         }
         let end = self.tmp("narrow-end");
+        self.zs_carrier(end);
         self.m.edge(start, end);
         self.narrow.push(Narrow {
             mi,
@@ -892,6 +894,7 @@ impl<'a> Gen<'a> {
                 let an = self.bound_node(mi, a);
                 let bn = b2.map(|b2| self.bound_node(mi, b2));
                 let dst = self.tmp("narrow-bound");
+                self.zs_carrier(dst);
                 self.range_rule(op, an, bn, dst);
                 self.m.add_prim(dst, prim::NUM);
                 dst
@@ -913,6 +916,7 @@ impl<'a> Gen<'a> {
                     .narrowed_read(mi, o)
                     .unwrap_or_else(|| self.local(mi, o));
                 let len = self.tmp("narrow-length");
+                self.zs_carrier(len);
                 let key = crate::model::Key::Named(self.m.atom("length"));
                 self.m.cons(on, crate::model::Cons::Load { key, dst: len });
                 len
@@ -985,6 +989,7 @@ impl<'a> Gen<'a> {
                 .narrowed_read(mi, id)
                 .unwrap_or_else(|| self.local(mi, id));
             let start = self.tmp("guard");
+            self.zs_carrier(start);
             match fact {
                 Implied::Clip(_, kind, bound) => {
                     let is_char = matches!(bound, Bound::Char(_));
@@ -1006,6 +1011,7 @@ impl<'a> Gen<'a> {
                 }
             }
             let end = self.tmp("guard-end");
+            self.zs_carrier(end);
             self.m.edge(start, end);
             self.narrow.push(Narrow {
                 mi,

@@ -280,9 +280,18 @@ pub struct ElisionFacts {
     pub local_classes: std::collections::BTreeMap<u32, u32>,
     pub indexed_owners: std::collections::BTreeMap<u32, FactsIndexedOwner>,
     pub number_inputs: std::collections::BTreeSet<u32>,
-    /// Number bindings whose every value is an int32, never `-0` (the
-    /// wpfacts interval proof, `BindingFacts::int_range`).
+    /// Number bindings whose every value is an int32 (the wpfacts interval
+    /// proof, `BindingFacts::int_range`), never an observable `-0`.
     pub int32_inputs: std::collections::BTreeSet<u32>,
+    /// −0 tolerance (wpfacts PR D): the `int32_inputs` whose values may hold
+    /// a `-0` no use observes (`BindingFacts::zero_tol`). Check mode admits
+    /// `-0` entering their slot, and a sign-observing operation reading one
+    /// is a false proof (`verify_facts::zero_sign`).
+    pub zero_tolerant_locals: std::collections::BTreeSet<u32>,
+    /// Some Number node keeps its interval by −0 tolerance
+    /// (`ProgramFacts::zero_sign_tolerated`): check mode's int32 witnesses
+    /// of fields and elements admit `-0`.
+    pub zero_sign_tolerated: bool,
     /// Local id → the representation the whole-program facts give it
     /// (representation RFC §10.3, wpfacts `BindingFacts::rep`). A local the
     /// facts cover takes exactly this one; codegen does not choose.
@@ -485,6 +494,9 @@ pub struct FactsSignature {
     pub ret: FactsRep,
     /// The class id of the one class every `this` holds (E2).
     pub this_class: Option<u32>,
+    /// −0 tolerance (wpfacts PR D): an I32 parameter may receive `-0` (no
+    /// use observes it); the check-mode entry witness admits it.
+    pub zero_ok: bool,
 }
 
 /// `field_read_calls`).

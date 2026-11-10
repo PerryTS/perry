@@ -257,6 +257,9 @@ impl Rep {
 pub struct BindingFacts {
     /// Its representation (`Rep`).
     pub rep: Rep,
+    /// −0 tolerance (PR D): its interval holds a `-0` no use observes
+    /// (`zero_sign`): an I32 slot may then receive `-0` as `0`.
+    pub zero_tol: bool,
     /// One of its values can reach an int consumer (`demand`).
     pub int_demand: bool,
     /// Diagnostic-only TOP provenance; never consumed by emitted-code decisions.
@@ -617,6 +620,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
     out.int_demand = node.int_demand;
+    out.zero_tol = node.zs_tol;
     out.rep = match arr_rep(m, &[n]) {
         Some(r) => Rep::Arr(r),
         None => rep_of(&out),
@@ -840,12 +844,14 @@ fn rest_probe(m: &Model) -> Vec<String> {
             let mut other = false;
             let mut range = crate::model::Iv::EMPTY;
             let mut demand = false;
+            let mut zsign = false;
             for &n in nodes {
                 let node = &m.nodes[n as usize];
                 prims |= node.prim;
                 other |= !node.pts.is_empty();
                 range = range.join(node.range);
                 demand |= node.int_demand;
+                zsign |= node.zsign;
             }
             if prims & crate::model::prim::NUM == 0 {
                 return None;
@@ -856,8 +862,8 @@ fn rest_probe(m: &Model) -> Vec<String> {
                 format!("[{},{}]", range.lo, range.hi)
             };
             Some(format!(
-                "# rest {what} prims={prims:#x} other={} range={range} demand={}",
-                other as u8, demand as u8
+                "# rest {what} prims={prims:#x} other={} range={range} demand={} zsign={}",
+                other as u8, demand as u8, zsign as u8
             ))
         };
         if let TmplKind::Arr { plain: true, .. } = tpl.kind {

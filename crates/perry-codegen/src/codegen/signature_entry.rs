@@ -461,11 +461,13 @@ pub(crate) fn select_methods(
 /// i1: double `value` is a value of `rep` within `range` (§5). `None` for
 /// a Boxed encoding, which claims nothing here (an `Arr` slot's claim is
 /// not a signature's: DESIGN-p4l1 §4.4).
+/// `zero_ok` (−0 tolerance, wpfacts PR D): an I32 value may also be `-0`.
 fn emit_rep_test(
     blk: &mut LlBlock,
     rep: FactsRep,
     range: Option<(i64, i64)>,
     value: &str,
+    zero_ok: bool,
 ) -> Option<String> {
     match rep.encoding() {
         FactsEnc::Boxed => None,
@@ -483,6 +485,9 @@ fn emit_rep_test(
             let bits = blk.bitcast_double_to_i64(value);
             let not_negative_zero = blk.icmp_ne(I64, &bits, "-9223372036854775808");
             let ok = blk.and(I1, &in_range, &exact);
+            if zero_ok {
+                return Some(ok);
+            }
             Some(blk.and(I1, &ok, &not_negative_zero))
         }
     }
@@ -499,7 +504,8 @@ fn witness_value(
     if !crate::verify_facts::enabled() {
         return;
     }
-    let Some(ok) = emit_rep_test(ctx.block(), rep, range, value) else {
+    let zero_ok = ctx.wpfacts.zero_sign_tolerated;
+    let Some(ok) = emit_rep_test(ctx.block(), rep, range, value, zero_ok) else {
         return;
     };
     crate::verify_facts::covered(Fact::Signature, || serde_json::json!({ "what": what }));
@@ -530,7 +536,8 @@ pub(crate) fn witness_field_rep(ctx: &mut FnCtx<'_>, rep: FactsRep, value: &str,
     if !crate::verify_facts::enabled() {
         return;
     }
-    let Some(ok) = emit_rep_test(ctx.block(), rep, None, value) else {
+    let zero_ok = ctx.wpfacts.zero_sign_tolerated;
+    let Some(ok) = emit_rep_test(ctx.block(), rep, None, value, zero_ok) else {
         return;
     };
     crate::verify_facts::covered(Fact::FieldRep, || serde_json::json!({ "field": what }));
@@ -906,7 +913,7 @@ fn emit_entry(
             continue;
         }
         if let Some(site) = &sites[i] {
-            let ok = emit_rep_test(blk, rep, sig.ranges[i], &value).unwrap();
+            let ok = emit_rep_test(blk, rep, sig.ranges[i], &value, sig.zero_ok).unwrap();
             blk.call_void("perry_verify_facts_tick", &[]);
             let miss = wf.blocks().len();
             let miss_l = wf.create_block("signature.entry_miss").label.clone();
