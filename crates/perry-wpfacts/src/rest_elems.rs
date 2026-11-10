@@ -131,7 +131,7 @@ fn tok_refusal(m: &Model, t: Tok, tm: TmplId) -> Option<&'static str> {
             return Some("elem not a number");
         };
         let e = &m.nodes[e as usize];
-        return Some(if e.prim != crate::model::prim::NUM || !e.pts.is_empty() {
+        return Some(if r.elem == ElemRep::Boxed {
             "elem not a number"
         } else if !crate::bindings::elem_demand(m, t, e) {
             "elem without demand"
@@ -311,14 +311,14 @@ pub(crate) fn admit(
         // template's own token beside its birth-site tokens) holds no Array.
         let mut toks = m.tmpl_toks(tm);
         toks.retain(|t| m.all_fields.contains_key(t));
-        let why = if interpreted {
+        let refusal = if interpreted {
             Some("interpreter")
         } else if toks.is_empty() {
             Some("no token")
         } else {
             toks.iter().find_map(|&t| tok_refusal(m, t, tm))
         };
-        match why {
+        match refusal {
             Some(w) => {
                 refused.insert(tm, w.to_string());
             }
@@ -369,16 +369,13 @@ pub(crate) fn admit(
             continue;
         }
         let fill_recv = fill_recvs.contains(&n);
-        if let Some(why) = node
+        if let Some(kind) = node
             .cons
             .iter()
             .find_map(|c| use_of(m, c, fill_recv, &reads))
         {
-            let why = format!(
-                "{why} on {}",
-                m.labels.get(n as usize).copied().unwrap_or("?")
-            );
-            refuse(&mut cand, hit, &why);
+            let on = m.labels.get(n as usize).copied().unwrap_or("?");
+            refuse(&mut cand, hit, &format!("{kind} on {on}"));
         }
     }
     // Co-occurrence, to the fixpoint.
