@@ -64,6 +64,7 @@ fn reachable_dynamic_import_observes_namespace_dead_site_does_not() {
         byte_offset: 0,
         deferred_error: None,
         synchronous: false,
+        deferred: false,
     }));
     let mut dynamic = lower(
         "export function viaImport() {} function privateDead() {}",
@@ -298,6 +299,7 @@ fn dynamic_namespace_includes_star_bindings_and_deferred_evaluation() {
         byte_offset: 0,
         deferred_error: None,
         synchronous: false,
+        deferred: false,
     }));
     let mut barrel = lower("export * from 'lib.ts';", "barrel.ts");
     let mut lib = lower(

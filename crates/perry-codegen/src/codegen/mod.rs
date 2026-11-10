@@ -239,6 +239,7 @@ mod closure_capture_cells;
 mod closure_captures;
 mod closure_collect;
 mod constructor_contracts;
+mod deferred_namespace;
 #[cfg(test)]
 mod number_local_root_tests;
 mod shared_class_method_bodies;
@@ -247,9 +248,9 @@ mod ctor_arity;
 pub use ctor_arity::{
     context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
 };
-mod checked_integer;
 #[cfg(test)]
 mod buffer_alias_metadata_tests;
+mod checked_integer;
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -3056,6 +3057,7 @@ fn lower_module(
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_self_import: opts.namespace_self_import,
         namespace_source_prefixes: opts.namespace_source_prefixes,
+        deferred_namespace_imports: opts.deferred_namespace_imports,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -3370,6 +3372,8 @@ fn lower_module(
         lazy_path_init_modules: opts.lazy_path_init_modules.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
+        module_deferred_init_deps: opts.module_deferred_init_deps.clone(),
+        module_deferred_readiness: opts.module_deferred_readiness.clone(),
         is_dynamic_import_target: opts.is_dynamic_import_target,
         namespace_adopts_cjs_exports: opts.namespace_adopts_cjs_exports,
     };

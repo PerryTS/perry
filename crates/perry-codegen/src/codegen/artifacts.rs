@@ -477,6 +477,13 @@ pub(super) fn emit_module_artifacts(
     // entries so the populator emit-site can look up `(global_name,
     // byte_len)` per key without rebuilding any LLVM IR. Vec entries
     // are parallel to `cross_module.namespace_entries`.
+    super::deferred_namespace::emit_readiness(
+        llmod,
+        &module_prefix,
+        opts.is_entry_module,
+        hir.has_top_level_await,
+        &cross_module.module_deferred_readiness,
+    );
     let mut namespace_key_globals: Vec<(String, usize)> = Vec::new();
     // Issue #842: also emit `@__perry_ns_<prefix>` for side-effect-only
     // dynamic-import targets (`namespace_entries` empty but the module
@@ -485,6 +492,12 @@ pub(super) fn emit_module_artifacts(
     // the global; the populator below handles `n == 0` by calling
     // `js_create_namespace(0, ...)` which returns an empty object.
     if !cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target {
+        super::deferred_namespace::emit(
+            llmod,
+            &module_prefix,
+            opts.is_entry_module,
+            &cross_module.module_deferred_init_deps,
+        );
         let ns_name = format!("__perry_ns_{}", module_prefix);
         // Hex double literal for TAG_UNDEFINED (0x7FFC_0000_0000_0001).
         // #10399: namespace objects are built by module init.
@@ -582,7 +595,9 @@ pub(super) fn emit_module_artifacts(
     // already declare their targets. Now that a namespace re-exporter gets one
     // too, its source needs declaring on the same terms.
     for entry in &cross_module.namespace_entries {
-        if let crate::NamespaceEntryKind::NestedNamespace { source_prefix } = &entry.kind {
+        if let crate::NamespaceEntryKind::NestedNamespace { source_prefix }
+        | crate::NamespaceEntryKind::DeferredNamespace { source_prefix } = &entry.kind
+        {
             if source_prefix != module_prefix.as_str() {
                 nested_prefixes.insert(source_prefix.clone());
             }
@@ -614,6 +629,7 @@ pub(super) fn emit_module_artifacts(
             if prefix.starts_with("__native_mod__") || prefix.starts_with("__node_submod__") {
                 continue;
             }
+            llmod.declare_function(&format!("{prefix}__deferred_namespace"), DOUBLE, &[]);
             let ns_name = format!("__perry_ns_{}", prefix);
             llmod.add_external_module_state_global(&ns_name, DOUBLE);
             // Issue #753: declare each dynamic-import target's `__init`

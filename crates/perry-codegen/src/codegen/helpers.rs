@@ -1440,6 +1440,8 @@ pub(super) fn emit_namespace_populator(
                     let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
+                NamespaceEntryKind::DeferredNamespace { source_prefix } => ctx.block().call(
+                    DOUBLE, &format!("{source_prefix}__deferred_namespace"), &[]),
                 NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
                     .block()
                     .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
