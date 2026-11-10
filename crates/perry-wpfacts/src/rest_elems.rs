@@ -305,6 +305,7 @@ pub(crate) fn admit(
         fill_recvs.insert(f.recv);
         fill_recvs.extend(copies.get(&f.recv).into_iter().flatten().copied());
     }
+    fill_recvs.extend(m.rest_fill_relays.iter().copied());
     let mut reads: FxHashSet<NodeId> = FxHashSet::default();
     for &(_, offset, n) in &g.element_values {
         if offset != 0 {
@@ -324,7 +325,7 @@ pub(crate) fn admit(
     for (n, node) in m.nodes.iter().enumerate() {
         let n = n as NodeId;
         for c in &node.cons {
-            if let Some(o) = object_use(m, c) {
+            if let Some(o) = object_use(m, c).filter(|o| !fill_recvs.contains(o)) {
                 let hit = held(m, o, &cand, &mut buf);
                 refuse(&mut cand, hit, c.kind_name());
             }

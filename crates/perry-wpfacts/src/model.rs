@@ -1370,6 +1370,8 @@ pub struct Model {
     pub arr_used: crate::pts::FxHashSet<Tok>,
     /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
     pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
+    /// The receiver relays `array_method` makes for a fused fill's call.
+    pub rest_fill_relays: Vec<NodeId>,
     /// The templates admitted at rest (`rest_elems::admit`), and why each
     /// other candidate was not (`rest_elems::probe`).
     pub rest_tmpls: crate::pts::FxHashSet<TmplId>,

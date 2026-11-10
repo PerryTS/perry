@@ -1042,6 +1042,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
     m.add_tok(recv, t);
+    if crate::rest_elems::fused_fill(m, call) {
+        // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
+        m.rest_fill_relays.push(recv);
+    }
     let this_arg = |i: usize| match c.args.get(i) {
         Some(&n) => ThisArg::Node(n),
         None => ThisArg::Undef,
