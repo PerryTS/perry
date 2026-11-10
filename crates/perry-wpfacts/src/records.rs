@@ -627,8 +627,9 @@ struct Scan<'a, 'g> {
     copies: FxHashMap<NodeId, Vec<NodeId>>,
     /// A copy's shared node.
     orig_of: FxHashMap<NodeId, NodeId>,
-    /// Locals another function references (`Model::captures`): a closure
-    /// environment cell, a heap slot (closure capture by value is VR-7).
+    /// Locals a closure references (`Model::captures` by a function some
+    /// body creates, `FuncInfo::parent`): a closure environment cell, a heap
+    /// slot (closure capture by value is VR-7).
     captured: FxHashSet<NodeId>,
     /// The nodes holding a token of each object-literal or Arr template.
     holders: FxHashMap<TmplId, Vec<NodeId>>,
@@ -782,7 +783,12 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
         }
         let elem_atom = m.atoms.iter().position(|a| a == ELEM).map(|a| a as Atom);
-        let captured = m.captures.iter().map(|&(n, _)| n).collect();
+        let captured = m
+            .captures
+            .iter()
+            .filter(|&&(_, f)| (f as usize) < m.funcs.len() && m.funcs[f as usize].parent != NO_FN)
+            .map(|&(n, _)| n)
+            .collect();
         Scan {
             g,
             captured,
