@@ -503,7 +503,7 @@ class Chess {
   set(square: number, piece: number): void { this.board[square] = piece; }
   ranks(): number {
     let s = 0;
-    for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) s += this.at(r * 16 + f);
+    for (let r = 7; r >= 0; r--) s += this.at(r * 16);
     return s;
   }
   masked(move: number): number { return this.at(move & 127); }
@@ -513,7 +513,9 @@ class Chess {
 const c = new Chess();
 for (let i = -16; i < 144; i++) c.set(i, i & 7);
 c.ep = process.argv.length > 100 ? 40 : 20;
-console.log(c.ranks(), c.masked(process.argv.length), c.capture(process.argv.length), c.past());
+let t = 0;
+for (let i = 0; i < 1000; i++) t += c.masked(i) + c.capture(i);
+console.log(c.ranks(), t, c.past());
 "#;
 
 /// The field read calls of `src` by the source text of their call.
@@ -523,7 +525,8 @@ fn b1(src: &str, cfg: FactsConfig) -> Vec<(String, crate::FieldReadCall)> {
         .iter()
         .flat_map(|b| b.field_read_calls.iter())
         .map(|(offset, c)| {
-            let rest = &src[*offset as usize..];
+            // Offsets are 1-based.
+            let rest = &src[*offset as usize - 1..];
             let end = rest.find(')').map_or(rest.len(), |e| e + 1);
             (rest[..end].to_string(), c.clone())
         })
@@ -560,9 +563,9 @@ fn a_field_read_call_is_in_the_floor_by_its_own_key() {
             "{c:?}"
         );
     }
-    assert!(of("this.at(r * 16 + f").in_floor);
+    assert!(of("this.at(r * 16)").in_floor);
     assert!(of("this.at(move & 127)").in_floor);
-    // `[-16, 111]` and `[36, 56]`... only the first leaves the floor below.
+    // `[-16, 111]` leaves the floor below; `[15, 56]` is inside.
     assert!(!of("this.at((move & 127) - 16").in_floor);
     assert!(of("this.at(this.ep + 16").in_floor);
 }

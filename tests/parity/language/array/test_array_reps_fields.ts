@@ -15,7 +15,8 @@ class Board {
     const old = this.at(sq);
     this.board[sq] = piece + old * 0;
   }
-  // Keys inside the floor at every call.
+  // Every key is on the board (the facts' interval for `r * 16 + f` may
+  // still be wider than the floor: the read then keeps its bound).
   sumRanks(): number {
     let s = 0;
     for (let r = 0; r < 8; r++) {
