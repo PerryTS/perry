@@ -1455,7 +1455,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             return reject("retain");
         }
         for c in &m.nodes[n as usize].cons {
-            let why = match c {
+            let use_kind = match c {
                 Cons::Identity { .. } => "identity",
                 Cons::Load { .. }
                 | Cons::Falsy { .. }
@@ -1486,7 +1486,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Hard { .. } => "retain",
                 _ => "call",
             };
-            return reject(why);
+            return reject(use_kind);
         }
         None
     }
