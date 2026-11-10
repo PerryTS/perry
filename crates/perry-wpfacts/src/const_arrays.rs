@@ -4,7 +4,7 @@
 //! An Array token is **immutable** when nothing writes it after its birth:
 //! it is a plain program Array (`bindings::arr_rep` admits it: not foreign,
 //! escaped or hard, no named or metadata write), its length never moves
-//! (`ArrRep::fixed`), it does not leave its unit (`Model::is_cell_arr`), and
+//! (`ArrRep::fixed`), it does not leave its unit (`Model::cell_arrs`), and
 //! no write reached it (`Model::arr_stored`). The writes are:
 //! - a store under any key, named, index or computed (`Model::store_into`:
 //!   `a[i] = v`, `a.x = v`, an `Object.assign` into it, a declared setter);
@@ -107,7 +107,7 @@ impl Model {
 
     /// Plain Array token `t` with a fixed length is never written.
     pub(crate) fn arr_immutable(&self, t: Tok) -> bool {
-        self.const_arrays && !self.arr_stored.contains(&t) && !self.is_cell_arr(t)
+        self.const_arrays && !self.arr_stored.contains(&t) && !self.cell_arrs.contains_key(&t)
     }
 }
 
