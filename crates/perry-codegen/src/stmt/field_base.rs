@@ -46,14 +46,14 @@ use crate::types::I64;
 pub(crate) struct Installed(Vec<String>);
 
 /// A trusted read found in a loop.
-struct Read {
-    call: usize,
-    callee: usize,
-    field: String,
-    rep: FactsArrRep,
-    field_read: Expr,
+pub(super) struct Read {
+    pub(super) call: usize,
+    pub(super) callee: usize,
+    pub(super) field: String,
+    pub(super) rep: FactsArrRep,
+    pub(super) field_read: Expr,
     /// The call is in its own floor: its read has no cold arm.
-    in_floor: bool,
+    pub(super) in_floor: bool,
 }
 
 fn diag(ctx: &FnCtx<'_>, fields: &[&str], verdict: &str) {
@@ -236,7 +236,7 @@ pub(crate) fn end(ctx: &mut FnCtx<'_>, installed: Installed) {
 /// `e` is a coercing operator (arithmetic, bitwise, relational, unary)
 /// whose operands are each inert, a served read of Number elements, or
 /// such an operator in turn: ToPrimitive meets no object.
-fn operator_over(
+pub(super) fn operator_over(
     e: &Expr,
     inert: &dyn Fn(&Expr) -> bool,
     primitive: &dyn Fn(&Expr) -> bool,
@@ -251,12 +251,12 @@ fn operator_over(
     }
 }
 
-fn addr(e: &Expr) -> usize {
+pub(super) fn addr(e: &Expr) -> usize {
     e as *const Expr as usize
 }
 
 /// The trusted reads in `e` (not inside closures, which are other frames).
-fn reads_in_expr(ctx: &FnCtx<'_>, e: &Expr, out: &mut Vec<Read>) {
+pub(super) fn reads_in_expr(ctx: &FnCtx<'_>, e: &Expr, out: &mut Vec<Read>) {
     if matches!(e, Expr::Closure { .. }) {
         return;
     }
@@ -288,7 +288,7 @@ fn reads_in_expr(ctx: &FnCtx<'_>, e: &Expr, out: &mut Vec<Read>) {
     perry_hir::walker::walk_expr_children(e, &mut |c| reads_in_expr(ctx, c, out));
 }
 
-fn reads_in_stmt(ctx: &FnCtx<'_>, s: &Stmt, out: &mut Vec<Read>) {
+pub(super) fn reads_in_stmt(ctx: &FnCtx<'_>, s: &Stmt, out: &mut Vec<Read>) {
     match s {
         Stmt::Expr(e)
         | Stmt::Throw(e)

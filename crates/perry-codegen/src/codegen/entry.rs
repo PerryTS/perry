@@ -1060,6 +1060,7 @@ pub(super) fn compile_module_entry(
             record_packed_admissions: std::collections::HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
             receiver_descriptors: Default::default(),
+            fn_base: Default::default(),
             poll_stride_counter_slot: None,
             deferred_integer_update_accumulators: HashSet::new(),
             local_slot_reps: HashMap::new(),
