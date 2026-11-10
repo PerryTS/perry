@@ -308,3 +308,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, target_arch = "x86_64", target_os = "linux"))]
+#[path = "fn_record_order_tests.rs"]
+mod order_tests;

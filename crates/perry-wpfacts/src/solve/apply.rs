@@ -577,6 +577,26 @@ impl Model {
                             self.note_shared(SharedWrite::Accessor(Shared::Top, k.clone()));
                             self.note_shared(SharedWrite::Removed(Some(k)));
                         }
+                        // A NAMED key on `Object.prototype` defines that key
+                        // there and no other (node: `Object.defineProperty(
+                        // Object.prototype, "k", d)`): an accessor key of
+                        // every chain through it, as on a class prototype.
+                        // DECISIONS 242(1) (an accessor under any key) is a
+                        // computed key: `Cons::Hard` E5 (`mark_hard`).
+                        TokKind::ObjectProto => {
+                            let k = Some(Key::Named(key));
+                            builtins::note_native_write(self, t, k, "E5 Object.defineProperty");
+                            self.virt_revoke(t, Some(key));
+                            self.reshape(Some(key));
+                            if let Some(s) = self.shared_of(t) {
+                                let name = self.atoms[key as usize].clone();
+                                self.note_shared(SharedWrite::Accessor(s, name));
+                            }
+                            let ks = self.accessor_keys.entry(t).or_default();
+                            if !ks.contains(&key) {
+                                ks.push(key);
+                            }
+                        }
                         _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }
                 }

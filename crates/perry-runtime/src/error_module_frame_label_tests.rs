@@ -31,3 +31,16 @@ fn a_module_body_frame_renders_its_own_location() {
         Some("    at Object.<anonymous> (/app/node_modules/plugin/index.js)"),
     );
 }
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn an_esm_module_frame_is_a_bare_file_url() {
+    const START: usize = 0x0000_7d10_0000_0000;
+    crate::builtins::test_publish_bundle_name(START, b"file:///app/module.mjs");
+    let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+    let len = encode_pcs(&[START + 32], &mut blob);
+    assert_eq!(
+        render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
+        Some("    at file:///app/module.mjs")
+    );
+}

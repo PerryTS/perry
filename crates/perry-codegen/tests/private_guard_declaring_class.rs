@@ -103,6 +103,7 @@ fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
