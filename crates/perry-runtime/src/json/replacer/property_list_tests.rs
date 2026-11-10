@@ -269,3 +269,122 @@ fn property_list_preserves_public_private_storage_hiding() {
         }
     }
 }
+
+#[test]
+fn property_list_dedup_membership_work_scales_linearly() {
+    use std::cell::Cell;
+    use std::hash::{Hash, Hasher};
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct CountedKey {
+        value: usize,
+        operations: Rc<Cell<usize>>,
+    }
+
+    impl PartialEq for CountedKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.operations.set(self.operations.get() + 1);
+            self.value == other.value
+        }
+    }
+    impl Eq for CountedKey {}
+    impl Hash for CountedKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.operations.set(self.operations.get() + 1);
+            self.value.hash(state);
+        }
+    }
+
+    // Count real membership-key operations, not elapsed time. Reversed repeats
+    // must neither reorder first occurrences nor append duplicate keys.
+    for count in [256, 512] {
+        let operations = Rc::new(Cell::new(0));
+        let input = (0..count).chain((0..count).rev()).map(|value| CountedKey {
+            value,
+            operations: operations.clone(),
+        });
+        let result = collect_property_list_keys(input);
+        assert_eq!(
+            result.iter().map(|key| key.value).collect::<Vec<_>>(),
+            (0..count).collect::<Vec<_>>()
+        );
+        assert!(
+            operations.get() <= 16 * count,
+            "{count} distinct keys plus repeats require {} membership operations",
+            operations.get()
+        );
+    }
+}
+
+#[test]
+fn property_list_deduplicates_coerced_names_in_first_occurrence_order() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let object = parse(r#"{"2":2,"1":1,"a":3,"omit":4}"#);
+        assert_eq!(
+            stringify(
+                object,
+                r#"[2,"a","2",null,true,1,"a","1",{}]"#,
+                f64::from_bits(TAG_UNDEFINED)
+            ),
+            r#"{"2":2,"a":3,"1":1}"#,
+        );
+    }
+}
+
+thread_local! {
+    static KEY_CONVERSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+extern "C" fn converted_wrapper_key(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    KEY_CONVERSIONS.with(|n| n.set(n.get() + 1));
+    f64::from_bits(JSValue::string_ptr(key("β")).bits())
+}
+
+#[test]
+fn property_list_coerces_repeated_wrappers_before_unicode_deduplication() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let object = parse(r#"{"β":9,"2":2,"omit":0}"#);
+        let wrapper = crate::builtins::js_boxed_number_new(2.0);
+        let string_wrapper = crate::builtins::js_boxed_string_new(
+            f64::from_bits(JSValue::string_ptr(key("2")).bits()),
+            1,
+        );
+        assert!(crate::builtins::boxed_primitive_payload(wrapper).is_some());
+        assert!(crate::builtins::boxed_primitive_payload(string_wrapper).is_some());
+        let callback =
+            crate::closure::js_closure_alloc(crate::fn_info!(converted_wrapper_key, 0), 0);
+        crate::object::js_object_set_field_by_name(
+            JSValue::from_bits(wrapper.to_bits())
+                .as_pointer::<crate::ObjectHeader>()
+                .cast_mut(),
+            key("toString"),
+            crate::value::js_nanbox_pointer(callback as i64),
+        );
+        // Qualify callback installation before attributing output to stringify.
+        KEY_CONVERSIONS.with(|n| n.set(0));
+        let converted = crate::value::js_jsvalue_to_string(wrapper);
+        assert_eq!(str_from_header(converted).unwrap(), "β");
+        KEY_CONVERSIONS.with(|n| assert_eq!(n.get(), 1));
+        KEY_CONVERSIONS.with(|n| n.set(0));
+        let whitelist = parse(r#"["β",0,2,"2",null,true,{},0,0]"#);
+        let arr = whitelist.as_pointer::<crate::ArrayHeader>();
+        let elems = crate::array::array_elements_ptr(arr) as *mut f64;
+        *elems.add(1) = wrapper;
+        *elems.add(7) = wrapper;
+        *elems.add(8) = string_wrapper;
+        assert_eq!((*arr).length, 9);
+        assert_eq!((*elems.add(1)).to_bits(), wrapper.to_bits());
+        let output = text(crate::json::js_json_stringify_full(
+            f64::from_bits(object.bits()),
+            f64::from_bits(whitelist.bits()),
+            f64::from_bits(TAG_UNDEFINED),
+        ));
+        assert_eq!(output, r#"{"β":9,"2":2}"#);
+        KEY_CONVERSIONS.with(|n| assert_eq!(n.get(), 2, "duplicates must still coerce"));
+    }
+}

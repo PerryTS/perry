@@ -255,17 +255,23 @@ pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
-    let mut result: Vec<String> = Vec::new();
-    for i in 0..len {
-        let elem = *elements.add(i as usize);
-        // Per ECMA-262 SerializeJSONObject: a PropertyList item is kept when it
-        // is a String, a Number, or a String/Number wrapper object (Numbers and
-        // wrappers coerce to their canonical string form). Duplicate names are
-        // dropped — first occurrence wins.
-        if let Some(key) = json_property_list_key(elem) {
-            if !result.contains(&key) {
-                result.push(key);
-            }
+    // Coerce in array order before deduplicating: wrapper conversion can run
+    // user code even when its resulting name already appears in the list.
+    collect_property_list_keys((0..len).filter_map(|i| {
+        json_property_list_key(*elements.add(i as usize))
+    }))
+}
+
+/// Keep the first occurrence of each coerced key without changing read order.
+/// Membership is indexed separately so distinct keys do not scan the prefix.
+fn collect_property_list_keys<K: Clone + Eq + std::hash::Hash>(
+    keys: impl Iterator<Item = K>,
+) -> Vec<K> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for key in keys {
+        if seen.insert(key.clone()) {
+            result.push(key);
         }
     }
     result

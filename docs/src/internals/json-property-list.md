@@ -4,6 +4,12 @@ An array replacer controls object property reads, not only the final JSON keys.
 `js_json_stringify_full` extracts its deduplicated PropertyList and carries it
 through nested object and array serialization.
 
+Key extraction coerces entries in array order, including repeated names. A
+separate membership set avoids scanning the preceding keys; the ordered list
+retains the first occurrence. Average membership work scales with the number
+of entries, with extra key storage and hashing proportional to key bytes; this
+is not a worst-case or elapsed-time guarantee.
+
 For each object, `stringify_object_with_array_replacer` reads and serializes one
 listed property at a time, in PropertyList order. It must not resolve all own
 getters into a value snapshot: excluded getters must never execute, and an
