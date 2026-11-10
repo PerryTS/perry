@@ -419,7 +419,7 @@ pub(crate) fn solve(m: &mut Model) -> u32 {
     for (i, nd) in m.nodes.iter().enumerate() {
         seed[i] = nd.zs_use || (!nd.zs_known && nd.prim & prim::NUM != 0);
     }
-    let why = std::env::var("PERRY_FACTS_ZERO_SIGN_WHY").ok();
+    let trace = std::env::var("PERRY_FACTS_ZERO_SIGN_WHY").ok();
     let mut slot_toks: Vec<crate::model::Tok> = m
         .fields
         .keys()
@@ -492,7 +492,7 @@ pub(crate) fn solve(m: &mut Model) -> u32 {
             work.push(i as NodeId);
         }
     }
-    let mut from: Vec<NodeId> = if why.is_some() {
+    let mut from: Vec<NodeId> = if trace.is_some() {
         vec![NO_NODE; n]
     } else {
         Vec::new()
@@ -510,7 +510,7 @@ pub(crate) fn solve(m: &mut Model) -> u32 {
             }
         }
     }
-    if let Some(w) = why {
+    if let Some(w) = trace {
         why_probe(m, &w, &seed, &from, &copies);
     }
     // Settle: no interval leaves the solve with the bit.
