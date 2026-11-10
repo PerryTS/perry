@@ -269,31 +269,37 @@ fn literal(bits: u64) -> Expr {
     }
 }
 
-/// Lower `if (cond) then_branch else …` when it is the walk of a for-of
-/// over an immutable Array (module docs). `false`: not such a walk; the
-/// caller lowers the `if`.
-pub(super) fn lower(ctx: &mut FnCtx<'_>, cond: &Expr, then_branch: &[Stmt]) -> Result<bool> {
+/// What [`lower`] takes for `if (cond) then_branch`: the walk, the
+/// receiver's rep, the constants when it unrolls, and the packed admission.
+struct Decided<'a> {
+    walk: Walk<'a>,
+    rep: FactsArrRep,
+    consts: Option<Vec<u64>>,
+    packed: bool,
+}
+
+/// The one decision [`lower`] makes (module docs); `None`: not a decided
+/// walk, the caller lowers the `if`.
+fn decide<'a>(ctx: &FnCtx<'_>, cond: &Expr, then_branch: &'a [Stmt]) -> Option<Decided<'a>> {
     if ctx.wpfacts_off || crate::expr::typed_feedback_emission_enabled() {
-        return Ok(false);
+        return None;
     }
-    let Some(w) = walk(cond, then_branch) else {
-        return Ok(false);
-    };
+    let w = walk(cond, then_branch)?;
     // A local the codegen keeps in scalar slots holds no array word.
     if ctx.scalar_replaced_arrays.contains_key(&w.source)
         || ctx.array_row_aliases.contains_key(&w.source)
         || ctx.scalar_replaced.contains_key(&w.source)
     {
-        return Ok(false);
+        return None;
     }
     let Some(FactsRep::Arr(rep)) = crate::codegen::facts_rep::local(ctx, w.source) else {
-        return Ok(false);
+        return None;
     };
     if !rep.im || !ctx.wpfacts.immutable_arrays.contains(&w.source) {
-        return Ok(false);
+        return None;
     }
     if crate::expr::array_program_facts(&ctx.wpfacts) != 0 {
-        return Ok(false);
+        return None;
     }
     let consts = ctx
         .wpfacts
@@ -306,6 +312,42 @@ pub(super) fn lower(ctx: &mut FnCtx<'_>, cond: &Expr, then_branch: &[Stmt]) -> R
         })
         .cloned();
     let packed = w.counted && rep.dense && rep.floor > 0 && rep.elem != FactsElemRep::Boxed;
+    Some(Decided {
+        walk: w,
+        rep,
+        consts,
+        packed,
+    })
+}
+
+/// N2 (`stmt::fn_base`): when [`lower`] takes `if (cond) then_branch` as an
+/// unrolled walk, the statements of one copy after its binding (a Number
+/// literal) and the number of copies. Nothing else of the `if` is lowered:
+/// not the entry call, not `t.length`, not `t[k]`, not the IteratorRecord
+/// branch. The same decision as the lowering, so the two cannot disagree.
+pub(crate) fn unrolled_body<'a>(
+    ctx: &FnCtx<'_>,
+    cond: &Expr,
+    then_branch: &'a [Stmt],
+) -> Option<(&'a [Stmt], usize)> {
+    let d = decide(ctx, cond, then_branch)?;
+    let n = d.consts.as_ref()?.len();
+    Some((d.walk.body, n))
+}
+
+/// Lower `if (cond) then_branch else …` when it is the walk of a for-of
+/// over an immutable Array (module docs). `false`: not such a walk; the
+/// caller lowers the `if`.
+pub(super) fn lower(ctx: &mut FnCtx<'_>, cond: &Expr, then_branch: &[Stmt]) -> Result<bool> {
+    let Some(Decided {
+        walk: w,
+        rep,
+        consts,
+        packed,
+    }) = decide(ctx, cond, then_branch)
+    else {
+        return Ok(false);
+    };
     crate::verify_facts::covered(crate::verify_facts::Fact::ConstArray, || {
         serde_json::json!({
             "local": w.source,
@@ -314,6 +356,11 @@ pub(super) fn lower(ctx: &mut FnCtx<'_>, cond: &Expr, then_branch: &[Stmt]) -> R
         })
     });
     witness(ctx, &w, rep, consts.as_deref(), packed)?;
+    if crate::verify_facts::enabled() {
+        // N2: the witness's runtime entry may collect; a held base is
+        // re-derived after it.
+        crate::expr::index_get::field_base::rederive_all(ctx)?;
+    }
     match consts {
         Some(c) => unrolled(ctx, &w, &c),
         None => {

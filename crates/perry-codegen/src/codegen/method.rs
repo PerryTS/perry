@@ -863,6 +863,7 @@ pub(super) fn compile_method(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -1750,9 +1751,14 @@ pub(super) fn compile_method(
             )
         })?;
     } else {
+        // N2: the held suffix of a plain method body (`stmt::fn_base`).
+        if !is_constructor_method && !method.is_generator {
+            stmt::fn_base::plan(&mut ctx, method_body);
+        }
         stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
             format!("lowering body of method '{}::{}'", class.name, method.name)
         })?;
+        stmt::fn_base::finish(&mut ctx);
     }
 
     // #8648: pre-#8630 this symbol ended in `ret undefined`, and every caller
