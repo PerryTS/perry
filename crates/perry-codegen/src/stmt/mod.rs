@@ -41,9 +41,9 @@ mod element_shape_loop;
 mod element_shape_loop_tests;
 mod element_shape_native;
 pub(crate) mod field_base;
-pub(crate) mod fn_base;
 #[cfg(test)]
 mod field_base_tests;
+pub(crate) mod fn_base;
 #[cfg(test)]
 mod fn_base_tests;
 mod if_stmt;
