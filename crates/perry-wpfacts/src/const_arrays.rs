@@ -152,11 +152,7 @@ impl Model {
 /// (the caller's `ArrRep::im`) of a literal of constant Numbers, all with
 /// the same elements. `number`: the one Number a module binding holds
 /// (`const_numbers`).
-fn const_elems(
-    m: &Model,
-    n: NodeId,
-    number: &dyn Fn(u32, u32) -> Option<i64>,
-) -> Option<Vec<u64>> {
+fn const_elems(m: &Model, n: NodeId, number: &dyn Fn(u32, u32) -> Option<i64>) -> Option<Vec<u64>> {
     let node = &m.nodes[n as usize];
     let mut out: Option<Vec<u64>> = None;
     for t in node.pts.to_sorted() {

@@ -144,7 +144,8 @@ fn a_reading_method_keeps_it_immutable() {
 
 #[test]
 fn a_callback_that_writes_its_receiver_makes_it_mutable() {
-    let src = "const K = [1, 2, 3];\nK.forEach((x, i, a) => { a[i] = x + 1; });\nconsole.log(K[0]);\n";
+    let src =
+        "const K = [1, 2, 3];\nK.forEach((x, i, a) => { a[i] = x + 1; });\nconsole.log(K[0]);\n";
     assert!(!im(src, "K"));
 }
 

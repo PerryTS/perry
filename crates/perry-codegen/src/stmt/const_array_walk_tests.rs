@@ -92,7 +92,10 @@ fn constant_contents_unroll_the_walk() {
     let f = ir(true, 3, Some(vec![1.0, 2.0, 3.0]));
     assert!(!f.contains("forof.walk."), "no entry test\n{f}");
     assert!(!f.contains("js_array_record_enter_counted"), "{f}");
-    assert!(!f.contains("js_array_record_stack_enter"), "no record loop\n{f}");
+    assert!(
+        !f.contains("js_array_record_stack_enter"),
+        "no record loop\n{f}"
+    );
     // Two `next` blocks between three copies, and the exit.
     assert_eq!(blocks(&f, "forof.im.next"), 2, "{f}");
     assert_eq!(blocks(&f, "forof.im.exit"), 1, "{f}");
@@ -122,6 +125,9 @@ fn an_immutable_receiver_without_contents_keeps_the_counted_walk() {
     let f = ir(true, 3, None);
     assert!(!f.contains("forof.walk."), "no entry test\n{f}");
     assert!(!f.contains("js_array_record_enter_counted"), "{f}");
-    assert!(!f.contains("js_array_record_stack_enter"), "no record loop\n{f}");
+    assert!(
+        !f.contains("js_array_record_stack_enter"),
+        "no record loop\n{f}"
+    );
     assert_eq!(blocks(&f, "forof.im."), 0, "{f}");
 }

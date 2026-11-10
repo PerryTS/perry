@@ -124,16 +124,18 @@ fn walk<'a>(cond: &Expr, then_branch: &'a [Stmt]) -> Option<Walk<'a>> {
     };
     let Stmt::For {
         init: Some(init),
-        condition: Some(Expr::Compare {
-            op: CompareOp::Lt,
-            left,
-            right,
-        }),
-        update: Some(Expr::Update {
-            id: stepped,
-            op: UpdateOp::Increment,
-            prefix: false,
-        }),
+        condition:
+            Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left,
+                right,
+            }),
+        update:
+            Some(Expr::Update {
+                id: stepped,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
         body: loop_body,
     } = &lp[0]
     else {

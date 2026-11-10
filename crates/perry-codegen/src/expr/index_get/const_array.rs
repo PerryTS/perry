@@ -21,8 +21,7 @@ use crate::types::{DOUBLE, I32, I64, I8};
 
 /// The constant the read `expr` is, when the facts give one (module docs).
 pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
-    if ctx.wpfacts_off || ctx.wpfacts.const_arrays.is_empty() || typed_feedback_emission_enabled()
-    {
+    if ctx.wpfacts_off || ctx.wpfacts.const_arrays.is_empty() || typed_feedback_emission_enabled() {
         return Ok(None);
     }
     let Expr::IndexGet { object, index, .. } = expr else {
@@ -51,9 +50,10 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     else {
         return Ok(None);
     };
-    crate::verify_facts::covered(crate::verify_facts::Fact::ConstArray, || {
-        serde_json::json!({ "local": id, "index": i })
-    });
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::ConstArray,
+        || serde_json::json!({ "local": id, "index": i }),
+    );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
         let recv = super::lower_expr(ctx, object)?;
