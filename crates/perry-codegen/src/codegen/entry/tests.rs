@@ -65,6 +65,8 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -102,6 +104,7 @@ fn empty_module() -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -678,4 +681,27 @@ fn eager_literal_pools_precede_all_bodies_but_deferred_pools_stay_lazy() {
     assert!(first_pool < first_body && later_pool < first_body && first_body < later_body);
     assert!(!ir.contains("ptr @__perry_prepare_literals_lazy_ts to i64"));
     assert!(!ir.contains("call void @lazy_ts__init()"));
+}
+
+#[test]
+fn no_tla_program_emits_no_async_evaluation_path() {
+    let ir = emitted_ir("executable");
+    assert!(!ir.contains("js_async_module_"));
+    assert!(!ir.contains("__async_record"));
+    assert!(!ir.contains("__perry_async_module_"));
+}
+
+#[test]
+fn tla_program_emits_record_owned_dependency_visitor_in_source_order() {
+    let mut opts = entry_opts("executable");
+    opts.program_has_tla = true;
+    opts.module_init_deps = vec!["first".into(), "second".into()];
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+    let start = ir.find("__async_dependencies(i64 %walk, i64 %parent)").unwrap();
+    let body = &ir[start..];
+    let first = body.find("call i64 @first__async_record()").unwrap();
+    let second = body.find("call i64 @second__async_record()").unwrap();
+    assert!(first < second);
+    assert!(ir.contains("call void @js_async_module_entry"));
+    assert!(ir.contains("internal global [16 x i64] zeroinitializer"));
 }
