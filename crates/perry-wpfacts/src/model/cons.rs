@@ -23,9 +23,53 @@ pub enum OwnGateAt {
     Value,
 }
 
+/// Where a program observes the identity of what a node holds
+/// (`Cons::Identity`; DESIGN-p4l4 §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityRoute {
+    /// `===` / `!==` between two values neither of which is a primitive
+    /// literal (a comparison with one is a presence test).
+    StrictEq,
+    /// `==` / `!=`: object against object is identity.
+    LooseEq,
+    /// A `switch` discriminant and its case expressions (`===`).
+    Switch,
+    /// `Object.is`.
+    ObjectIs,
+    /// `Object.prototype.isPrototypeOf`: the receiver against each object on
+    /// the argument's chain.
+    IsPrototypeOf,
+    /// A Map/Set/WeakMap/WeakSet key (SameValueZero, or identity).
+    Collection,
+    /// `structuredClone` keeps the sharing of what it copies.
+    Clone,
+    /// A realm declaration's `identity(slot)`.
+    Native,
+}
+
+impl IdentityRoute {
+    pub fn name(self) -> &'static str {
+        match self {
+            IdentityRoute::StrictEq => "===",
+            IdentityRoute::LooseEq => "==",
+            IdentityRoute::Switch => "switch",
+            IdentityRoute::ObjectIs => "Object.is",
+            IdentityRoute::IsPrototypeOf => "isPrototypeOf",
+            IdentityRoute::Collection => "collection-key",
+            IdentityRoute::Clone => "structuredClone",
+            IdentityRoute::Native => "native",
+        }
+    }
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The program observes the identity of every object the node holds
+    /// (`route`). No flow and no effect on the solve: a fact the value-record
+    /// derive reads (DESIGN-p4l4 R4). Generated only under
+    /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
+    Identity { route: IdentityRoute },
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
     /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
@@ -607,6 +651,7 @@ impl Cons {
 
     pub fn kind_name(&self) -> &'static str {
         match self {
+            Cons::Identity { .. } => "identity",
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",

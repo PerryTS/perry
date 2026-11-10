@@ -1375,16 +1375,28 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (_, None) => ret_tok(m, call, t),
         ("Collection", Some("set" | "add")) => {
+            // The key is compared by SameValueZero (identity for objects).
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
             for &a in &c.args {
                 m.edge(a, elems);
             }
             ret_tok(m, call, t);
         }
         ("Collection", Some("get")) => {
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
             m.edge(elems, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
-        ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
+        ("Collection", Some("has" | "delete")) => {
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
+            ret_prim(m, call, prim::BOOL)
+        }
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
         ("Collection", Some("keys" | "values")) => {
             let it = iter_over(m, call, members::collection_iterator(kind), elems);

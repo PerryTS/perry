@@ -34,6 +34,7 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
+        Identity { route } => Identity { route },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -448,7 +449,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
     use Cons::*;
     matches!(
         c,
-        Load { .. }
+        Identity { .. }
+            | Load { .. }
             | ProtoKey { .. }
             | OwnValues { .. }
             | CjsPublish { .. }

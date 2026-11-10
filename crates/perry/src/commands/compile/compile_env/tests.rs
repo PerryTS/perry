@@ -324,6 +324,7 @@ fn codegen_env_vars_are_build_cache_inputs() {
 fn array_fact_switches_are_cache_inputs() {
     for name in [
         "PERRY_FACTS_ARRAY_BASE",
+        "PERRY_FACTS_FN_BASES",
         "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
@@ -380,5 +381,15 @@ fn cold_path_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_COLD_PATHS"),
         "PERRY_COLD_PATHS must key the compile caches"
+    );
+}
+
+/// Value records (DESIGN-p4l4 §7): the switch changes the facts (and, from
+/// VR-3, emitted code), so `=1` must never reuse an object built without it.
+#[test]
+fn value_records_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_VALUE_RECORDS"),
+        "PERRY_FACTS_VALUE_RECORDS must key the compile caches"
     );
 }

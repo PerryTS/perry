@@ -227,7 +227,10 @@ fn method(ir: &str, name: &str) -> String {
 fn a_loop_whose_every_iteration_reads_the_board_holds_its_base() {
     let ir = ir(FactsRep::Arr(GROWABLE));
     let f = method(&ir, "ray");
-    assert!(f.contains("abase.install"), "guarded install\n{f}");
+    // N2: the loop is the body's whole held suffix, so the function-level
+    // base serves it (no guarded loop install) unless N2 is off.
+    let n2 = crate::stmt::fn_base::enabled();
+    assert!(n2 || f.contains("abase.install"), "guarded install\n{f}");
     // The install resolves forwarding once; the read inside the loop has
     // no forwarding test of its own (C3's `arep.live`).
     assert!(f.contains("abase.follow"), "{f}");
@@ -235,7 +238,8 @@ fn a_loop_whose_every_iteration_reads_the_board_holds_its_base() {
     // The poll re-derives the base: a second resolution after the safepoint.
     // Arithmetic over the read's Number is no coercion of an object.
     let g = method(&ir, "sum");
-    assert!(g.contains("abase.install"), "{g}");
+    assert!(n2 || g.contains("abase.install"), "{g}");
+    assert!(g.contains("abase.follow"), "{g}");
     let after_poll = f
         .split("call void @js_gc_loop_safepoint()")
         .skip(1)
