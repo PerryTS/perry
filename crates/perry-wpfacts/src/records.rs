@@ -499,6 +499,7 @@ pub(crate) fn derive(
     templates: &mut [TemplateFacts],
     sites: &[SiteFacts],
     interp_guard: Option<&str>,
+    sabotage: Option<&str>,
 ) -> Vec<RecordArray> {
     let m = &g.m;
     if !m.value_records || m.aborted {
@@ -511,7 +512,13 @@ pub(crate) fn derive(
             verdict.insert(tf.id, v);
         }
     }
-    let s = Scan::new(g, sites);
+    let mut s = Scan::new(g, sites);
+    // S0 negative controls (DESIGN-p4l4 §10.3): an identity route ignored.
+    s.ignored_route = match sabotage {
+        Some("vrident" | "vrinline") => Some("==="),
+        Some("vrswitch") => Some("switch"),
+        _ => None,
+    };
     // Arr template -> the record template it holds (R6(a)), and the
     // rejected ones.
     let mut linked: FxHashMap<TmplId, TmplId> = FxHashMap::default();
@@ -620,6 +627,9 @@ struct Scan<'a, 'g> {
     copies: FxHashMap<NodeId, Vec<NodeId>>,
     /// A copy's shared node.
     orig_of: FxHashMap<NodeId, NodeId>,
+    /// Locals another function references (`Model::captures`): a closure
+    /// environment cell, a heap slot (closure capture by value is VR-7).
+    captured: FxHashSet<NodeId>,
     /// The nodes holding a token of each object-literal or Arr template.
     holders: FxHashMap<TmplId, Vec<NodeId>>,
     /// `this` of a literal-shape class's constructor (and its instance
@@ -627,6 +637,9 @@ struct Scan<'a, 'g> {
     ctor_this: FxHashMap<NodeId, TmplId>,
     /// The element key's atom.
     elem_atom: Option<Atom>,
+    /// The identity route a negative control ignores (`vrident`,
+    /// `vrinline`: `===`; `vrswitch`: `switch`).
+    ignored_route: Option<&'static str>,
     /// A method call's receiver node.
     mcall_recv: FxHashMap<CallId, NodeId>,
     /// The `new` calls: their result is the object they birth.
@@ -769,8 +782,11 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
         }
         let elem_atom = m.atoms.iter().position(|a| a == ELEM).map(|a| a as Atom);
+        let captured = m.captures.iter().map(|&(n, _)| n).collect();
         Scan {
             g,
+            captured,
+            ignored_route: None,
             elem_atom,
             holders,
             ctor_this,
@@ -1245,6 +1261,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                         why = Some(R5StoreHeap(o));
                     } else if self.regions.contains(&n) {
                         why = Some(R5Throw);
+                    } else if self.captured.contains(&n) {
+                        why = Some(R5StoreHeap("closure capture".into()));
                     } else if !elem_of_arr
                         && (other
                             || !ars.is_empty()
@@ -1272,6 +1290,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                                 }
                                 match record_use(c, m, &keys[&tm]) {
                                     Use::Allowed => {}
+                                    Use::Reject(R4Identity(r))
+                                        if self.ignored_route == Some(r.as_str()) => {}
                                     Use::TypedCall(call) => {
                                         if let Err(e) = self.typed_target(self.source_any(call, n))
                                         {
@@ -1301,6 +1321,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                     why = Some(R6Join(at.clone()));
                 } else if self.regions.contains(&n) || region.contains_key(&n) {
                     why = Some(R6ArrayHolder(at.clone()));
+                } else if self.captured.contains(&n) {
+                    why = Some(R6ArrayHolder(format!("captured {at}")));
                 } else if let Some(o) = owner {
                     // A record array in another record array or record: VR-7.
                     if o.is_some_and(|o| arrs.contains_key(&o) || admitted.contains(&o)) {
@@ -1539,11 +1561,16 @@ pub fn ledger_lines(templates: &[TemplateFacts], arrays: &[RecordArray]) -> Vec<
                     format!(" at {}", r.at)
                 };
                 out.push(format!(
-                    "# record {} tmpl={} words={} REJECTED {}{at}",
+                    "# record {} tmpl={} words={} REJECTED {}{at} keys={}",
                     t.display,
                     t.id,
                     t.birth_keys.len(),
-                    r.why
+                    r.why,
+                    t.birth_keys
+                        .iter()
+                        .map(|k| crate::model::esc_key(k))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ));
             }
         }

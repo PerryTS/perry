@@ -220,3 +220,10 @@ fn the_reject_list_prints_every_reason() {
     assert_eq!(r.to_string(), "R5RetainingHelper(keep, retain)");
     assert_eq!(RecordReject::Cascade(7).to_string(), "Cascade(7)");
 }
+
+#[test]
+fn a_captured_record_rejects() {
+    // Closure capture by value is VR-7: a captured local is a heap cell.
+    let r = rejected("const u = mk(1);\nconst f = () => use(u);\nconsole.log(f());\n");
+    assert_eq!(r, "R5StoreHeap(closure capture)");
+}
