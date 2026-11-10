@@ -28,6 +28,9 @@ mod class_field_loop_tests;
 mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
+mod const_array_walk;
+#[cfg(test)]
+mod const_array_walk_tests;
 #[cfg(test)]
 mod contents_stable_ir_tests;
 mod counter_range;
@@ -37,6 +40,9 @@ mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod element_shape_native;
+pub(crate) mod field_base;
+#[cfg(test)]
+mod field_base_tests;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;

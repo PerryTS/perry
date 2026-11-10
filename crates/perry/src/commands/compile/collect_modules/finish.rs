@@ -316,6 +316,7 @@ pub(crate) fn collect_module_finish(
             collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
             ..Default::default()
         });
+        perry_transform::lower_async_module_body(&mut hir_module);
         transform_async_to_generator(&mut hir_module);
         // #8595: outline an oversized module-entry body into per-chunk
         // functions so no single function carries the whole init (which is

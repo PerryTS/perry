@@ -19,6 +19,8 @@
 pub mod bindings;
 mod builtins;
 pub mod canonical_numbers;
+mod const_arrays;
+mod const_numbers;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
@@ -26,6 +28,8 @@ mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
+mod element_floors;
+mod element_keys;
 pub mod field_read_calls;
 mod gen;
 mod gen_call;
@@ -45,7 +49,9 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, BodyRef, ElementRead, ModuleBindings, Rep};
+pub use bindings::{
+    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, Rep,
+};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 pub use signatures::Signature;
 pub use derive::{
@@ -76,6 +82,33 @@ pub struct FactsConfig {
     /// No array length intervals: every Array `length` is ⊤
     /// (`PERRY_FACTS_ARRAY_LENGTHS=0`).
     pub no_array_lengths: bool,
+    /// No length floor: growth makes an Array's `length` ⊤ instead of
+    /// raising its upper bound (`solve::arr_len`; `PERRY_FACTS_ARRAY_FLOOR=0`).
+    pub no_array_floor: bool,
+    /// No plain Array births, fused-fill birth or `Rep::Arr`
+    /// (`PERRY_FACTS_ARRAY_REPS=0`, DESIGN-p4l1 PR-B).
+    pub no_array_reps: bool,
+    /// No immutable Arrays and no constant contents
+    /// (`PERRY_FACTS_CONST_ARRAYS=0`, `const_arrays`).
+    pub no_const_arrays: bool,
+    /// No `Rep::Arr` for a field and no in-floor field read call
+    /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
+    pub no_array_fields: bool,
+    /// R1: a `Cons::Range` result widens like any node again, after
+    /// `WIDEN_STEPS` growths (`PERRY_FACTS_EXACT_RULES=0`;
+    /// `solve::grow_rule_range`).
+    pub no_exact_rules: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves ends
+    /// the narrowed reads after the branch again (`PERRY_FACTS_LEAVING_WRITES=0`;
+    /// `gen::narrow`, "Writes on a leaving path").
+    pub no_leaving_writes: bool,
+    /// An element read's past-the-end `undefined` is unconditional again
+    /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
+    pub no_elem_undef: bool,
+    /// N6 off (`PERRY_FACTS_CONST_NUMBERS=0`): bitwise operators keep their
+    /// int32 hull and no module binding is exported as a constant Number
+    /// (`const_numbers`).
+    pub no_const_numbers: bool,
     /// No guard narrowing, predicate summaries or String code intervals
     /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
     pub no_guard_ranges: bool,
@@ -279,6 +312,9 @@ pub struct ProgramFacts {
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
+    /// The dump's `# rep` probe lines (`bindings::rep_probe`), with the
+    /// dump only.
+    pub rep_probe: Vec<String>,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
@@ -450,8 +486,29 @@ fn generate<'a>(
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
     g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
     g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
+    g.m.elem_undef = !cfg.no_elem_undef;
+    g.m.elem_undef_sabotage = cfg.sabotage.as_deref() == Some("arrundef");
     g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
-    g.m.dense_birth_sabotage = cfg.sabotage.as_deref() == Some("densebirth");
+    g.m.const_numbers = !cfg.no_const_numbers;
+    g.m.const_number_sabotage = cfg.sabotage.as_deref() == Some("constnum");
+    g.m.arr_cap_sabotage = matches!(cfg.sabotage.as_deref(), Some("arrcap" | "densebirth"));
+    g.m.arr_floor_sabotage = cfg.sabotage.as_deref() == Some("arrfloor");
+    g.m.arr_append_sabotage = cfg.sabotage.as_deref() == Some("arrappend");
+    g.m.arr_fwd_sabotage = cfg.sabotage.as_deref() == Some("arrfwd");
+    g.m.arr_floor_off = cfg.no_array_floor;
+    g.m.array_reps = !cfg.no_array_reps;
+    g.m.arr_dense_sabotage = cfg.sabotage.as_deref() == Some("arrdense");
+    g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
+    g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
+    g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
+    g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
+    g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
+    g.m.array_fields = !cfg.no_array_fields;
+    g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
+    g.m.exact_rules = !cfg.no_exact_rules;
+    g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
+    g.leaving_writes = !cfg.no_leaving_writes;
+    g.leaving_write_sabotage = cfg.sabotage.as_deref() == Some("leavingwrite");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
@@ -819,6 +876,8 @@ fn compute_act<'a>(
     tests::delivery_boundaries::record(&g.m);
     #[cfg(test)]
     tests::computed_key_members::record(&g.m);
+    #[cfg(test)]
+    tests::box_computed_read::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
@@ -869,6 +928,11 @@ fn compute_act<'a>(
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);
+    let rep_probe = if cfg.diagnostics && !g.m.aborted {
+        bindings::rep_probe(&g)
+    } else {
+        Vec::new()
+    };
     if !g.m.aborted && field_read_calls::enabled() {
         field_read_calls::collect(
             &g,
@@ -876,11 +940,20 @@ fn compute_act<'a>(
             &mut bindings,
             interp_guard.is_some(),
             cfg.sabotage.as_deref() == Some("fieldreadcall"),
+            cfg.sabotage.as_deref() == Some("arrb1"),
         );
     }
     if canonical_numbers::enabled() {
         canonical_numbers::collect(&g, &mut bindings);
     }
+    if cfg.verify_facts {
+        element_floors::collect(&g, &mut bindings);
+    }
+    if g.m.const_numbers {
+        const_numbers::collect(&g, &mut bindings);
+    }
+    const_arrays::collect(&g, &mut bindings);
+    element_keys::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
@@ -2108,6 +2181,7 @@ fn compute_act<'a>(
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
         relations: g.m.relations.take(),
+        rep_probe,
         tok_names,
         bindings,
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),

@@ -180,6 +180,7 @@ pub(crate) use helpers::{
     is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
+pub(crate) use i32_fast_path::temps as i32_temps;
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
@@ -418,6 +419,7 @@ pub(crate) struct FnCtx<'a> {
     /// that arm is the site's complete operation without the facts.
     pub wpfacts_off: bool,
     pub program_has_worker: bool,
+    pub program_has_tla: bool,
     pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,

@@ -326,6 +326,13 @@ impl<'a> Gen<'a> {
             self.name_enum_object(mi, s);
         }
         (self.order_ok, self.loop_depth) = saved;
+        // Codegen invokes this owned body when the module evaluates. Follow
+        // that explicit FuncId edge only after the owning init is activated.
+        if let Some(id) = self.modules[mi as usize].1.async_init_function {
+            if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
+                self.m.activate(f, "module-init");
+            }
+        }
         for f in self.functions_of(mi as usize) {
             if self.m.aborted {
                 return;
@@ -648,7 +655,13 @@ impl<'a> Gen<'a> {
         let packet_read_start = self.read_sites.len();
         #[cfg(test)]
         self.m.packet_declarations(&f.body);
-        let r = self.m.raise_of(fxi);
+        // An async function body that runs untransformed throws into its
+        // promise (`async_body`), never into its caller.
+        let r = if f.is_async && !f.is_generator {
+            self.thrown
+        } else {
+            self.m.raise_of(fxi)
+        };
         let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
         self.m.gen_region = region;
@@ -688,8 +701,11 @@ impl<'a> Gen<'a> {
             fx.this = self.sloppy_this(info.this);
             self.m.cur_fn = prev;
         }
+        if f.is_async && !f.is_generator {
+            fx = self.async_body(&fx).0;
+        }
         self.params(&fx, &f.params);
-        if f.is_async || f.is_generator {
+        if f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
             self.m.add_top(info.ret, |_| {
@@ -717,7 +733,7 @@ impl<'a> Gen<'a> {
             // The body's normal completion returns `undefined` (a class
             // constructor's completion is never its result: `new` and
             // `super()` yield `this`).
-            self.m.add_prim(info.ret, prim::UNDEF);
+            self.m.add_prim(fx.ret, prim::UNDEF);
         }
         self.narrow_exit_body(scope);
         self.own_helper_finish(fxi, own);
@@ -1197,34 +1213,44 @@ impl<'a> Gen<'a> {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
+                // A branch that always leaves: its writes reach only where
+                // it jumps to (`narrow_leave`).
+                let pre = self.narrow_snapshot();
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(&then_fx, then_branch);
                 self.narrow_pop(k);
+                self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         ..fx.clone()
                     };
+                    let pre = self.narrow_snapshot();
                     let k = self.narrow_guard(fx, condition, false);
                     self.stmts(&else_fx, e);
                     self.narrow_pop(k);
+                    self.narrow_leave(e, pre);
                 }
             }
             Stmt::While { condition, body } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
+                self.jumps += 1;
                 let _ = self.expr(fx, condition);
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(fx, body);
                 self.narrow_pop(k);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::DoWhile { body, condition } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
+                self.jumps += 1;
                 let _ = self.expr(fx, condition);
                 self.stmts(fx, body);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::For {
@@ -1238,6 +1264,7 @@ impl<'a> Gen<'a> {
                     self.stmt(fx, i);
                 }
                 self.loop_depth += 1;
+                self.jumps += 1;
                 if let Some(c) = condition {
                     let _ = self.expr(fx, c);
                 }
@@ -1265,6 +1292,7 @@ impl<'a> Gen<'a> {
                 if narrowed {
                     self.narrow_end();
                 }
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
@@ -1294,6 +1322,7 @@ impl<'a> Gen<'a> {
                 // finally run in the enclosing one.
                 let rt = self.m.node_l("RAISE-try");
                 let outer = std::mem::replace(&mut self.m.gen_region, Some(rt));
+                self.tries += 1;
                 self.stmts(fx, body);
                 self.m.gen_region = outer;
                 if let Some(c) = catch {
@@ -1310,6 +1339,7 @@ impl<'a> Gen<'a> {
                 if let Some(f) = finally {
                     self.stmts(fx, f);
                 }
+                self.tries -= 1;
             }
             Stmt::Switch {
                 discriminant,
@@ -1317,13 +1347,16 @@ impl<'a> Gen<'a> {
             } => {
                 let d = self.expr(fx, discriminant);
                 // `===` against case values: no coercion.
-                let _ = d;
+                self.jumps += 1;
                 for c in cases {
                     if let Some(t) = &c.test {
-                        let _ = self.expr(fx, t);
+                        let tv = self.expr(fx, t);
+                        // N1: a case test is the strict equality it means.
+                        self.equality_demand(discriminant, t, d, tv);
                     }
                     self.stmts(fx, &c.body);
                 }
+                self.jumps -= 1;
             }
         }
     }

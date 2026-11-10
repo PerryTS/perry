@@ -92,6 +92,15 @@ fn fact_lines(t: &TemplateFacts) -> Vec<String> {
             crate::model::esc_key(&f.key),
             b(f.ta_stable)
         ));
+        // DESIGN-p4l1 §3.1: only a field the facts give `Arr` gets a line.
+        if matches!(f.rep, crate::bindings::Rep::Arr(_)) {
+            v.push(format!(
+                "FACT FR rep {}.{} = {}",
+                t.display,
+                crate::model::esc_key(&f.key),
+                f.rep.name()
+            ));
+        }
     }
     v
 }
@@ -119,6 +128,80 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             if let Some(o) = &b.indexed_owner {
                 out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
             }
+            // DESIGN-p4l1 §5.6: each binding the facts give `Arr`.
+            if matches!(b.rep, crate::bindings::Rep::Arr(_)) {
+                out.push_str(&format!(
+                    "# arr_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
+            }
+            // Fact IM (`const_arrays`): a rooted `const` of immutable Arrays,
+            // and its constant contents.
+            if b.immutable_array {
+                out.push_str(&format!("# immutable_array module={mi} local={id}\n"));
+            }
+            if let Some(c) = &b.const_elems {
+                let v: Vec<String> = c
+                    .iter()
+                    .map(|b| format!("{}", f64::from_bits(*b)))
+                    .collect();
+                out.push_str(&format!(
+                    "# const_array module={mi} local={id} elems=[{}]\n",
+                    v.join(",")
+                ));
+            }
+        }
+    }
+    // DESIGN-p4l1 §5.6: each field read call (b1), its key's interval at
+    // the call, what the read reads from, and the in-floor verdict.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (offset, c) in &bindings.field_read_calls {
+            let key = bindings
+                .call_arg_ranges
+                .binary_search_by_key(offset, |(o, _)| *o)
+                .ok()
+                .and_then(|at| bindings.call_arg_ranges[at].1.get(c.index_arg as usize))
+                .copied()
+                .flatten()
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let rep = c
+                .array
+                .map_or("boxed".to_string(), |r| crate::bindings::Rep::Arr(r).name());
+            out.push_str(&format!(
+                "# field_read_call module={mi} call={offset} field={} key={key} rep={rep} in_floor={}\n",
+                c.field, c.in_floor as u8
+            ));
+        }
+    }
+    // N1: what decides each Number local's representation.
+    for l in &pf.rep_probe {
+        out.push_str(l);
+        out.push('\n');
+    }
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (func, s) in &bindings.signatures {
+            let params: Vec<String> = s
+                .params
+                .iter()
+                .zip(&s.ranges)
+                .map(|(r, iv)| match iv {
+                    Some((lo, hi)) => format!("{}[{lo},{hi}]", r.name()),
+                    None => r.name(),
+                })
+                .collect();
+            out.push_str(&format!(
+                "# signature module={mi} func={func} params=({}) ret={}\n",
+                params.join(","),
+                s.ret.name()
+            ));
+        }
+    }
+    // N6: each module binding the facts give one Number.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (id, value) in &bindings.const_numbers {
+            out.push_str(&format!(
+                "# const_number module={mi} local={id} value={value}\n"
+            ));
         }
     }
     out.push_str(&format!(

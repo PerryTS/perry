@@ -88,6 +88,11 @@ pub struct FactsField {
     /// or when interpreted code can run.
     pub classes: Vec<u32>,
     pub nullable: bool,
+    /// The field's representation (wpfacts `FieldFacts::rep`, DESIGN-p4l1
+    /// §3): `Arr` when the field, on every object of the class, holds only
+    /// plain program Arrays for the object's whole life. A read of the
+    /// field is a value of this representation (`FieldProof::array`).
+    pub rep: FactsRep,
 }
 
 /// A plain compiled body of this module that a binding or a field holds
@@ -181,12 +186,76 @@ impl FactsNumericExpr {
         }
     }
 }
-/// A value's one representation (wpfacts `Rep`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A value's one representation (wpfacts `Rep`). It has no order (the
+/// derived one is not the lattice); every encoding decision goes through
+/// `FactsRep::encoding`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FactsRep {
     Boxed,
     F64,
     I32,
+    /// Only plain program Arrays (wpfacts `Rep::Arr`, DESIGN-p4l1 §2.1):
+    /// the slot holds the NaN-boxed pointer word, as a Boxed one does.
+    Arr(FactsArrRep),
+}
+
+/// wpfacts `ArrRep`: what every Array the value may hold has for its whole
+/// life (`length >= floor` and `capacity >= floor`; `dense`: no hole below
+/// `floor`; `fixed`: never grows, so never forwarded; `im`: never written
+/// after its birth, which `ElisionFacts::immutable_arrays` turns into a
+/// fact about a local), and the representation of its elements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactsArrRep {
+    pub elem: FactsElemRep,
+    pub floor: u32,
+    pub dense: bool,
+    pub fixed: bool,
+    pub im: bool,
+}
+
+/// wpfacts `ElemRep`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsElemRep {
+    Boxed,
+    F64,
+    I32,
+}
+
+/// wpfacts `Enc`: how a slot's word is stored and passed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsEnc {
+    Boxed,
+    F64,
+    I32,
+}
+
+impl FactsArrRep {
+    /// The join (says less) of two array reps, wpfacts `ArrRep::join`.
+    pub fn join(a: FactsArrRep, b: FactsArrRep) -> FactsArrRep {
+        use FactsElemRep::{Boxed, F64, I32};
+        FactsArrRep {
+            elem: match (a.elem, b.elem) {
+                (Boxed, _) | (_, Boxed) => Boxed,
+                (F64, _) | (_, F64) => F64,
+                (I32, I32) => I32,
+            },
+            floor: a.floor.min(b.floor),
+            dense: a.dense && b.dense,
+            fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
+        }
+    }
+}
+
+impl FactsRep {
+    /// The slot encoding: an `Arr` slot holds the Boxed word.
+    pub fn encoding(self) -> FactsEnc {
+        match self {
+            FactsRep::Boxed | FactsRep::Arr(_) => FactsEnc::Boxed,
+            FactsRep::F64 => FactsEnc::F64,
+            FactsRep::I32 => FactsEnc::I32,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -227,6 +296,14 @@ pub struct ElisionFacts {
     /// is a program Array literal whose birth length never moves (wpfacts
     /// `BindingFacts::const_length`).
     pub const_length_inputs: std::collections::BTreeMap<u32, i64>,
+    /// Locals that are a rooted `const` holding only immutable program
+    /// Arrays (wpfacts `BindingFacts::immutable_array`): every read that
+    /// yields a value yields an Array nothing writes after its birth.
+    pub immutable_arrays: std::collections::BTreeSet<u32>,
+    /// Local id → the constant contents of every value it holds: such a
+    /// local whose Arrays are all born from literals of these constant
+    /// Numbers, as bit patterns (wpfacts `BindingFacts::const_elems`).
+    pub const_arrays: std::collections::BTreeMap<u32, Vec<u64>>,
     /// Method call byte offset → each argument's integer interval at the
     /// call (wpfacts `ModuleBindings::call_arg_ranges`).
     pub call_arg_ranges: std::collections::BTreeMap<u32, Vec<Option<(i64, i64)>>>,
@@ -250,6 +327,19 @@ pub struct ElisionFacts {
     /// plain Number; `true` when it may also be `undefined` (wpfacts
     /// `canonical_numbers`, P3 B1).
     pub number_element_reads: std::collections::BTreeMap<u32, bool>,
+    /// Check mode: element reads (by `element_offset`) whose past-the-end
+    /// `undefined` the facts withheld, with the least length lower bound of
+    /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
+    /// `expr::index_get::elem_floor`).
+    pub element_floors: std::collections::BTreeMap<u32, u32>,
+    /// Module binding (local id) → the one integer Number it holds for the
+    /// whole program (wpfacts `ModuleBindings::const_numbers`, N6): a read
+    /// of its module global is that constant (`expr::literals_vars::facts_const_number`).
+    pub const_numbers: std::collections::BTreeMap<u32, i64>,
+    /// Element reads (by `element_offset`) whose key is an integer Number at
+    /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
+    /// PR-C2; `expr::index_get::proven_array`).
+    pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -302,6 +392,8 @@ impl ElisionFacts {
             && self.local_reps.is_empty()
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
+            && self.immutable_arrays.is_empty()
+            && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
             && self.element_reads.is_empty()
@@ -309,6 +401,7 @@ impl ElisionFacts {
             && self.signatures.is_empty()
             && self.typed_calls.is_empty()
             && self.number_element_reads.is_empty()
+            && self.const_numbers.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()
@@ -405,6 +498,11 @@ pub struct FactsFieldReadCall {
     /// The method body's `IndexGet::element_offset` and `this.f` offset.
     pub element_offset: u32,
     pub field_offset: u32,
+    /// `Some(floor)`: this call's index is an integer in `[0, floor)`, and
+    /// every Array the method's read may read from has at least `floor`
+    /// elements with no hole below it (wpfacts `FieldReadCall::in_floor`,
+    /// DESIGN-p4l1 §2.8): the slot is a present own element.
+    pub in_floor: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

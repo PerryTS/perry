@@ -317,3 +317,57 @@ fn codegen_env_vars_are_build_cache_inputs() {
     assert!(missing.is_empty(), "unregistered compiler env reads: {missing:?}; add to compile_env::COMPILE_ENV_VARS or COMPILE_ENV_EXCLUSIONS with a reason (#12582)");
     eprintln!("compile env audit: {reads} reads, {} names", found.len());
 }
+
+/// The element-rep facts' switches change emitted code, so each one keys
+/// both caches (DESIGN-p4l1 §5.2): `=0` must never reuse an `=1` object.
+#[test]
+fn array_fact_switches_are_cache_inputs() {
+    for name in [
+        "PERRY_FACTS_ARRAY_BASE",
+        "PERRY_FACTS_ARRAY_FIELDS",
+        "PERRY_FACTS_ARRAY_FLOOR",
+        "PERRY_FACTS_ARRAY_LENGTHS",
+        "PERRY_FACTS_ARRAY_REPS",
+        "PERRY_FACTS_ARRAY_TIER",
+        "PERRY_FACTS_CONST_ARRAYS",
+        "PERRY_FACTS_SABOTAGE",
+    ] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
+/// N6: the module-const switch changes the facts' intervals and the reads
+/// codegen emits, so `=0` must never reuse an `=1` object.
+#[test]
+fn const_number_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CONST_NUMBERS"),
+        "PERRY_FACTS_CONST_NUMBERS must key the compile caches"
+    );
+}
+
+/// R1: the range-tightening switches change the facts' intervals (and with
+/// them in-floor reads and int32 locals), so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn range_tightening_switches_are_cache_inputs() {
+    for name in ["PERRY_FACTS_EXACT_RULES", "PERRY_FACTS_LEAVING_WRITES"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
+/// N4: the cold-path switch changes helper declarations, call-site
+/// attributes and branch weights, so `=0` must never reuse an `=1` object.
+#[test]
+fn cold_path_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_COLD_PATHS"),
+        "PERRY_COLD_PATHS must key the compile caches"
+    );
+}

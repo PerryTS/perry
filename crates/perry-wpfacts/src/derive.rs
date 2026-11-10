@@ -108,6 +108,15 @@ pub struct FieldFacts {
     /// (`bindings::bodies_of` over every token of the layout); empty when
     /// it may hold anything else.
     pub fns: Vec<crate::bindings::BodyRef>,
+    /// The field's representation (DESIGN-p4l1 §3.1, finding 8): `Arr` of
+    /// what the field holds over every token of the template
+    /// (`bindings::arr_rep`) when it is definite, a data field, and the
+    /// template is neither escaped nor hard (a `delete` or a
+    /// `setPrototypeOf` on an instance can make the read `undefined`
+    /// without the field node holding it); Boxed otherwise, and with
+    /// `PERRY_FACTS_ARRAY_FIELDS=0`. A read of the field is a value of this
+    /// representation (PR-C3: codegen's `FieldProof::array`).
+    pub rep: crate::bindings::Rep,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -253,6 +262,8 @@ impl FieldFacts {
         self.writers_post = self.writers_post.max(o.writers_post);
         self.kind.join(&o.kind);
         self.ta_stable &= o.ta_stable;
+        // The join, not the meet: the row must hold for either class.
+        self.rep = crate::bindings::Rep::join(self.rep, o.rep);
         if self.ta_kind != o.ta_kind {
             self.ta_kind = None;
         }
@@ -889,7 +900,27 @@ fn template_facts(
         } else {
             Vec::new()
         };
+        let whole_life =
+            m.array_fields && definite && !is_accessor && escape.is_none() && hard.is_none();
+        let rep = if whole_life {
+            // The field nodes of the tokens that have one, as `field_kind`
+            // reads them.
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            let ignored = if m.arr_field_sabotage {
+                prim::NULL | prim::UNDEF
+            } else {
+                0
+            };
+            crate::bindings::arr_rep_beside(m, &nodes, ignored)
+                .map_or(crate::bindings::Rep::Boxed, crate::bindings::Rep::Arr)
+        } else {
+            crate::bindings::Rep::Boxed
+        };
         fields.push(FieldFacts {
+            rep,
             fns,
             ta_stable,
             ta_kind,

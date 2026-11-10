@@ -359,12 +359,29 @@ pub struct Gen<'a> {
     /// Array literals record their birth length (`solve::arr_len`;
     /// `FactsConfig::no_array_lengths`).
     pub arr_lengths: bool,
+    /// The source site of the last `new Array(...)` of the builtin
+    /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
+    pub new_array_site: Option<SiteId>,
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves past
+    /// the narrowing's code does not end its narrowed reads after the branch
+    /// (`gen::narrow`, "Writes on a leaving path";
+    /// `FactsConfig::no_leaving_writes`).
+    pub leaving_writes: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
+    /// branch's writes are dropped from the reads after it, also a branch
+    /// that falls through to them.
+    pub leaving_write_sabotage: bool,
+    /// The loops and `switch`es (`jumps`) and `try` statements (`tries`)
+    /// the walk is inside: where an unlabeled `break`/`continue` lands, and
+    /// whether a `throw` or a `finally` stays inside a narrowing's code.
+    pub jumps: u32,
+    pub tries: u32,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -688,8 +705,13 @@ impl<'a> Gen<'a> {
             dynimport_sabotage: false,
             int_ranges: true,
             arr_lengths: true,
+            new_array_site: None,
             guard_ranges: true,
             guard_presence: true,
+            leaving_writes: true,
+            leaving_write_sabotage: false,
+            jumps: 0,
+            tries: 0,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -1750,7 +1772,15 @@ impl<'a> Gen<'a> {
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
-            self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.to_string()));
+            // The binding's module when HIR resolved it to an import of a
+            // node module (`import { EventEmitter } from "events"`), else
+            // the global object's built-in.
+            let module = c
+                .native_extends
+                .as_ref()
+                .filter(|(_, name)| name == n)
+                .map_or("builtin", |(m, _)| m.as_str());
+            self.m.tmpls[tm as usize].native_parent = Some((module.into(), n.to_string()));
         } else if c.extends_name.as_deref() == Some("Object") && c.extends_expr.is_none() {
             // `extends Object`: the ordinary chain.
         } else if c.extends_expr.is_some()
@@ -2139,17 +2169,25 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
-        self.new_arr_birth(mi, what, false)
+        self.new_arr_birth(mi, what, false, false)
     }
 
     /// An array born with every index below its length (`TmplKind::Arr`
-    /// `hole_free`) or not.
-    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
+    /// `hole_free`) or not. `plain`: a program literal or spread literal
+    /// (`TmplKind::Arr::plain`), set only with `Model::array_reps` on.
+    pub(crate) fn new_arr_birth(
+        &mut self,
+        mi: u32,
+        what: &str,
+        hole_free: bool,
+        plain: bool,
+    ) -> TmplId {
         let site = self.next_site(mi);
         let kind = TmplKind::Arr {
             module: mi,
             site,
             hole_free,
+            plain: plain && self.m.array_reps,
         };
         self.new_indexed_template(mi, kind, what, site)
     }

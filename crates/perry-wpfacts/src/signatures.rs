@@ -26,7 +26,7 @@
 //! signature (`admits`). Calls of different spans under one key are distinct
 //! calls and refuse.
 
-use crate::bindings::{ModuleBindings, Rep};
+use crate::bindings::{Enc, ModuleBindings, Rep};
 use crate::derive::{SiteFacts, Verdict};
 use crate::gen::Gen;
 use crate::model::{NodeId, TokKind, TOP};
@@ -58,11 +58,13 @@ pub struct Signature {
 }
 
 impl Signature {
-    /// A signature that changes nothing (every slot Boxed, no layout).
+    /// A signature that changes nothing: every slot's encoding is Boxed
+    /// (an `Arr` slot holds the Boxed word, DESIGN-p4l1 §4.4) and there is
+    /// no layout.
     pub fn is_boxed(&self) -> bool {
-        self.ret == Rep::Boxed
+        self.ret.encoding() == Enc::Boxed
             && self.this_class.is_none()
-            && self.params.iter().all(|r| *r == Rep::Boxed)
+            && self.params.iter().all(|r| r.encoding() == Enc::Boxed)
     }
 }
 
@@ -72,15 +74,6 @@ pub fn enabled() -> bool {
         std::env::var("PERRY_FACTS_TYPED_SIGNATURES").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
-}
-
-/// The join of two representations: I32 ⊑ F64 ⊑ Boxed.
-fn join(a: Rep, b: Rep) -> Rep {
-    match (a, b) {
-        (Rep::Boxed, _) | (_, Rep::Boxed) => Rep::Boxed,
-        (Rep::F64, _) | (_, Rep::F64) => Rep::F64,
-        (Rep::I32, Rep::I32) => Rep::I32,
-    }
 }
 
 fn is_literal(e: &perry_hir::Expr) -> bool {
@@ -163,7 +156,7 @@ pub(crate) fn collect(
         all(n)
             .into_iter()
             .map(rep1)
-            .reduce(join)
+            .reduce(Rep::join)
             .unwrap_or(Rep::Boxed)
     };
     // The function token's body index of every function.
@@ -210,7 +203,7 @@ pub(crate) fn collect(
         let mut this_nodes = vec![f.this];
         for it in &m.sum.insts {
             if it.f as usize == fx {
-                ret = join(ret, rep1(it.ret));
+                ret = Rep::join(ret, rep1(it.ret));
                 this_nodes.push(it.this);
             }
         }
@@ -372,7 +365,7 @@ fn admits(
         (v.fract() == 0.0 && !(v == 0.0 && v.is_sign_negative())).then_some((v as i64, v as i64))
     };
     sig.params.iter().enumerate().all(|(i, &rep)| {
-        if rep == Rep::Boxed {
+        if rep.encoding() == Enc::Boxed {
             return true;
         }
         let lit = lits.get(i).copied().flatten();

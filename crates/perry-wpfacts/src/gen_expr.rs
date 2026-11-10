@@ -83,8 +83,16 @@ impl<'a> Gen<'a> {
     /// call of it by that token (`builtins::solved_namespace_call`), so a
     /// direct HIR call of it runs the same arm a call through the namespace
     /// runs.
+    /// A member whose effects the runtime declares at its body
+    /// (`builtins::declared_member`: `node:util/types.isArrayBufferView`)
+    /// is called the same way: the solver runs the declaration.
     pub(crate) fn namespace_member_callee(&mut self, module: &str, method: &str) -> Option<Tok> {
-        let identity = crate::builtins::solved_namespace_call(module, method)?;
+        let identity = crate::builtins::solved_namespace_call(module, method).or_else(|| {
+            let bare = module.strip_prefix("node:").unwrap_or(module);
+            crate::builtins::declared_member(&format!("node:{bare}.{method}"))
+                .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
+                .map(|e| e.name)
+        })?;
         Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
     }
 
@@ -187,7 +195,7 @@ impl<'a> Gen<'a> {
                     // elements of a list. A call site's spread entry is read
                     // at its elements, whatever made it.
                     let v = self.expr(fx, e);
-                    let tm = self.new_arr_birth(fx.module, "spread-args", true);
+                    let tm = self.new_arr_birth(fx.module, "spread-args", true, false);
                     let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                     let fa = self.m.field_any(t);
                     let it = self.iterate(v);
@@ -604,6 +612,27 @@ impl<'a> Gen<'a> {
         self.tok_node(t)
     }
 
+    /// The body of an async function that runs untransformed: one without
+    /// `await`, which `async_to_generator` leaves `is_async` and codegen
+    /// lowers direct (`lower_async_rejecting_stmts`): a call returns a fresh
+    /// promise (`js_async_fn_result`) settled with what the body returns, a
+    /// returned thenable adopted, and rejected with what the body throws; a
+    /// call never throws. Returns the body's context, whose `ret` is the
+    /// settled value, and its throw region, the realm's rejection cell (as
+    /// for the async-step driver's step closure, `async_callback`).
+    pub(crate) fn async_body(&mut self, fx: &Fx) -> (Fx, NodeId) {
+        let settled = self.tmp("async-settled");
+        let p = self.promise_of(fx.module, settled);
+        self.m.edge(p, fx.ret);
+        (
+            Fx {
+                ret: settled,
+                ..fx.clone()
+            },
+            self.thrown,
+        )
+    }
+
     /// A fresh promise template whose settled value is `value`.
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
         let tm = self.new_bobj_template(mi, "Promise");
@@ -939,6 +968,7 @@ impl<'a> Gen<'a> {
                     let r = self.expr(fx, right);
                     self.raise_on(l);
                     self.raise_on(r);
+                    self.equality_demand(left, right, l, r);
                     self.prim_node(prim::BOOL)
                 }
                 _ => self.prim_op(
@@ -1613,9 +1643,14 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::Array(elems, _) => {
-                let tm = self.new_arr_birth(mi, "lit", true);
+                let tm = self.new_arr_birth(mi, "lit", true, true);
                 if self.arr_lengths {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
+                }
+                if self.m.const_arrays {
+                    if let Some(c) = crate::const_arrays::literal_elems(mi, elems) {
+                        self.m.arr_const.insert(tm, c);
+                    }
                 }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
@@ -1627,7 +1662,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArraySpread(elems) => {
                 let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
-                let tm = self.new_arr_birth(mi, "spread", dense);
+                let tm = self.new_arr_birth(mi, "spread", dense, true);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {

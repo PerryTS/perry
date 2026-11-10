@@ -21,6 +21,7 @@ pub(crate) mod effects_for_tests {
 }
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
+pub(crate) use members::realm_parent_constructor;
 mod native_protocol;
 mod realm_declared;
 pub(crate) mod realm_shapes;
@@ -33,7 +34,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_static, run_construct, run_function, run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static, run_construct, run_function,
+    run_member,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -127,9 +129,14 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     })
 }
 
-/// The node module object the realm declares as `name` (`node:fs`).
+/// The host object the realm declares as `name`: a realm namespace, a node
+/// module object (`node:fs`) or a global host object (`Intl`,
+/// `performance`). Its token is `BuiltinNs::Module(name)`; its keys read
+/// what its declaration (and its chain's, flattened into the realm rows)
+/// names. An object a declared object holds (`process.stdin`) is not a
+/// global name: only a node module or an undotted global host object is.
 fn node_module(name: &str) -> Option<BuiltinNs> {
-    if !name.starts_with("node:") {
+    if !name.starts_with("node:") && name.contains('.') {
         return None;
     }
     crate::native_effects::realm()
@@ -454,7 +461,7 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
 
 /// A per-call-site template (solve-time births: promises, arrays …).
 fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
-    site_tmpl_born(m, call, what, false)
+    site_tmpl_born(m, call, what, false, false)
 }
 
 /// A per-call-site Array born without holes: the builtin that makes it
@@ -462,14 +469,39 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
 /// whose holes it carries over (`collections::array_method`). Later stores
 /// mark their own holes as on any array.
 fn site_dense_arr(m: &mut Model, call: CallId) -> Tok {
-    site_tmpl_born(m, call, "DenseArray", true)
+    site_tmpl_born(m, call, "DenseArray", true, false)
 }
 
-fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bool) -> Tok {
+/// The Array `new Array(...)` or `Array(...)` births (`BuiltinNs::Array`):
+/// `js_array_constructor*` allocates a fresh `GC_TYPE_ARRAY` with its
+/// elements at the front, of at least its recorded birth length
+/// (`solve::arr_len`), so with `Model::array_reps` on it is plain
+/// (`TmplKind::Arr::plain`). The receiver of a fused fill
+/// (`SiteBirth::hole_free`, `Gen::call_with`) is born hole-free.
+fn site_new_array(m: &mut Model, call: CallId) -> Tok {
+    let site = m.calls[call as usize].site;
+    let birth = m.arr_len_at_site.get(&site).copied().unwrap_or_default();
+    let reps = m.array_reps;
+    let hole_free = reps && (birth.hole_free || m.arr_dense_sabotage);
+    site_tmpl_born(m, call, "Array", hole_free, reps)
+}
+
+/// The template of `what` born at `call`'s source site. The key holds
+/// `plain` (REVIEW-p4l1 R1): a call whose callee holds two builtins
+/// (`const f = c ? Array : JSON.parse; f(s)`) births one template per
+/// kind, so a lazy JSON array never shares the plain `Array` birth's
+/// template, and only a plain birth ever makes or finds a plain template.
+fn site_tmpl_born(
+    m: &mut Model,
+    call: CallId,
+    what: &'static str,
+    hole_free: bool,
+    plain: bool,
+) -> Tok {
     // Keyed by the SOURCE call site: calls derived while solving (bindings
     // through relays, protocol touches) share their origin's template.
     let site = m.calls[call as usize].site;
-    let key = (site, what);
+    let key = (site, what, plain);
     if let Some(&t) = m.site_tmpls.get(&key) {
         let tm = m.tmpl_of(t).expect("site template");
         let ctx = m.birth_ctx(call);
@@ -481,6 +513,7 @@ fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bo
             module: u32::MAX,
             site,
             hole_free,
+            plain,
         }
     } else {
         TmplKind::BObj {
@@ -512,8 +545,10 @@ fn site_tmpl_born(m: &mut Model, call: CallId, what: &'static str, hole_free: bo
         per_evaluation: false,
         static_methods: Vec::new(),
     });
-    if what == "Array" {
-        if let Some(&k) = m.arr_len_at_site.get(&site) {
+    // The birth length is the `new Array(k)` birth's: with array reps on,
+    // only the plain template's (`site_new_array`).
+    if what == "Array" && plain == m.array_reps {
+        if let Some(k) = m.arr_len_at_site.get(&site).and_then(|b| b.len) {
             m.arr_birth_len.insert(tm, k);
         }
     }
@@ -907,6 +942,45 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 
 /// Resolve the member's object reference before interning its token. The
 /// receiver family locates the holder, but is never part of value identity.
+/// The realm prototype a builtin object of family `fam` (`what`) reads its
+/// members from (past a Buffer's own prototype, `member_native`).
+fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<usize> {
+    match what {
+        Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
+        // Every iterator kind resolves its members as `Iterator.prototype`'s.
+        Some(w) if members::bobj_family(w) == Family::Iterator => {
+            m.declarations.named("Iterator.prototype", m)
+        }
+        // The prototype of an object a declaration made.
+        Some(w) if w.ends_with(".prototype") => m.declarations.named(w, m),
+        Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
+        None => m.declarations.family(fam, m),
+    }
+}
+
+/// Whether the realm declares key `name` an accessor (`accessor` row) where
+/// a builtin object of family `fam` (`what`) reads it: a load runs the
+/// getter, so its value is the getter's result, never a function of the
+/// chain (`Response.prototype.body`).
+fn realm_accessor(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> bool {
+    let own = (what == Some("Buffer"))
+        .then(|| m.declarations.named("Buffer.prototype", m))
+        .flatten();
+    [own, realm_holder(m, fam, what)]
+        .into_iter()
+        .flatten()
+        .find_map(|h| m.declarations.property(h, name, m))
+        .is_some_and(|p| p.get.is_some())
+}
+
+/// What a load of an accessor whose getter the realm does not declare
+/// (`realm_accessor`; a declared one: `effects::getter_load`) reads: the
+/// host's result of the getter, unknown.
+fn undeclared_getter_result(m: &mut Model, dst: NodeId) {
+    m.add_top(dst, |_| "result of a getter the realm does not declare".into());
+    m.add_prim(dst, prim::ALL);
+}
+
 fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
     // A Buffer's own prototype first: past it the chain is a typed array's.
     if what == Some("Buffer") {
@@ -930,15 +1004,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .native?;
         return Some(Native::Member { identity, holder: None });
     }
-    let holder = match what {
-        Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
-        // Every iterator kind resolves its members as `Iterator.prototype`'s.
-        Some(w) if members::bobj_family(w) == Family::Iterator => {
-            m.declarations.named("Iterator.prototype", m)
-        }
-        Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
-        None => m.declarations.family(fam, m),
-    }?;
+    let holder = realm_holder(m, fam, what)?;
     let identity = m
         .declarations
         .property(holder, name, m)
@@ -1302,6 +1368,17 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     }
 }
 
+/// An ordinary object a builtin makes (`members::box_chain` Object: a
+/// `JSON.parse` object, a property descriptor, an `Object.fromEntries`
+/// result): its chain is `Object.prototype`, or a prototype the program
+/// gave it, never another builtin prototype.
+pub(crate) fn ordinary_box(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what, .. }
+            if members::bobj_family(what) == Family::Box
+                && members::box_chain(what) == members::BoxChain::Object))
+}
+
 fn is_site_builtin(m: &Model, t: Tok) -> bool {
     matches!(m.toks[t as usize], TokKind::Obj(tm, _)
         if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
@@ -1351,9 +1428,34 @@ pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
 pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// Whether the generated global object declares a callable under this key.
+/// The objects `JSON.parse` makes at `call`: ordinary objects and arrays
+/// (`members::box_chain`), as `Gen::json_value` models them, whose fields
+/// and elements are such objects or primitives.
+pub(crate) fn json_value(m: &mut Model, call: CallId) -> (Tok, Tok) {
+    let j = site_tmpl(m, call, "json");
+    let ja = site_tmpl(m, call, "Array");
+    let fa = m.field_any(j);
+    for f in [fa, m.field_any(ja)] {
+        m.add_prim(f, prim::ALL);
+        m.add_tok(f, j);
+        m.add_tok(f, ja);
+    }
+    (j, ja)
+}
+
 pub(crate) fn global_function(m: &Model, name: &str) -> bool {
     m.namespace_property(BuiltinNs::GlobalThis, name)
         .is_some_and(|p| p.native.is_some())
+}
+
+/// [[Set]] of `key` on the declared holder `t` meets the realm's accessor
+/// with a getter and no setter (`navigator` on the global object, Node 26:
+/// `get navigator`, no `set`): no setter runs and nothing is written; strict
+/// code throws a TypeError, the runtime error every `catch` already receives
+/// (`Model::thrown`).
+pub(crate) fn getter_only(m: &Model, t: Tok, key: &str) -> bool {
+    m.native_property(t, key)
+        .is_some_and(|p| p.get.is_some() && p.set.is_none())
 }
 
 pub(crate) fn namespace_receiver_getter(m: &Model, t: Tok, key: &str) -> bool {
@@ -1932,16 +2034,8 @@ fn ns_method_inner(
         }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
-            // Its objects are ordinary objects, its arrays arrays
-            // (`members::box_chain`), as `Gen::json_value` models them.
-            let j = site_tmpl(m, call, "json");
-            let ja = site_tmpl(m, call, "Array");
+            let (j, ja) = json_value(m, call);
             let fa = m.field_any(j);
-            for f in [fa, m.field_any(ja)] {
-                m.add_prim(f, prim::ALL);
-                m.add_tok(f, j);
-                m.add_tok(f, ja);
-            }
             ret_tok(m, call, j);
             ret_tok(m, call, ja);
             ret_prim(m, call, prim::ALL);
@@ -2329,7 +2423,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::Array => {
-            let arr = site_tmpl(m, call, "Array");
+            let arr = site_new_array(m, call);
             let fa = m.field_any(arr);
             let c = m.calls[call as usize].clone();
             match (c.args.as_slice(), c.spread.is_empty()) {

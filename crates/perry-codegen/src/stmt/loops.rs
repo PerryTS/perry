@@ -6721,8 +6721,7 @@ fn dynamic_bound_private_counter_is_safe(
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
-    // 0x7FFF_FFFF_FFFF_FFFF]. INT32 boxes are excluded too: their payload
-    // still needs unboxing before floating-point arithmetic.
+    // 0x7FFF_FFFF_FFFF_FFFF].
     //
     // The test ignores the sign bit, so it also rejects the MIRROR of the tag
     // band (negative NaNs whose magnitude lies in it). A value that passes
@@ -6777,7 +6776,21 @@ pub(crate) fn lower_for(
     if let Some(init_stmt) = init {
         lower_stmt(ctx, init_stmt)?;
     }
+    // PR-D: the element bases this loop holds (`stmt::field_base`).
+    let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+    let based = super::field_base::begin(ctx, condition, &controls, body)?;
+    let lowered = lower_for_after_bases(ctx, init, condition, update, body);
+    super::field_base::end(ctx, based);
+    lowered
+}
 
+fn lower_for_after_bases(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
     if iterator_record::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
@@ -8695,6 +8708,9 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
     }
+    // PR-D: the held element bases, from `this`'s GC-updated root.
+    crate::expr::index_get::field_base::emit_poll_refresh(ctx)
+        .expect("a held field base re-derives at the poll");
     // Cached element bases of validated windows, from their refreshed handles.
     let element_refresh: Vec<(String, String)> = ctx
         .receiver_descriptors
@@ -10486,6 +10502,17 @@ pub(crate) fn lower_while(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    let based = super::field_base::begin(ctx, Some(condition), &[condition], body)?;
+    let lowered = lower_while_after_bases(ctx, condition, body);
+    super::field_base::end(ctx, based);
+    lowered
+}
+
+fn lower_while_after_bases(
+    ctx: &mut FnCtx<'_>,
+    condition: &perry_hir::Expr,
+    body: &[Stmt],
+) -> Result<()> {
     // A while loop is the same Number induction with no init/update clause.
     if super::number_local_loop::lower(ctx, None, Some(condition), None, body)? {
         return Ok(());
@@ -10579,13 +10606,18 @@ pub(crate) fn lower_do_while(
     body: &[Stmt],
     condition: &perry_hir::Expr,
 ) -> Result<()> {
-    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
-    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        super::cold_scoped(ctx, body, &[condition], |c| {
-            lower_do_while_impl(c, body, condition)
-        })
+    let based = super::field_base::begin(ctx, None, &[condition], body)?;
+    let region = super::region_loop::begin(ctx, Some(condition), body, None);
+    let lowered = region.and_then(|region| {
+        let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+            super::cold_scoped(ctx, body, &[condition], |c| {
+                lower_do_while_impl(c, body, condition)
+            })
+        });
+        super::region_loop::end(ctx, region);
+        lowered
     });
-    super::region_loop::end(ctx, region);
+    super::field_base::end(ctx, based);
     lowered
 }
 

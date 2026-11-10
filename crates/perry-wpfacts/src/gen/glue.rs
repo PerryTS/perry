@@ -173,6 +173,15 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+        if self.m.arr_lazy_sabotage {
+            // Negative control (`arrlazy`): a plain Array of Numbers, where
+            // the runtime may return a lazy JSON array header.
+            let arr = self.new_arr_birth(mi, "json", false, true);
+            let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+            let afa = self.m.field_any(at);
+            self.m.add_prim(afa, prim::NUM);
+            return self.tok_node(at);
+        }
         let (t, n) = self.bobj(mi, "json");
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
@@ -308,8 +317,11 @@ impl<'a> Gen<'a> {
                 let (Some(it), Some(next)) = (arg(0), arg(1)) else {
                     return self.prim_node(prim::BOOL);
                 };
-                let res =
-                    self.call_value(next, ThisArg::Node(it), vec![self.m.top_tok_node], vec![]);
+                // IteratorStep is IteratorNext with no value: `Call(next,
+                // iterator, «»)` (ECMA-262 7.4.4, 7.4.7), as `js_iterator_step`
+                // does it (a generator resumes with `undefined`, any other
+                // `next` gets argc 0). Nothing unknown is passed.
+                let res = self.call_value(next, ThisArg::Node(it), vec![], vec![]);
                 // The step output: the value of a result that is not done,
                 // or `undefined` the runtime publishes at done
                 // (`js_iterator_step`), which destructuring reads.

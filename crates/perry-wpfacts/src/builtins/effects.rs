@@ -129,8 +129,15 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
 /// (`node:inspector.Session`) whose effects the runtime declares at its
 /// body (`declared_member`): what `new` of it does, in forms `run_construct`
 /// runs.
+/// A constructor a host object holds (`Intl.Collator`, declared at its own
+/// definition) is found by owner and key, as `declared_static`.
 pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
-    declared_member(name).filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
+    declared_member(name)
+        .or_else(|| {
+            let (owner, key) = name.rsplit_once('.')?;
+            declared_at(owner, key).filter(|e| !names_this(e.effects))
+        })
+        .filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
 }
 
 fn by_proto() -> &'static ByProto {
@@ -188,6 +195,7 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
             RealmOperand::Union(us) => us.iter().any(|u| operand(u, slot, root)),
             // BoundFunctionCreate binds the receiver.
             RealmOperand::Bound => root == RealmSlotRoot::This,
+            RealmOperand::Json | RealmOperand::Unknown => false,
         }
     }
     let operand = |o: &RealmOperand| operand(o, &slot, root);
@@ -223,53 +231,38 @@ pub(crate) fn declared_static(identity: &str) -> Option<&'static RealmEntry> {
     declared_at(owner, key).filter(|e| !names_this(e.effects) && !names_callee(e.effects))
 }
 
-/// The declaration of getter `key` of `proto` (`AbortController.prototype`,
-/// `signal`), when it only returns primitives and slots of its receiver:
-/// a load reads its value directly (`getter_value`), no call runs.
-pub(super) fn declared_getter(proto: &str, key: &str) -> Option<&'static RealmEntry> {
-    fn simple(o: &RealmOperand) -> bool {
-        match o {
-            RealmOperand::Prim(_) => true,
-            RealmOperand::Slot(s) => {
-                s.root == RealmSlotRoot::This
-                    && s.steps.iter().all(|st| !matches!(st, RealmSlotStep::Elems))
-            }
-            RealmOperand::Union(us) => us.iter().all(simple),
-            _ => false,
-        }
+/// The declaration of prototype method `identity`
+/// (`Performance.prototype.now`) when the runtime declares what a call
+/// does without naming `this`: what the call does to its arguments and
+/// result, whatever the receiver (a receiver of another brand throws
+/// before any of it: the declaration is a superset).
+pub(crate) fn declared_proto_method(identity: &str) -> Option<&'static RealmEntry> {
+    let (owner, key) = identity.rsplit_once('.')?;
+    if !owner.ends_with(".prototype") || key.starts_with('<') {
+        return None;
     }
-    let e = declared_at(&format!("{proto}.{key}"), "<get>")?;
-    e.effects
-        .iter()
-        .all(|f| matches!(f, RealmEffect::Returns(o) if simple(o)))
-        .then_some(e)
+    declared_at(owner, key).filter(|e| !names_this(e.effects))
 }
 
-/// What getter `e` (`declared_getter`) returns on receiver `t`, into `dst`.
-pub(super) fn getter_value(m: &mut Model, e: &'static RealmEntry, t: Tok, dst: NodeId) {
-    fn operand(m: &mut Model, o: &RealmOperand, t: Tok, dst: NodeId) {
-        match o {
-            RealmOperand::Prim(ps) => m.add_prim(dst, prim_bits(ps)),
-            RealmOperand::Slot(s) => {
-                let mut at = m.node_l("native-get-this");
-                m.add_tok(at, t);
-                for st in s.steps.iter() {
-                    let key = step_key(m, st);
-                    let next = m.node_l("native-get");
-                    m.cons(at, Cons::Load { key, dst: next });
-                    at = next;
-                }
-                m.edge(at, dst);
-            }
-            RealmOperand::Union(us) => us.iter().for_each(|u| operand(m, u, t, dst)),
-            _ => unreachable!("declared_getter() takes primitives and receiver slots only"),
-        }
+/// The declaration of getter `key` of `proto` (`AbortController.prototype`,
+/// `signal`), when the runtime declares what a call of it does in forms
+/// `run_native` runs: a load of the key reads the getter's declared result
+/// (`getter_load`), never the getter function.
+pub(super) fn declared_getter(proto: &str, key: &str) -> Option<&'static RealmEntry> {
+    declared_at(&format!("{proto}.{key}"), "<get>")
+}
+
+/// `dst` ⊇ what getter `e` (`declared_getter`) of key `a` returns on
+/// receiver `t`: its declaration runs as a member call's does (`run_native`,
+/// one evaluator of declared results), in the one getter call on `t`
+/// (`collections::getter_call`); a `fresh` result is born at that call.
+pub(super) fn getter_load(m: &mut Model, e: &'static RealmEntry, t: Tok, a: Atom, dst: NodeId) {
+    let (call, made) = super::collections::getter_call(m, t, a);
+    if made {
+        run_native(m, e, t, call);
     }
-    for f in e.effects.iter() {
-        if let RealmEffect::Returns(o) = f {
-            operand(m, o, t, dst);
-        }
-    }
+    let ret = m.calls[call as usize].ret;
+    m.edge(ret, dst);
 }
 
 /// The declaration of setter `key` of `proto` (`AbortSignal.prototype`,
@@ -390,6 +383,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(|u| operand_in(u, field)),
+            RealmOperand::Json | RealmOperand::Unknown => true,
         }
     }
     !effects.is_empty()
@@ -453,6 +447,8 @@ struct Vals {
 /// One run of a declaration: native `entry` called with receiver token `t`
 /// (`None`: a construct, which has no receiver).
 struct Run {
+    /// The entry whose declaration runs.
+    name: &'static str,
     t: Option<Tok>,
     /// The function value called (`callee`): set by `run_member` only.
     callee: Option<Tok>,
@@ -715,6 +711,24 @@ impl Run {
                 unreachable!("interpretable() takes species as a result only")
             }
             RealmOperand::Bound => unreachable!("interpretable() takes bound as a result only"),
+            // What JSON.parse makes (`builtins::json_value`).
+            RealmOperand::Json => {
+                let n = m.node_l("native-json");
+                let (j, ja) = crate::builtins::json_value(m, self.call);
+                m.add_tok(n, j);
+                m.add_tok(n, ja);
+                m.add_prim(n, prim::ALL);
+                n
+            }
+            // What unknown code hands back: the declaration escaped the
+            // value that makes it.
+            RealmOperand::Unknown => {
+                let n = m.node_l("native-unknown");
+                let name = self.name;
+                m.add_top(n, |_| format!("{name}: a value of unknown code"));
+                m.add_prim(n, prim::ALL);
+                n
+            }
         }
     }
 
@@ -853,7 +867,7 @@ impl Run {
                 let p = self.promise(m, value, reject);
                 ret_tok(m, self.call, p);
             }
-            RealmOperand::Native(_) => {
+            RealmOperand::Native(_) | RealmOperand::Json | RealmOperand::Unknown => {
                 let n = self.operand(m, o);
                 m.edge(n, self.c.ret);
             }
@@ -973,6 +987,7 @@ fn run(
         sites.insert(site);
     }
     let mut run = Run {
+        name: entry.name,
         t,
         callee,
         call,
@@ -1098,6 +1113,10 @@ fn run(
                 }
             }
             RealmEffect::Stores { src, dst } => {
+                // A store into the receiver's elements writes the Array.
+                if let (RealmSlotRoot::This, Some(t)) = (dst.root, run.t) {
+                    m.arr_written(t);
+                }
                 let v = run.slot(m, src);
                 if let Some(d) = run.node(m, dst) {
                     flow(m, &v, d);

@@ -130,11 +130,12 @@ pub use codegen::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
     resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
     AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
-    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsBody,
-    FactsClass, FactsElementRead, FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsSignature,
-    FactsNumericExpr, FactsNumericFunction, FactsRecv, FactsRep, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
+    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
+    FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
+    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv,
+    FactsRep, FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
