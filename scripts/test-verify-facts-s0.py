@@ -121,6 +121,8 @@ def main():
         ("const-array-negative", "arrconst", "constant array"),
         ("array-field-negative", "arrfield", "array rep"),
         ("array-b1-negative", "arrb1", "array rep"),
+        ("range-sum-negative", "exactrule", "array rep"),
+        ("leaving-write-negative", "leavingwrite", "array rep"),
         ("array-base-negative", "arrbase", "array rep"),
         ("array-base-admit-negative", "arrbaseadm", "array rep"),
         ("number-call-negative", "numbercall", "numeric result"),
