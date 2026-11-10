@@ -617,13 +617,20 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
 /// value proves nothing. The rep is the join over the tokens of each one's
 /// own (`tok_arr_rep`). `None` with `Model::array_reps` off.
 pub(crate) fn arr_rep(m: &Model, nodes: &[NodeId]) -> Option<ArrRep> {
+    arr_rep_beside(m, nodes, 0)
+}
+
+/// `arr_rep` of `nodes` with the primitives `ignored` left out of account:
+/// 0 everywhere but under the negative control `arrfield`
+/// (`Model::arr_field_sabotage`).
+pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Option<ArrRep> {
     if !m.array_reps {
         return None;
     }
     let mut out: Option<ArrRep> = None;
     for &n in nodes {
         let node = &m.nodes[n as usize];
-        if node.prim != 0 {
+        if node.prim & !ignored != 0 {
             return None;
         }
         for t in node.pts.to_sorted() {

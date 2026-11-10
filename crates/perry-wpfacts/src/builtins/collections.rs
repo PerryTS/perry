@@ -1307,7 +1307,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         let callable = match born {
             Some(b) => matches!(
                 members::realm_chain_find(b, name),
-                members::RealmFind::Own(p) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
+                members::RealmFind::Own(p, _) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
             ),
             None => matches!(
                 members::member(members::bobj_family(what), name),

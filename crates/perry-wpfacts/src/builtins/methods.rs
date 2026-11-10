@@ -248,7 +248,11 @@ pub(super) fn undescribed_method(
 /// TypeError); any other member runs as an unknown method (`why`). A key no
 /// declaration on the chain has is absent, a TypeError: no instance of a
 /// declared prototype owns a callable property the realm leaves out (an
-/// error's own `stack`/`message`/`cause` are data). Found or absent, a key
+/// error's own `stack`/`message`/`cause` are data). A method the lookup
+/// finds on `Object.prototype` is that intrinsic's own method and runs its
+/// model (`proto_method`, as on any object whose chain ends there:
+/// `toString` reads `@@toStringTag` and returns a string, `valueOf` returns
+/// the receiver, ...), never unknown code. Found or absent, a key
 /// a store into ⊤ may have written onto the chain runs what was stored
 /// (`intrinsic_unwritten`, replayed when the write comes later).
 pub(super) fn realm_born_method(
@@ -268,8 +272,14 @@ pub(super) fn realm_born_method(
                 unknown_method(m, call, why);
             }
         }
-        members::RealmFind::Own(p) => {
+        members::RealmFind::Own(p, holder) => {
             match p.value {
+                _ if holder.name == "Object.prototype"
+                    && matches!(members::member(Family::Object, name), Some(Mem::Fn)) =>
+                {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, t, Key::Named(a), call);
+                }
                 RealmOwnValue::Undefined
                 | RealmOwnValue::Null
                 | RealmOwnValue::Boolean

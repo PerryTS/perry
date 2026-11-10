@@ -87,6 +87,9 @@ pub struct FactsConfig {
     /// No plain Array births, fused-fill birth or `Rep::Arr`
     /// (`PERRY_FACTS_ARRAY_REPS=0`, DESIGN-p4l1 PR-B).
     pub no_array_reps: bool,
+    /// No `Rep::Arr` for a field and no in-floor field read call
+    /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
+    pub no_array_fields: bool,
     /// An element read's past-the-end `undefined` is unconditional again
     /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
     pub no_elem_undef: bool,
@@ -483,6 +486,8 @@ fn generate<'a>(
     g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
     g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
     g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
+    g.m.array_fields = !cfg.no_array_fields;
+    g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
@@ -907,6 +912,7 @@ fn compute_act<'a>(
             &mut bindings,
             interp_guard.is_some(),
             cfg.sabotage.as_deref() == Some("fieldreadcall"),
+            cfg.sabotage.as_deref() == Some("arrb1"),
         );
     }
     if canonical_numbers::enabled() {

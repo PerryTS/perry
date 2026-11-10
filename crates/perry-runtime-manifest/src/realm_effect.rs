@@ -363,7 +363,19 @@ pub fn validate_effects(
                     _ => operand(this)?,
                 }
 
-                args.iter().try_for_each(operand)?;
+                // A callback may be handed the result or what it holds
+                // (node's ReadableStream calls `start` with a controller
+                // whose stream is the result, `cancel` with the reason the
+                // result keeps): an argument may name `result`.
+                args.iter().try_for_each(|a| {
+                    a.validate(at, names)?;
+                    let mut slots = Vec::new();
+                    slots_in(a, &mut slots);
+                    slots.into_iter().try_for_each(|s| match s.root {
+                        RealmSlotRoot::Result => s.validate(at),
+                        _ => value(s),
+                    })
+                })?;
             }
             RealmEffect::Stores { src, dst } => {
                 // The call's own result may be kept as it is (`watchFile`
