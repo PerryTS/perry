@@ -328,6 +328,7 @@ fn array_fact_switches_are_cache_inputs() {
         "PERRY_FACTS_ARRAY_LENGTHS",
         "PERRY_FACTS_ARRAY_REPS",
         "PERRY_FACTS_ARRAY_TIER",
+        "PERRY_FACTS_CONST_ARRAYS",
         "PERRY_FACTS_SABOTAGE",
     ] {
         assert!(

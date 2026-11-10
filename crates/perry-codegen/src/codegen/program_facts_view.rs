@@ -201,14 +201,16 @@ pub enum FactsRep {
 
 /// wpfacts `ArrRep`: what every Array the value may hold has for its whole
 /// life (`length >= floor` and `capacity >= floor`; `dense`: no hole below
-/// `floor`; `fixed`: never grows, so never forwarded), and the
-/// representation of its elements.
+/// `floor`; `fixed`: never grows, so never forwarded; `im`: never written
+/// after its birth, which `ElisionFacts::immutable_arrays` turns into a
+/// fact about a local), and the representation of its elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FactsArrRep {
     pub elem: FactsElemRep,
     pub floor: u32,
     pub dense: bool,
     pub fixed: bool,
+    pub im: bool,
 }
 
 /// wpfacts `ElemRep`.
@@ -240,6 +242,7 @@ impl FactsArrRep {
             floor: a.floor.min(b.floor),
             dense: a.dense && b.dense,
             fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
         }
     }
 }
@@ -293,6 +296,14 @@ pub struct ElisionFacts {
     /// is a program Array literal whose birth length never moves (wpfacts
     /// `BindingFacts::const_length`).
     pub const_length_inputs: std::collections::BTreeMap<u32, i64>,
+    /// Locals that are a rooted `const` holding only immutable program
+    /// Arrays (wpfacts `BindingFacts::immutable_array`): every read that
+    /// yields a value yields an Array nothing writes after its birth.
+    pub immutable_arrays: std::collections::BTreeSet<u32>,
+    /// Local id → the constant contents of every value it holds: such a
+    /// local whose Arrays are all born from literals of these constant
+    /// Numbers, as bit patterns (wpfacts `BindingFacts::const_elems`).
+    pub const_arrays: std::collections::BTreeMap<u32, Vec<u64>>,
     /// Method call byte offset → each argument's integer interval at the
     /// call (wpfacts `ModuleBindings::call_arg_ranges`).
     pub call_arg_ranges: std::collections::BTreeMap<u32, Vec<Option<(i64, i64)>>>,
@@ -381,6 +392,8 @@ impl ElisionFacts {
             && self.local_reps.is_empty()
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
+            && self.immutable_arrays.is_empty()
+            && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
             && self.element_reads.is_empty()
