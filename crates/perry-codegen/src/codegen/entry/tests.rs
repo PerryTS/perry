@@ -684,6 +684,42 @@ fn eager_literal_pools_precede_all_bodies_but_deferred_pools_stay_lazy() {
 }
 
 #[test]
+fn module_stack_identity_is_static_without_startup_registration() {
+    let mut opts = entry_opts("executable");
+    opts.target = Some("x86_64-unknown-linux-gnu".into());
+    opts.app_metadata.module_source_path = Some("/app/main.mts".into());
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+    assert!(ir.contains("@main$info ="), "{ir}");
+    assert!(ir.contains("@main$fnrec ="), "{ir}");
+    assert!(ir.contains("file:///app/main.mts"), "{ir}");
+    let header = ir
+        .lines()
+        .find(|line| line.starts_with("define ") && line.contains("@main("))
+        .unwrap();
+    assert!(header.contains("section \"perry_js_text\""), "{header}");
+    assert!(
+        !ir.contains("call void @js_register_function_metadata"),
+        "{ir}"
+    );
+}
+
+#[test]
+fn dependency_stack_identity_belongs_to_the_source_body() {
+    let mut opts = entry_opts("executable");
+    opts.is_entry_module = false;
+    opts.target = Some("x86_64-unknown-linux-gnu".into());
+    opts.app_metadata.module_source_path = Some("/app/dependency.mts".into());
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+    assert!(ir.contains("__init_body$info ="), "{ir}");
+    assert!(!ir.contains("__init_body$info = external constant"), "{ir}");
+    assert!(!ir.contains("__init_evaluate$info ="), "{ir}");
+    assert!(
+        !ir.contains("call void @js_register_function_metadata"),
+        "{ir}"
+    );
+}
+
+#[test]
 fn no_tla_program_emits_no_async_evaluation_path() {
     let ir = emitted_ir("executable");
     assert!(!ir.contains("js_async_module_"));

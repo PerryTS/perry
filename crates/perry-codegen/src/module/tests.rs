@@ -1136,6 +1136,25 @@ fn read_site_collecting_declarations_preserve_the_original_contract() {
     );
 }
 
+#[test]
+fn module_frames_preserve_existing_callable_ordinals() {
+    use crate::{module::LlModule, types::VOID};
+    let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+    for name in ["aaa_module", "zzz_callable"] {
+        module
+            .define_function(name, VOID, vec![])
+            .create_block("entry")
+            .ret_void();
+        module.note_fn_info(name, |facts| {
+            facts.module_frame = name == "aaa_module";
+        });
+    }
+    module.emit_fn_infos(true);
+    let facts = module.fn_infos.borrow();
+    assert_eq!(facts.facts("zzz_callable").metadata.unwrap().1, 0);
+    assert_eq!(facts.facts("aaa_module").metadata.unwrap().1, 1);
+}
+
 /// N4: the slow-arm helpers are `cold` under `PERRY_COLD_PATHS` (default on)
 /// and ordinary without it; the older list does not depend on the switch.
 #[test]

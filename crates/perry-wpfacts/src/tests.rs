@@ -57,6 +57,7 @@ mod const_key_set_store;
 mod const_numbers;
 pub(crate) mod computed_key_members;
 mod key_strings;
+mod option_name_merge;
 mod ctor_observed;
 mod ctor_return;
 mod dce_reach;
@@ -1989,6 +1990,7 @@ mod primitive_operand_to_primitive;
 
 mod accessor_lookup_values;
 mod buffer_iterator_absent;
+mod fs_path_operand;
 mod native_fs_effects;
 mod native_util_types_effects;
 mod native_module_ref;
