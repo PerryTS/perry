@@ -139,14 +139,11 @@ impl Scanner {
                 }
                 if let Some(source) = dependency {
                     let source = source.value.to_string_lossy();
-                    let source = if matches!(decl, ast::ModuleDecl::Import(_)) {
-                        ctx.package_aliases
-                            .get(source.as_ref())
-                            .cloned()
-                            .unwrap_or_else(|| source.into_owned())
-                    } else {
-                        source.into_owned()
-                    };
+                    let source = ctx
+                        .package_aliases
+                        .get(source.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| source.into_owned());
                     if let Some(resolved) =
                         cached_resolve_import_with_lexical_base(&source, path, &canonical, ctx)
                     {

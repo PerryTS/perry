@@ -91,6 +91,8 @@ pub(crate) fn plan(
                 if item.kind == Kind::Erased {
                     continue;
                 }
+                let aliased = ctx.package_aliases.get(source).cloned();
+                let source = aliased.as_ref().unwrap_or(source);
                 let rp = resolved(source);
                 match super::super::reachability::resolve_edge(
                     ctx,
