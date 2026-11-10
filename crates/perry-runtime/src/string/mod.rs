@@ -123,6 +123,7 @@ mod io;
 mod iter_object;
 mod locale;
 pub(crate) mod normalize_hooked;
+pub(crate) mod short_pair;
 mod pad;
 mod provenance;
 use provenance::{combine_string_flags, raw_string_metadata};

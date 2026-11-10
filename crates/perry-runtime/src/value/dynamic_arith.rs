@@ -570,6 +570,14 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     {
         return a + b;
     }
+    // Two short ASCII strings whose join fits inline (`from + to` over
+    // `squareName` results): no scope, no ToPrimitive, the same bits the
+    // string arm of `dynamic_add_non_plain` builds (see `string::short_pair`).
+    if crate::string::short_pair::short_pairs_enabled() {
+        if let Some(joined) = crate::string::short_pair::concat_short_pair(a, b) {
+            return joined;
+        }
+    }
     dynamic_add_non_plain(a, b)
 }
 
