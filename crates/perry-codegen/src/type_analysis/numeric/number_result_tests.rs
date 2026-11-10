@@ -41,6 +41,7 @@ fn body(with_facts: bool, checked: bool, interp: bool, kind: u16) -> String {
                     declared: false,
                     reserved: false,
                     fns: Vec::new(),
+                    rep: crate::codegen::FactsRep::Boxed,
                 }],
             },
         );

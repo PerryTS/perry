@@ -1679,6 +1679,7 @@ impl Model {
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)
             ),
+            Cons::TopIfTop { dst, reason } => format!("topiftop {n} {dst} {reason}"),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::DeleteKey { key, reason } => {
                 format!(
