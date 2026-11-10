@@ -1179,12 +1179,10 @@ pub extern "C" fn js_throw_json_constructor_type_error() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_throw_illegal_constructor_type_error() -> f64 {
-    // Node: `TypeError [ERR_ILLEGAL_CONSTRUCTOR]: Illegal constructor`.
-    crate::exception::throw_core(CoreError::with_code(
-        "Illegal constructor",
-        "ERR_ILLEGAL_CONSTRUCTOR",
-        1,
-    ))
+    // Node: `TypeError [ERR_ILLEGAL_CONSTRUCTOR]: Illegal constructor`. The
+    // code is a static string: the registered-code throw every runtime coded
+    // error with a fixed code uses (this throw is linked into every binary).
+    crate::fs::validate::throw_type_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
 }
 
 fn value_to_lossy_string(value: f64) -> String {

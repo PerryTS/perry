@@ -94,13 +94,23 @@ pub(super) fn scan_byob_roots<V: super::gc::StreamRootVisitor>(visitor: &mut V) 
     }
 }
 
+/// What a caller-supplied view IS, so the fulfilled value is a view of the
+/// same class (node: an Int8Array read yields an Int8Array, a Buffer read a
+/// Buffer, a DataView read a DataView).
+#[derive(Clone, Copy)]
+enum ViewClass {
+    /// A typed array of this element kind (`typedarray::KIND_*`).
+    Typed(u8),
+    /// A byte view in buffer storage: its brand (`buffer::buffer_brand`).
+    Bytes(perry_runtime::buffer::bytes::Brand),
+}
+
 /// A writable window over a caller-supplied view: TypedArray (any kind),
-/// DataView, or Node Buffer. `kind` is the typed-array element kind used
-/// to mint the fulfilled value (Uint8 for DataView/Buffer receivers).
+/// DataView, or Node Buffer. `class` mints the fulfilled value.
 struct ViewInfo {
     data: *mut u8,
     byte_len: usize,
-    kind: u8,
+    class: ViewClass,
     elem_size: usize,
     // Queue processing can allocate a remainder and invoke stream callbacks.
     // Keep the owner rooted and the address stable for the whole operation.
@@ -112,16 +122,21 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
     if addr < 0x1000 {
         return None;
     }
-    let (kind, elem_size) =
+    let (class, elem_size) =
         if let Some(kind) = perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr) {
             (
-                kind,
+                ViewClass::Typed(kind),
                 perry_runtime::typedarray_hook_slots::elem_size_for_kind(kind).max(1),
             )
-        } else if perry_runtime::buffer::is_registered_buffer(addr)
-            && !perry_runtime::buffer::is_any_array_buffer(addr)
-        {
-            (0, 1)
+        } else if perry_runtime::buffer::is_registered_buffer(addr) {
+            use perry_runtime::buffer::{bytes::Brand, BufferBrand};
+            let brand = match perry_runtime::buffer::buffer_brand(addr) {
+                Some(BufferBrand::Uint8Array) => Brand::Uint8Array,
+                Some(BufferBrand::NodeBuffer) => Brand::Buffer,
+                Some(BufferBrand::DataView) => Brand::DataView,
+                _ => return None,
+            };
+            (ViewClass::Bytes(brand), 1)
         } else {
             return None;
         };
@@ -130,7 +145,7 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
     Some(ViewInfo {
         data: pin.as_mut_ptr(),
         byte_len: pin.len(),
-        kind,
+        class,
         elem_size,
         _pin: pin,
     })
@@ -156,11 +171,14 @@ pub(super) unsafe fn chunk_byte_length(chunk_bits: u64) -> f64 {
 }
 
 /// Build the fulfilled `value` for a BYOB read: a fresh view of the same
-/// element kind holding `bytes` (already copied into the caller's view).
-unsafe fn alloc_view_of_kind(kind: u8, elem_size: usize, bytes: &[u8]) -> u64 {
-    if kind == 0 {
-        return alloc_uint8array_from_bytes(bytes);
-    }
+/// class holding `bytes` (already copied into the caller's view).
+unsafe fn alloc_view_of_kind(class: ViewClass, elem_size: usize, bytes: &[u8]) -> u64 {
+    let kind = match class {
+        ViewClass::Bytes(brand) => {
+            return perry_runtime::buffer::bytes::from_slice(brand, bytes).to_bits();
+        }
+        ViewClass::Typed(kind) => kind,
+    };
     let elems = bytes.len() / elem_size.max(1);
     let ta = perry_runtime::typedarray_hook_slots::typed_array_alloc(kind, elems as u32);
     if ta.is_null() {
@@ -347,7 +365,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
             return promise;
         }
         Outcome::Closed => {
-            let empty = alloc_view_of_kind(info.kind, info.elem_size, &[]);
+            let empty = alloc_view_of_kind(info.class, info.elem_size, &[]);
             let result = build_iter_result(empty, true);
             js_promise_resolve(promise, f64::from_bits(result));
             return promise;
@@ -362,7 +380,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
     super::transform::transform_release_writes(stream_id);
     if filled > 0 {
         let bytes = std::slice::from_raw_parts(info.data, filled);
-        let value = alloc_view_of_kind(info.kind, info.elem_size, bytes);
+        let value = alloc_view_of_kind(info.class, info.elem_size, bytes);
         let (closed_now, reader) = {
             let g = READABLE_STREAMS.lock().unwrap();
             match g.get(&stream_id) {
@@ -484,13 +502,13 @@ pub(super) fn byob_request_respond(stream_id: usize, bytes_written: f64) -> f64 
                     .push_front(pending);
                 throw_type_error("bytesWritten must be positive while the stream is readable");
             }
-            let empty = alloc_view_of_kind(info.kind, info.elem_size, &[]);
+            let empty = alloc_view_of_kind(info.class, info.elem_size, &[]);
             let result = build_iter_result(empty, true);
             js_promise_resolve(pending.promise, f64::from_bits(result));
             return f64::from_bits(TAG_UNDEFINED);
         }
         let bytes = std::slice::from_raw_parts(info.data, n);
-        let value = alloc_view_of_kind(info.kind, info.elem_size, bytes);
+        let value = alloc_view_of_kind(info.class, info.elem_size, bytes);
         let result = build_iter_result(value, false);
         js_promise_resolve(pending.promise, f64::from_bits(result));
     }
@@ -588,7 +606,7 @@ pub(super) unsafe fn service_pending_with_chunk(stream_id: usize, chunk_bits: u6
         }
     }
     let filled = std::slice::from_raw_parts(info.data, take);
-    let value = alloc_view_of_kind(info.kind, info.elem_size, filled);
+    let value = alloc_view_of_kind(info.class, info.elem_size, filled);
     let result = build_iter_result(value, false);
     js_promise_resolve(pending.promise, f64::from_bits(result));
     true
@@ -602,11 +620,11 @@ pub(super) unsafe fn close_pending_byob(stream_id: usize) {
         None => return,
     };
     for pending in drained {
-        let (kind, elem_size) = match view_info(pending.view_bits) {
-            Some(info) => (info.kind, info.elem_size),
-            None => (0, 1),
+        let (class, elem_size) = match view_info(pending.view_bits) {
+            Some(info) => (info.class, info.elem_size),
+            None => (ViewClass::Bytes(perry_runtime::buffer::bytes::Brand::Uint8Array), 1),
         };
-        let empty = alloc_view_of_kind(kind, elem_size, &[]);
+        let empty = alloc_view_of_kind(class, elem_size, &[]);
         let result = build_iter_result(empty, true);
         js_promise_resolve(pending.promise, f64::from_bits(result));
     }
