@@ -349,6 +349,19 @@ fn const_number_switch_is_a_cache_input() {
     );
 }
 
+/// R1: the range-tightening switches change the facts' intervals (and with
+/// them in-floor reads and int32 locals), so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn range_tightening_switches_are_cache_inputs() {
+    for name in ["PERRY_FACTS_EXACT_RULES", "PERRY_FACTS_LEAVING_WRITES"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]

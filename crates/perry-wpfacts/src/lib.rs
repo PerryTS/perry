@@ -94,6 +94,14 @@ pub struct FactsConfig {
     /// No `Rep::Arr` for a field and no in-floor field read call
     /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
     pub no_array_fields: bool,
+    /// R1: a `Cons::Range` result widens like any node again, after
+    /// `WIDEN_STEPS` growths (`PERRY_FACTS_EXACT_RULES=0`;
+    /// `solve::grow_rule_range`).
+    pub no_exact_rules: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves ends
+    /// the narrowed reads after the branch again (`PERRY_FACTS_LEAVING_WRITES=0`;
+    /// `gen::narrow`, "Writes on a leaving path").
+    pub no_leaving_writes: bool,
     /// An element read's past-the-end `undefined` is unconditional again
     /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
     pub no_elem_undef: bool,
@@ -494,6 +502,10 @@ fn generate<'a>(
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
+    g.m.exact_rules = !cfg.no_exact_rules;
+    g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
+    g.leaving_writes = !cfg.no_leaving_writes;
+    g.leaving_write_sabotage = cfg.sabotage.as_deref() == Some("leavingwrite");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
