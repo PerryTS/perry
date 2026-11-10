@@ -7,6 +7,7 @@ use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
+mod compare;
 mod define_keys;
 mod export;
 pub(crate) use export::UNDESCRIBED;

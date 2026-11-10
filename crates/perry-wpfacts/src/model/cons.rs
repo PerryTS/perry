@@ -45,6 +45,10 @@ pub enum IdentityRoute {
     Clone,
     /// A realm declaration's `identity(slot)`.
     Native,
+    /// `JSON.stringify` with a replacer that is no literal `null`,
+    /// `undefined` or array: the replacer receives every value serialized,
+    /// unseen by the model (DESIGN-p4l4 finding 14).
+    JsonReplacer,
 }
 
 impl IdentityRoute {
@@ -58,6 +62,7 @@ impl IdentityRoute {
             IdentityRoute::Collection => "collection-key",
             IdentityRoute::Clone => "structuredClone",
             IdentityRoute::Native => "native",
+            IdentityRoute::JsonReplacer => "JSON replacer",
         }
     }
 }

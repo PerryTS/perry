@@ -41,6 +41,7 @@ mod ledger;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+pub mod records;
 pub mod signatures;
 mod rooted;
 mod solve;
@@ -276,6 +277,9 @@ pub struct ProgramFacts {
     pub body_reach: BodyReach,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
+    /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
+    /// the `records` ledger.
+    pub record_arrays: Vec<records::RecordArray>,
     pub sites: Vec<SiteFacts>,
     /// Computed member sites in a whole-program solve. Per-unit facts do
     /// not publish values whose token/template ids belong to separate solves.
@@ -931,6 +935,20 @@ fn compute_act<'a>(
     } else {
         derive::derive(&mut g)
     };
+    // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
+    // the templates and sites, before any representation reads them.
+    let record_arrays = records::derive(
+        &g,
+        &mut templates,
+        &sites,
+        interp_guard.as_deref(),
+        cfg.sabotage.as_deref(),
+    );
+    if g.m.value_records && std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
+        for l in records::ledger_lines(&templates, &record_arrays) {
+            eprintln!("perry: wpfacts: {}", l.trim_start_matches("# "));
+        }
+    }
     let mut elements = if g.m.aborted {
         Vec::new()
     } else {
@@ -2186,6 +2204,7 @@ fn compute_act<'a>(
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
+        record_arrays,
         sites,
         elements,
         stats,
