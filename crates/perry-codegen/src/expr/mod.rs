@@ -1319,6 +1319,9 @@ pub(crate) struct FnCtx<'a> {
     /// buffer views. Lookup, nested-scope teardown and boundary validation
     /// live in that table instead of independent `FnCtx` maps.
     pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
+    /// N2: the planned function-level element bases of the method body
+    /// (`stmt::fn_base`).
+    pub fn_base: crate::stmt::fn_base::Pending,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once

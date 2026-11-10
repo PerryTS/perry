@@ -324,6 +324,7 @@ fn codegen_env_vars_are_build_cache_inputs() {
 fn array_fact_switches_are_cache_inputs() {
     for name in [
         "PERRY_FACTS_ARRAY_BASE",
+        "PERRY_FACTS_FN_BASES",
         "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
