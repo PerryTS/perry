@@ -115,18 +115,29 @@ pub(crate) fn try_lower(
         || serde_json::json!({ "call": site }),
     );
     crate::facts_consumed::used();
-    let value = match in_floor(ctx, site, &read) {
-        Some((object, index, rep, floor)) => {
-            // The index is inert and reaches no ender (the accessor), so no
-            // collection runs between it and the field load.
-            let idx = crate::expr::lower_expr_as_i32(ctx, index)?;
-            let arr = crate::expr::lower_expr(ctx, object)?;
-            crate::expr::index_get::proven_array::lower_in_floor(ctx, &arr, &idx, rep, floor)
+    // PR-D: a loop that holds the field's element base serves the read.
+    let held = crate::expr::index_get::field_base::try_lower_read(ctx, site, &read)?;
+    let served = held.is_some();
+    let value = if let Some(value) = held {
+        value
+    } else {
+        match in_floor(ctx, site, &read) {
+            Some((object, index, rep, floor)) => {
+                // The index is inert and reaches no ender (the accessor), so
+                // no collection runs between it and the field load.
+                let idx = crate::expr::lower_expr_as_i32(ctx, index)?;
+                let arr = crate::expr::lower_expr(ctx, object)?;
+                crate::expr::index_get::proven_array::lower_in_floor(ctx, &arr, &idx, rep, floor)
+            }
+            None => crate::expr::lower_expr(ctx, &read)?,
         }
-        None => crate::expr::lower_expr(ctx, &read)?,
     };
     if crate::verify_facts::enabled() {
         witness(ctx, callee, args, &value, site)?;
+        if served {
+            // The real call may collect: the held bases are re-derived.
+            crate::expr::index_get::field_base::rederive_all(ctx)?;
+        }
     }
     Ok(Some(value))
 }

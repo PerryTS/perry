@@ -526,10 +526,7 @@ impl<'a> Gen<'a> {
             | Expr::PathWin32 { .. }
             | Expr::FsReadFileSync(..)
             | Expr::FsWriteFileSync(..)
-            | Expr::FsMkdirSync(..)
-            | Expr::FsUnlinkSync(..)
             | Expr::FsAppendFileSync(..)
-            | Expr::FsRmRecursive(..)
             | Expr::FileURLToPath(..)
             | Expr::BufferIsBuffer(..)
             | Expr::BufferByteLength { .. }
@@ -547,13 +544,23 @@ impl<'a> Gen<'a> {
                 // spread's elements) or takes a buffer; each is its own model.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
-            Expr::FsExistsSync(path) => {
-                match self.declared_member_call(fx, "node:fs.existsSync", &[path]) {
-                    Some(ret) => ret,
-                    None => {
-                        self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
-                    }
-                }
+            Expr::FsExistsSync(path)
+            | Expr::FsMkdirSync(path)
+            | Expr::FsUnlinkSync(path)
+            | Expr::FsRmRecursive(path) => {
+                // A path operand is read as node's getValidatedPath reads it
+                // (a string or a Buffer as is, a file URL by its named keys,
+                // else ERR_INVALID_ARG_TYPE): the member's effects, declared
+                // at the runtime body its dispatch arm calls (`path(arg(0))`),
+                // run on it. The HIR variant is that member's call.
+                let member = match e {
+                    Expr::FsMkdirSync(..) => "node:fs.mkdirSync",
+                    Expr::FsUnlinkSync(..) => "node:fs.unlinkSync",
+                    Expr::FsRmRecursive(..) => "node:fs.rmSync",
+                    _ => "node:fs.existsSync",
+                };
+                self.declared_member_call(fx, member, &[path])
+                    .expect("an fs path member is declared at its runtime body")
             }
             Expr::MapClear(map) => {
                 let recv = self.expr(fx, map);

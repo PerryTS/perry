@@ -715,8 +715,10 @@ pub type StrSet = u32;
 pub const STRS_NONE: StrSet = 0;
 pub const STRS_TOP: StrSet = 1;
 pub const STRS_SET0: StrSet = 2;
-/// Past this many constants a node holds any string.
-pub const STRS_K: usize = 8;
+/// Past this many constants a node holds any string. Constant sets are
+/// exact (tsc-src holds ~200 option names in one key): interned sets keep
+/// the join cheap, priced on tsc-src and three.js (SEED2).
+pub const STRS_K: usize = usize::MAX;
 
 /// An interned key shape (`Model::key_shapes`); 0: any string.
 pub type KeyShapeId = u32;
@@ -1259,6 +1261,14 @@ pub struct Model {
     /// `+` interval rule drops its right operand, a wrong transfer the
     /// int32 witnesses must catch.
     pub range_sabotage: bool,
+    /// R1: a `Cons::Range` result takes the join of its rule's evaluations
+    /// without widening (`solve::grow_rule_range`); only copy targets widen.
+    /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
+    pub exact_rules: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): with the exact
+    /// rule results, a sum is the hull of its operands instead of their
+    /// sum, a claim too narrow that the witnesses must catch.
+    pub exact_rule_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
     /// counts as one inside its array's birth length (`arr_len_index`).
     pub arr_len_sabotage: bool,
@@ -1777,7 +1787,7 @@ pub struct Model {
     /// (key node, store site, index) a `StoreIndexed` store has been added
     /// for: `true` the index store, `false` the computed-key one. A shared
     /// body's replay has its own key node.
-    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, bool)>,
+    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, u8)>,
     /// (key node, store site, atom) a `StoreIndexed` named store has been
     /// added for, by a string constant of the key (`Node::strs`).
     pub str_store_done: crate::pts::FxHashSet<(NodeId, SiteId, Atom)>,
