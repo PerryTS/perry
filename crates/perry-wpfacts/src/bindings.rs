@@ -164,7 +164,9 @@ pub struct ArrRep {
     pub fixed: bool,
     /// Every token is immutable (`const_arrays`): nothing writes it after
     /// its birth, so each index holds its birth value for the whole
-    /// program. Implies `fixed`.
+    /// program. Implies `fixed`. It is about the Arrays, not about a
+    /// binding that may be read before it holds one: consumers ask
+    /// `BindingFacts::immutable_array`.
     pub im: bool,
 }
 
@@ -285,10 +287,13 @@ pub struct BindingFacts {
     /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
     /// that constant.
     pub const_length: Option<i64>,
-    /// It holds only immutable Arrays (`ArrRep::im`) born from literals of
-    /// constant Numbers with the same elements (`const_arrays::collect`):
-    /// index `i` reads the Number with bits `const_elems[i]`, for the whole
-    /// program.
+    /// It is a rooted `const` (`const_arrays`) that holds only immutable
+    /// Arrays (`ArrRep::im`): every read of it that yields a value yields
+    /// an Array nothing writes after its birth.
+    pub immutable_array: bool,
+    /// Such a binding whose Arrays are all born from literals of constant
+    /// Numbers with the same elements (`const_arrays::collect`): index `i`
+    /// reads the Number with bits `const_elems[i]`, for the whole program.
     pub const_elems: Option<Vec<u64>>,
 }
 

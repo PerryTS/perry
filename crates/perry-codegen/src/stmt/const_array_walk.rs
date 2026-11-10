@@ -15,7 +15,9 @@
 //! and the entry is a header test of `t` per loop, with the runtime behind
 //! it. When the facts give `t` the representation `Arr` with `im` (every
 //! Array it may hold is a plain program Array nothing writes after its
-//! birth), and no program write can reach an iteration member or define an
+//! birth) and name it an immutable Array local (`ElisionFacts::
+//! immutable_arrays`: a rooted `const`, so it is never read before it holds
+//! one), and no program write can reach an iteration member or define an
 //! element descriptor (`array_program_facts` is 0), the entry is decided
 //! here: the walk is taken, the IteratorRecord loop is not lowered.
 //!
@@ -287,7 +289,7 @@ pub(super) fn lower(ctx: &mut FnCtx<'_>, cond: &Expr, then_branch: &[Stmt]) -> R
     let Some(FactsRep::Arr(rep)) = crate::codegen::facts_rep::local(ctx, w.source) else {
         return Ok(false);
     };
-    if !rep.im {
+    if !rep.im || !ctx.wpfacts.immutable_arrays.contains(&w.source) {
         return Ok(false);
     }
     if crate::expr::array_program_facts(&ctx.wpfacts) != 0 {
@@ -326,7 +328,6 @@ pub(super) fn lower(ctx: &mut FnCtx<'_>, cond: &Expr, then_branch: &[Stmt]) -> R
             lower_stmts(ctx, w.prelude)?;
             let lp = &then_branch[w.prelude.len()..];
             lower_stmts(ctx, lp)?;
-            let _ = w.loop_body;
             Ok(())
         }
     }?;
@@ -486,7 +487,9 @@ pub(super) fn holds_no_string(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> bool
     if ctx.wpfacts_off || crate::expr::typed_feedback_emission_enabled() {
         return false;
     }
-    if !matches!(crate::codegen::facts_rep::local(ctx, id), Some(FactsRep::Arr(r)) if r.im) {
+    if !ctx.wpfacts.immutable_arrays.contains(&id)
+        || !matches!(crate::codegen::facts_rep::local(ctx, id), Some(FactsRep::Arr(r)) if r.im)
+    {
         return false;
     }
     crate::verify_facts::covered(

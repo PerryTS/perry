@@ -639,6 +639,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if let Some(n) = b.const_length {
                 out.const_length_inputs.insert(*id, n);
             }
+            if b.immutable_array {
+                out.immutable_arrays.insert(*id);
+            }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());
             }

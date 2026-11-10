@@ -57,6 +57,9 @@ fn ir(im: bool, floor: u32, consts: Option<Vec<f64>>) -> String {
             im,
         }),
     );
+    if im {
+        elision.immutable_arrays.insert(t);
+    }
     if let Some(c) = consts {
         elision
             .const_arrays
@@ -73,6 +76,14 @@ fn ir(im: bool, floor: u32, consts: Option<Vec<f64>>) -> String {
     String::from_utf8(compile_module(&m, opts).expect("fixture compiles")).expect("UTF-8 IR")
 }
 
+/// Calls of runtime function `name` (its `declare` is always there).
+fn calls(ir: &str, name: &str) -> usize {
+    let callee = format!("@{name}(");
+    ir.lines()
+        .filter(|l| l.contains(" call ") && l.contains(&callee))
+        .count()
+}
+
 fn blocks(ir: &str, prefix: &str) -> usize {
     ir.lines()
         .filter(|l| l.starts_with(prefix) && l.trim_end().ends_with(':'))
@@ -83,7 +94,7 @@ fn blocks(ir: &str, prefix: &str) -> usize {
 fn without_the_fact_the_walk_keeps_its_entry() {
     let f = ir(false, 3, None);
     assert!(f.contains("forof.walk.header"), "the inline entry\n{f}");
-    assert!(f.contains("js_array_record_enter_counted"), "{f}");
+    assert!(calls(&f, "js_array_record_enter_counted") >= 1, "{f}");
     assert_eq!(blocks(&f, "forof.im."), 0, "{f}");
     // The copy into the walk's temp keeps its string demote.
     assert!(blocks(&f, "str_addref.call") >= 1, "{f}");
@@ -93,27 +104,25 @@ fn without_the_fact_the_walk_keeps_its_entry() {
 fn a_copy_into_an_immutable_array_local_has_no_string_demote() {
     let with = ir(true, 3, Some(vec![1.0, 2.0, 3.0]));
     let without = ir(false, 3, None);
-    assert_eq!(
-        blocks(&with, "str_addref.call") + 1,
-        blocks(&without, "str_addref.call"),
-        "one demote test less\n{with}"
-    );
+    assert!(blocks(&without, "str_addref.call") >= 1, "{without}");
+    assert_eq!(blocks(&with, "str_addref.call"), 0, "{with}");
 }
 
 #[test]
 fn constant_contents_unroll_the_walk() {
     let f = ir(true, 3, Some(vec![1.0, 2.0, 3.0]));
     assert!(!f.contains("forof.walk."), "no entry test\n{f}");
-    assert!(!f.contains("js_array_record_enter_counted"), "{f}");
-    assert!(
-        !f.contains("js_array_record_stack_enter"),
+    assert_eq!(calls(&f, "js_array_record_enter_counted"), 0, "{f}");
+    assert_eq!(
+        calls(&f, "js_array_record_stack_enter"),
+        0,
         "no record loop\n{f}"
     );
     // Two `next` blocks between three copies, and the exit.
     assert_eq!(blocks(&f, "forof.im.next"), 2, "{f}");
     assert_eq!(blocks(&f, "forof.im.exit"), 1, "{f}");
     // No counted loop and no poll remain.
-    assert!(!f.contains("js_gc_loop_safepoint"), "{f}");
+    assert_eq!(calls(&f, "js_gc_loop_safepoint"), 0, "{f}");
     assert_eq!(blocks(&f, "for.cond"), 0, "{f}");
 }
 
@@ -129,7 +138,7 @@ fn an_empty_constant_array_is_no_loop() {
 fn more_elements_than_the_bound_keep_the_counted_walk() {
     let f = ir(true, 9, Some((1..=9).map(f64::from).collect()));
     assert!(!f.contains("forof.walk."), "no entry test\n{f}");
-    assert!(!f.contains("js_array_record_enter_counted"), "{f}");
+    assert_eq!(calls(&f, "js_array_record_enter_counted"), 0, "{f}");
     assert_eq!(blocks(&f, "forof.im."), 0, "not unrolled\n{f}");
 }
 
@@ -137,9 +146,10 @@ fn more_elements_than_the_bound_keep_the_counted_walk() {
 fn an_immutable_receiver_without_contents_keeps_the_counted_walk() {
     let f = ir(true, 3, None);
     assert!(!f.contains("forof.walk."), "no entry test\n{f}");
-    assert!(!f.contains("js_array_record_enter_counted"), "{f}");
-    assert!(
-        !f.contains("js_array_record_stack_enter"),
+    assert_eq!(calls(&f, "js_array_record_enter_counted"), 0, "{f}");
+    assert_eq!(
+        calls(&f, "js_array_record_stack_enter"),
+        0,
         "no record loop\n{f}"
     );
     assert_eq!(blocks(&f, "forof.im."), 0, "{f}");

@@ -233,6 +233,35 @@ const laterSteps = stepped();
 for (const d of laterSteps) st += d + ";";
 out.push("consts " + dirs + " " + st + DIRS[1] + NINE[8] + KNIGHT[0]);
 
+// A hoisted `var` read before its initializer runs holds `undefined`, and a
+// `const` read in its dead zone throws: neither walk may run on the
+// literal's values before the binding holds the Array.
+function earlyVar(): string {
+  let s = "";
+  for (const x of HOISTED) s += x;
+  return s;
+}
+function earlyConst(): string {
+  let s = "";
+  for (const x of LATER) s += x;
+  return s;
+}
+let hoisted = "";
+try {
+  hoisted = earlyVar();
+} catch (e) {
+  hoisted = "TypeError " + (e instanceof TypeError);
+}
+let dead = "";
+try {
+  dead = earlyConst();
+} catch (e) {
+  dead = "ReferenceError " + (e instanceof ReferenceError);
+}
+var HOISTED = [1, 2, 3];
+const LATER = [4, 5, 6];
+out.push("early " + hoisted + " " + dead + " " + earlyVar() + earlyConst());
+
 // ---- negative controls: written, so not immutable ----
 // Written later through an alias: the first walk sees the birth values.
 const W = [1, 2, 3, 4];

@@ -28,7 +28,7 @@ fn consts_with(src: &str, cfg: FactsConfig) -> HashMap<String, (bool, Option<Vec
     let mut out = HashMap::new();
     for (id, b) in &mb.locals {
         if let Some(name) = names.get(id) {
-            let im = matches!(b.rep, Rep::Arr(r) if r.im);
+            let im = b.immutable_array && matches!(b.rep, Rep::Arr(r) if r.im);
             let c = b
                 .const_elems
                 .as_ref()
@@ -175,6 +175,23 @@ fn only_number_literals_have_contents() {
     // Immutable all the same: nothing writes it.
     let src = "const K = ['a', 'b'];\nconsole.log(K.length);\n";
     assert!(im(src, "K"));
+}
+
+#[test]
+fn only_a_rooted_const_is_an_immutable_array_binding() {
+    // A hoisted `var` holds `undefined` until its initializer runs, and a
+    // `let`, a parameter and a call result are not rooted either: the
+    // Arrays are immutable (`ArrRep::im`), the bindings are not exported.
+    let src = "var V = [1, 2, 3];\nlet L = [1, 2, 3];\nconst K = [1, 2, 3];\nconst A = K;\nconst B = V;\nfunction id(x: number[]): number[] { return x; }\nconst R = id(K);\nfunction len(p: number[]): number { const q = p; return q.length; }\nconsole.log(V[0], L[0], A[0], B[0], R[0], len(K));\n";
+    let all = consts(src);
+    assert_eq!(all["K"], (true, Some(vec![1.0, 2.0, 3.0])));
+    assert_eq!(all["A"], (true, Some(vec![1.0, 2.0, 3.0])), "a const alias");
+    for name in ["V", "L", "B", "R", "q"] {
+        assert_eq!(all[name], (false, None), "{name}");
+    }
+    let pf = facts_with(src, FactsConfig::default());
+    let text = pf.dump_text();
+    assert_eq!(text.matches("# immutable_array ").count(), 2, "{text}");
 }
 
 #[test]
