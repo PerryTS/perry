@@ -457,6 +457,9 @@ pub struct ModuleBindings {
     /// PR-C1), with the least length lower bound of their receivers; sorted
     /// (`element_floors`).
     pub element_floors: Vec<(u32, u32)>,
+    /// Module-scope bindings (by local id) whose every value is this one
+    /// integer Number, sorted (`const_numbers`, N6).
+    pub const_numbers: Vec<(u32, i64)>,
     /// PR-C2: element reads by `element_offset` whose key is an integer
     /// Number at every copy, with the hull of its interval; sorted
     /// (`element_keys`).

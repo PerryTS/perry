@@ -1273,6 +1273,16 @@ pub struct Model {
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
+    /// N6: bitwise operators over single int32 values and constant left
+    /// shifts take their exact interval (`range::eval_exact`), and module
+    /// bindings that hold one Number are exported (`const_numbers`;
+    /// `PERRY_FACTS_CONST_NUMBERS=0` turns both off).
+    pub const_numbers: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=constnum`): a module binding
+    /// with any bounded Number interval is exported as the constant at its
+    /// lower bound (`const_numbers`), a wrong claim the read's witness must
+    /// catch.
+    pub const_number_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrcap`, also `densebirth`):
     /// `new Array(k)` records its birth length past
     /// `MAX_FRESH_DENSE_ARRAY_LENGTH`, over a store the runtime does not

@@ -335,3 +335,13 @@ fn array_fact_switches_are_cache_inputs() {
         );
     }
 }
+
+/// N6: the module-const switch changes the facts' intervals and the reads
+/// codegen emits, so `=0` must never reuse an `=1` object.
+#[test]
+fn const_number_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CONST_NUMBERS"),
+        "PERRY_FACTS_CONST_NUMBERS must key the compile caches"
+    );
+}
