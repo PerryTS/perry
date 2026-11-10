@@ -7,7 +7,7 @@
 //! (`ArrRep::fixed`), it does not leave its unit (`Model::cell_arrs`), and
 //! no write reached it (`Model::arr_stored`). The writes are:
 //! - a store under any key, named, index or computed (`Model::store_into`:
-//!   `a[i] = v`, `a.x = v`, an `Object.assign` into it, a declared setter);
+//!   `a[i] = v`, `a.x = v`, an `Object.assign` into it, `Reflect.set`);
 //! - an `Array.prototype` method that is not in `method_reads_only`, with the
 //!   token as its receiver, however it is reached (`builtins::array_method`:
 //!   the method call, a folded HIR form, `.call`/`.apply`, a computed key);
