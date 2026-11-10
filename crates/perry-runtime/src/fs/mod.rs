@@ -980,6 +980,9 @@ pub(crate) fn mkdir_result_value(first: Option<String>) -> f64 {
     }
 }
 
+// node mkdirSync: getValidatedPath, then `recursive` (validateBoolean: a
+// non-boolean is ERR_INVALID_ARG_TYPE with its inspected value) and `mode`.
+crate::realm_decl! { "node:fs.mkdirSync", effects = { path(arg(0)); reads(field(arg(1), recursive)); reads(field(arg(1), mode)); coerce(field(arg(1), recursive), ShallowInspect); stores(fresh); returns(prim(undefined) | prim(str)) } }
 /// `fs.mkdirSync(path, options)`: undefined, or with `recursive` the first
 /// directory created.
 #[no_mangle]
@@ -1024,6 +1027,8 @@ pub(crate) unsafe fn js_fs_unlink_result(path_value: f64) -> Result<(), crate::e
     }
 }
 
+// node unlinkSync: getValidatedPath, then the unlink.
+crate::realm_decl! { "node:fs.unlinkSync", effects = { path(arg(0)); stores(fresh); returns(prim(undefined)) } }
 /// Remove a file synchronously.
 /// Returns 1 on success and throws a Node-shaped fs error on failure.
 /// Accepts NaN-boxed string path.
@@ -1178,6 +1183,10 @@ pub(crate) unsafe fn js_fs_rm_result(
     }
 }
 
+// node rmSync: getValidatedPath, then the options object (validateObject:
+// a non-object is ERR_INVALID_ARG_TYPE with its inspected value), `force`
+// and `recursive`.
+crate::realm_decl! { "node:fs.rmSync", effects = { path(arg(0)); coerce(arg(1), ShallowInspect); reads(field(arg(1), force)); reads(field(arg(1), recursive)); stores(fresh); returns(prim(undefined)) } }
 #[no_mangle]
 pub extern "C" fn js_fs_rm_recursive_options(path_value: f64, options_value: f64) -> i32 {
     unsafe {
