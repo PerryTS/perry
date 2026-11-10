@@ -214,6 +214,25 @@ function local(n: number): number {
 }
 out.push("local " + local(1) + "," + local(2));
 
+// Elements that read a module `const` holding one Number, and ones that
+// read a binding that changes.
+const NORTH = -16;
+const EAST = 1 << 0;
+const ZERO = 0;
+const DIRS = [NORTH, -NORTH, EAST, -EAST, -ZERO];
+let dirs = "";
+for (const d of DIRS) dirs += (Object.is(d, -0) ? "-0" : d) + ";";
+let step = 2;
+function stepped(): number[] {
+  return [step, -step, 1];
+}
+let st = "";
+for (const d of stepped()) st += d + ";";
+step = 5;
+const laterSteps = stepped();
+for (const d of laterSteps) st += d + ";";
+out.push("consts " + dirs + " " + st + DIRS[1] + NINE[8] + KNIGHT[0]);
+
 // ---- negative controls: written, so not immutable ----
 // Written later through an alias: the first walk sees the birth values.
 const W = [1, 2, 3, 4];
