@@ -470,6 +470,55 @@ fn witness(
     Ok(())
 }
 
+/// Local `id`, being bound to `value`, holds only immutable Arrays by the
+/// facts (the walk's source temp `const t = a`, or any other such copy): it
+/// is never a string, so the copy needs no string demote
+/// (`emit_string_addref_if_heap_string`, a no-op on anything but a heap
+/// string). With that test gone the temp of an unrolled walk is dead.
+/// Check mode tests that `value` carries no string tag (`Fact::ConstArray`).
+pub(super) fn holds_no_string(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> bool {
+    if ctx.wpfacts_off || crate::expr::typed_feedback_emission_enabled() {
+        return false;
+    }
+    if !matches!(crate::codegen::facts_rep::local(ctx, id), Some(FactsRep::Arr(r)) if r.im) {
+        return false;
+    }
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::ConstArray,
+        || serde_json::json!({ "local": id, "no_string": true }),
+    );
+    if crate::verify_facts::enabled() {
+        // `STRING_TAG` in the word's top 16 bits.
+        const TAG_MASK_I64: &str = "-281474976710656";
+        const STRING_TAG_I64: &str = "9223090561878065152";
+        let miss = ctx.new_block("forof.im.verify_string");
+        let next = ctx.new_block("forof.im.no_string");
+        let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+        crate::verify_facts::tick(ctx);
+        let bits = ctx.block().bitcast_double_to_i64(value);
+        let tag = ctx.block().and(I64, &bits, TAG_MASK_I64);
+        let other = ctx.block().icmp_ne(I64, &tag, STRING_TAG_I64);
+        ctx.block().cond_br(&other, &next_l, &miss_l);
+        ctx.current_block = miss;
+        let site = crate::verify_facts::site_arg(
+            ctx,
+            &format!("immutable array local {id} is no string"),
+            crate::verify_facts::Fact::ConstArray,
+            &[],
+        );
+        let _ = crate::verify_facts::check(
+            ctx,
+            I32,
+            "perry_wpfacts_check_miss",
+            &[(DOUBLE, value)],
+            &site,
+        );
+        ctx.block().unreachable();
+        ctx.current_block = next;
+    }
+    true
+}
+
 /// `cond` goes on to a new block `name`, else to `other`; the new block is
 /// current.
 fn branch(ctx: &mut FnCtx<'_>, cond: &str, name: &str, other: &str) {
