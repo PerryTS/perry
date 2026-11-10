@@ -1990,6 +1990,7 @@ mod native_module_ref;
 mod fresh_proto_chain;
 mod host_browser_effects;
 mod host_performance_intl;
+mod host_stream_effects;
 mod host_fs_effects;
 mod native_fs_watch;
 mod host_inspector_effects;
