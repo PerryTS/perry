@@ -715,8 +715,10 @@ pub type StrSet = u32;
 pub const STRS_NONE: StrSet = 0;
 pub const STRS_TOP: StrSet = 1;
 pub const STRS_SET0: StrSet = 2;
-/// Past this many constants a node holds any string.
-pub const STRS_K: usize = 8;
+/// Past this many constants a node holds any string. Constant sets are
+/// exact (tsc-src holds ~200 option names in one key): interned sets keep
+/// the join cheap, priced on tsc-src and three.js (SEED2).
+pub const STRS_K: usize = usize::MAX;
 
 /// An interned key shape (`Model::key_shapes`); 0: any string.
 pub type KeyShapeId = u32;
@@ -1785,7 +1787,7 @@ pub struct Model {
     /// (key node, store site, index) a `StoreIndexed` store has been added
     /// for: `true` the index store, `false` the computed-key one. A shared
     /// body's replay has its own key node.
-    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, bool)>,
+    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, u8)>,
     /// (key node, store site, atom) a `StoreIndexed` named store has been
     /// added for, by a string constant of the key (`Node::strs`).
     pub str_store_done: crate::pts::FxHashSet<(NodeId, SiteId, Atom)>,
