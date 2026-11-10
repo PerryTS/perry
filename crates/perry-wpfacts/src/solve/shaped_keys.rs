@@ -77,6 +77,12 @@ impl Model {
         self.shaped_stores.insert((t, s), n);
         let all = self.all_fields(t);
         self.edge(n, all);
+        // Any String may be an index string: it writes the numeric
+        // properties a Number key reads.
+        if self.key_shapes[s as usize].may_be_numeric() {
+            let numeric = self.numeric_field(t);
+            self.edge(n, numeric);
+        }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.key_may_name(key, a) {
                 let f = self.field(t, a);

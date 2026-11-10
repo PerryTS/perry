@@ -1414,18 +1414,25 @@ impl Model {
                         );
                     }
                 }
-                if index && self.index_store_done.insert((n, site, true)) {
+                if index && self.index_store_done.insert((n, site, 1)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
                     // `a[i] = v` may write past the end; `push` appends.
                     self.cons(o, Cons::IndexHole);
                 }
-                let any = !toks.is_empty()
-                    || prim & (prim::SYMBOL | prim::BIGINT) != 0
-                    || (prim & prim::STR != 0 && strs == STRS_TOP);
-                // An Any store under the any-string shape (this pop's or an
-                // earlier one's) is every name's.
-                if shape == 0 && (any || self.index_store_done.contains(&(n, site, false))) {
+                // A key that may be no String (an object to ToPrimitive, a
+                // symbol, a BigInt) keeps the any-key store; any String
+                // stores under the any-String shape, which never names a
+                // symbol-keyed property (`key_may_name_str`).
+                let not_str = !toks.is_empty() || prim & (prim::SYMBOL | prim::BIGINT) != 0;
+                let any = not_str || (prim & prim::STR != 0 && strs == STRS_TOP);
+                // An Any store under no shape or the any-String shape (this
+                // pop's or an earlier one's) is every name's.
+                if shape == 0
+                    && (any
+                        || self.index_store_done.contains(&(n, site, 0))
+                        || self.index_store_done.contains(&(n, site, 2)))
+                {
                     names.clear();
                 }
                 for a in names {
@@ -1440,7 +1447,11 @@ impl Model {
                         );
                     }
                 }
-                if any && self.index_store_done.insert((n, site, false)) {
+                let (kind, shape) = match shape == 0 && !not_str {
+                    true => (2, self.any_string_shape()),
+                    false => (0, shape),
+                };
+                if any && self.index_store_done.insert((n, site, kind)) {
                     self.cons(
                         o,
                         Cons::Store {
@@ -1502,6 +1513,10 @@ impl Model {
                     let (l, r) = if right { (ot, me) } else { (me, ot) };
                     if self.range_sabotage && op == RangeOp::Add {
                         l
+                    } else if self.exact_rule_sabotage && op == RangeOp::Add {
+                        // Negative control (`exactrule`): a sum is the hull
+                        // of its operands, not their sum.
+                        l.join(r)
                     } else {
                         self.const_numbers
                             .then(|| crate::model::range::eval_exact(op, l, r))
@@ -1509,7 +1524,13 @@ impl Model {
                             .unwrap_or_else(|| crate::model::range::eval(op, l, r))
                     }
                 };
-                if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
+                let d = &mut self.nodes[dst as usize];
+                let grew = if self.exact_rules {
+                    crate::solve::grow_rule_range(d, iv)
+                } else {
+                    crate::solve::grow_range(d, iv)
+                };
+                if grew {
                     let d = &mut self.nodes[dst as usize];
                     if !d.in_wl {
                         d.in_wl = true;

@@ -1002,6 +1002,7 @@ impl<'a> Gen<'a> {
                         self.m.identity(l, IdentityRoute::StrictEq);
                         self.m.identity(r, IdentityRoute::StrictEq);
                     }
+                    self.equality_demand(left, right, l, r);
                     self.prim_node(prim::BOOL)
                 }
                 // `==` / `!=` (IsLooselyEqual): ToPrimitive on an object

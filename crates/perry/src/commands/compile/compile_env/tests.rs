@@ -323,6 +323,7 @@ fn codegen_env_vars_are_build_cache_inputs() {
 #[test]
 fn array_fact_switches_are_cache_inputs() {
     for name in [
+        "PERRY_FACTS_ARRAY_BASE",
         "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
@@ -346,6 +347,19 @@ fn const_number_switch_is_a_cache_input() {
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CONST_NUMBERS"),
         "PERRY_FACTS_CONST_NUMBERS must key the compile caches"
     );
+}
+
+/// R1: the range-tightening switches change the facts' intervals (and with
+/// them in-floor reads and int32 locals), so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn range_tightening_switches_are_cache_inputs() {
+    for name in ["PERRY_FACTS_EXACT_RULES", "PERRY_FACTS_LEAVING_WRITES"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
 }
 
 /// N4: the cold-path switch changes helper declarations, call-site
