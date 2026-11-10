@@ -853,10 +853,7 @@ impl<'a, 'g> Scan<'a, 'g> {
         if self.rec_of.contains_key(&c) {
             return c;
         }
-        let Some(&o) = self.orig_of.get(&n) else {
-            return c;
-        };
-        let found = match i {
+        let by_node = self.orig_of.get(&n).and_then(|&o| match i {
             Some(i) => self
                 .arg_of
                 .get(&o)
@@ -871,8 +868,22 @@ impl<'a, 'g> Scan<'a, 'g> {
                 .flatten()
                 .find(|c0| self.rec_of.contains_key(c0))
                 .copied(),
-        };
-        found.unwrap_or(c)
+        });
+        by_node.or_else(|| self.source_by_ret(c)).unwrap_or(c)
+    }
+
+    /// The source call of instance call `c` through its own result node,
+    /// a copy of the source call's result (when its argument is a body node
+    /// every instance shares).
+    fn source_by_ret(&self, c: CallId) -> Option<CallId> {
+        let ret = self.g.m.calls.get(c as usize)?.ret;
+        let o = self.orig_of.get(&ret)?;
+        self.ret_of
+            .get(o)
+            .into_iter()
+            .flatten()
+            .find(|c0| self.rec_of.contains_key(c0))
+            .copied()
     }
 
     /// `source_call` for a binding constraint (`ArgInto`, `RetInto`) of `n`.
@@ -880,17 +891,16 @@ impl<'a, 'g> Scan<'a, 'g> {
         if self.rec_of.contains_key(&c) {
             return c;
         }
-        let Some(&o) = self.orig_of.get(&n) else {
-            return c;
-        };
-        self.arg_of
-            .get(&o)
-            .into_iter()
-            .flatten()
-            .map(|(c0, _)| *c0)
-            .chain(self.ret_of.get(&o).into_iter().flatten().copied())
-            .find(|c0| self.rec_of.contains_key(c0))
-            .unwrap_or(c)
+        let by_node = self.orig_of.get(&n).and_then(|o| {
+            self.arg_of
+                .get(o)
+                .into_iter()
+                .flatten()
+                .map(|(c0, _)| *c0)
+                .chain(self.ret_of.get(o).into_iter().flatten().copied())
+                .find(|c0| self.rec_of.contains_key(c0))
+        });
+        by_node.or_else(|| self.source_by_ret(c)).unwrap_or(c)
     }
 
     fn site(&self, c: CallId) -> String {
