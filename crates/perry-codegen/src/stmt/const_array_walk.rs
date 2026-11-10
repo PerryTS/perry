@@ -418,11 +418,17 @@ fn witness(
     let same = ctx.block().icmp_eq(I64, &head_bits, &recv_bits);
     let ok = ctx.block().and(I1, &agreed, &same);
     branch(ctx, &ok, "forof.im.verify_length", &miss_l);
-    // Immutable: the length is the floor, for good.
+    // The floor is the least length over the Arrays the value may hold;
+    // with one contents it is the length of each.
     let handle = ctx.block().and(I64, &recv_bits, POINTER_MASK_I64);
     let ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &ptr);
-    let fixed = ctx.block().icmp_eq(I32, &length, &rep.floor.to_string());
+    let floor = rep.floor.to_string();
+    let fixed = if consts.is_some() {
+        ctx.block().icmp_eq(I32, &length, &floor)
+    } else {
+        ctx.block().icmp_uge(I32, &length, &floor)
+    };
     if let Some(consts) = consts {
         branch(ctx, &fixed, "forof.im.verify_elems", &miss_l);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);

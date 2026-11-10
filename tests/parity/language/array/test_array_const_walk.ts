@@ -314,19 +314,15 @@ let u1 = "";
 for (const v of U) u1 += v + ",";
 out.push("updates " + u1);
 
-// `Object.assign`, `defineProperty`, `Reflect.set`, `delete`.
+// `Object.assign` and `delete`. (`Object.defineProperty` of an index and
+// `Reflect.set` turn the walk's proof off for the whole program: they are in
+// test_array_const_walk_own_iterator.ts.)
 const O1 = [1, 2, 3];
 Object.assign(O1, { 1: 20 });
-const O2 = [1, 2, 3];
-Object.defineProperty(O2, 1, { value: 21, writable: true, enumerable: true, configurable: true });
-const O3 = [1, 2, 3];
-Reflect.set(O3, 1, 22);
 const O4 = [1, 2, 3];
 delete O4[1];
 let objs = "";
 for (const v of O1) objs += v + ",";
-for (const v of O2) objs += v + ",";
-for (const v of O3) objs += v + ",";
 for (const v of O4) objs += v + ",";
 out.push("object " + objs);
 
