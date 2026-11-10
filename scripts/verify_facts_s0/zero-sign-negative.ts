@@ -4,12 +4,11 @@
 // Under PERRY_FACTS_SABOTAGE=zerosign the division is no sign-observing use:
 // `p` is I32 by tolerance, its slot holds 0 and `1 / p` would be Infinity.
 // The sign witness at the division must report the false claim.
-function f(a: number, b: number): number {
-  const p = a * b;
-  if (p === 0) return 1 / p;
-  return p & 7;
-}
 const n = process.argv.length > 100 ? 1 : -1;
 let out = "";
-for (let i = 0; i < 3; i++) out += String(f(i & 1, n)) + " ";
+for (let i = 0; i < 3; i++) {
+  const a = i & 1;
+  const p = a * n;
+  out += (p === 0 ? String(1 / p) : String(p & 7)) + " ";
+}
 console.log(out);
