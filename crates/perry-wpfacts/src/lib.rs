@@ -903,6 +903,13 @@ fn compute_act<'a>(
     }
     let t2 = std::time::Instant::now();
     g.resolve_param_guards();
+    // I32 at rest (PR A): a field's representation (`FieldFacts::rep`, a
+    // Number field's I32 or an `Arr` field's `elem`) reads int demand, so
+    // demand is solved before the derive. It reads only the solved graph.
+    let demand_first = demand::at_rest_demand();
+    if demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
     let (mut templates, mut sites) = if g.m.aborted {
         (Vec::new(), Vec::new())
     } else {
@@ -913,7 +920,7 @@ fn compute_act<'a>(
     } else {
         derive::element_facts(&g)
     };
-    if !g.m.aborted && g.int_ranges && demand::enabled() {
+    if !demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);

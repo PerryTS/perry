@@ -145,6 +145,14 @@ pub(crate) fn solve(m: &mut Model) {
                         f(src, *dst)
                     }
                     Cons::Guard { from, dst, .. } if filters => f(*from, *dst),
+                    // A summarized run's result delivers its Numbers to
+                    // the call's result unchanged (`Model::ret_into`).
+                    Cons::RetInto { call, .. } if filters => {
+                        let ret = m.calls[*call as usize].ret;
+                        if ret != NO_NODE {
+                            f(src, ret)
+                        }
+                    }
                     _ => {}
                 }
             }
