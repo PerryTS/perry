@@ -161,7 +161,10 @@ fn a_native_that_receives_it_makes_it_mutable() {
     // `JSON.stringify` and `console.log` take the Array to native code: its
     // length is ⊤ there (an escape), so it is no fixed `Arr` and no
     // immutable Array.
-    for use_ in ["const t = JSON.stringify(K);\nconsole.log(t);", "console.log(K);"] {
+    for use_ in [
+        "const t = JSON.stringify(K);\nconsole.log(t);",
+        "console.log(K);",
+    ] {
         let src = format!("const K = [1, 2, 3];\n{use_}\n");
         assert!(!im(&src, "K"), "{use_}");
         assert_eq!(elems(&src, "K"), None, "{use_}");
