@@ -222,6 +222,10 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
         }
     }
+    // N1: a test of two exact int32 chains is one integer compare.
+    if let Some(bit) = crate::expr::i32_temps::try_lower_compare(ctx, expr)? {
+        return Ok(bit);
+    }
     if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
         return Ok(bit);
     }

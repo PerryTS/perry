@@ -123,6 +123,27 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// N1 (`demand::compare_demand`): a strict equality test of node `l`
+    /// (`left`) and node `r` (`right`) against an int32 constant is an int
+    /// consumer of the other operand.
+    pub(crate) fn equality_demand(
+        &mut self,
+        left: &perry_hir::Expr,
+        right: &perry_hir::Expr,
+        l: NodeId,
+        r: NodeId,
+    ) {
+        if !self.int_ranges || !crate::demand::compare_demand() {
+            return;
+        }
+        if crate::demand::int32_constant(right) {
+            self.m.nodes[l as usize].int_use = true;
+        }
+        if crate::demand::int32_constant(left) {
+            self.m.nodes[r as usize].int_use = true;
+        }
+    }
+
     /// Register the interval rule of a numeric operator: `dst` takes its
     /// interval from `op` over `l` (and `r`). On both operands, so a growth
     /// of either re-evaluates it.
