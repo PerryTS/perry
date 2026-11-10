@@ -270,3 +270,10 @@ fn a_captured_record_rejects() {
     let r = rejected("const u = mk(1);\nconst f = () => use(u);\nconsole.log(f());\n");
     assert_eq!(r, "R5StoreHeap(closure capture)");
 }
+
+#[test]
+fn a_record_popped_from_its_array_is_the_array_s_operation() {
+    // `xs.pop()` returns the record from a record array: R6 decides it.
+    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(mk(1));\nconst last = xs.pop();\nconsole.log(last === undefined ? 0 : use(last));\n");
+    assert!(r.starts_with("R6"), "{r}");
+}

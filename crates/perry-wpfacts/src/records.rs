@@ -627,8 +627,9 @@ struct Scan<'a, 'g> {
     copies: FxHashMap<NodeId, Vec<NodeId>>,
     /// A copy's shared node.
     orig_of: FxHashMap<NodeId, NodeId>,
-    /// Locals another function references (`Model::captures`): a closure
-    /// environment cell, a heap slot (closure capture by value is VR-7).
+    /// Locals a closure references (`Model::captures` by a function some
+    /// body creates, `FuncInfo::parent`): a closure environment cell, a heap
+    /// slot (closure capture by value is VR-7).
     captured: FxHashSet<NodeId>,
     /// The nodes holding a token of each object-literal or Arr template.
     holders: FxHashMap<TmplId, Vec<NodeId>>,
@@ -782,7 +783,12 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
         }
         let elem_atom = m.atoms.iter().position(|a| a == ELEM).map(|a| a as Atom);
-        let captured = m.captures.iter().map(|&(n, _)| n).collect();
+        let captured = m
+            .captures
+            .iter()
+            .filter(|&&(_, f)| (f as usize) < m.funcs.len() && m.funcs[f as usize].parent != NO_FN)
+            .map(|&(n, _)| n)
+            .collect();
         Scan {
             g,
             captured,
@@ -1292,6 +1298,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     Use::Allowed => {}
                                     Use::Reject(R4Identity(r))
                                         if self.ignored_route == Some(r.as_str()) => {}
+                                    Use::TypedCall(call)
+                                        if self.own_array_call(call, &recs, linked) => {}
                                     Use::TypedCall(call) => {
                                         if let Err(e) = self.typed_target(self.source_any(call, n))
                                         {
@@ -1395,15 +1403,7 @@ impl<'a, 'g> Scan<'a, 'g> {
         for &(c, i) in self.arg_of.get(&n).into_iter().flatten() {
             // A method of a record array of this record (`played.push(u)`):
             // the array's R6 rules decide it.
-            let into_own_array = self.mcall_recv.get(&c).is_some_and(|&r| {
-                let node = &m.nodes[r as usize];
-                !node.pts.is_empty()
-                    && node.pts.to_sorted().into_iter().all(|t| {
-                        matches!(m.toks[t as usize], TokKind::Obj(a, _)
-                            if linked.get(&a).is_some_and(|tm| recs.contains(tm)))
-                    })
-            });
-            if into_own_array {
+            if self.own_array_call(c, recs, linked) {
                 continue;
             }
             if i == u32::MAX {
@@ -1428,6 +1428,9 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
         }
         for &c in self.ret_of.get(&n).into_iter().flatten() {
+            if self.own_array_call(c, recs, linked) {
+                continue;
+            }
             let c = self.source_call(c, n, None);
             if self.new_calls.contains(&c) {
                 continue;
@@ -1444,6 +1447,26 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
         }
         None
+    }
+
+    /// Call `c` is a method call on record arrays of one of `recs` only
+    /// (`played.push(u)`, `played.pop()`): R6 decides it, as an operation on
+    /// the array (`RECORD_ARRAY_INTRINSICS`).
+    fn own_array_call(
+        &self,
+        c: CallId,
+        recs: &[TmplId],
+        linked: &FxHashMap<TmplId, TmplId>,
+    ) -> bool {
+        let m = &self.g.m;
+        self.mcall_recv.get(&c).is_some_and(|&r| {
+            let node = &m.nodes[r as usize];
+            !node.pts.is_empty()
+                && node.pts.to_sorted().into_iter().all(|t| {
+                    matches!(m.toks[t as usize], TokKind::Obj(a, _)
+                        if linked.get(&a).is_some_and(|tm| recs.contains(tm)))
+                })
+        })
     }
 
     /// The owner ruling's condition on a copy's node (§4.4): read, presence,
