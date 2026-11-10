@@ -78,10 +78,12 @@ fn a_number_field_takes_the_representation_of_its_nodes() {
 }
 
 #[test]
-fn an_escaped_or_switched_off_field_is_boxed() {
+fn a_hard_field_is_boxed() {
     use crate::bindings::Rep;
-    let escaped = format!("{FIELDS}\n(globalThis as any).leak = c;\n");
-    assert_eq!(field_rep(&escaped, "C", "small"), Rep::Boxed);
+    // `delete` (E7) can make a read `undefined` without the field node
+    // holding it: the field keeps no representation.
+    let hard = format!("{FIELDS}\nif (process.argv.length > 100) delete (c as any).small;\n");
+    assert_eq!(field_rep(&hard, "C", "small"), Rep::Boxed);
 }
 
 #[test]
