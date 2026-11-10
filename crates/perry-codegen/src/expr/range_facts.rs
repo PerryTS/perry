@@ -339,24 +339,6 @@ fn int_range_expr_inner(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr).map(IntRange::exact),
         Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
-        // I32 at rest (PR A): a read of a data field the facts give I32 on
-        // every class of an unguarded proven receiver is an int32, however
-        // the read is lowered (the claim is about the field's values, and
-        // the read runs no getter). Check mode tests it at the proven load.
-        Expr::PropertyGet {
-            object, property, ..
-        } if !ctx.wpfacts_off && field_range_enabled() => {
-            let p = super::wpfacts_access::prove(
-                ctx,
-                object,
-                property,
-                super::wpfacts_access::Access::Get,
-            )?;
-            (p.num_rep == Some(crate::codegen::FactsRep::I32)).then_some(IntRange {
-                min: i64::from(i32::MIN),
-                max: i64::from(i32::MAX),
-            })
-        }
         // The literal choices exposed by a private constant-array read retain
         // their integer range through selection. Only literal leaves qualify:
         // an arbitrary condition can write a local before selecting its value.
@@ -468,15 +450,6 @@ fn int_range_expr_inner(
 
 pub(crate) fn int_range_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
     int_range_expr_inner(ctx, expr, &mut std::collections::HashSet::new())
-}
-
-/// `PERRY_FACTS_FIELD_RANGE=0`: a proven read of an I32 field gets no
-/// int32 range (I32 at rest, PR A; measures the consumer on its own).
-fn field_range_enabled() -> bool {
-    !matches!(
-        std::env::var("PERRY_FACTS_FIELD_RANGE").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
 }
 
 fn literal_selection_range(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
