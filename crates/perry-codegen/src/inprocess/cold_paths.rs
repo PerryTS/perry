@@ -1,48 +1,40 @@
 //! Cold paths stay cold through the statepoint rewrite.
 //!
-//! A `cold` helper declaration tells LLVM that the blocks leading to its
-//! call are unlikely: block frequencies, block placement and, above all, the
-//! register allocator's split and spill decisions follow. That information
-//! lives on the callee. `rewrite-statepoints-for-gc` replaces a collecting
-//! call by `gc.statepoint(..., @callee, ...)` and keeps only the attributes
-//! of the call SITE, so for every collecting helper the fact was lost before
-//! the optimizer and the backend ran: the loop poll's slow call, the shared
-//! cold element read and the store slow paths were all weighed like the hot
-//! path, and values live across them were spilled on the hot path too.
+//! A `cold` helper declaration tells LLVM that the blocks leading to its call
+//! are unlikely. Block frequencies follow, and with them block placement and
+//! the register allocator's split and spill decisions: a value that is live
+//! across an unlikely call is saved and restored next to that call instead of
+//! living in memory on the likely path.
+//!
+//! The fact lives on the callee. `rewrite-statepoints-for-gc` runs before the
+//! optimizer and replaces a collecting call by
+//! `gc.statepoint(..., @callee, ...)`, keeping the attributes of the call
+//! SITE only. So for every collecting helper the fact was gone before any
+//! pass could use it: the loop poll's call, the shared cold element read and
+//! the inline-cache misses were weighed like the code around them.
 //!
 //! This pass runs before the rewrite and states the fact where it survives:
 //! - every call to a `cold` callee gets the `cold` call-site attribute;
-//! - a conditional branch with exactly one successor that cannot avoid such
-//!   a call gets explicit `branch_weights`, like the worker-interrupt poll's
-//!   branch (`loop_interrupt`).
+//! - a conditional branch with exactly one side that cannot avoid such a call
+//!   gets the `branch_weights` an `llvm.expect` on its condition would give.
 //!
-//! Nothing about what the calls do changes: same callee, same convention,
-//! same statepoint, same roots.
+//! Nothing about the call changes: same callee, same convention, same
+//! statepoint, same roots.
 
 use inkwell::module::Module;
 use inkwell::values::{AsValueRef, InstructionOpcode};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
-use llvm_sys::LLVMAttributeFunctionIndex;
+use llvm_sys::{LLVMAttributeFunctionIndex, LLVMOpcode};
 use std::collections::HashSet;
 
-/// Taken : not taken, the ratio of the worker-interrupt poll's branch.
-const COLD_WEIGHT: u64 = 1;
-const HOT_WEIGHT: u64 = 1_048_575;
-
-/// `PERRY_COLD_PATHS=0` leaves the module as codegen built it.
-pub(crate) fn enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| enabled_from_env(std::env::var("PERRY_COLD_PATHS").ok().as_deref()))
-}
-
-pub(crate) fn enabled_from_env(value: Option<&str>) -> bool {
-    !matches!(value, Some("0" | "off" | "false"))
-}
+/// LLVM's own `llvm.expect` weights (`-likely-branch-weight`,
+/// `-unlikely-branch-weight`).
+const LIKELY: u64 = 2000;
+const UNLIKELY: u64 = 1;
 
 pub(super) fn apply(module: &Module<'_>) -> (usize, usize) {
-    if !enabled() {
+    if !crate::module::cold_paths_enabled() {
         return (0, 0);
     }
     mark(module)
@@ -55,40 +47,36 @@ fn mark(module: &Module<'_>) -> (usize, usize) {
         let ctx = LLVMGetModuleContext(module.as_mut_ptr());
         let cold_kind = LLVMGetEnumAttributeKindForName(c"cold".as_ptr(), 4);
         let prof_kind = LLVMGetMDKindIDInContext(ctx, c"prof".as_ptr(), 4);
-        // EXPERIMENT knobs (removed before shipping).
-        let extra: Vec<String> = std::env::var("PERRY_COLD_X")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::to_string)
-            .collect();
-        let no_prof = std::env::var("PERRY_COLD_PROF").as_deref() == Ok("0");
-        let is_cold_callee = |callee: LLVMValueRef| {
-            if LLVMIsAFunction(callee).is_null() {
-                return false;
-            }
-            if !LLVMGetEnumAttributeAtIndex(callee, LLVMAttributeFunctionIndex, cold_kind).is_null()
-            {
-                return true;
-            }
-            let mut len = 0usize;
-            let name = LLVMGetValueName2(callee, &mut len);
-            let name = std::slice::from_raw_parts(name.cast::<u8>(), len);
-            extra.iter().any(|x| x.as_bytes() == name)
-        };
+        let i32_ty = LLVMInt32TypeInContext(ctx);
         for function in module.get_functions() {
+            let blocks: Vec<LLVMBasicBlockRef> = function
+                .get_basic_blocks()
+                .iter()
+                .map(|block| block.as_mut_ptr())
+                .collect();
             let mut cold: HashSet<LLVMBasicBlockRef> = HashSet::new();
-            let blocks = function.get_basic_blocks();
-            for block in &blocks {
+            for block in function.get_basic_blocks() {
                 for instruction in block.get_instructions() {
-                    if instruction.get_opcode() != InstructionOpcode::Call {
+                    if !matches!(
+                        instruction.get_opcode(),
+                        InstructionOpcode::Call | InstructionOpcode::Invoke
+                    ) {
                         continue;
                     }
-                    let call = instruction.as_value_ref();
-                    if !is_cold_callee(LLVMGetCalledValue(call)) {
+                    let site = instruction.as_value_ref();
+                    let callee = LLVMGetCalledValue(site);
+                    if LLVMIsAFunction(callee).is_null()
+                        || LLVMGetEnumAttributeAtIndex(
+                            callee,
+                            LLVMAttributeFunctionIndex,
+                            cold_kind,
+                        )
+                        .is_null()
+                    {
                         continue;
                     }
                     LLVMAddCallSiteAttribute(
-                        call,
+                        site,
                         LLVMAttributeFunctionIndex,
                         LLVMCreateEnumAttribute(ctx, cold_kind, 0),
                     );
@@ -96,25 +84,26 @@ fn mark(module: &Module<'_>) -> (usize, usize) {
                     cold.insert(block.as_mut_ptr());
                 }
             }
-            if cold.is_empty() || no_prof {
+            if cold.is_empty() {
                 continue;
             }
-            // A block whose every successor is cold cannot avoid a cold call.
+            let branch = |block: LLVMBasicBlockRef| {
+                let terminator = LLVMGetBasicBlockTerminator(block);
+                (!terminator.is_null()
+                    && LLVMGetInstructionOpcode(terminator) == LLVMOpcode::LLVMBr)
+                    .then_some(terminator)
+            };
+            // A block whose every way on leads into a cold block cannot avoid
+            // the call either.
             loop {
                 let mut grew = false;
-                for block in &blocks {
-                    let block = block.as_mut_ptr();
+                for &block in &blocks {
                     if cold.contains(&block) {
                         continue;
                     }
-                    let terminator = LLVMGetBasicBlockTerminator(block);
-                    if terminator.is_null()
-                        || LLVMGetInstructionOpcode(terminator) != llvm_sys::LLVMOpcode::LLVMBr
-                    {
-                        continue;
-                    }
-                    let n = LLVMGetNumSuccessors(terminator);
-                    if n > 0 && (0..n).all(|i| cold.contains(&LLVMGetSuccessor(terminator, i))) {
+                    let Some(br) = branch(block) else { continue };
+                    let n = LLVMGetNumSuccessors(br);
+                    if n > 0 && (0..n).all(|i| cold.contains(&LLVMGetSuccessor(br, i))) {
                         cold.insert(block);
                         grew = true;
                     }
@@ -123,32 +112,22 @@ fn mark(module: &Module<'_>) -> (usize, usize) {
                     break;
                 }
             }
-            for block in &blocks {
-                let block = block.as_mut_ptr();
+            for &block in &blocks {
                 if cold.contains(&block) {
                     continue;
                 }
-                let terminator = LLVMGetBasicBlockTerminator(block);
-                if terminator.is_null()
-                    || LLVMGetInstructionOpcode(terminator) != llvm_sys::LLVMOpcode::LLVMBr
-                    || LLVMIsConditional(terminator) == 0
-                    || LLVMHasMetadata(terminator) != 0
-                        && !LLVMGetMetadata(terminator, prof_kind).is_null()
-                {
+                let Some(br) = branch(block) else { continue };
+                if LLVMIsConditional(br) == 0 || !LLVMGetMetadata(br, prof_kind).is_null() {
                     continue;
                 }
-                let taken = cold.contains(&LLVMGetSuccessor(terminator, 0));
-                let not_taken = cold.contains(&LLVMGetSuccessor(terminator, 1));
+                let taken = cold.contains(&LLVMGetSuccessor(br, 0));
+                let not_taken = cold.contains(&LLVMGetSuccessor(br, 1));
                 if taken == not_taken {
                     continue;
                 }
-                let i32_ty = LLVMInt32TypeInContext(ctx);
                 let weight = |is_cold: bool| {
-                    LLVMValueAsMetadata(LLVMConstInt(
-                        i32_ty,
-                        if is_cold { COLD_WEIGHT } else { HOT_WEIGHT },
-                        0,
-                    ))
+                    let w = if is_cold { UNLIKELY } else { LIKELY };
+                    LLVMValueAsMetadata(LLVMConstInt(i32_ty, w, 0))
                 };
                 let mut operands = [
                     LLVMMDStringInContext2(ctx, c"branch_weights".as_ptr(), 14),
@@ -156,10 +135,276 @@ fn mark(module: &Module<'_>) -> (usize, usize) {
                     weight(not_taken),
                 ];
                 let node = LLVMMDNodeInContext2(ctx, operands.as_mut_ptr(), operands.len());
-                LLVMSetMetadata(terminator, prof_kind, LLVMMetadataAsValue(ctx, node));
+                LLVMSetMetadata(br, prof_kind, LLVMMetadataAsValue(ctx, node));
                 branches += 1;
             }
         }
     }
     (sites, branches)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inprocess::{parse_ir_text, statepoint_rewritten_ir_with_passes};
+    use crate::linker::STATEPOINT_REWRITE_PASSES;
+    use inkwell::context::Context;
+
+    const IR: &str = r#"
+declare void @slow() cold
+declare void @plain()
+declare i32 @personality(...)
+define void @diamond(i1 %c, ptr %f) {
+entry:
+  br i1 %c, label %arm, label %join
+arm:
+  call void @slow()
+  call void %f()
+  br label %join
+join:
+  ret void
+}
+define void @cold_on_false(i1 %c) {
+entry:
+  br i1 %c, label %join, label %arm
+arm:
+  call void @slow()
+  br label %join
+join:
+  ret void
+}
+define void @through_a_block(i1 %c, i1 %d) {
+entry:
+  br i1 %c, label %setup, label %join
+setup:
+  br i1 %d, label %arm.a, label %arm.b
+arm.a:
+  br label %arm
+arm.b:
+  br label %arm
+arm:
+  call void @slow()
+  br label %join
+join:
+  ret void
+}
+define void @both_cold(i1 %c, i1 %d) {
+entry:
+  br i1 %d, label %pick, label %out
+pick:
+  br i1 %c, label %a, label %b
+a:
+  call void @slow()
+  ret void
+b:
+  call void @slow()
+  ret void
+out:
+  ret void
+}
+define void @not_cold(i1 %c) {
+entry:
+  br i1 %c, label %arm, label %join
+arm:
+  call void @plain()
+  br label %join
+join:
+  ret void
+}
+define void @weighted_already(i1 %c) {
+entry:
+  br i1 %c, label %arm, label %join, !prof !0
+arm:
+  call void @slow()
+  br label %join
+join:
+  ret void
+}
+define void @invoked(i1 %c) personality ptr @personality {
+entry:
+  br i1 %c, label %arm, label %join
+arm:
+  invoke void @slow() to label %join unwind label %pad
+join:
+  ret void
+pad:
+  %p = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %p
+}
+!0 = !{!"branch_weights", i32 7, i32 9}
+"#;
+
+    fn marked() -> (String, (usize, usize)) {
+        let ctx = Context::create();
+        let module = parse_ir_text(&ctx, IR, "cold_paths").unwrap();
+        let counts = mark(&module);
+        module.verify().expect("marked module verifies");
+        (module.print_to_string().to_string(), counts)
+    }
+
+    fn body<'a>(ir: &'a str, name: &str) -> &'a str {
+        let start = ir
+            .find(&format!("define void @{name}("))
+            .unwrap_or_else(|| panic!("no @{name} in:\n{ir}"));
+        let end = ir[start..].find("\n}\n").unwrap() + start;
+        &ir[start..end]
+    }
+
+    /// The attribute group of the first line of `ir` that contains `needle`.
+    fn site_attrs(ir: &str, needle: &str) -> String {
+        let site = ir
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no `{needle}` in:\n{ir}"));
+        let Some(group) = site.split(" #").nth(1) else {
+            return String::new();
+        };
+        let head = format!(
+            "attributes #{} = ",
+            group.split_whitespace().next().unwrap()
+        );
+        ir.lines()
+            .find(|l| l.starts_with(&head))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// The node the `!prof !N` of the line of `text` containing `needle` names.
+    fn weights<'a>(ir: &'a str, text: &str, needle: &str) -> Option<&'a str> {
+        let line = text.lines().find(|l| l.contains(needle))?;
+        let id = line.split("!prof !").nth(1)?.split_whitespace().next()?;
+        let def = format!("\n!{id} = ");
+        let at = ir.find(&def)? + def.len();
+        ir[at..].lines().next()
+    }
+
+    #[test]
+    fn a_cold_callee_marks_its_sites_and_the_branch_into_them() {
+        let (ir, (sites, branches)) = marked();
+        // diamond, cold_on_false, through_a_block, both_cold x2,
+        // weighted_already, invoked.
+        assert_eq!(sites, 7, "{ir}");
+        // diamond, cold_on_false, through_a_block (entry), both_cold (entry),
+        // invoked.
+        assert_eq!(branches, 5, "{ir}");
+        let diamond = body(&ir, "diamond");
+        assert!(
+            site_attrs(&ir, "call void @slow()").contains("cold"),
+            "{ir}"
+        );
+        assert!(
+            site_attrs(&ir, "invoke void @slow()").contains("cold"),
+            "{ir}"
+        );
+        assert_eq!(
+            weights(&ir, diamond, "br i1 %c"),
+            Some("!{!\"branch_weights\", i32 1, i32 2000}"),
+            "{ir}"
+        );
+        assert_eq!(
+            weights(&ir, body(&ir, "cold_on_false"), "br i1 %c"),
+            Some("!{!\"branch_weights\", i32 2000, i32 1}"),
+            "{ir}"
+        );
+        assert_eq!(
+            weights(&ir, body(&ir, "invoked"), "br i1 %c"),
+            Some("!{!\"branch_weights\", i32 1, i32 2000}"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn a_block_that_only_leads_into_a_cold_call_is_cold_too() {
+        let (ir, _) = marked();
+        let f = body(&ir, "through_a_block");
+        assert_eq!(
+            weights(&ir, f, "br i1 %c"),
+            Some("!{!\"branch_weights\", i32 1, i32 2000}"),
+            "{f}"
+        );
+        // `setup` chooses between two ways into the same call: neither side
+        // is the likely one.
+        assert_eq!(weights(&ir, f, "br i1 %d"), None, "{f}");
+        let f = body(&ir, "both_cold");
+        assert_eq!(weights(&ir, f, "br i1 %c"), None, "{f}");
+        assert_eq!(
+            weights(&ir, f, "br i1 %d"),
+            Some("!{!\"branch_weights\", i32 1, i32 2000}"),
+            "{f}"
+        );
+    }
+
+    #[test]
+    fn negative_controls_keep_their_calls_and_branches() {
+        let (ir, _) = marked();
+        let plain = body(&ir, "not_cold");
+        assert!(!plain.contains("!prof"), "{ir}");
+        assert_eq!(site_attrs(&ir, "call void @plain()"), "", "{ir}");
+        assert_eq!(site_attrs(&ir, "call void %f()"), "", "{ir}");
+        assert_eq!(
+            weights(&ir, body(&ir, "weighted_already"), "br i1 %c"),
+            Some("!{!\"branch_weights\", i32 7, i32 9}"),
+            "weights a lowering wrote are kept:\n{ir}"
+        );
+    }
+
+    const GC_IR: &str = r#"
+declare void @slow() cold
+define ptr addrspace(1) @rooted(ptr addrspace(1) %p, i1 %c) gc "statepoint-example" {
+entry:
+  br i1 %c, label %arm, label %join
+arm:
+  call void @slow()
+  br label %join
+join:
+  ret ptr addrspace(1) %p
+}
+"#;
+
+    /// What this pass exists for: the rewrite drops the callee's `cold`
+    /// (negative control) and keeps the call site's. The roots are the same
+    /// either way.
+    #[test]
+    fn the_statepoint_rewrite_keeps_only_the_call_site_attribute() {
+        let target = "x86_64-unknown-linux-gnu";
+        let statepoint = "@llvm.experimental.gc.statepoint";
+        let unmarked = statepoint_rewritten_ir_with_passes(
+            GC_IR,
+            target,
+            "unmarked",
+            STATEPOINT_REWRITE_PASSES,
+        )
+        .unwrap();
+        assert!(
+            !site_attrs(&unmarked, statepoint).contains("cold"),
+            "without the pass the statepoint does not say cold:\n{unmarked}"
+        );
+        assert!(!unmarked.contains("!prof"), "{unmarked}");
+
+        let ctx = Context::create();
+        let module = parse_ir_text(&ctx, GC_IR, "marked").unwrap();
+        assert_eq!(mark(&module), (1, 1));
+        let marked = statepoint_rewritten_ir_with_passes(
+            &module.print_to_string().to_string(),
+            target,
+            "marked",
+            STATEPOINT_REWRITE_PASSES,
+        )
+        .unwrap();
+        assert!(
+            site_attrs(&marked, statepoint).contains("cold"),
+            "the statepoint carries `cold`:\n{marked}"
+        );
+        assert!(
+            marked.contains("!\"branch_weights\", i32 1, i32 2000"),
+            "{marked}"
+        );
+        let relocations = |ir: &str| ir.matches("@llvm.experimental.gc.relocate").count();
+        assert!(relocations(&marked) > 0, "{marked}");
+        assert_eq!(relocations(&marked), relocations(&unmarked));
+        assert_eq!(
+            marked.matches("\"gc-live\"").count(),
+            unmarked.matches("\"gc-live\"").count()
+        );
+    }
 }
