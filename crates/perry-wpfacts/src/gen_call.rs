@@ -189,6 +189,7 @@ impl<'a> Gen<'a> {
                             offset,
                             recv,
                             site,
+                            fill_site: u32::MAX,
                         };
                         self.m.rest_fills.push(fill);
                     }
@@ -223,6 +224,9 @@ impl<'a> Gen<'a> {
                     });
                 }
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(f) = self.m.rest_fills.last_mut().filter(|f| fused_fill && f.recv == o) {
+                    f.fill_site = self.m.calls[call as usize].site;
+                }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }

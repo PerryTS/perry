@@ -57,7 +57,7 @@
 
 use crate::bindings::{owner_metadata_written, tok_arr_rep, ElemRep, ModuleBindings};
 use crate::gen::Gen;
-use crate::model::{Cons, Model, NodeId, SiteId, ThisArg, TmplId, TmplKind, Tok, TOP};
+use crate::model::{Cons, Model, NodeId, SiteId, TmplId, TmplKind, Tok, TOP};
 use crate::pts::{FxHashMap, FxHashSet};
 
 /// `PERRY_REST_ELEMS=0` turns the storage kind off.
@@ -70,13 +70,15 @@ pub(crate) fn enabled() -> bool {
 
 /// A fused fill birth `new Array(k).fill(v)` (`Gen::call_with`): the
 /// module, the `fill` call's offset (codegen's key for the call), the
-/// fill's receiver node and the `new Array` call's source site.
+/// fill's receiver node, the `new Array` call's source site and the `fill`
+/// call's (every call the solver derives from one shares its site).
 #[derive(Clone, Copy, Debug)]
 pub struct RestFill {
     pub module: u32,
     pub offset: u32,
     pub recv: NodeId,
     pub site: SiteId,
+    pub fill_site: SiteId,
 }
 
 impl Model {
@@ -88,12 +90,11 @@ impl Model {
     }
 }
 
-/// `call` is the `fill` of a fused fill birth, on the birth's receiver.
+/// `call` is (derived from) the `fill` call of a fused fill birth.
 pub(crate) fn fused_fill(m: &Model, call: crate::model::CallId) -> bool {
-    match m.calls.get(call as usize).map(|c| &c.this) {
-        Some(ThisArg::Node(n)) => m.rest_fills.iter().any(|f| f.recv == *n),
-        _ => false,
-    }
+    m.calls
+        .get(call as usize)
+        .is_some_and(|c| m.rest_fills.iter().any(|f| f.fill_site == c.site))
 }
 
 /// Every copy a summarized body's node has (`Inst::fresh`), by original.
@@ -183,7 +184,7 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         }
         Cons::IdxLoad { dst, .. } | Cons::IdxOwnLoad { dst, .. } => reads.contains(&dst),
         Cons::Store { site, .. } => index_store(m, site) || m.rest_elem_sabotage,
-        Cons::MCall { .. } => fill_recv || m.rest_elem_sabotage,
+        Cons::MCall { call, .. } => fill_recv || fused_fill(m, call) || m.rest_elem_sabotage,
         Cons::Identity { .. }
         | Cons::Raise { .. }
         | Cons::IndexHole
@@ -198,6 +199,18 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         // A callee: calling or constructing an Array throws before any
         // element is read (the `new Array` holder holds what it births).
         Cons::Call { .. } | Cons::New { .. } | Cons::NewNamed { .. } => true,
+        // The prototype lookup a load, a method call or a protocol touch
+        // continues on: the root on the holder is what decides (and a
+        // builtin method or protocol records its use, `Model::rest_used`).
+        Cons::Chain { .. }
+        | Cons::ChainUnion { .. }
+        | Cons::PlainKey { .. }
+        | Cons::ProtoMethods { .. }
+        | Cons::AnyAccessors { .. }
+        | Cons::HolderStep { .. }
+        | Cons::VisitHolders { .. }
+        | Cons::VisitStop { .. }
+        | Cons::ProtoClosure { .. } => true,
         // The fused fill's receiver: the birth and its native fill.
         _ => fill_recv,
     };
@@ -358,7 +371,10 @@ pub(crate) fn admit(
             .iter()
             .find_map(|c| use_of(m, c, fill_recv, &reads))
         {
-            let why = format!("{why} on {}", m.labels.get(n as usize).copied().unwrap_or("?"));
+            let why = format!(
+                "{why} on {}",
+                m.labels.get(n as usize).copied().unwrap_or("?")
+            );
             refuse(&mut cand, hit, &why);
         }
     }
