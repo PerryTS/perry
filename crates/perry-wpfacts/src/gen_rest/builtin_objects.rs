@@ -265,13 +265,41 @@ impl<'a> Gen<'a> {
                 // toJSON / getters run; replacer functions are called by
                 // the runtime with runtime values.
                 let ks = kids(e);
-                let out = self.prim_op(
-                    fx,
-                    &ks[..ks.len().min(1)],
-                    prim::STR | prim::UNDEF,
-                    "JSON.stringify value",
-                    Protocol::Json,
-                );
+                let replacer = match e {
+                    Expr::JsonStringifyFull(_, r, _) => Some(&**r),
+                    Expr::JsonStringifyPretty { replacer, .. } => replacer.as_deref(),
+                    _ => None,
+                };
+                // A replacer function sees every value serialized, unseen
+                // by the model (DESIGN-p4l4 §4.1, finding 14): with value
+                // records on, the value's identity is observed.
+                let replaced = self.m.value_records
+                    && replacer.is_some_and(|r| {
+                        !matches!(r, Expr::Null | Expr::Undefined | Expr::Array(..))
+                    });
+                let out = if replaced && !ks.is_empty() {
+                    let r = self.m.reason("JSON.stringify value");
+                    let v = self.expr(fx, ks[0]);
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Json,
+                        },
+                    );
+                    self.m.identity(v, IdentityRoute::JsonReplacer);
+                    let out = self.tmp("primop");
+                    self.m.add_prim(out, prim::STR | prim::UNDEF);
+                    out
+                } else {
+                    self.prim_op(
+                        fx,
+                        &ks[..ks.len().min(1)],
+                        prim::STR | prim::UNDEF,
+                        "JSON.stringify value",
+                        Protocol::Json,
+                    )
+                };
                 let rest = &ks[ks.len().min(1)..];
                 let _ = self.prim_op(
                     fx,
