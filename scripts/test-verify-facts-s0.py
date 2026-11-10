@@ -106,6 +106,7 @@ def main():
         ("receiver-negative", "unchecked", "F4 receiver set"),
         ("kind-negative", "kind:Box.v=num", "F2 kind"),
         ("int32-negative", "range", "int32 input"),
+        ("int32-compare-negative", "range", "int32 input"),
         ("arrlen-negative", "arrlen", "array constant length"),
         ("element-read-negative", "arrlen", "proven element read"),
         ("element-read-sparse-birth", "densebirth", "proven element read"),
