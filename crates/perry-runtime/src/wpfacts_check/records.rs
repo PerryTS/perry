@@ -6,7 +6,8 @@
 //! bit `OBJ_FLAG_RECORD_CLAIM`). The facts say such an object's identity is
 //! never observed (R4): compiled `===`/`==`/`switch` call
 //! `perry_verify_facts_record_identity` with both operands, and the runtime's
-//! identity routes (`value/equality.rs`, Map and Set keys) call [`route`].
+//! identity routes in `value/equality.rs` call [`route`] (Map and Set keys are
+//! not hooked: their compare is hot in release code).
 //! Either aborts with rc 86 when an operand carries the claim.
 //!
 //! A release program never sets the bit and never arms the routes: [`route`]
