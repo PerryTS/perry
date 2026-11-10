@@ -1487,7 +1487,13 @@ impl Model {
                             .unwrap_or_else(|| crate::model::range::eval(op, l, r))
                     }
                 };
-                if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
+                let d = &mut self.nodes[dst as usize];
+                let grew = if self.exact_rules {
+                    crate::solve::grow_rule_range(d, iv, self.exact_rule_sabotage)
+                } else {
+                    crate::solve::grow_range(d, iv)
+                };
+                if grew {
                     let d = &mut self.nodes[dst as usize];
                     if !d.in_wl {
                         d.in_wl = true;

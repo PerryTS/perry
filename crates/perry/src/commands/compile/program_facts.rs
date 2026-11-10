@@ -151,6 +151,14 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_exact_rules: matches!(
+            std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_leaving_writes: matches!(
+            std::env::var("PERRY_FACTS_LEAVING_WRITES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -894,6 +902,14 @@ pub(crate) fn activation(
         ),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_exact_rules: matches!(
+            std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_leaving_writes: matches!(
+            std::env::var("PERRY_FACTS_LEAVING_WRITES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_elem_undef: matches!(

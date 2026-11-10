@@ -1206,34 +1206,44 @@ impl<'a> Gen<'a> {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
+                // A branch that always leaves: its writes reach only where
+                // it jumps to (`narrow_leave`).
+                let pre = self.narrow_snapshot();
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(&then_fx, then_branch);
                 self.narrow_pop(k);
+                self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         ..fx.clone()
                     };
+                    let pre = self.narrow_snapshot();
                     let k = self.narrow_guard(fx, condition, false);
                     self.stmts(&else_fx, e);
                     self.narrow_pop(k);
+                    self.narrow_leave(e, pre);
                 }
             }
             Stmt::While { condition, body } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
+                self.jumps += 1;
                 let _ = self.expr(fx, condition);
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(fx, body);
                 self.narrow_pop(k);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::DoWhile { body, condition } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
+                self.jumps += 1;
                 let _ = self.expr(fx, condition);
                 self.stmts(fx, body);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::For {
@@ -1247,6 +1257,7 @@ impl<'a> Gen<'a> {
                     self.stmt(fx, i);
                 }
                 self.loop_depth += 1;
+                self.jumps += 1;
                 if let Some(c) = condition {
                     let _ = self.expr(fx, c);
                 }
@@ -1274,6 +1285,7 @@ impl<'a> Gen<'a> {
                 if narrowed {
                     self.narrow_end();
                 }
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
@@ -1303,6 +1315,7 @@ impl<'a> Gen<'a> {
                 // finally run in the enclosing one.
                 let rt = self.m.node_l("RAISE-try");
                 let outer = std::mem::replace(&mut self.m.gen_region, Some(rt));
+                self.tries += 1;
                 self.stmts(fx, body);
                 self.m.gen_region = outer;
                 if let Some(c) = catch {
@@ -1319,6 +1332,7 @@ impl<'a> Gen<'a> {
                 if let Some(f) = finally {
                     self.stmts(fx, f);
                 }
+                self.tries -= 1;
             }
             Stmt::Switch {
                 discriminant,
@@ -1327,12 +1341,14 @@ impl<'a> Gen<'a> {
                 let d = self.expr(fx, discriminant);
                 // `===` against case values: no coercion.
                 let _ = d;
+                self.jumps += 1;
                 for c in cases {
                     if let Some(t) = &c.test {
                         let _ = self.expr(fx, t);
                     }
                     self.stmts(fx, &c.body);
                 }
+                self.jumps -= 1;
             }
         }
     }

@@ -1259,6 +1259,14 @@ pub struct Model {
     /// `+` interval rule drops its right operand, a wrong transfer the
     /// int32 witnesses must catch.
     pub range_sabotage: bool,
+    /// R1: a `Cons::Range` result takes the join of its rule's evaluations
+    /// without widening (`solve::grow_rule_range`); only copy targets widen.
+    /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
+    pub exact_rules: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): a rule result
+    /// keeps its first interval, a claim too narrow for the values its
+    /// operands grow to, which the witnesses must catch.
+    pub exact_rule_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
     /// counts as one inside its array's birth length (`arr_len_index`).
     pub arr_len_sabotage: bool,
