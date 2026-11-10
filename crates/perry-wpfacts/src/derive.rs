@@ -113,8 +113,9 @@ pub struct FieldFacts {
     /// (`bindings::arr_rep`) when it is definite, a data field, and the
     /// template is neither escaped nor hard (a `delete` or a
     /// `setPrototypeOf` on an instance can make the read `undefined`
-    /// without the field node holding it); Boxed otherwise. No consumer
-    /// yet (PR-C3 reads it).
+    /// without the field node holding it); Boxed otherwise, and with
+    /// `PERRY_FACTS_ARRAY_FIELDS=0`. A read of the field is a value of this
+    /// representation (PR-C3: codegen's `FieldProof::array`).
     pub rep: crate::bindings::Rep,
 }
 
@@ -899,14 +900,24 @@ fn template_facts(
         } else {
             Vec::new()
         };
-        let rep = if definite && !is_accessor && escape.is_none() && hard.is_none() {
+        let rep = if m.array_fields
+            && definite
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+        {
             // The field nodes of the tokens that have one, as `field_kind`
             // reads them.
             let nodes: Vec<NodeId> = ts
                 .iter()
                 .filter_map(|t| m.fields.get(&(*t, a)).copied())
                 .collect();
-            crate::bindings::arr_rep(m, &nodes)
+            let ignored = if m.arr_field_sabotage {
+                prim::NULL | prim::UNDEF
+            } else {
+                0
+            };
+            crate::bindings::arr_rep_beside(m, &nodes, ignored)
                 .map_or(crate::bindings::Rep::Boxed, crate::bindings::Rep::Arr)
         } else {
             crate::bindings::Rep::Boxed

@@ -25,8 +25,17 @@
 //! The caller's receivers flow into F's `this` (1), so they are a subset of
 //! every set F's facts were joined over (4, 5b, 5d): the facts hold for
 //! every value the caller can pass.
+//!
+//! **In the floor (DESIGN-p4l1 §2.8, §3; PR-C3).** `FieldReadCall::array` is
+//! the representation of everything F's element read may read from
+//! (`bindings::arr_rep` over every copy of its receiver), and `in_floor`
+//! says this call's own argument `k` is an integer in `[0, array.floor)` of
+//! arrays that are dense below it. The slot is then a present own element
+//! at every such call, whatever keys F's other callers pass: the body's
+//! read joins them all and keeps its `undefined`, the call does not.
+//! `PERRY_FACTS_ARRAY_FIELDS=0` exports neither.
 
-use crate::bindings::{owner_metadata_written, ModuleBindings};
+use crate::bindings::{arr_rep, owner_metadata_written, ArrRep, ModuleBindings};
 use crate::derive::{SiteFacts, Verdict};
 use crate::gen::Gen;
 use crate::model::{TokKind, TOP};
@@ -69,6 +78,12 @@ pub struct FieldReadCall {
     pub element_offset: u32,
     /// F's `this.f` read's byte offset.
     pub field_offset: u32,
+    /// What F's element read reads from, when that is only plain program
+    /// Arrays (module docs).
+    pub array: Option<ArrRep>,
+    /// This call's index is an integer in `[0, array.floor)` and the arrays
+    /// are dense below the floor: the slot is a present own element.
+    pub in_floor: bool,
 }
 
 type Shape = (String, usize, Option<FieldReadDefault>, u32, u32);
@@ -145,13 +160,16 @@ fn method(m: &perry_hir::Module, func_id: u32) -> Option<&perry_hir::Function> {
 /// Fill `ModuleBindings::field_read_calls` (module docs). `interpreted`:
 /// interpreted code can run (`ProgramFacts::interp_guard`). `sabotage`: the
 /// negative control `PERRY_FACTS_SABOTAGE=fieldreadcall` drops conditions
-/// 1, 4 and 5 (the shape and argument count still hold).
+/// 1, 4 and 5 (the shape and argument count still hold). `floor_sabotage`:
+/// the negative control `PERRY_FACTS_SABOTAGE=arrb1` claims `in_floor` for
+/// every call into a dense floor, whatever its key.
 pub(crate) fn collect(
     g: &Gen<'_>,
     sites: &[SiteFacts],
     bindings: &mut [ModuleBindings],
     interpreted: bool,
     sabotage: bool,
+    floor_sabotage: bool,
 ) {
     let m = &g.m;
     // 5c.
@@ -196,6 +214,34 @@ pub(crate) fn collect(
                         })
             })
     };
+    // A summarized body's receiver node has one copy per instance
+    // (`Inst::fresh`), as `element_keys` reads a key's.
+    let mut inst_copies: std::collections::HashMap<crate::model::NodeId, Vec<_>> =
+        Default::default();
+    if m.array_fields {
+        for inst in 0..m.sum.insts.len() as u32 {
+            m.inst_copies(inst, |orig, copy| {
+                inst_copies.entry(orig).or_default().push(copy)
+            });
+        }
+    }
+    // What F's element read reads from: every copy of its receiver.
+    let array_of = |mi: u32, offset: u32| -> Option<ArrRep> {
+        if !m.array_fields {
+            return None;
+        }
+        let mut nodes = Vec::new();
+        for e in &g.element_sites {
+            if e.module == mi
+                && e.byte_offset == offset
+                && e.op == crate::derive::ElementOp::Read
+            {
+                nodes.push(e.recv);
+                nodes.extend(inst_copies.get(&e.recv).into_iter().flatten().copied());
+            }
+        }
+        arr_rep(m, &nodes)
+    };
     for s in sites {
         let one_body = s.target_fns.len() == 1 || sabotage && !s.target_fns.is_empty();
         if !s.is_call || !one_body {
@@ -233,6 +279,16 @@ pub(crate) fn collect(
         {
             continue;
         }
+        let array = array_of(fm, element_offset);
+        let in_floor = array.is_some_and(|r| {
+            r.dense
+                && (floor_sabotage
+                    || args
+                        .get(k)
+                        .copied()
+                        .flatten()
+                        .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(r.floor)))
+        });
         bindings[s.module as usize].field_read_calls.push((
             s.byte_offset,
             FieldReadCall {
@@ -241,6 +297,8 @@ pub(crate) fn collect(
                 default,
                 element_offset,
                 field_offset,
+                array,
+                in_floor,
             },
         ));
     }

@@ -147,6 +147,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_array_fields: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -582,6 +586,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     default,
                     element_offset: c.element_offset,
                     field_offset: c.field_offset,
+                    in_floor: c.array.filter(|_| c.in_floor).map(|r| r.floor),
                 },
             );
         }
@@ -708,6 +713,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     ta_kind: f.ta_kind,
                     declared: f.declared,
                     reserved: f.reserved,
+                    rep: facts_rep(f.rep),
                 })
             })
             .collect();
@@ -879,6 +885,10 @@ pub(crate) fn activation(
         ),
         no_array_reps: matches!(
             std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_fields: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_elem_undef: matches!(

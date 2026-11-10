@@ -79,12 +79,23 @@ pub(crate) fn witness(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<()> {
     } else {
         None
     };
-    emit(ctx, &recv, key.as_deref(), r, *id);
+    emit(ctx, &recv, key.as_deref(), r, &format!("local {id}"));
     Ok(())
 }
 
+/// Check mode at a field read the facts give `Arr(r)` (DESIGN-p4l1 §5.1,
+/// PR-C3): the claim on the word `value` the read loaded. `what` names the
+/// field for the report.
+pub(crate) fn witness_value(ctx: &mut FnCtx<'_>, value: &str, r: FactsArrRep, what: &str) {
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "field": what, "floor": r.floor }),
+    );
+    emit(ctx, value, None, r, what);
+}
+
 /// The tests of `witness` on the lowered receiver `recv` and key `key`.
-fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, id: u32) {
+fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what: &str) {
     let miss = ctx.new_block("arr_rep.verify_miss");
     let next = ctx.new_block("arr_rep.admitted");
     let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
@@ -121,7 +132,7 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, id: 
     let extent = ctx.block().and(I1, &long, &backed);
     let Some(key) = key else {
         ctx.block().cond_br(&extent, &next_l, &miss_l);
-        finish(ctx, miss, next, recv, r, id);
+        finish(ctx, miss, next, recv, r, what);
         return;
     };
     branch(ctx, &extent, "arr_rep.key", &miss_l);
@@ -154,7 +165,7 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, id: 
     let present = ctx.block().xor(I1, &hole, "true");
     branch(ctx, &present, "arr_rep.elem_kind", &next_l);
     elem_test(ctx, &raw, r.elem, &next_l, &miss_l);
-    finish(ctx, miss, next, recv, r, id);
+    finish(ctx, miss, next, recv, r, what);
 }
 
 /// Check mode at the rep-keyed tier: what the read `recv[idx]` (`idx` an
@@ -169,7 +180,7 @@ pub(super) fn witness_read(
     let r = read.rep;
     crate::verify_facts::covered(
         crate::verify_facts::Fact::ArrayRep,
-        || serde_json::json!({ "local": read.local, "floor": r.floor, "read": true }),
+        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "read": true }),
     );
     let miss = ctx.new_block("arep.verify_miss");
     let next = ctx.new_block("arep.admitted");
@@ -215,7 +226,10 @@ pub(super) fn witness_read(
     let extent = ctx.block().and(I1, &long, &backed);
     branch(ctx, &extent, "arep.verify_key", &miss_l);
     if read.in_floor {
-        let below = ctx.block().icmp_ult(I32, idx, &floor);
+        // The floor the key was proven below (a field read call's own).
+        let below = ctx
+            .block()
+            .icmp_ult(I32, idx, &read.key_floor.to_string());
         branch(ctx, &below, "arep.verify_stored", &miss_l);
     }
     // The slot, when the store holds it.
@@ -247,7 +261,7 @@ pub(super) fn witness_read(
         r.elem
     };
     elem_test(ctx, &raw, elem, &next_l, &miss_l);
-    finish(ctx, miss, next, recv, r, read.local);
+    finish(ctx, miss, next, recv, r, &read.receiver.label());
 }
 
 /// The element kind test of a present slot `raw`: none for Boxed, a plain
@@ -287,12 +301,19 @@ fn branch(ctx: &mut FnCtx<'_>, cond: &str, name: &str, other: &str) {
 }
 
 /// The miss block's report, then `next` is current.
-fn finish(ctx: &mut FnCtx<'_>, miss: usize, next: usize, recv: &str, r: FactsArrRep, id: u32) {
+fn finish(
+    ctx: &mut FnCtx<'_>,
+    miss: usize,
+    next: usize,
+    recv: &str,
+    r: FactsArrRep,
+    what: &str,
+) {
     ctx.current_block = miss;
     let site = crate::verify_facts::site_arg(
         ctx,
         &format!(
-            "array rep of local {id}: elem {:?}, floor {}, dense {}, fixed {}",
+            "array rep of {what}: elem {:?}, floor {}, dense {}, fixed {}",
             r.elem, r.floor, r.dense, r.fixed
         ),
         crate::verify_facts::Fact::ArrayRep,
