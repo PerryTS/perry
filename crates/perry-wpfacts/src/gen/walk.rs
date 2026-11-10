@@ -1333,10 +1333,11 @@ impl<'a> Gen<'a> {
             } => {
                 let d = self.expr(fx, discriminant);
                 // `===` against case values: no coercion.
-                let _ = d;
                 for c in cases {
                     if let Some(t) = &c.test {
-                        let _ = self.expr(fx, t);
+                        let tv = self.expr(fx, t);
+                        // N1: a case test is the strict equality it means.
+                        self.equality_demand(discriminant, t, d, tv);
                     }
                     self.stmts(fx, &c.body);
                 }

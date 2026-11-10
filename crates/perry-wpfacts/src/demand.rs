@@ -3,8 +3,10 @@
 //!
 //! An int consumer is an operand the language converts to an integer: an
 //! element key (`Expr::IndexGet` / `IndexSet` / `IndexUpdate` and the
-//! buffer forms) and the operands of the bitwise operators and `Math.imul`.
-//! The generator marks those operand nodes (`Node::int_use`). After the solve
+//! buffer forms), the operands of the bitwise operators and `Math.imul`, and
+//! (N1, `compare_demand`) the operand a strict equality or a `switch` case
+//! tests against an int32 constant. The generator marks those operand nodes
+//! (`Node::int_use`). After the solve
 //! the demand flows backwards: from a node to every node with a copy edge
 //! into it (`Node::succ`), and from an integer rule's result to its operands
 //! (`Cons::Range` for the operators whose integer result is computed from the
@@ -55,6 +57,43 @@ pub(crate) fn int_operands(op: RangeOp) -> bool {
             | RangeOp::BitNot
             | RangeOp::Imul
     )
+}
+
+/// N1: an equality test against an int32 constant (`x === 5`, `x != -17`,
+/// a `switch` case) is an int consumer of the other operand: on an I32
+/// operand it is one integer compare, on a double it is `ucomisd` plus the
+/// NaN branch. Relational tests (`i < n`) are not: a counter that only meets
+/// a loop bound and feeds double arithmetic keeps F64 (#7128).
+/// `PERRY_FACTS_COMPARE_DEMAND=0` seeds nothing here.
+pub(crate) fn compare_demand() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_COMPARE_DEMAND").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `e` is an int32 Number constant: an integer literal, or the negation of
+/// one, inside `[-2^31, 2^31)`, never `-0`.
+pub(crate) fn int32_constant(e: &perry_hir::Expr) -> bool {
+    use perry_hir::{Expr, UnaryOp};
+    let v = match e {
+        Expr::Integer(n) => *n as f64,
+        Expr::Number(n) => *n,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => match operand.as_ref() {
+            Expr::Integer(n) if *n != 0 => -(*n as f64),
+            Expr::Number(n) if *n != 0.0 => -*n,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    v.is_finite()
+        && v.trunc() == v
+        && !(v == 0.0 && v.is_sign_negative())
+        && v >= f64::from(i32::MIN)
+        && v <= f64::from(i32::MAX)
 }
 
 pub(crate) fn enabled() -> bool {
