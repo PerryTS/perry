@@ -1,0 +1,1 @@
+Integer temporaries keep the I32 representation: a conditional, `Math.min`, `Math.max` or `Math.abs` of integer operands is computed as an integer, and a test of two exact integer operands is one integer compare, so loop bounds like `f <= Math.min(7, file + 1)` and selected squares no longer round-trip through doubles (`PERRY_WP_REP_TEMPS=0` restores the double lowering).
