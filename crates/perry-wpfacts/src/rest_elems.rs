@@ -127,7 +127,7 @@ fn tok_refusal(m: &Model, t: Tok, tm: TmplId) -> Option<&'static str> {
     let r = tok_arr_rep(m, t, tm, true);
     if r.elem != ElemRep::I32 {
         let Some(&e) = m.all_fields.get(&t) else {
-            return Some("no element node");
+            return Some("elem not a number");
         };
         let e = &m.nodes[e as usize];
         return Some(if e.prim != crate::model::prim::NUM || !e.pts.is_empty() {
@@ -276,7 +276,10 @@ pub(crate) fn admit(
             refused.insert(tm, "no offset");
             continue;
         }
-        let toks = m.tmpl_toks(tm);
+        // A token the fill wrote has an element node; one with none (the
+        // template's own token beside its birth-site tokens) holds no Array.
+        let mut toks = m.tmpl_toks(tm);
+        toks.retain(|t| m.all_fields.contains_key(t));
         let why = if interpreted {
             Some("interpreter")
         } else if toks.is_empty() {
