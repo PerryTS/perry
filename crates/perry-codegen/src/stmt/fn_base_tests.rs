@@ -29,11 +29,11 @@ fn lower(src: &str) -> Module {
 const SRC: &str = "export class B {\n\
   board: number[] = [];\n\
   at(sq: number): number { return this.board[sq] ?? 0; }\n\
-  three(a: number): number { return this.at(a & 127) + this.at((a + 1) & 127) + this.at((a + 2) & 127); }\n\
-  one(a: number): number { return this.at(a & 127); }\n\
-  calls(a: number): number { let s = this.at(a & 63); this.board.push(1); s += this.at((a + 3) & 63); return s; }\n\
-  after(a: number): number { this.board.push(2); let s = this.at(a & 31); return s + this.at((a + 9) & 31); }\n\
-  outer(a: number): number { let s = this.at(a & 15); let i = 0; while (i < 100) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
+  three(n: number): number { return this.at(3) + this.at(5) + this.at(7); }\n\
+  one(n: number): number { return this.at(9); }\n\
+  calls(n: number): number { let s = this.at(1); this.board.push(1); s += this.at(2); return s; }\n\
+  after(n: number): number { this.board.push(2); let s = this.at(4); return s + this.at(6); }\n\
+  outer(n: number): number { let s = this.at(8); let i = 0; while (i < 100) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
 }\n";
 
 const GROWABLE: FactsArrRep = FactsArrRep {
