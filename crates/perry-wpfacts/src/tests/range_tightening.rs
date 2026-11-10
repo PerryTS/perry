@@ -110,7 +110,7 @@ fn reaching() -> String {
         "  falls(): number { let s = 0; for (let q = 0; q < 128; q++) { if ((q & 0x88) !== 0) { q += 7; } s += this.at(q + 0); } return s; }\n\
            inSwitch(k: number): number { let s = 0; for (let q = 0; q < 128; q++) { switch (k) { case 1: if (q > 3) { q += 200; break; } s += 1; } s += this.at(q - 0); } return s; }\n\
            inTry(): number { let s = 0; for (let q = 0; q < 128; q++) { try { if (q > 3) { q += 200; continue; } } finally { s += this.at(q * 1); } } return s; }\n\
-           labeled(): number { let s = 0; outer: for (let q = 0; q < 128; q++) { if (q > 3) { q += 200; continue outer; } s += this.at(q | 0); } return s; }\n\
+           labeled(): number { let s = 0; outer: for (let q = 0; q < 128; q++) { if ((q & 0x88) !== 0) { q += 200; continue outer; } s += this.at(q | 0); } return s; }\n\
            sumPast(): number { let s = 0; for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) s += this.at(r * 16 + f + 9); return s; }",
         "b.falls(), b.inSwitch(1), b.inSwitch(2), b.inTry(), b.labeled(), b.sumPast()",
     )
