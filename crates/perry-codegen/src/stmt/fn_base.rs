@@ -125,7 +125,13 @@ pub(crate) fn plan(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
         return;
     };
     if cold && !admit_all && !ctx.receiver_descriptors.only_field_bases() {
-        diag(ctx, &names, start, n, "refused:cold-arm-under-another-address");
+        diag(
+            ctx,
+            &names,
+            start,
+            n,
+            "refused:cold-arm-under-another-address",
+        );
         return;
     }
     // Rule 3, per field.
@@ -156,11 +162,7 @@ pub(crate) fn plan(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
         &shown,
         start,
         n,
-        if cold {
-            "planned:cold-arm"
-        } else {
-            "planned"
-        },
+        if cold { "planned:cold-arm" } else { "planned" },
     );
     ctx.fn_base = Pending {
         list: Some(key(body)),
@@ -229,7 +231,10 @@ fn walk_body<'s>(ctx: &FnCtx<'_>, s: &'s Stmt) -> Option<(&'s [Stmt], usize)> {
 /// in `reads` classified as PR-D classifies a served read.
 fn stmt_enders(ctx: &FnCtx<'_>, s: &Stmt, reads: &[Read]) -> Vec<RegionEnder> {
     if let Some((body, _)) = walk_body(ctx, s) {
-        return body.iter().flat_map(|st| stmt_enders(ctx, st, reads)).collect();
+        return body
+            .iter()
+            .flat_map(|st| stmt_enders(ctx, st, reads))
+            .collect();
     }
     let is_inert = |e: &Expr| crate::rooting::expr_is_inert_primitive(ctx, e);
     let primitive = |e: &Expr| {

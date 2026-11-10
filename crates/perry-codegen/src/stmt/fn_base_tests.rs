@@ -136,25 +136,25 @@ fn method(ir: &str, name: &str) -> String {
 
 #[test]
 fn straight_line_reads_share_one_install() {
-    let ir = ir(FactsRep::Arr(GROWABLE));
-    let f = method(&ir, "three");
+    let text = ir(FactsRep::Arr(GROWABLE));
+    let f = method(&text, "three");
     // One install (one forwarding resolution) serves the three reads, none
     // of which tests forwarding itself (C3's `arep.live`).
     assert_eq!(f.matches("call i64 @js_array_live_head").count(), 1, "{f}");
     assert!(!f.contains("arep.live"), "{f}");
     // Negative control: a single read installs nothing.
-    let g = method(&ir, "one");
+    let g = method(&text, "one");
     assert!(!g.contains("abase."), "{g}");
 }
 
 #[test]
 fn a_call_ends_the_region_and_the_suffix_starts_after_it() {
-    let ir = ir(FactsRep::Arr(GROWABLE));
+    let text = ir(FactsRep::Arr(GROWABLE));
     // A read before the push and one after: the suffix holds one site.
-    let f = method(&ir, "calls");
+    let f = method(&text, "calls");
     assert!(!f.contains("abase."), "{f}");
     // Two reads after the push: installed after it.
-    let g = method(&ir, "after");
+    let g = method(&text, "after");
     let (before, tail) = g.split_once("js_array_push").expect("the push");
     assert!(!before.contains("abase."), "{g}");
     assert!(tail.contains("abase.follow"), "{g}");
@@ -162,8 +162,8 @@ fn a_call_ends_the_region_and_the_suffix_starts_after_it() {
 
 #[test]
 fn a_loop_in_the_suffix_is_served_and_installs_nothing() {
-    let ir = ir(FactsRep::Arr(GROWABLE));
-    let f = method(&ir, "outer");
+    let text = ir(FactsRep::Arr(GROWABLE));
+    let f = method(&text, "outer");
     assert!(f.contains("abase.follow"), "{f}");
     assert!(!f.contains("abase.install"), "no loop install\n{f}");
     // The poll re-derives the function-level base.
