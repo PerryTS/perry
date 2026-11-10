@@ -125,6 +125,8 @@ def main():
         ("leaving-write-negative", "leavingwrite", "array rep"),
         ("array-base-negative", "arrbase", "array rep"),
         ("array-base-admit-negative", "arrbaseadm", "array rep"),
+        ("fn-base-admit-negative", "fnbaseadm", "array rep"),
+        ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),
@@ -132,6 +134,8 @@ def main():
         ("signature-negative", "signature", "signature"),
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),
+        ("rest-field-negative", "restfield", "field rep"),
+        ("rest-field-zero-negative", "restfield", "field rep"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

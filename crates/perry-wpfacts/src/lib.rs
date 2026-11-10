@@ -513,6 +513,7 @@ fn generate<'a>(
     g.m.value_records = cfg.value_records;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
+    g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
     g.leaving_writes = !cfg.no_leaving_writes;
@@ -922,6 +923,13 @@ fn compute_act<'a>(
     }
     let t2 = std::time::Instant::now();
     g.resolve_param_guards();
+    // I32 at rest (PR A): a field's representation (`FieldFacts::rep`, a
+    // Number field's I32 or an `Arr` field's `elem`) reads int demand, so
+    // demand is solved before the derive. It reads only the solved graph.
+    let demand_first = demand::at_rest_demand();
+    if demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
     let (mut templates, mut sites) = if g.m.aborted {
         (Vec::new(), Vec::new())
     } else {
@@ -951,7 +959,7 @@ fn compute_act<'a>(
     } else {
         derive::element_facts(&g)
     };
-    if !g.m.aborted && g.int_ranges && demand::enabled() {
+    if !demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
         demand::solve(&mut g.m);
     }
     let mut bindings = bindings::collect(&g);

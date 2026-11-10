@@ -339,7 +339,10 @@ fn lower_array_index_set_via_runtime_key(
             // side has done this since #7286 (`aidx.canonical`). A rejected key
             // becomes index -1, which the guarded in-bounds store declines
             // onto the same helper arm, so the helper is emitted once.
-            let guard_idx_i32 = super::index_key::normalize(ctx, &idx_double, Some(index));
+            // N10: every arm of that store is behind `idx <u capacity`, and
+            // every decline takes this one helper with the original key, so
+            // a widened native index needs no sign test in front of it.
+            let guard_idx_i32 = super::index_key::normalize_unsigned(ctx, &idx_double, Some(index));
             super::index_set_guarded::emit_guarded_inbounds_array_store(
                 ctx,
                 &arr_box,

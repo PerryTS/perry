@@ -43,6 +43,9 @@ mod element_shape_native;
 pub(crate) mod field_base;
 #[cfg(test)]
 mod field_base_tests;
+pub(crate) mod fn_base;
+#[cfg(test)]
+mod fn_base_tests;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
@@ -224,6 +227,9 @@ fn lower_stmts_from(
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    // N2: a function-level base installed in this lowering of the list ends
+    // with it.
+    fn_base::end_list(ctx, stmts);
     // A class-guard run never outlives its statement list.
     crate::expr::class_guard_memo::close(ctx);
     crate::expr::map_entry_fusion::close_list(ctx, stmts);
@@ -244,6 +250,8 @@ fn lower_stmts_list(
     // table (`closure_births::try_lower_let_run`).
     let mut born_until = 0;
     while i < stmts.len() {
+        // N2: the held suffix of a method body starts here.
+        fn_base::at_stmt(ctx, stmts, i)?;
         ctx.ready_cell_roots.discard_notes();
         // A typed array this statement may expose is untrusted from here on,
         // and no run lowered as one unit may reach past the next statement

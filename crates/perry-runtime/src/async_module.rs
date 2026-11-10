@@ -410,6 +410,11 @@ pub unsafe extern "C" fn js_async_module_import(addr: i64) -> f64 {
     result.get_nanbox_f64()
 }
 
+unsafe fn settled(m: *mut AsyncModule) -> bool {
+    let status = (*m).status;
+    status == EVALUATED || status == FAILED
+}
+
 /// # Safety
 /// `addr` is the compiled entry module's record.
 #[no_mangle]
@@ -417,12 +422,23 @@ pub unsafe extern "C" fn js_async_module_entry(addr: i64) {
     let m = evaluate(addr as *mut AsyncModule);
     // Entry evaluation owns the host's startup await. Dependency traversal
     // has finished before the first checkpoint can resume a suspended body.
-    while (*m).status != EVALUATED && (*m).status != FAILED {
+    // Each turn is the one the synchronous `await` loop runs (fs_await.rs):
+    // microtasks, the stdlib pump, then the timers, poll and check phases. A
+    // callback-style native completion (`fs.readdir(path, cb)`) is delivered
+    // only by the poll phase, so a turn without it never settles the body.
+    // The record's status changes only inside the callbacks this loop runs.
+    while !settled(m) {
         crate::event_pump::perry_poll();
-        if (*m).status == EVALUATED || (*m).status == FAILED {
+        crate::timer::js_await_loop_tick_timers();
+        if settled(m) {
             break;
         }
-        if crate::event_pump::perry_has_work() == 0 {
+        // `perry_has_work` sees timer deadlines but not the check and poll
+        // queues; a queued completion callback is live work, as it is for the
+        // synchronous `await` loop's liveness test.
+        if crate::event_pump::perry_has_work() == 0
+            && crate::timer::js_callback_timer_has_pending() == 0
+        {
             crate::event_pump::js_unsettled_top_level_await_exit();
         }
         crate::event_pump::js_wait_for_event();

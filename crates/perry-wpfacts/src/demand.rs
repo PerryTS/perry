@@ -96,6 +96,16 @@ pub(crate) fn int32_constant(e: &perry_hir::Expr) -> bool {
         && v <= f64::from(i32::MAX)
 }
 
+/// I32 at rest (RFC §10.7, PR A): the at-rest facts are on. Demand is then
+/// solved before the derive, so a field's representation can read it
+/// (`lib.rs`). `PERRY_FACTS_AT_REST=0` restores main's facts.
+pub(crate) fn at_rest_demand() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_AT_REST").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 pub(crate) fn enabled() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_INT_DEMAND").as_deref(),

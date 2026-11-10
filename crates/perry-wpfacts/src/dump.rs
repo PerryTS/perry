@@ -92,8 +92,9 @@ fn fact_lines(t: &TemplateFacts) -> Vec<String> {
             crate::model::esc_key(&f.key),
             b(f.ta_stable)
         ));
-        // DESIGN-p4l1 §3.1: only a field the facts give `Arr` gets a line.
-        if matches!(f.rep, crate::bindings::Rep::Arr(_)) {
+        // DESIGN-p4l1 §3.1: a field the facts give `Arr` gets a line;
+        // I32 at rest: a Number field's F64/I32 gets one too.
+        if f.rep != crate::bindings::Rep::Boxed {
             v.push(format!(
                 "FACT FR rep {}.{} = {}",
                 t.display,

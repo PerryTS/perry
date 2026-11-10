@@ -43,6 +43,8 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `bindings.rs:589` | read/map | read: tests or masks the fact, seeds nothing |
 | `bindings.rs:682` | read/map | read: tests or masks the fact, seeds nothing |
 | `bindings.rs:683` | read/map | read: tests or masks the fact, seeds nothing |
+| `bindings.rs:746` | read/map | read: tests or masks the fact, seeds nothing (I32 at rest: a Number field's rep) |
+| `bindings.rs:850` | read/map | read: tests or masks the fact, seeds nothing (I32 at rest: the `# rest` probe) |
 | `signatures.rs:389` | read/map | read: tests or masks the fact, seeds nothing |
 | `dump.rs:470` | read/map | read: tests or masks the fact, seeds nothing |
 | `records.rs:448` | read/map | read: R3's immediate-field mask (value records), seeds nothing |
