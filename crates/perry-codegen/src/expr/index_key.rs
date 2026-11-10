@@ -570,13 +570,20 @@ mod tests {
             .and_then(|(_, f)| f.split("\naidx.canonical.").next())
             .unwrap_or_else(|| panic!("no split: {ir}"));
         assert!(!entry.contains("icmp sge i32"), "{entry}");
-        let miss = ir
-            .split_once("\nubound.cold.")
-            .map(|(head, _)| head.rsplit("\n\n").next().unwrap_or(head))
+        // The miss arm's exit: a negative key to the runtime-key arm, the
+        // rest to the tier's cold read.
+        let exit = ir
+            .lines()
+            .find(|l| l.contains("label %aidx.runtime_key.") && l.contains("label %ubound.cold."))
             .unwrap_or_else(|| panic!("no negative exit: {ir}"));
+        let cond = exit
+            .split_whitespace()
+            .nth(2)
+            .map(|c| c.trim_end_matches(','))
+            .unwrap_or_else(|| panic!("{exit}"));
         assert!(
-            miss.contains("icmp slt i32") && miss.contains("aidx.runtime_key"),
-            "the miss arm tests the sign and leaves for the runtime key: {miss}"
+            ir.contains(&format!("{cond} = icmp slt i32")),
+            "the exit tests the sign: {ir}"
         );
     }
 
@@ -595,8 +602,10 @@ mod tests {
             .split_once("\naidx.runtime_key.")
             .map(|(_, rest)| rest.split("\n\n").next().unwrap_or(rest))
             .unwrap_or_else(|| panic!("no runtime-key block: {ir}"));
+        // Mode 0: the original key, the exact property-key read.
         assert!(
-            runtime_block.contains("call double @perry_array_read_cold_shared(double %arg1"),
+            runtime_block.contains("call double @perry_array_read_cold_shared(")
+                && runtime_block.contains(", i64 0)"),
             "{runtime_block}"
         );
     }
