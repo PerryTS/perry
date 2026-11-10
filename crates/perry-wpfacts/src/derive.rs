@@ -140,6 +140,15 @@ pub struct TemplateFacts {
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
+    /// Value records (DESIGN-p4l4 §2, `records`): the template's instances
+    /// are their fields by value, or the reason they are heap objects.
+    /// `Off` unless `PERRY_FACTS_VALUE_RECORDS=1`.
+    pub record: Result<crate::records::RecordLayout, crate::records::Rejected>,
+    /// The Arr templates born as record arrays of this template (§1.4, R6):
+    /// every holder of their tokens holds them as `Arr{Record}`. The
+    /// design's `record_elems` per Arr template, kept on the element
+    /// template because an Arr template has no `TemplateFacts`.
+    pub record_elems: Vec<TmplId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -972,6 +981,8 @@ fn template_facts(
         fields,
         statics: constant_statics(m, tm),
         sabotaged: false,
+        record: Err(crate::records::Rejected::off()),
+        record_elems: Vec::new(),
         ancestors: {
             let mut v = Vec::new();
             let mut cur = tpl.parent;
