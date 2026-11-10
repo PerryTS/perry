@@ -709,6 +709,9 @@ fn deferred_namespace_creation_is_cached_rooted_and_does_not_evaluate() {
     assert!(evaluator.contains("__init()"));
     assert!(evaluator.contains("@js_deferred_namespace_not_ready"));
     assert!(evaluator.contains("__deferred_ready"));
+}
+
+#[test]
 fn module_stack_identity_is_static_without_startup_registration() {
     let mut opts = entry_opts("executable");
     opts.target = Some("x86_64-unknown-linux-gnu".into());
