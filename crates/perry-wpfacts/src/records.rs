@@ -1289,7 +1289,19 @@ impl<'a, 'g> Scan<'a, 'g> {
                             Some(o) => m.tmpls[o as usize].display.clone(),
                             None => "a builtin object".into(),
                         };
-                        why = Some(R5StoreHeap(o));
+                        // An iterator's value slot over one of the record's
+                        // own arrays (`for (const u of played)`): the for-of
+                        // intrinsic of §5.3, R6's to decide.
+                        let iterates_own = owner.flatten().is_some_and(|o| {
+                            matches!(m.tmpls[o as usize].kind, TmplKind::BObj { what, .. } if what.contains("Iterator"))
+                        }) && recs
+                            .iter()
+                            .any(|tm| linked.values().any(|r| r == tm));
+                        why = Some(if iterates_own {
+                            R6Op("iterate".into())
+                        } else {
+                            R5StoreHeap(o)
+                        });
                     } else if self.regions.contains(&n) {
                         why = Some(R5Throw);
                     } else if self.captured.contains(&n) {
