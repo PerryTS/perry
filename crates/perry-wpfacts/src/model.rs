@@ -1645,9 +1645,11 @@ pub struct Model {
     pub bound_synth: crate::pts::FxHashSet<CallId>,
     /// (bound value, `new`) → its merged call.
     pub bound_merged: FxHashMap<(u32, bool), CallId>,
-    /// (receiver, member) → the one call a builtin method makes of that
-    /// member of the receiver (`collections::recv_call`).
-    pub recv_calls: FxHashMap<(Tok, Atom), CallId>,
+    /// (receiver, member, getter) → the one call a builtin method makes of
+    /// that member of the receiver (`collections::recv_call`), or, with
+    /// `true`, the one run of the member's declared getter on the receiver
+    /// that every load of the key reads (`collections::getter_call`).
+    pub recv_calls: FxHashMap<(Tok, Atom, bool), CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,
