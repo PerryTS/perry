@@ -119,6 +119,7 @@ pub(crate) fn solve(m: &mut Model) {
     // The reverse graph, in compressed rows: `preds[start[d]..start[d + 1]]`
     // are the nodes demand on `d` reaches.
     let mut start = vec![0u32; n + 1];
+    let filters = m.zero_sign && crate::zero_sign::filter_demand();
     let each_edge = |m: &Model, f: &mut dyn FnMut(NodeId, NodeId)| {
         for (src, node) in m.nodes.iter().enumerate() {
             let src = src as NodeId;
@@ -126,10 +127,32 @@ pub(crate) fn solve(m: &mut Model) {
                 f(src, d);
             }
             for c in &node.cons {
-                if let Cons::Range { op, dst, .. } = c {
-                    if carries(*op) {
-                        f(src, *dst);
+                match c {
+                    Cons::Range { op, dst, .. } if carries(*op) => f(src, *dst),
+                    // PR D (`filters`): a filter delivers some of its host's
+                    // values unchanged (`l ?? r`, `l && r`, a presence
+                    // narrowing), and a guard delivers its `from` operand's
+                    // (`r` of `l ?? r`, `l || r`, `l && r`): a copy of
+                    // values, so demand on the result is demand on the
+                    // operand.
+                    Cons::NotNullish { dst }
+                    | Cons::Defined { dst }
+                    | Cons::NotUndefined { dst }
+                    | Cons::Falsy { dst }
+                        if filters =>
+                    {
+                        f(src, *dst)
                     }
+                    Cons::Guard { from, dst, .. } if filters => f(*from, *dst),
+                    // A summarized run's result delivers its Numbers to the
+                    // call's result unchanged (`Model::ret_into`).
+                    Cons::RetInto { call, .. } if filters => {
+                        let ret = m.calls[*call as usize].ret;
+                        if ret != NO_NODE {
+                            f(src, ret)
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -161,6 +184,12 @@ pub(crate) fn solve(m: &mut Model) {
                     f(orig, copy)
                 }
             });
+        }
+        // PR D (`filters`): an index read reads `num_fields`, the element
+        // facts read the aggregate `all_fields` (`bindings::tok_arr_rep`):
+        // views of the same slots, so demand on one is demand on each.
+        if filters {
+            crate::zero_sign::slot_views(m, f);
         }
     };
     each_edge(m, &mut |_, d| start[d as usize + 1] += 1);

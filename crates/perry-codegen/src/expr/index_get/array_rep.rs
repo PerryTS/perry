@@ -283,7 +283,11 @@ fn elem_test(ctx: &mut FnCtx<'_>, raw: &str, elem: FactsElemRep, next_l: &str, m
             let back = ctx.block().sitofp(I32, &int, DOUBLE);
             let exact = ctx.block().fcmp("oeq", &back, &x);
             let not_negative_zero = ctx.block().icmp_ne(I64, raw, "-9223372036854775808");
-            let ok = ctx.block().and(I1, &exact, &not_negative_zero);
+            let mut ok = ctx.block().and(I1, &exact, &not_negative_zero);
+            // −0 tolerance (wpfacts PR D): a tolerated element may be `-0`.
+            if ctx.wpfacts.zero_sign_tolerated {
+                ok = ctx.block().or(I1, &ok, &exact);
+            }
             ctx.block().cond_br(&ok, next_l, miss_l);
         }
     }

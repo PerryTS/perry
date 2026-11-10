@@ -85,7 +85,8 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let s = self.expr(fx, string);
         crate::builtins::string_methods::to_prim(&mut self.m, s, "string method receiver ToString");
-        let args: Vec<NodeId> = operands.iter().map(|o| self.expr(fx, o)).collect();
+        // The method classifies its operands (`zero_sign`, `with_native`).
+        let args: Vec<NodeId> = operands.iter().map(|o| self.expr_zs(fx, o)).collect();
         let recv = self.prim_node(prim::STR);
         let a = self.m.atom(name);
         self.mcall(recv, Key::Named(a), args, vec![])

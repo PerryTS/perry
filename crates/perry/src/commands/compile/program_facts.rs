@@ -161,6 +161,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_zero_sign: matches!(
+            std::env::var("PERRY_FACTS_ZERO_SIGN").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_leaving_writes: matches!(
             std::env::var("PERRY_FACTS_LEAVING_WRITES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -470,6 +474,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
     out.super_unrelinked = pf.super_unrelinked.clone();
+    out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
@@ -580,6 +585,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     ranges: sig.ranges.clone(),
                     ret: rep(&sig.ret),
                     this_class: sig.this_class,
+                    zero_ok: pf.zero_sign_tolerated > 0,
                 },
             );
         }
@@ -642,6 +648,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
                 {
                     out.int32_inputs.insert(*id);
+                    if b.zero_tol {
+                        out.zero_tolerant_locals.insert(*id);
+                    }
                     if b.int_range.is_some_and(|(lo, _)| lo >= 0) {
                         out.nonneg_int32_inputs.insert(*id);
                     }
@@ -726,6 +735,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
+                if f.zero_tol {
+                    out.zero_tolerant_fields.insert((cid, f.key.clone()));
+                }
                 Some(FactsField {
                     classes,
                     nullable,
@@ -924,6 +936,10 @@ pub(crate) fn activation(
         ),
         no_exact_rules: matches!(
             std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_zero_sign: matches!(
+            std::env::var("PERRY_FACTS_ZERO_SIGN").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_leaving_writes: matches!(

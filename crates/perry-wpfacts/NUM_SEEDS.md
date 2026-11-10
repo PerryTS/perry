@@ -139,6 +139,8 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `gen_rest/collections.rs:213` | seed | callback index (from/forEach): as above |
 | `canonical_numbers.rs:49` | read/map | read: tests or masks the fact, seeds nothing (P3 B1's element-value test) |
 | `canonical_numbers.rs:50` | read/map | read: tests or masks the fact, seeds nothing (P3 B1's element-value test) |
+| `zero_sign.rs:420` | read/map | read: a node holding Numbers whose uses the generator does not see is a zero-sign seed; seeds nothing (PR D) |
+| `zero_sign.rs:527` | read/map | read: counts the tolerated Number nodes; seeds nothing (PR D) |
 
 ## INT32-box producers claimed by code comments (CWN, P3 B1)
 Two runtime comments claimed live INT32-tagged Number producers. Neither is live: no code path writes an INT32 word for

@@ -1179,7 +1179,7 @@ impl<'a> Gen<'a> {
                 }
                 match init {
                     Some(e) => {
-                        let v = self.expr(fx, e);
+                        let v = self.expr_zs(fx, e);
                         self.m.edge(v, n);
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
@@ -1191,11 +1191,11 @@ impl<'a> Gen<'a> {
                 }
             }
             Stmt::Expr(e) => {
-                let _ = self.expr(fx, e);
+                let _ = self.expr_zs(fx, e);
             }
             Stmt::Return(e) => {
                 if let Some(e) = e {
-                    let v = self.expr(fx, e);
+                    let v = self.expr_zs(fx, e);
                     self.m.edge(v, fx.ret);
                 } else {
                     self.m.add_prim(fx.ret, prim::UNDEF);
@@ -1237,7 +1237,7 @@ impl<'a> Gen<'a> {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
                 self.jumps += 1;
-                let _ = self.expr(fx, condition);
+                let _ = self.expr_zs(fx, condition);
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(fx, body);
                 self.narrow_pop(k);
@@ -1248,7 +1248,7 @@ impl<'a> Gen<'a> {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
                 self.jumps += 1;
-                let _ = self.expr(fx, condition);
+                let _ = self.expr_zs(fx, condition);
                 self.stmts(fx, body);
                 self.jumps -= 1;
                 self.loop_depth -= 1;
@@ -1266,7 +1266,7 @@ impl<'a> Gen<'a> {
                 self.loop_depth += 1;
                 self.jumps += 1;
                 if let Some(c) = condition {
-                    let _ = self.expr(fx, c);
+                    let _ = self.expr_zs(fx, c);
                 }
                 // The update runs after the body: it reads the end node.
                 let narrowed = self.narrow_for(
@@ -1280,7 +1280,7 @@ impl<'a> Gen<'a> {
                     self.narrow_in_update(true);
                 }
                 if let Some(u) = update {
-                    let _ = self.expr(fx, u);
+                    let _ = self.expr_zs(fx, u);
                 }
                 if narrowed {
                     self.narrow_in_update(false);
@@ -1345,13 +1345,13 @@ impl<'a> Gen<'a> {
                 discriminant,
                 cases,
             } => {
-                let d = self.expr(fx, discriminant);
+                let d = self.expr_zs(fx, discriminant);
                 // `===` against case values: no coercion, identity.
                 self.jumps += 1;
                 self.m.identity(d, IdentityRoute::Switch);
                 for c in cases {
                     if let Some(t) = &c.test {
-                        let tv = self.expr(fx, t);
+                        let tv = self.expr_zs(fx, t);
                         self.m.identity(tv, IdentityRoute::Switch);
                         // N1: a case test is the strict equality it means.
                         self.equality_demand(discriminant, t, d, tv);

@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::Stmt;
 
-use crate::types::{DOUBLE, I32};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -88,7 +88,14 @@ pub(crate) fn witness_exact(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u
     }
     // A Number is a plain double: the witness admits an exact int32 double.
     let bits = ctx.block().bitcast_double_to_i64(value);
-    let exact = super::typed_abi::emit_typed_i32_plain_guard_and_raw(ctx.block(), value, &bits).0;
+    let mut exact =
+        super::typed_abi::emit_typed_i32_plain_guard_and_raw(ctx.block(), value, &bits).0;
+    // −0 tolerance (wpfacts PR D): the local may receive a `-0` no use
+    // observes; it enters the slot as `0`.
+    if ctx.wpfacts.zero_tolerant_locals.contains(&id) {
+        let nz = ctx.block().icmp_eq(I64, &bits, "-9223372036854775808");
+        exact = ctx.block().or(I1, &exact, &nz);
+    }
     crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("int32.input.verify_miss");
     let next = ctx.new_block("int32.input.admitted");
