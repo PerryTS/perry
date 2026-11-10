@@ -155,3 +155,63 @@ fn k3_onabort_is_called_with_an_event() {
     );
     assert!(!esc(&pf, "R") && !esc(&pf, "E"), "{}", pf.dump_text());
 }
+
+/// G1: a load of a key whose realm declaration is a getter reads the
+/// getter's declared result. `AbortSignal.prototype.reason`'s getter
+/// returns the reason slot or a fresh DOMException (node: `abort()` with no
+/// reason); the `.y` receivers are those values, never the getter function
+/// (red while the load reads `builtin-fn`).
+#[test]
+fn g1_reason_getter_reads_the_declared_result() {
+    let pf = facts(
+        r#"
+        class R { y = 2; }
+        const c = new AbortController();
+        c.abort(new R());
+        const s = c.signal;
+        const r: any = s.reason;
+        console.log(r.y);
+        export const keep = 1;
+    "#,
+    );
+    show(&pf, &["y", "reason"], &["R"]);
+    let y = site(&pf, "y");
+    assert!(
+        y.receivers.iter().any(|r| r.ends_with(":R"))
+            && y.receivers.iter().any(|r| r.contains("DOMException.prototype"))
+            && !y.receivers.iter().any(|r| r.contains("builtin-fn")),
+        "{:?}\n{}",
+        y.receivers,
+        pf.dump_text()
+    );
+}
+
+/// G2 (the false proof): the program writes a string into R.y through the
+/// reason getter's result, so R.y is written after construction and `q.y`
+/// is not proven a number (red while the getter's result is its function:
+/// R.y readonly, kind num, `q.y` T0).
+#[test]
+fn g2_write_through_the_reason_getter_reaches_r() {
+    let pf = facts(
+        r#"
+        class R { y = 2; }
+        const c = new AbortController();
+        const q = new R();
+        c.abort(q);
+        const r: any = c.signal.reason;
+        r.y = "s";
+        console.log(q.y + 1);
+        export const keep = 1;
+    "#,
+    );
+    show(&pf, &["y"], &["R"]);
+    let y = field(tmpl(&pf, "R"), "y");
+    eprintln!("SKINBR R.y readonly={} writers_post={} kind={:?}", y.readonly, y.writers_post, y.kind);
+    assert!(!y.readonly && y.writers_post > 0, "{}", pf.dump_text());
+    assert!(
+        y.kind.prims & crate::model::prim::STR != 0,
+        "{:?}\n{}",
+        y.kind,
+        pf.dump_text()
+    );
+}
