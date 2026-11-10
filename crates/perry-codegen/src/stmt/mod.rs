@@ -44,6 +44,8 @@ pub(crate) mod field_base;
 pub(crate) mod fn_base;
 #[cfg(test)]
 mod field_base_tests;
+#[cfg(test)]
+mod fn_base_tests;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
