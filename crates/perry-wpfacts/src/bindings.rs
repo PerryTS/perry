@@ -747,6 +747,41 @@ fn rep_of(b: &BindingFacts) -> Rep {
     }
 }
 
+/// The dump's representation probe (N1, `PERRY_FACTS_DUMP` only): one
+/// `# rep` line per Number-holding local with what decides its
+/// representation (RFC §10.3): the prims, the interval, int demand and
+/// whether the binding is itself an int consumer's operand. Named only
+/// when the relations are recorded (the dump records them).
+pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
+    let m = &g.m;
+    let mut out = Vec::new();
+    for (mi, info) in g.mods.iter().enumerate() {
+        let mut ls: Vec<(u32, NodeId)> = info.locals.iter().map(|(&i, &n)| (i, n)).collect();
+        ls.sort_unstable();
+        for (id, n) in ls {
+            let node = &m.nodes[n as usize];
+            if node.prim & crate::model::prim::NUM == 0 {
+                continue;
+            }
+            let b = facts_of(g, n);
+            let range = b
+                .int_range
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let name = m.node_names.get(n as usize).map_or("?", |s| s.as_str());
+            out.push(format!(
+                "# rep module={mi} local={id} name={} rep={} prims={:#x} other={} range={range} demand={} use={}",
+                name.replace(' ', "_"),
+                b.rep.name(),
+                b.prims,
+                (b.other || !b.class_ids.is_empty()) as u8,
+                b.int_demand as u8,
+                node.int_use as u8,
+            ));
+        }
+    }
+    out
+}
+
 /// The class id of the one class object node `n` holds when it holds
 /// nothing else (markers beside their values aside).
 fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
