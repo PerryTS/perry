@@ -181,12 +181,56 @@ impl FactsNumericExpr {
         }
     }
 }
-/// A value's one representation (wpfacts `Rep`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A value's one representation (wpfacts `Rep`). It has no order (the
+/// derived one is not the lattice); every encoding decision goes through
+/// `FactsRep::encoding`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FactsRep {
     Boxed,
     F64,
     I32,
+    /// Only plain program Arrays (wpfacts `Rep::Arr`, DESIGN-p4l1 §2.1):
+    /// the slot holds the NaN-boxed pointer word, as a Boxed one does.
+    Arr(FactsArrRep),
+}
+
+/// wpfacts `ArrRep`: what every Array the value may hold has for its whole
+/// life (`length >= floor` and `capacity >= floor`; `dense`: no hole below
+/// `floor`; `fixed`: never grows, so never forwarded), and the
+/// representation of its elements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactsArrRep {
+    pub elem: FactsElemRep,
+    pub floor: u32,
+    pub dense: bool,
+    pub fixed: bool,
+}
+
+/// wpfacts `ElemRep`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsElemRep {
+    Boxed,
+    F64,
+    I32,
+}
+
+/// wpfacts `Enc`: how a slot's word is stored and passed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FactsEnc {
+    Boxed,
+    F64,
+    I32,
+}
+
+impl FactsRep {
+    /// The slot encoding: an `Arr` slot holds the Boxed word.
+    pub fn encoding(self) -> FactsEnc {
+        match self {
+            FactsRep::Boxed | FactsRep::Arr(_) => FactsEnc::Boxed,
+            FactsRep::F64 => FactsEnc::F64,
+            FactsRep::I32 => FactsEnc::I32,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -250,6 +294,19 @@ pub struct ElisionFacts {
     /// plain Number; `true` when it may also be `undefined` (wpfacts
     /// `canonical_numbers`, P3 B1).
     pub number_element_reads: std::collections::BTreeMap<u32, bool>,
+    /// Check mode: element reads (by `element_offset`) whose past-the-end
+    /// `undefined` the facts withheld, with the least length lower bound of
+    /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
+    /// `expr::index_get::elem_floor`).
+    pub element_floors: std::collections::BTreeMap<u32, u32>,
+    /// Module binding (local id) → the one integer Number it holds for the
+    /// whole program (wpfacts `ModuleBindings::const_numbers`, N6): a read
+    /// of its module global is that constant (`expr::literals_vars::facts_const_number`).
+    pub const_numbers: std::collections::BTreeMap<u32, i64>,
+    /// Element reads (by `element_offset`) whose key is an integer Number at
+    /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
+    /// PR-C2; `expr::index_get::proven_array`).
+    pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -309,6 +366,7 @@ impl ElisionFacts {
             && self.signatures.is_empty()
             && self.typed_calls.is_empty()
             && self.number_element_reads.is_empty()
+            && self.const_numbers.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()

@@ -282,7 +282,26 @@ pub(super) fn cb_call(
 /// result are of `t`'s run (`fam_home`), as a protocol call's; it is born
 /// at no program site. `true`: made now, the caller adds its callee.
 fn recv_call(m: &mut Model, t: Tok, key: Atom, this: ThisArg, nargs: usize) -> (CallId, bool) {
-    if let Some(&c) = m.recv_calls.get(&(t, key)) {
+    member_call(m, t, key, false, this, nargs)
+}
+
+/// The one run of the declared getter of key `key` on receiver `t`
+/// (`effects::getter_load`): what a load of the key reads on `t` depends on
+/// `t` alone, so every load shares it, and a `fresh` result is born once
+/// per receiver. `true`: made now, the caller runs the declaration.
+pub(super) fn getter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
+    member_call(m, t, key, true, ThisArg::Tok(t), 0)
+}
+
+fn member_call(
+    m: &mut Model,
+    t: Tok,
+    key: Atom,
+    get: bool,
+    this: ThisArg,
+    nargs: usize,
+) -> (CallId, bool) {
+    if let Some(&c) = m.recv_calls.get(&(t, key, get)) {
         return (c, false);
     }
     let home = m.fam_home(t);
@@ -303,7 +322,7 @@ fn recv_call(m: &mut Model, t: Tok, key: Atom, this: ThisArg, nargs: usize) -> (
         site: call,
         region: m.thrown,
     });
-    m.recv_calls.insert((t, key), call);
+    m.recv_calls.insert((t, key, get), call);
     (call, true)
 }
 
@@ -990,8 +1009,14 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 | "with"
         )
     );
-    if !keeps_length {
-        m.arr_len_top(t);
+    if name == Some("push") {
+        m.arr_len_append(t);
+    } else if !keeps_length {
+        if !(m.arr_front_sabotage && name == Some("shift")) {
+            m.arr_len_top(t);
+        }
+    } else if matches!(name, Some("reverse" | "copyWithin")) {
+        m.arr_len_permuted(t);
     }
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
@@ -1642,6 +1667,14 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
         }
+        // A key neither the buffer's own prototype nor `Object.prototype`
+        // declares (`buffer_member_absent`; `@@iterator` among them: a
+        // buffer is not iterable): the lookup is `undefined` and the call
+        // throws a fresh TypeError. Nothing runs and nothing escapes. A key
+        // a program store may have written onto a builtin prototype was
+        // already answered by `own_method_inner` (the receiver is described:
+        // the written method runs now, or on the replay of the miss).
+        ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(_)) => {}
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);
             if name == Some("toString") {

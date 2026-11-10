@@ -73,13 +73,18 @@ fn ir(expr: Expr, extra: Vec<Stmt>) -> String {
     ir[start..end].to_string()
 }
 
+/// The comparand of the one emitted plain-number test.
+const PLAIN_NUMBER_MAX: &str = "9221401712017801215"; // 0x7FF8_FFFF_FFFF_FFFF
+
 #[test]
 fn forty_dynamic_comparisons_classify_once_and_share_the_slow_call() {
     let ir = ir(chain(40), vec![]);
     assert_eq!(ir.matches("call double @js_rel_ge(").count(), 1, "{ir}");
-    assert_eq!(ir.matches("sitofp i32").count(), 1, "{ir}");
-    // The one exact int32 test (`emit_int32_bits_test`), shared by the graph.
-    assert_eq!(ir.matches(crate::nanbox::INT32_TAG_I64).count(), 1, "{ir}");
+    // One plain-number classification, shared by the graph, and no decode: a
+    // Number has one encoding.
+    assert_eq!(ir.matches(PLAIN_NUMBER_MAX).count(), 1, "{ir}");
+    assert!(!ir.contains("sitofp i32"), "{ir}");
+    assert!(!ir.contains(crate::nanbox::INT32_TAG_I64), "{ir}");
     assert!(!ir.contains("lshr i64"), "{ir}");
     assert!(ir.contains("phi i1"), "{ir}");
     assert!(
@@ -99,7 +104,7 @@ fn reassignment_before_the_graph_still_classifies_once() {
     );
     assert!(ir.contains("cmpgraph."), "{ir}");
     assert_eq!(ir.matches("call double @js_rel_ge(").count(), 1, "{ir}");
-    assert_eq!(ir.matches("sitofp i32").count(), 1, "{ir}");
+    assert_eq!(ir.matches(PLAIN_NUMBER_MAX).count(), 1, "{ir}");
 }
 
 #[test]
@@ -147,13 +152,15 @@ fn strict_number_literal_equalities_need_no_coercion_or_slow_arm() {
         },
         vec![],
     );
-    assert_eq!(ir.matches("sitofp i32").count(), 1, "{ir}");
+    // Non-number tags are NaNs, so the graph classifies nothing.
+    assert!(!ir.contains("sitofp i32"), "{ir}");
+    assert!(!ir.contains(PLAIN_NUMBER_MAX), "{ir}");
     assert!(!ir.contains("cmpgraph.coerce"), "{ir}");
     assert!(!ir.contains("@js_eq("), "{ir}");
 }
 
 #[test]
-fn mixed_graph_does_not_decode_a_constructively_numeric_local() {
+fn mixed_graph_does_not_classify_a_constructively_numeric_local() {
     let expr = Expr::Logical {
         op: LogicalOp::And,
         left: Box::new(comparison(CompareOp::Ge, 100.0)),
@@ -171,12 +178,8 @@ fn mixed_graph_does_not_decode_a_constructively_numeric_local() {
         init: Some(Expr::Number(1.25)),
     };
     let good = ir(expr.clone(), vec![local.clone()]);
-    assert_eq!(good.matches("sitofp i32").count(), 1, "{good}");
-    assert_eq!(
-        good.matches(crate::nanbox::INT32_TAG_I64).count(),
-        1,
-        "{good}"
-    );
+    assert_eq!(good.matches(PLAIN_NUMBER_MAX).count(), 1, "{good}");
+    assert!(!good.contains(crate::nanbox::INT32_TAG_I64), "{good}");
     let dynamic = ir(
         expr,
         vec![
@@ -184,6 +187,6 @@ fn mixed_graph_does_not_decode_a_constructively_numeric_local() {
             Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::String("1".into())))),
         ],
     );
-    assert_eq!(dynamic.matches("sitofp i32").count(), 2, "{dynamic}");
+    assert_eq!(dynamic.matches(PLAIN_NUMBER_MAX).count(), 2, "{dynamic}");
     assert!(dynamic.contains("call double @js_rel_lt("), "{dynamic}");
 }
