@@ -133,7 +133,9 @@ fn new_external_cell(
     };
     #[cfg(feature = "native-payload-test-census")]
     super::test_census::created(unsafe { (*cell).type_id });
-    NewCell { word: crate::value::JSValue::pointer(cell as *const u8).bits() }
+    NewCell {
+        word: crate::value::JSValue::pointer(cell as *const u8).bits(),
+    }
 }
 
 /// Make the cell `word` names `obj`'s payload slot: an own data property
@@ -173,8 +175,7 @@ fn listed_slot_sabotage() -> bool {
 /// retains.
 pub(super) fn link_cell(obj: &crate::gc::RuntimeHandle<'_>, word: u64, external_bytes: usize) {
     let cell = (word & crate::value::POINTER_MASK) as *mut crate::native_handle::NativeHandleHeader;
-    let links_owner =
-        unsafe { (*cell).flags } & crate::native_payload::CALLBACK_STORAGE != 0;
+    let links_owner = unsafe { (*cell).flags } & crate::native_payload::CALLBACK_STORAGE != 0;
     if links_owner {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             let owner = crate::value::js_nanbox_pointer(obj as i64).to_bits();

@@ -814,7 +814,10 @@ fn cxid3_a_wildcard_native_read_charges_every_holder_it_inspects() {
             })
             .collect();
     for identity in identities {
-        m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
+        m.tok(TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        }));
     }
     let f = m.tok(TokKind::BuiltinFn(Native::Any));
     let dst = m.node_l("bounded-native-read");

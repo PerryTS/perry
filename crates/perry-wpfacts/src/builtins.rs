@@ -34,8 +34,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct, run_function,
-    run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
+    run_function, run_member,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -221,7 +221,9 @@ pub fn async_resource(m: &mut Model, n: NodeId, name: &'static str) {
         m.async_resources.push((n, name));
         return;
     };
-    let r = m.reason(&format!("{name} hands its resource to async_hooks init ({why})"));
+    let r = m.reason(&format!(
+        "{name} hands its resource to async_hooks init ({why})"
+    ));
     m.sink_node(n, r);
 }
 
@@ -979,7 +981,9 @@ fn realm_accessor(m: &Model, fam: Family, what: Option<&'static str>, name: &str
 /// (`realm_accessor`; a declared one: `effects::getter_load`) reads: the
 /// host's result of the getter, unknown.
 fn undeclared_getter_result(m: &mut Model, dst: NodeId) {
-    m.add_top(dst, |_| "result of a getter the realm does not declare".into());
+    m.add_top(dst, |_| {
+        "result of a getter the realm does not declare".into()
+    });
     m.add_prim(dst, prim::ALL);
 }
 
@@ -991,7 +995,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named("Buffer.prototype", m)
             .and_then(|h| m.declarations.property(h, name, m))
         {
-            return p.native.map(|identity| Native::Member { identity, holder: None });
+            return p.native.map(|identity| Native::Member {
+                identity,
+                holder: None,
+            });
         }
     }
     // The prototype of an object a declaration made
@@ -1004,7 +1011,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named(w, m)
             .and_then(|h| m.declarations.property(h, name, m))?
             .native?;
-        return Some(Native::Member { identity, holder: None });
+        return Some(Native::Member {
+            identity,
+            holder: None,
+        });
     }
     let holder = realm_holder(m, fam, what)?;
     let identity = m
@@ -1018,7 +1028,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             let object = m.declarations.family(Family::Object, m)?;
             m.declarations.property(object, name, m)?.native
         })?;
-    Some(Native::Member { identity, holder: None })
+    Some(Native::Member {
+        identity,
+        holder: None,
+    })
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.
@@ -1529,7 +1542,10 @@ pub(crate) fn native_own_load(
             } else {
                 m.native_missing.push((holder, a, NativeMiss::Load(dst)));
                 if let Some(identity) = value {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity,
+                        holder: None,
+                    }));
                     m.add_tok(dst, value);
                 } else {
                     opaque_member(m, dst);
@@ -1551,7 +1567,10 @@ pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
 /// Read the function reference from this receiver's declared property shape.
 pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
     if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
-        return Some(Native::Member { identity, holder: None });
+        return Some(Native::Member {
+            identity,
+            holder: None,
+        });
     }
     matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
         .then(|| member_native(m, members::ns_chain(ns), None, name))

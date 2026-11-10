@@ -246,9 +246,6 @@ pub(crate) mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
-#[cfg(test)]
-#[path = "field_get_set/undeclared_prototype_tests.rs"]
-mod undeclared_prototype_tests;
 mod map_set_receiver;
 #[cfg(test)]
 mod map_set_receiver_tests;
@@ -258,6 +255,9 @@ mod probe_dispatch;
 mod prototype_override;
 /// A builtin's spec `Get` as a read site: an emitted site's two words, per agent.
 pub(crate) mod runtime_read_site;
+#[cfg(test)]
+#[path = "field_get_set/undeclared_prototype_tests.rs"]
+mod undeclared_prototype_tests;
 #[allow(dead_code)] // #9244: field-get short-circuits removed; kept for the method path.
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline

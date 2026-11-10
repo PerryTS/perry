@@ -58,8 +58,7 @@ pub(crate) fn throw_non_extensible_array_push(arr: *const ArrayHeader) -> ! {
 #[inline]
 pub(crate) fn push_guard(arr: *const ArrayHeader, argc: u32) {
     let flags = array_object_flags(arr);
-    if argc > 0
-        && flags & (gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0
+    if argc > 0 && flags & (gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0
     {
         throw_non_extensible_array_push(arr);
     }

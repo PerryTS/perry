@@ -1702,10 +1702,7 @@ pub(super) fn global_root(slot: usize) {
     // That member is skipped here, so the first registration this run sees
     // is an importer's duplicate: bookkeeping as above, and the slot stays
     // D's binding, owned by no imaged init.
-    if st.slot_owner_rule
-        && !st.skip.is_empty()
-        && st.env_words.get(slot as u64) == Some(POISON)
-    {
+    if st.slot_owner_rule && !st.skip.is_empty() && st.env_words.get(slot as u64) == Some(POISON) {
         return;
     }
     count_unwatched_root(st, slot);

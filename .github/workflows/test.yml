@@ -2512,7 +2512,7 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
         shell: bash

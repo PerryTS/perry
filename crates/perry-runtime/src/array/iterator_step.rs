@@ -161,7 +161,11 @@ pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle
                     super::iterator_method::property_at(h, slot as u32),
                 );
             }
-            holder = if h == obj { crate::object::iterator_next_property_owner(obj) } else { None };
+            holder = if h == obj {
+                crate::object::iterator_next_property_owner(obj)
+            } else {
+                None
+            };
         }
     }
     let key = crate::string::intern_ascii_literal(b"next");

@@ -56,10 +56,10 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
-pub(crate) use loops::this_field_fast_off;
 pub(crate) use crate::expr::index_get::descriptor_read;
 pub(crate) use crate::expr::index_get::descriptor_read::scoped as cold_scoped;
 pub(crate) use loops::create_poll_refreshed_receiver_cache;
+pub(crate) use loops::this_field_fast_off;
 mod masked_window_region;
 mod number_local_loop;
 pub(crate) use number_local_loop::numeric_callbacks;

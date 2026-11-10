@@ -49,114 +49,114 @@ pub(super) fn compile_module_init(
     if cross_module.program_has_tla {
         super::async_module::emit_record(llmod, hir, module_prefix, cross_module);
     } else {
-    let done_global = format!("__perry_init_done_{}", module_prefix);
-    // #10399: with a Worker in the program this guard MUST be per-thread.
-    // A process-wide flag means a worker reaching `<mod>__init` finds the
-    // 1 the main thread stored, skips the body, and then reads module
-    // globals that point into the main thread's arena — where
-    // `classify_heap_generation` is `Unknown`, so the object reads back
-    // with no keys. Node and bun evaluate the module graph once per
-    // worker; a thread-local flag is what makes that happen here.
-    //
-    // The guard is the low byte of an eight-byte global. The bytes above it
-    // belong to the runtime, which numbers the module record there on first
-    // evaluation (`js_run_module_init_guarded`), so the record is named by its
-    // evaluation order and not by where the linker put the global.
-    if llmod.program_has_worker {
-        llmod.add_internal_thread_local_global(&done_global, I64, "0");
-    } else {
-        llmod.add_internal_global(&done_global, I64, "0");
-    }
-    let init_name = format!("{}__init", module_prefix);
-    let init_body_name = format!("{}__init_body", module_prefix);
-    let evaluate_name = format!("{}__init_evaluate", module_prefix);
-    {
-        let wrap_fn = llmod.define_function(&init_name, VOID, vec![]);
-        let _ = wrap_fn.create_block("entry");
-        let _ = wrap_fn.create_block("guard.ret");
-        let _ = wrap_fn.create_block("guard.do");
-        let ret_label = wrap_fn.block_mut(1).unwrap().label.clone();
-        let do_label = wrap_fn.block_mut(2).unwrap().label.clone();
-        {
-            let blk = wrap_fn.block_mut(0).unwrap();
-            let done = blk.load(I8, &format!("@{}", done_global));
-            let already = blk.icmp_ne(I8, &done, "0");
-            blk.cond_br(&already, &ret_label, &do_label);
+        let done_global = format!("__perry_init_done_{}", module_prefix);
+        // #10399: with a Worker in the program this guard MUST be per-thread.
+        // A process-wide flag means a worker reaching `<mod>__init` finds the
+        // 1 the main thread stored, skips the body, and then reads module
+        // globals that point into the main thread's arena — where
+        // `classify_heap_generation` is `Unknown`, so the object reads back
+        // with no keys. Node and bun evaluate the module graph once per
+        // worker; a thread-local flag is what makes that happen here.
+        //
+        // The guard is the low byte of an eight-byte global. The bytes above it
+        // belong to the runtime, which numbers the module record there on first
+        // evaluation (`js_run_module_init_guarded`), so the record is named by its
+        // evaluation order and not by where the linker put the global.
+        if llmod.program_has_worker {
+            llmod.add_internal_thread_local_global(&done_global, I64, "0");
+        } else {
+            llmod.add_internal_global(&done_global, I64, "0");
         }
+        let init_name = format!("{}__init", module_prefix);
+        let init_body_name = format!("{}__init_body", module_prefix);
+        let evaluate_name = format!("{}__init_evaluate", module_prefix);
         {
-            let blk = wrap_fn.block_mut(1).unwrap();
-            blk.ret_void();
-        }
-        {
-            let blk = wrap_fn.block_mut(2).unwrap();
-            blk.store(I8, "1", &format!("@{}", done_global));
-            // The registry owns failed evaluation records. On a throw the
-            // runtime clears this existing reentry guard before propagating it,
-            // so the next call replays the failure instead of returning early.
-            let evaluate_addr = format!("ptrtoint (ptr @{} to i64)", evaluate_name);
-            let guard_addr = format!("ptrtoint (ptr @{} to i64)", done_global);
-            blk.call_void(
-                "js_run_module_init_guarded",
-                &[(I64, &evaluate_addr), (I64, &guard_addr)],
-            );
-            blk.ret_void();
-        }
-    }
-    {
-        // Include dependency evaluation in the same failure boundary: a
-        // dependency can throw before this module reaches its own body.
-        let evaluate_fn = llmod.define_function(&evaluate_name, VOID, vec![]);
-        let _ = evaluate_fn.create_block("entry");
-        {
-            let blk = evaluate_fn.block_mut(0).unwrap();
-            // Cyclic dependencies may call our hoisted functions before
-            // our body. Prepare literal infrastructure without evaluating
-            // declared classes or any user statement ahead of dependencies.
-            let prepare_addr = format!(
-                "ptrtoint (ptr @__perry_prepare_literals_{} to i64)",
-                module_prefix
-            );
-            blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
-            // Trigger init of static-dep + re-export source modules
-            // before the body runs. Each `<dep>__init` is itself
-            // wrapped by the same guard pattern, so this short-
-            // circuits when the dep was already initialized
-            // (Eager-via-main path) and fires the body when the
-            // dep is Deferred and this is the first reach. The driver
-            // excludes evaluation back-edges to the program entry.
-            for dep_prefix in &cross_module.module_init_deps {
-                if dep_prefix == module_prefix {
-                    continue;
-                }
-                blk.call_void(&format!("{}__init", dep_prefix), &[]);
+            let wrap_fn = llmod.define_function(&init_name, VOID, vec![]);
+            let _ = wrap_fn.create_block("entry");
+            let _ = wrap_fn.create_block("guard.ret");
+            let _ = wrap_fn.create_block("guard.do");
+            let ret_label = wrap_fn.block_mut(1).unwrap().label.clone();
+            let do_label = wrap_fn.block_mut(2).unwrap().label.clone();
+            {
+                let blk = wrap_fn.block_mut(0).unwrap();
+                let done = blk.load(I8, &format!("@{}", done_global));
+                let already = blk.icmp_ne(I8, &done, "0");
+                blk.cond_br(&already, &ret_label, &do_label);
             }
-            // Run each module body behind a native exception boundary.
-            // A CommonJS wrapper publishes partial exports at the top of
-            // this body; if an exception escapes before final publication,
-            // the runtime caches that exact failure and wakes path-module
-            // waiters before rethrowing. Keeping the boundary here avoids
-            // adding a JavaScript `try` block that would change top-level
-            // `let`/`const`/`class` scope in flat CJS emission.
-            let init_body_addr = format!("ptrtoint (ptr @{} to i64)", init_body_name);
-            blk.call_void(
-                "js_run_module_init_catching",
-                &[(I64, init_body_addr.as_str())],
-            );
-            blk.ret_void();
+            {
+                let blk = wrap_fn.block_mut(1).unwrap();
+                blk.ret_void();
+            }
+            {
+                let blk = wrap_fn.block_mut(2).unwrap();
+                blk.store(I8, "1", &format!("@{}", done_global));
+                // The registry owns failed evaluation records. On a throw the
+                // runtime clears this existing reentry guard before propagating it,
+                // so the next call replays the failure instead of returning early.
+                let evaluate_addr = format!("ptrtoint (ptr @{} to i64)", evaluate_name);
+                let guard_addr = format!("ptrtoint (ptr @{} to i64)", done_global);
+                blk.call_void(
+                    "js_run_module_init_guarded",
+                    &[(I64, &evaluate_addr), (I64, &guard_addr)],
+                );
+                blk.ret_void();
+            }
         }
-    }
-    // Declare every dep's `__init` symbol so the wrapper's calls
-    // resolve at link time. Most overlap with `non_entry_module_prefixes`
-    // (whose declarations live in the entry module's compilation),
-    // but a non-entry module compiled standalone has no entry-side
-    // declaration list — emit them here too. `declare_function`
-    // dedupes by name.
-    for dep_prefix in &cross_module.module_init_deps {
-        if dep_prefix == module_prefix {
-            continue;
+        {
+            // Include dependency evaluation in the same failure boundary: a
+            // dependency can throw before this module reaches its own body.
+            let evaluate_fn = llmod.define_function(&evaluate_name, VOID, vec![]);
+            let _ = evaluate_fn.create_block("entry");
+            {
+                let blk = evaluate_fn.block_mut(0).unwrap();
+                // Cyclic dependencies may call our hoisted functions before
+                // our body. Prepare literal infrastructure without evaluating
+                // declared classes or any user statement ahead of dependencies.
+                let prepare_addr = format!(
+                    "ptrtoint (ptr @__perry_prepare_literals_{} to i64)",
+                    module_prefix
+                );
+                blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
+                // Trigger init of static-dep + re-export source modules
+                // before the body runs. Each `<dep>__init` is itself
+                // wrapped by the same guard pattern, so this short-
+                // circuits when the dep was already initialized
+                // (Eager-via-main path) and fires the body when the
+                // dep is Deferred and this is the first reach. The driver
+                // excludes evaluation back-edges to the program entry.
+                for dep_prefix in &cross_module.module_init_deps {
+                    if dep_prefix == module_prefix {
+                        continue;
+                    }
+                    blk.call_void(&format!("{}__init", dep_prefix), &[]);
+                }
+                // Run each module body behind a native exception boundary.
+                // A CommonJS wrapper publishes partial exports at the top of
+                // this body; if an exception escapes before final publication,
+                // the runtime caches that exact failure and wakes path-module
+                // waiters before rethrowing. Keeping the boundary here avoids
+                // adding a JavaScript `try` block that would change top-level
+                // `let`/`const`/`class` scope in flat CJS emission.
+                let init_body_addr = format!("ptrtoint (ptr @{} to i64)", init_body_name);
+                blk.call_void(
+                    "js_run_module_init_catching",
+                    &[(I64, init_body_addr.as_str())],
+                );
+                blk.ret_void();
+            }
         }
-        llmod.declare_function(&format!("{}__init", dep_prefix), VOID, &[]);
-    }
+        // Declare every dep's `__init` symbol so the wrapper's calls
+        // resolve at link time. Most overlap with `non_entry_module_prefixes`
+        // (whose declarations live in the entry module's compilation),
+        // but a non-entry module compiled standalone has no entry-side
+        // declaration list — emit them here too. `declare_function`
+        // dedupes by name.
+        for dep_prefix in &cross_module.module_init_deps {
+            if dep_prefix == module_prefix {
+                continue;
+            }
+            llmod.declare_function(&format!("{}__init", dep_prefix), VOID, &[]);
+        }
     }
     // The body retains every existing semantic of `<prefix>__init`
     // (strings init, globals/GC registration, top-level statements,
@@ -171,7 +171,11 @@ pub(super) fn compile_module_init(
     );
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
-    let body_return = if cross_module.program_has_tla { DOUBLE } else { VOID };
+    let body_return = if cross_module.program_has_tla {
+        DOUBLE
+    } else {
+        VOID
+    };
     let init_fn = llmod.define_function(&init_name, body_return, vec![]);
     // Keep the body symbol available to the legacy direct-body worker path.
     // Worker programs use the guarded wrapper, whose state is per thread.

@@ -35,7 +35,7 @@ import {
   isValidIsoDate,
   todayIso,
 } from './constants.mts'
-import { REPO_ROOT, SURFACES } from './paths.mts'
+import { REPO_ROOT, SURFACES } from '../paths/soak.mts'
 
 export interface Finding {
   file: string

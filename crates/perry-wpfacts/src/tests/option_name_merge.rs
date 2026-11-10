@@ -60,7 +60,10 @@ fn constant_option_names_past_eight_store_named_slots() {
     // Control within the old bound, then tsc's case past it.
     for n in [3, 12, 40] {
         let (ok, d) = witness(&src(n, "console.log(`${result}`);"));
-        assert!(ok, "{n} option names: box escaped through ToPrimitive of result\n{d}");
+        assert!(
+            ok,
+            "{n} option names: box escaped through ToPrimitive of result\n{d}"
+        );
     }
 }
 
@@ -93,7 +96,10 @@ fn sym_src(key: &str) -> String {
 #[test]
 fn any_string_key_store_keeps_facts() {
     let (ok, d) = witness(&sym_src("String(Date.now())"));
-    assert!(ok, "any-String key store read back under Symbol.toPrimitive\n{d}");
+    assert!(
+        ok,
+        "any-String key store read back under Symbol.toPrimitive\n{d}"
+    );
 }
 
 /// The predicate itself: the any-String shape may name every string, a
@@ -107,7 +113,14 @@ fn any_string_shape_never_names_a_symbol() {
     let wk = format!("{}toPrimitive", crate::builtins::WK_PREFIX);
     assert!(!m.key_may_name_str(Key::Any(s), &wk));
     assert!(m.key_may_name_str(Key::Any(0), &wk));
-    for n in ["constructor", "toString", "__proto__", "0", crate::model::ELEM, crate::model::NUM_KEY] {
+    for n in [
+        "constructor",
+        "toString",
+        "__proto__",
+        "0",
+        crate::model::ELEM,
+        crate::model::NUM_KEY,
+    ] {
         assert!(m.key_may_name_str(Key::Any(s), n), "{n}");
     }
 }

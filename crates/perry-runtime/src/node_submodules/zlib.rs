@@ -333,9 +333,8 @@ pub extern "C" fn js_zlib_brotli_large_window(opts: f64) -> i32 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
     let params = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"params"));
-    let value = crate::value::JSValue::from_bits(
-        gzip_read_option(params.get_nanbox_f64(), b"1").to_bits(),
-    );
+    let value =
+        crate::value::JSValue::from_bits(gzip_read_option(params.get_nanbox_f64(), b"1").to_bits());
     let enabled = if value.is_number() {
         let n = value.as_number();
         n != 0.0 && !n.is_nan()

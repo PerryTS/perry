@@ -50,7 +50,7 @@ import {
   RACK_DIR,
   REPO_ROOT,
   SURFACES,
-} from './paths.mts'
+} from '../paths/soak.mts'
 
 const SFW_ECOSYSTEMS = ['npm', 'yarn', 'pnpm', 'pip', 'pip3', 'uv', 'cargo']
 

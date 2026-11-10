@@ -209,7 +209,8 @@ runs:
         # /usr/bin/clang-22, but consumers resolve a toolchain by DIRECTORY —
         # PERRY_LLVM_OPT and PERRY_LLVM_CLANG must come from the same bin dir or
         # opt and clang can skew across majors — so it has to sit under $PREFIX.
-        if [ ! -x "$PREFIX/bin/clang" ] && [ -x /usr/bin/clang-22 ]; then
+        if ! "$PREFIX/bin/clang" --version 2>/dev/null | grep -q 'version 22\.' \
+          && [ -x /usr/bin/clang-22 ]; then
           sudo ln -sf /usr/bin/clang-22 "$PREFIX/bin/clang"
         fi
         # Assert the pair, not just llvm-config. A green setup step that leaves

@@ -756,8 +756,7 @@ pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep
 pub(crate) fn elem_demand(m: &Model, t: Tok, node: &crate::model::Node) -> bool {
     node.int_demand
         || m.rest_elems
-            && m
-                .num_fields
+            && m.num_fields
                 .get(&t)
                 .is_some_and(|&n| m.nodes[n as usize].int_demand)
 }

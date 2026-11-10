@@ -3,13 +3,22 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[3]
-JOBS = yaml.safe_load((ROOT / '.github/workflows/release-packages.yml').read_text())['jobs']
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from tests.paths.release_pipeline import (
+    LLVM_SETUP_ACTION,
+    PUBLISH_VISIBILITY_SCRIPT,
+    RELEASE_WORKFLOW,
+    ROOT,
+    TEST_WORKFLOW,
+)
+
+JOBS = yaml.safe_load(RELEASE_WORKFLOW.read_text())['jobs']
 SHA, BASE = 'a' * 40, 'b' * 40
 
 
@@ -186,24 +195,25 @@ sleep() { echo 'unexpected wait' >&2; exit 99; }
                 {'name': '@perryts/perry', 'version': '1', 'path': 'wrapper.tgz', 'sha1': SHA}]}))
             stub = r'''
 node() {
-  if [ "$1" = scripts/publish/platform-visibility.mjs ]; then return 1; fi
+  if [ "$1" = "$PUBLISH_VISIBILITY_SCRIPT" ]; then return 1; fi
   command node "$@"
 }
 npm() { printf '%s\n' "$*" >> "$CALLS"; }
 '''
             result = shell(stub + source, cwd=root, env={'CALLS': str(root / 'calls'),
-                'NPM_TOKEN': '', 'NODE_AUTH_TOKEN': '', 'NPM_AUTH_TOKEN': '', 'DIST_TAG': 'test'})
+                'NPM_TOKEN': '', 'NODE_AUTH_TOKEN': '', 'NPM_AUTH_TOKEN': '', 'DIST_TAG': 'test',
+                'PUBLISH_VISIBILITY_SCRIPT': PUBLISH_VISIBILITY_SCRIPT})
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             calls = (root / 'calls').read_text()
             self.assertIn('publish ./platform.tgz', calls)
             self.assertNotIn('publish ./wrapper.tgz', calls)
 
     def test_apt_install_still_gates_after_update_failure(self):
-        workflows = [JOBS, yaml.safe_load((ROOT / '.github/workflows/test.yml').read_text())['jobs']]
+        workflows = [JOBS, yaml.safe_load(TEST_WORKFLOW.read_text())['jobs']]
         sources = [s['run'] for jobs in workflows for job in jobs.values()
                    for s in job.get('steps', [])
                    if 'sudo apt-get update' in s.get('run', '') and '_bad=' in s['run']]
-        action = yaml.safe_load((ROOT / '.github/actions/setup-llvm22/action.yml').read_text())
+        action = yaml.safe_load(LLVM_SETUP_ACTION.read_text())
         sources += [s['run'] for s in action['runs']['steps']
                     if 'sudo apt-get update' in s.get('run', '')]
         self.assertEqual(len(sources), 10, 'exercise every changed apt site')
@@ -241,6 +251,7 @@ sudo() {
     *'apt-get install'*'.deb'*)
       echo OFFLINE_REACHED; return "$OFFLINE_RC" ;;
     *'apt-get install'*) echo INSTALL_REACHED; return "$INSTALL_RC" ;;
+    'rm -rf '*) return 0 ;;
     *) echo "unexpected sudo: $*" >&2; return 99 ;;
   esac
 }

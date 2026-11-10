@@ -402,6 +402,14 @@
       "reason": "Tag-identity truthiness is taken only for a parameter in spec_bool_params, whose sole entry is the public wrapper's inline TAG_TRUE|TAG_FALSE guard; the proof API also rejects any binding written anywhere in the body, so the slot still holds the guarded boolean."
     },
     {
+      "path": "crates/perry-codegen/src/proto_constants.rs",
+      "function": "iterator_member_site",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The local type hint only nominates a class candidate for the specialized iterator path. Before loading the prototype slot, emitted code checks the live receiver is an object with no meta record, compares its layout word against the registered family descriptor, and verifies every prototype in the class chain has the expected shape; every failed check branches to generic GetIterator."
+    },
+    {
       "path": "crates/perry-codegen/src/rooting/temp_root.rs",
       "function": "local_is_inert_primitive",
       "access": "stable_local_type_proof",

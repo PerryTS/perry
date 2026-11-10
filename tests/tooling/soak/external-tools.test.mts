@@ -19,7 +19,7 @@ import {
   pruneExpiredSoakBypasses,
   staleBypasses,
 } from '../../../scripts/soak/external-tools.mts'
-import { DOCKER_PREBAKE, EXTERNAL_TOOLS_JSON, REPO_ROOT, SURFACES } from '../../../scripts/soak/paths.mts'
+import { DOCKER_PREBAKE, EXTERNAL_TOOLS_JSON, REPO_ROOT, SURFACES } from '../../../scripts/paths/soak.mts'
 
 const GOOD_SRI =
   'sha512-waLrsPG2a7EOv0XuvXDQZGgCZ4MTtOfZh8TmGbM6gn2B6Nh6HI+15jaoKdAS9wgdTyIqTuqU+O+NtVYd+kuFaA=='

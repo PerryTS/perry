@@ -20,12 +20,21 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
 
 fn not_escaped(pf: &ProgramFacts, class: &str) {
     let t = tmpl(pf, class);
-    assert!(t.escape.is_none(), "{class}: escape {:?}\n{}", t.escape, pf.dump_text());
+    assert!(
+        t.escape.is_none(),
+        "{class}: escape {:?}\n{}",
+        t.escape,
+        pf.dump_text()
+    );
 }
 
 fn escaped(pf: &ProgramFacts, class: &str) {
     let t = tmpl(pf, class);
-    assert!(t.escape.is_some(), "{class}: not escaped\n{}", pf.dump_text());
+    assert!(
+        t.escape.is_some(),
+        "{class}: not escaped\n{}",
+        pf.dump_text()
+    );
 }
 
 const STEP: &str = "class Links { x = 1 }\nfunction f(v: any) { for (const t of v) { console.log(t); } }\nf([1]);\n";

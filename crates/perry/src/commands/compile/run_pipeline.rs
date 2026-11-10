@@ -4000,12 +4000,12 @@ pub fn run_with_parse_cache(
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
             if !program_has_tla {
-            if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
-                deps.retain(|dep| {
-                    deferred_module_prefixes.contains(dep)
-                        || init_pos.get(dep).map_or(true, |&p| p < self_pos)
-                });
-            }
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| {
+                        deferred_module_prefixes.contains(dep)
+                            || init_pos.get(dep).map_or(true, |&p| p < self_pos)
+                    });
+                }
             }
             if program_has_tla {
                 let mut ordered = super::init_order::static_requested_paths(&ctx, path);
@@ -4019,8 +4019,11 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
-                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
-                    .map(|m| sanitize_name(&m.name)).collect();
+                deps = ordered
+                    .iter()
+                    .filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name))
+                    .collect();
             }
             deps
         };

@@ -1,12 +1,31 @@
-//! `SlotIndex` — the shape key index's content-hash → slot table, in a
-//! sibling file.
-//!
-//! Extracted from `shapes.rs` to keep it under the repo's 2000-line cap.
-//! Also carries the two helpers that are mostly index manipulation:
+//! `SlotIndex` — the shape key index's content-hash → slot table and key-byte
+//! comparison. Also carries the helpers that are mostly index manipulation:
 //! `record_shape_scan_outcome` (the shape scanner's per-descriptor
 //! bookkeeping) and `shape_index_migrate_after_delete`.
 
 use crate::codegen_abi::{LayoutWord, ShapeId};
+
+/// Byte equality without a libc call for the short keys property names are.
+#[inline]
+pub(super) unsafe fn bytes_eq(a: *const u8, b: *const u8, n: usize) -> bool {
+    let mut i = 0;
+    while i + 8 <= n {
+        if std::ptr::read_unaligned(a.add(i) as *const u64)
+            != std::ptr::read_unaligned(b.add(i) as *const u64)
+        {
+            return false;
+        }
+        i += 8;
+    }
+    while i < n {
+        if *a.add(i) != *b.add(i) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Content hash → candidate slots for one shape, as an open-addressing table
 /// of packed `(hash tag, slot)` cells.
 ///
