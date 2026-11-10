@@ -197,15 +197,18 @@ fn a_number_context_keeps_its_number_test_without_the_number_fact() {
 }
 
 #[test]
-fn a_key_outside_the_floor_is_bounded_by_the_fixed_length() {
+fn a_key_outside_the_floor_is_bounded_by_the_capacity() {
+    // The floor is the least length over the receivers: an index at or
+    // past it may still name an element of a longer one, so the bound is
+    // the capacity and the slot may be a hole.
     for key in [None, Some((-1, 127)), Some((0, 128))] {
         let ir = rep_ir(BOARD, key, true);
         let f = body(&ir, "__at").join("\n");
-        assert!(bound_128(&f), "{key:?}: the bound is the floor\n{f}");
+        assert!(f.contains("arep.inside"), "{key:?}: a bound\n{f}");
+        assert!(!bound_128(&f), "{key:?}: not the floor\n{f}");
+        assert!(f.contains("arep.own"), "{key:?}: a hole test\n{f}");
         assert!(f.contains("arep.cold"), "{key:?}: a miss reads cold\n{f}");
         assert!(!forwarding_test(&f), "{key:?}\n{f}");
-        // Dense below the floor: the bound is the only test.
-        assert!(!f.contains("arep.own"), "{key:?}: no hole test\n{f}");
         assert!(!f.contains(".guard.prefix"), "{key:?}\n{f}");
     }
 }

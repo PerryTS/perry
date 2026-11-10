@@ -12,9 +12,11 @@
 //! test, and:
 //! - the forwarding test only when the storage may move (`!r.fixed`);
 //! - no bound when the key's interval lies in `[0, r.floor)` (wpfacts
-//!   `element_keys`); the constant bound `idx <u r.floor` when the length
-//!   is that constant (`r.fixed`); else `idx <u capacity` (the runtime
-//!   keeps `[length, capacity)` hole-filled, `array::storage`);
+//!   `element_keys`), else `idx <u capacity`: the runtime keeps
+//!   `[length, capacity)` hole-filled (`array::storage`), so a slot past
+//!   the length reads as the hole it is. The floor is the least length
+//!   over the Arrays the value may hold, so an index at or past it may
+//!   still name an element;
 //! - the slot at `h + 24 + 8 * idx` when `r.floor > 0`, else through the
 //!   header's capacity and size (a `shift` moves the front of an Array
 //!   whose length is not defined);
@@ -85,7 +87,7 @@ pub(crate) struct RepRead {
 impl RepRead {
     /// The slot is below a dense floor: present, never a hole.
     fn present(self) -> bool {
-        self.rep.dense && (self.in_floor || self.rep.fixed)
+        self.rep.dense && self.in_floor
     }
 
     /// The read cannot miss: no test, no cold arm.
@@ -125,10 +127,6 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
     let FactsRep::Arr(rep) = crate::codegen::facts_rep::local(ctx, *id)? else {
         return None;
     };
-    // An Array that is always empty has no slot to read.
-    if rep.fixed && rep.floor == 0 {
-        return None;
-    }
     let in_floor = element_offset != 0
         && ctx
             .wpfacts
@@ -251,13 +249,8 @@ fn lower_rep(
         step(ctx, &live, "arep.live");
     }
     let mut capacity = None;
-    if read.in_floor {
-        // `capacity >= floor > idx`: the slot exists.
-    } else if r.fixed {
-        // `length == floor`: an index at or past it is absent.
-        let inside = ctx.block().icmp_ult(I32, idx_i32, &r.floor.to_string());
-        step(ctx, &inside, "arep.inside");
-    } else {
+    // In the floor `capacity >= floor > idx`: the slot exists.
+    if !read.in_floor {
         let ptr = ctx.block().inttoptr(I64, &handle);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
         let cap = ctx.block().load(I32, &cap_ptr);
@@ -277,7 +270,7 @@ fn lower_rep(
         );
         blk.add(I64, &base, &offset)
     } else {
-        let cap = capacity.expect("a floor of 0 bounds the key by the capacity");
+        let cap = capacity.expect("no key is below a floor of 0");
         blk.array_element_addr_with_capacity(&handle, &cap, idx_i32)
     };
     let slot = blk.inttoptr(I64, &addr);
