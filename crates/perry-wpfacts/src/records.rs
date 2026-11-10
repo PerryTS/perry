@@ -559,6 +559,9 @@ pub(crate) fn derive(
                 }
             }
         }
+        // The owner ruling's reject names the helper (§4.4): it is the cause
+        // of the other rejects its copy region leads to, so it comes first.
+        rejects.sort_by_key(|(_, r)| !matches!(r.why, RecordReject::R5RetainingHelper { .. }));
         for (tm, why) in rejects {
             if let Some(v) = verdict.get_mut(&tm) {
                 if v.is_ok() {
@@ -1218,6 +1221,15 @@ impl<'a, 'g> Scan<'a, 'g> {
                         if region.insert(p, f).is_none() {
                             work.push(p);
                         }
+                    }
+                    // A mixed argument (`show(c ? 5 : u)`) is evaluated into
+                    // the Boxed parameter: the record is materialized there,
+                    // so the argument node holds the copy too.
+                    let (_, ars, other) = self.held(a, admitted, &FxHashMap::default());
+                    let arg_mixed =
+                        other || !ars.is_empty() || m.nodes[a as usize].prim & !prim::UNDEF != 0;
+                    if arg_mixed && region.insert(a, f).is_none() {
+                        work.push(a);
                     }
                 }
             }
