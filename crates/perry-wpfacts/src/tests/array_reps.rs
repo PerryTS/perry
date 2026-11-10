@@ -126,6 +126,7 @@ fn two_arrays_join_to_what_both_have() {
             dense: true,
             fixed: false,
             im: false,
+            at_rest: false,
         })
     );
     let j = Rep::join(SAMPLES[3], SAMPLES[4]);
@@ -137,6 +138,7 @@ fn two_arrays_join_to_what_both_have() {
             dense: false,
             fixed: true,
             im: false,
+            at_rest: false,
         })
     );
 }

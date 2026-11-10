@@ -366,14 +366,6 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
     floor
 }
 
-/// The receivers of every copy of the element site `(module, offset)`.
-pub(crate) fn site_recvs(g: &Gen<'_>, module: u32, offset: u32, write: bool) -> Vec<NodeId> {
-    let copies = node_copies(&g.m);
-    sites(g, &copies)
-        .remove(&(module, offset, write))
-        .unwrap_or_default()
-}
-
 /// Fill `ModuleBindings::rest_reads`, `rest_writes` and `rest_births`
 /// (module docs).
 pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
