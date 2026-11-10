@@ -140,23 +140,6 @@ pub(crate) fn concat_short_pair(a: f64, b: f64) -> Option<f64> {
 
 #[inline(always)]
 fn short_pair_bits(a: u64, b: u64) -> Option<u64> {
-    // Both operands inline: one tag test each, one length sum (a sum of two
-    // length bytes is at most 5 only when each is), one ASCII test over both
-    // payloads.
-    if a & TAG_MASK == SHORT_STRING_TAG && b & TAG_MASK == SHORT_STRING_TAG {
-        let la = (a >> SHORT_STRING_LEN_SHIFT) & 0xFF;
-        let lb = (b >> SHORT_STRING_LEN_SHIFT) & 0xFF;
-        let total = la + lb;
-        if total > SHORT_STRING_MAX_LEN as u64 {
-            return None;
-        }
-        let pa = a & low_bytes_mask(la);
-        let pb = b & low_bytes_mask(lb);
-        if (pa | pb) & PAYLOAD_HIGH_BITS != 0 {
-            return None;
-        }
-        return Some(SHORT_STRING_TAG | (total << SHORT_STRING_LEN_SHIFT) | pa | (pb << (la * 8)));
-    }
     let (pa, la) = short_ascii_operand(a)?;
     let (pb, lb) = short_ascii_operand(b)?;
     let total = la + lb;
