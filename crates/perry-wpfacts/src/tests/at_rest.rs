@@ -85,23 +85,6 @@ fn an_escaped_or_switched_off_field_is_boxed() {
 }
 
 #[test]
-fn demand_reaches_an_element_behind_a_coalesce() {
-    let src = r#"
-const b: number[] = new Array<number>(8).fill(0);
-function at(i: number): number { return b[i] ?? 0; }
-let s = 0;
-for (let i = 0; i < 8; i++) {
-  b[i] = i & 3;
-  const p = at(i);
-  if (p === 2) s++;
-}
-console.log(s);
-"#;
-    let l = rest(src, "elem Array@");
-    assert!(l.contains("demand=1"), "{l}");
-}
-
-#[test]
 fn probe_prints_field_and_element_intervals() {
     let src = r#"
 class C {

@@ -96,23 +96,12 @@ pub(crate) fn int32_constant(e: &perry_hir::Expr) -> bool {
         && v <= f64::from(i32::MAX)
 }
 
-/// I32 at rest (RFC §10.7, PR A): demand flows through value filters and
-/// guards (`l ?? r`, `l && r`, `l || r`, presence narrowings), so an
-/// element or field read behind `?? 0` meets the int consumers of its
-/// result. `PERRY_FACTS_AT_REST=0` restores the copy-edge-only walk.
+/// I32 at rest (RFC §10.7, PR A): the at-rest facts are on. Demand is then
+/// solved before the derive, so a field's representation can read it
+/// (`lib.rs`). `PERRY_FACTS_AT_REST=0` restores main's facts.
 pub(crate) fn at_rest_demand() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_AT_REST").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
-}
-
-/// `PERRY_FACTS_FILTER_DEMAND=0`: with the at-rest facts on, demand still
-/// walks copy edges only (the filter and guard edges and a summarized run's
-/// result are left out). Measures the demand half of PR A on its own.
-pub(crate) fn filter_demand() -> bool {
-    !matches!(
-        std::env::var("PERRY_FACTS_FILTER_DEMAND").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
 }
@@ -130,7 +119,6 @@ pub(crate) fn solve(m: &mut Model) {
     // The reverse graph, in compressed rows: `preds[start[d]..start[d + 1]]`
     // are the nodes demand on `d` reaches.
     let mut start = vec![0u32; n + 1];
-    let filters = at_rest_demand() && filter_demand();
     let each_edge = |m: &Model, f: &mut dyn FnMut(NodeId, NodeId)| {
         for (src, node) in m.nodes.iter().enumerate() {
             let src = src as NodeId;
@@ -138,32 +126,10 @@ pub(crate) fn solve(m: &mut Model) {
                 f(src, d);
             }
             for c in &node.cons {
-                match c {
-                    Cons::Range { op, dst, .. } if carries(*op) => f(src, *dst),
-                    // I32 at rest (`filters`): a filter delivers some of
-                    // its host's values unchanged (`l ?? r`, `l && r`, a
-                    // presence narrowing), and a guard delivers its `from`
-                    // operand's (`r` of `l ?? r`, `l || r`, `l && r`): a
-                    // copy of values, so demand on the result is demand on
-                    // the operand.
-                    Cons::NotNullish { dst }
-                    | Cons::Defined { dst }
-                    | Cons::NotUndefined { dst }
-                    | Cons::Falsy { dst }
-                        if filters =>
-                    {
-                        f(src, *dst)
+                if let Cons::Range { op, dst, .. } = c {
+                    if carries(*op) {
+                        f(src, *dst);
                     }
-                    Cons::Guard { from, dst, .. } if filters => f(*from, *dst),
-                    // A summarized run's result delivers its Numbers to
-                    // the call's result unchanged (`Model::ret_into`).
-                    Cons::RetInto { call, .. } if filters => {
-                        let ret = m.calls[*call as usize].ret;
-                        if ret != NO_NODE {
-                            f(src, ret)
-                        }
-                    }
-                    _ => {}
                 }
             }
         }
