@@ -75,6 +75,8 @@ pub(super) fn family_load(
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
         if buffer_member_absent(m, what, &name) {
             m.add_prim(dst, prim::UNDEF);
+        } else if realm_accessor(m, fam, what, &name) {
+            undeclared_getter_result(m, dst);
         } else {
             undescribed_member(m, dst);
         }
@@ -84,6 +86,9 @@ pub(super) fn family_load(
         return;
     }
     match members::member(fam, &name) {
+        // An accessor of the realm (a getter the model lists as a method):
+        // the getter's result, never the getter or a method.
+        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => undeclared_getter_result(m, dst),
         Some(Mem::Fn) => {
             let bf = match member_native(m, fam, what, &name) {
                 Some(n) => {

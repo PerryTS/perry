@@ -942,6 +942,45 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 
 /// Resolve the member's object reference before interning its token. The
 /// receiver family locates the holder, but is never part of value identity.
+/// The realm prototype a builtin object of family `fam` (`what`) reads its
+/// members from (past a Buffer's own prototype, `member_native`).
+fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<usize> {
+    match what {
+        Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
+        // Every iterator kind resolves its members as `Iterator.prototype`'s.
+        Some(w) if members::bobj_family(w) == Family::Iterator => {
+            m.declarations.named("Iterator.prototype", m)
+        }
+        // The prototype of an object a declaration made.
+        Some(w) if w.ends_with(".prototype") => m.declarations.named(w, m),
+        Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
+        None => m.declarations.family(fam, m),
+    }
+}
+
+/// Whether the realm declares key `name` an accessor (`accessor` row) where
+/// a builtin object of family `fam` (`what`) reads it: a load runs the
+/// getter, so its value is the getter's result, never a function of the
+/// chain (`Response.prototype.body`).
+fn realm_accessor(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> bool {
+    let own = (what == Some("Buffer"))
+        .then(|| m.declarations.named("Buffer.prototype", m))
+        .flatten();
+    [own, realm_holder(m, fam, what)]
+        .into_iter()
+        .flatten()
+        .find_map(|h| m.declarations.property(h, name, m))
+        .is_some_and(|p| p.get.is_some())
+}
+
+/// What a load of an accessor whose getter the realm does not declare
+/// (`realm_accessor`; a declared one: `effects::getter_load`) reads: the
+/// host's result of the getter, unknown.
+fn undeclared_getter_result(m: &mut Model, dst: NodeId) {
+    m.add_top(dst, |_| "result of a getter the realm does not declare".into());
+    m.add_prim(dst, prim::ALL);
+}
+
 fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
     // A Buffer's own prototype first: past it the chain is a typed array's.
     if what == Some("Buffer") {
@@ -965,15 +1004,7 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .native?;
         return Some(Native::Member { identity, holder: None });
     }
-    let holder = match what {
-        Some("TypedArray" | "Buffer") => m.declarations.named("%TypedArray%.prototype", m),
-        // Every iterator kind resolves its members as `Iterator.prototype`'s.
-        Some(w) if members::bobj_family(w) == Family::Iterator => {
-            m.declarations.named("Iterator.prototype", m)
-        }
-        Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
-        None => m.declarations.family(fam, m),
-    }?;
+    let holder = realm_holder(m, fam, what)?;
     let identity = m
         .declarations
         .property(holder, name, m)

@@ -215,3 +215,33 @@ fn g2_write_through_the_reason_getter_reaches_r() {
         pf.dump_text()
     );
 }
+
+/// Q1: an accessor the realm declares with a getter the model does not
+/// (`Response.prototype.body`) reads the getter's unknown result (⊤ and
+/// any primitive), never a builtin function (red while it reads
+/// `builtin-fn`: a value the program gave the Response, its body stream,
+/// would be missing).
+#[test]
+fn q1_undeclared_accessor_reads_its_result_not_a_function() {
+    let pf = facts(
+        r#"
+        function go(url: string) {
+            return fetch(url).then((r: any) => {
+                const b: any = r.body;
+                console.log(b.locked);
+            });
+        }
+        go(process.argv[2]);
+        export const keep = 1;
+    "#,
+    );
+    show(&pf, &["locked", "body"], &[]);
+    let l = site(&pf, "locked");
+    assert!(
+        l.top && !l.receivers.iter().any(|r| r.contains("builtin-fn")),
+        "{} {:?}\n{}",
+        l.top,
+        l.receivers,
+        pf.dump_text()
+    );
+}
