@@ -70,6 +70,50 @@ fn macro_reads_source_files_only_at_compile_time_and_respects_shadowing() {
     );
 }
 
+/// The runner awaits each macro at its top level. A macro that settles through
+/// a callback-style fs completion (Effect's FileSystem, Supabase's
+/// compute-stacks macro) resumes only in the poll phase of that await's turn.
+#[test]
+fn macro_settled_by_fs_callbacks_expands() {
+    let source = tempdir().unwrap();
+    let binaries = tempdir().unwrap();
+    let output = binaries.path().join("program");
+    fs::create_dir_all(source.path().join("stacks/node")).unwrap();
+    fs::write(source.path().join("stacks/node/index.ts"), "hi").unwrap();
+    let compiled = compile(
+        source.path(),
+        r#"
+        import { stacks } from './macro.ts' with { type: 'macro' };
+        console.log(JSON.stringify(stacks()));
+    "#,
+        r#"
+        import { readdir, readFile } from 'node:fs';
+        import { fileURLToPath } from 'node:url';
+        const list = (dir: string) => new Promise<string[]>((ok, no) => readdir(dir, (e, names) => e ? no(e) : ok(names.sort())));
+        const read = (file: string) => new Promise<string>((ok, no) => readFile(file, 'utf8', (e, text) => e ? no(e) : ok(text)));
+        export async function stacks() {
+            const root = fileURLToPath(new URL('stacks', import.meta.url));
+            const out: Record<string, Record<string, string>> = {};
+            for (const entry of await list(root)) {
+                const files: Record<string, string> = {};
+                for (const name of await list(root + '/' + entry)) files[name] = await read(root + '/' + entry + '/' + name);
+                out[entry] = files;
+            }
+            return out;
+        }
+    "#,
+        &output,
+    );
+    assert!(compiled.status.success(), "{}", diagnostics(&compiled));
+    drop(source);
+    let run = Command::new(output).output().unwrap();
+    assert!(run.status.success(), "{}", diagnostics(&run));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        r#"{"node":{"index.ts":"hi"}}"#
+    );
+}
+
 #[test]
 fn macro_calls_share_one_module_instance_and_inline_awaited_results() {
     let source = tempdir().unwrap();
