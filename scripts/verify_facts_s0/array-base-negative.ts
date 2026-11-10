@@ -20,5 +20,9 @@ class Board {
   }
 }
 const b = new Board();
-for (let k = 0; k < 100; k++) b.board.push(2);
-console.log(b.scan(), b.at(40), b.board.length);
+// A birth right behind the board keeps it from growing in place
+// (the runtime lengthens only the most recent nursery birth).
+const blocker = new Board();
+const alias = b.board;
+for (let k = 0; k < 100; k++) alias.push(2);
+console.log(b.scan(), b.at(40), b.board.length, blocker.at(3));

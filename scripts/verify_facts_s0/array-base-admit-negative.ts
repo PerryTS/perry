@@ -12,9 +12,9 @@ class Board {
   grow(n: number): void {
     for (let k = 0; k < n; k++) this.board.push(k);
   }
-  scan(): number {
+  scan(n: number): number {
     let s = 0;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < n; i++) {
       s += this.at(i);
       this.grow(64);
     }
@@ -22,4 +22,6 @@ class Board {
   }
 }
 const b = new Board();
-console.log(b.scan(), b.board.length);
+// A birth right behind the board keeps it from growing in place.
+const blocker = new Board();
+console.log(b.scan(8), b.board.length, blocker.at(3));
