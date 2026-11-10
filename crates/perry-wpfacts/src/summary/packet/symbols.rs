@@ -129,6 +129,11 @@ impl Model {
                 from,
                 reason.and_then(|r| self.reasons.get(r as usize))
             ),
+            Cons::TopIfTop { dst, reason } => format!(
+                "TopIfTop dst={:?} reason={:?}",
+                dst,
+                self.reasons.get(reason as usize)
+            ),
             Cons::Guard { test, from, dst } => {
                 format!("Guard test={:?} from={:?} dst={:?}", test, from, dst)
             }
