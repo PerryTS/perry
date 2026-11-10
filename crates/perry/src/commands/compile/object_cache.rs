@@ -562,6 +562,14 @@ fn compute_object_cache_key_with_env(
         );
     }
     h.field("init_deps", &opts.module_init_deps.join("|"));
+    h.field(
+        "defer_async_deps",
+        &opts.module_deferred_init_deps.join("|"),
+    );
+    h.field("defer_readiness", &opts.module_deferred_readiness.join("|"));
+    let mut deferred_names: Vec<_> = opts.deferred_namespace_imports.iter().cloned().collect();
+    deferred_names.sort();
+    h.field("deferred_namespaces", &deferred_names.join("|"));
     // Issue #842: side-effect-only dynamic-import targets emit a
     // `@__perry_ns_<prefix>` global + populator regardless of
     // `namespace_entries`. Toggling this flag changes the emitted IR
@@ -1251,6 +1259,10 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
         }
         perry_codegen::NamespaceEntryKind::NestedNamespace { source_prefix } => {
             out.push_str("nested_ns:");
+            out.push_str(source_prefix);
+        }
+        perry_codegen::NamespaceEntryKind::DeferredNamespace { source_prefix } => {
+            out.push_str("deferred_ns:");
             out.push_str(source_prefix);
         }
         perry_codegen::NamespaceEntryKind::NativeNamespace { specifier } => {

@@ -34,6 +34,7 @@ use super::CompilationContext;
 pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &Path) {
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
+    eager.extend(deferred_async_dependencies(ctx, entry_path));
     // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
     // have no static importer (loaded by a runtime-computed path). They are left
     // Deferred — eager-initing turbopack chunks at startup runs React-SSR code
@@ -56,7 +57,11 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
                 .imports
                 .iter()
                 .filter(|i| {
-                    !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require
+                    !i.is_dynamic
+                        && !i.is_deferred
+                        && !i.type_only
+                        && !i.runtime_erased
+                        && !i.is_deferred_require
                 })
                 .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
                 .collect();
@@ -120,7 +125,7 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
         let mut next: Vec<PathBuf> = module
             .imports
             .iter()
-            .filter(|i| !i.is_dynamic && !i.type_only && !i.runtime_erased)
+            .filter(|i| !i.is_dynamic && !i.is_deferred && !i.type_only && !i.runtime_erased)
             .filter(|i| !i.is_deferred_require || edge_sources.contains(i.source.as_str()))
             .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
             .collect();
@@ -214,6 +219,7 @@ pub(super) fn topo_sort_non_entry_modules(
             // and the generated per-module init wrappers both exclude these
             // edges; the global order must use the same graph.
             if import.is_dynamic
+                || import.is_deferred
                 || import.type_only
                 || import.runtime_erased
                 || import.is_deferred_require
@@ -317,6 +323,7 @@ pub(super) fn topo_sort_non_entry_modules(
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
             if import.is_dynamic
+                || import.is_deferred
                 || import.type_only
                 || import.runtime_erased
                 || import.is_deferred_require
@@ -396,4 +403,81 @@ mod esm_request_order_tests {
             ]
         );
     }
+}
+
+/// Async modules reachable over static edges must run before a deferred
+/// namespace is exposed, without evaluating intervening synchronous modules.
+pub(super) fn requested_module_dependencies(
+    ctx: &mut CompilationContext,
+    root: &Path,
+) -> Vec<PathBuf> {
+    fn visit(
+        ctx: &mut CompilationContext,
+        path: &Path,
+        seen: &mut HashSet<PathBuf>,
+        result: &mut Vec<PathBuf>,
+    ) {
+        if !seen.insert(path.to_path_buf()) {
+            return;
+        }
+        if !ctx.native_modules.contains_key(path) {
+            return;
+        }
+        let targets = direct_requested_module_dependencies(ctx, path);
+        for target in targets {
+            visit(ctx, &target, seen, result);
+        }
+        result.push(path.to_path_buf());
+    }
+    let mut result = Vec::new();
+    visit(ctx, root, &mut HashSet::new(), &mut result);
+    result
+}
+
+/// Project only modules with asynchronous bodies from the requested graph.
+pub(super) fn deferred_async_dependencies(
+    ctx: &mut CompilationContext,
+    root: &Path,
+) -> Vec<PathBuf> {
+    requested_module_dependencies(ctx, root)
+        .into_iter()
+        .filter(|path| {
+            ctx.native_modules
+                .get(path)
+                .is_some_and(|m| m.has_top_level_await)
+        })
+        .collect()
+}
+
+/// Requested edges include defer and cycle back-edges; readiness does not evaluate them.
+pub(super) fn direct_requested_module_dependencies(
+    ctx: &mut CompilationContext,
+    path: &Path,
+) -> Vec<PathBuf> {
+    let Some(module) = ctx.native_modules.get(path) else {
+        return Vec::new();
+    };
+    let mut targets: Vec<PathBuf> = module
+        .imports
+        .iter()
+        .filter(|i| !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require)
+        .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
+        .collect();
+    let sources: Vec<String> = module
+        .exports
+        .iter()
+        .filter_map(|e| match e {
+            perry_hir::Export::ExportAll { source }
+            | perry_hir::Export::ReExport { source, .. }
+            | perry_hir::Export::NamespaceReExport { source, .. } => Some(source.clone()),
+            _ => None,
+        })
+        .collect();
+    for source in sources {
+        if let Some((target, _)) = resolve_import_with_context(&source, path, ctx) {
+            targets.push(target);
+        }
+    }
+    targets.retain(|p| ctx.native_modules.contains_key(p));
+    targets
 }
