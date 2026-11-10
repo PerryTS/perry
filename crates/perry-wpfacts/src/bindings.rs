@@ -457,6 +457,9 @@ pub struct ModuleBindings {
     /// PR-C1), with the least length lower bound of their receivers; sorted
     /// (`element_floors`).
     pub element_floors: Vec<(u32, u32)>,
+    /// Module-scope bindings (by local id) whose every value is this one
+    /// integer Number, sorted (`const_numbers`, N6).
+    pub const_numbers: Vec<(u32, i64)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
@@ -511,7 +514,7 @@ fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead
 
 /// Node `n` holds only Numbers, each an integer in this interval. An empty
 /// node proves nothing (it may be one the solve left unpopulated).
-fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
+pub(crate) fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
     let node = &m.nodes[n as usize];
     if node.prim != crate::model::prim::NUM || !node.pts.is_empty() {
         return None;

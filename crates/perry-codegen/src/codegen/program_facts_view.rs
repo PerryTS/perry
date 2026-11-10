@@ -299,6 +299,10 @@ pub struct ElisionFacts {
     /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
     /// `expr::index_get::elem_floor`).
     pub element_floors: std::collections::BTreeMap<u32, u32>,
+    /// Module binding (local id) → the one integer Number it holds for the
+    /// whole program (wpfacts `ModuleBindings::const_numbers`, N6): a read
+    /// of its module global is that constant (`expr::literals_vars::facts_const_number`).
+    pub const_numbers: std::collections::BTreeMap<u32, i64>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
@@ -358,6 +362,7 @@ impl ElisionFacts {
             && self.signatures.is_empty()
             && self.typed_calls.is_empty()
             && self.number_element_reads.is_empty()
+            && self.const_numbers.is_empty()
             && self.locals.is_empty()
             && self.this_of.is_empty()
             && self.local_bodies.is_empty()

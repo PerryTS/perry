@@ -151,6 +151,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_const_numbers: matches!(
+            std::env::var("PERRY_FACTS_CONST_NUMBERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_guard_ranges: matches!(
             std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -547,6 +551,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.number_element_reads
             .extend(mb.number_element_reads.iter().copied());
         out.element_floors.extend(mb.element_floors.iter().copied());
+        out.const_numbers.extend(mb.const_numbers.iter().copied());
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
             out.signatures.insert(
@@ -882,6 +887,10 @@ pub(crate) fn activation(
         ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_const_numbers: matches!(
+            std::env::var("PERRY_FACTS_CONST_NUMBERS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_guard_ranges: matches!(

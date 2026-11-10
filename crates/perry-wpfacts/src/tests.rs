@@ -52,6 +52,7 @@ mod closure_context;
 mod computed_table_fn;
 mod const_key_read;
 mod const_key_set_store;
+mod const_numbers;
 pub(crate) mod computed_key_members;
 mod key_strings;
 mod ctor_observed;
