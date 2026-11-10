@@ -510,6 +510,7 @@ impl<'a> Gen<'a> {
                     module: mi,
                     site: u32::MAX,
                     hole_free: false,
+                    plain: false,
                 }
             },
             display: display.to_string(),

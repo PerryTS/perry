@@ -39,7 +39,10 @@ pub(crate) enum Fact {
     ElementRead,
     FieldReadCall,
     CanonicalNumber,
+    ElementFloor,
+    ConstNumber,
     Signature,
+    ArrayRep,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -78,7 +81,10 @@ impl Fact {
             Self::ElementRead => "proven element read",
             Self::FieldReadCall => "field read call",
             Self::CanonicalNumber => "canonical number",
+            Self::ElementFloor => "element floor",
+            Self::ConstNumber => "constant number",
             Self::Signature => "signature",
+            Self::ArrayRep => "array rep",
         }
     }
 }

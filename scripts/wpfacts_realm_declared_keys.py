@@ -23,9 +23,13 @@ the realm defines (every other global name is the program's).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
 strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
+`accessor <owner> <key> <get> [<set>]` rows name a key the realm declares an
+accessor: its getter (`-` none) and setter (no column: none). A [[Set]] of a key
+whose accessor has no setter writes nothing (sloppy) or throws (strict).
 `object <owner> <key> <namespace>` rows name a node module object's data property whose value
-is another declared node module object (`node:inspector` `default`: `node:inspector.default`).
-`native <owner> <key> <identity>` rows resolve callable property references on global, namespace, node module (`node:fs`) and prototype holders
+is another declared host object (`node:inspector` `default`: `node:inspector.default`;
+`node:perf_hooks` `performance`: `performance`).
+native <owner> <key> <identity>` rows resolve callable property references on global, namespace, node module (`node:fs`) and prototype holders
 (an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
 """
 import argparse
@@ -68,6 +72,12 @@ def node_module(name, kind):
     return kind == "namespace" and name.startswith("node:")
 
 
+def host_object(name, kind):
+    """A declared host object: a realm namespace (`node:fs`, `Intl`, `performance`);
+    wpfacts reads it as `BuiltinNs::Module`."""
+    return kind == "namespace"
+
+
 def intrinsic_prototype(name, kind):
     """A realm prototype named by its intrinsic (`%GeneratorPrototype%`), not
     reachable as a constructor's `.prototype`: its own callable members only."""
@@ -93,11 +103,14 @@ def rows(realm):
                 getter = prop.get("get")
                 if getter and declarations[getter].get("effects") == receiver_result:
                     out.add(("getter-this", name, prop["key"], getter))
+                if not prop.get("symbol") and (getter or prop.get("set")):
+                    out.add(("accessor", name, prop["key"], getter or "-")
+                            + ((prop["set"],) if prop.get("set") else ()))
                 value = prop.get("value", {}).get("value")
                 if prop.get("value", {}).get("kind") == "reference" and value in callable_names:
                     out.add(("native", name, prop["key"], value))
                 if (node_module(name, kind) and prop.get("value", {}).get("kind") == "reference"
-                        and node_module(value, declarations.get(value, {}).get("kind"))):
+                        and host_object(value, declarations.get(value, {}).get("kind"))):
                     out.add(("object", name, prop["key"], value))
                 if (prop.get("value", {}).get("kind") == "dynamic"
                         and declarations.get(value, {}).get("elements") == "string"):

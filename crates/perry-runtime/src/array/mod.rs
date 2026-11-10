@@ -5,6 +5,9 @@ pub use append::js_array_append_set;
 #[cfg(test)]
 mod append_tests;
 mod buffer_receiver;
+/// The length floor's capacity-write classification (wpfacts `solve::arr_len`).
+#[cfg(test)]
+mod capacity_writes_tests;
 mod concat_reverse;
 /// #10593: a retargeted array's prototype is a per-array fact.
 #[cfg(test)]

@@ -368,6 +368,14 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
+    /// The past-the-end `undefined` of a computed-key read `o[key]` of
+    /// program Array token `obj` (DESIGN-p4l1 §2.8, PR-C1). Watches both
+    /// inputs: it sits on the key node and on `arr_len(obj)`. `dst` ⊇
+    /// `undefined` once the read may be at or past the length: the length
+    /// is ⊤, or the key may be anything but an integer Number in
+    /// `[0, arr_len(obj).lo)`. Below the length the read is an element or a
+    /// hole, which the read's own edges carry (`all_fields`, `hole`).
+    ElemUndef { obj: Tok, key: NodeId, dst: NodeId },
     /// `IdxLoad` of a read that runs only after an own-property test of the
     /// same object and key (`gen/own_guard.rs`): a program object's own
     /// fields under the key (`IdxOwnKey`), never its prototype chain; any
@@ -476,6 +484,10 @@ pub enum Cons {
     /// `[lo, hi]`: each keeps its birth length only when that interval lies
     /// inside it (`Model::arr_len_index`).
     LenIndex { lo: i64, hi: i64 },
+    /// The node is token `t`'s length node (`Model::arr_len`), and `t` is
+    /// permuted in place (`reverse`, `copyWithin`): once the length is not
+    /// a point it is ⊤ (`Model::arr_len_permuted`).
+    LenPermuted { t: Tok },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -577,6 +589,8 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::LenPermuted { .. }
+                | Cons::ElemUndef { .. }
                 | Cons::StoreIndexed { .. }
                 | Cons::RetInto { .. }
                 | Cons::Defined { .. }
@@ -656,10 +670,12 @@ impl Cons {
             Cons::Arith { .. } => "arith",
             Cons::Range { .. } => "range",
             Cons::LenIndex { .. } => "lenindex",
+            Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::ElemUndef { .. } => "elemundef",
             Cons::IdxOwnLoad { .. } => "idxownload",
             Cons::IdxOwnKey { .. } => "idxownkey",
             Cons::OwnGate { .. } => "owngate",

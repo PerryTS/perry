@@ -1,6 +1,13 @@
 //! `node:util/types` predicate runtime entry points
 //! (`util.types.isPromise`, `isMap`, `isDate`, `isRegExp`, etc.).
 //!
+//! Each predicate but `isGeneratorObject` tests the brand, class id or
+//! kind of its one argument: it reads no property, converts nothing, keeps
+//! and calls nothing, and returns a boolean. Its `realm_decl!` says so at
+//! the body the `node:util/types` dispatch arm calls. `isGeneratorObject`
+//! reads the argument's `next`, `return` and `throw` fields and stays
+//! undeclared.
+//!
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
 
@@ -98,36 +105,43 @@ const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
 const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
 const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
 
+crate::realm_decl! { "node:util/types.isArgumentsObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_arguments_object(value: f64) -> f64 {
     nanbox_bool(value_is_arguments_object(value))
 }
 
+crate::realm_decl! { "node:util/types.isBigIntObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_big_int_object(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_BIGINT))
 }
 
+crate::realm_decl! { "node:util/types.isSymbolObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_symbol_object(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_SYMBOL))
 }
 
+crate::realm_decl! { "node:util/types.isNumberObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_number_object(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_NUMBER))
 }
 
+crate::realm_decl! { "node:util/types.isStringObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_string_object(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_STRING))
 }
 
+crate::realm_decl! { "node:util/types.isBooleanObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_boolean_object(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_BOOLEAN))
 }
 
+crate::realm_decl! { "node:util/types.isBoxedPrimitive", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_boxed_primitive(value: f64) -> f64 {
     nanbox_bool(matches!(
@@ -142,32 +156,38 @@ pub extern "C" fn js_util_types_is_boxed_primitive(value: f64) -> f64 {
     ))
 }
 
+crate::realm_decl! { "node:util/types.isPromise", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_promise(value: f64) -> f64 {
     // `js_is_promise` only null-checks; `js_value_is_promise` reads the GC type.
     nanbox_bool(crate::promise::js_value_is_promise(value) != 0)
 }
 
+crate::realm_decl! { "node:util/types.isArrayBuffer", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_array_buffer(value: f64) -> f64 {
     nanbox_bool(crate::buffer::is_array_buffer(jsvalue_addr(value)))
 }
 
+crate::realm_decl! { "node:util/types.isSharedArrayBuffer", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_shared_array_buffer(value: f64) -> f64 {
     nanbox_bool(crate::buffer::is_shared_array_buffer(jsvalue_addr(value)))
 }
 
+crate::realm_decl! { "node:util/types.isAnyArrayBuffer", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_any_array_buffer(value: f64) -> f64 {
     nanbox_bool(crate::buffer::is_any_array_buffer(jsvalue_addr(value)))
 }
 
+crate::realm_decl! { "node:util/types.isArrayBufferView", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_array_buffer_view(value: f64) -> f64 {
     nanbox_bool(super::view_brand::view_brand(value).is_some())
 }
 
+crate::realm_decl! { "node:util/types.isDataView", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
     nanbox_bool(
@@ -175,6 +195,7 @@ pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isTypedArray", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_typed_array(value: f64) -> f64 {
     nanbox_bool(
@@ -183,51 +204,61 @@ pub extern "C" fn js_util_types_is_typed_array(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isUint8Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_uint8_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_UINT8))
 }
 
+crate::realm_decl! { "node:util/types.isInt8Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_int8_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_INT8))
 }
 
+crate::realm_decl! { "node:util/types.isInt16Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_int16_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_INT16))
 }
 
+crate::realm_decl! { "node:util/types.isUint16Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_uint16_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_UINT16))
 }
 
+crate::realm_decl! { "node:util/types.isInt32Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_int32_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_INT32))
 }
 
+crate::realm_decl! { "node:util/types.isUint32Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_uint32_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_UINT32))
 }
 
+crate::realm_decl! { "node:util/types.isFloat32Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_float32_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_FLOAT32))
 }
 
+crate::realm_decl! { "node:util/types.isFloat16Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_float16_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_FLOAT16))
 }
 
+crate::realm_decl! { "node:util/types.isFloat64Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_float64_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray_hook_slots::KIND_FLOAT64))
 }
 
+crate::realm_decl! { "node:util/types.isUint8ClampedArray", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_uint8_clamped_array(value: f64) -> f64 {
     nanbox_bool(
@@ -235,6 +266,7 @@ pub extern "C" fn js_util_types_is_uint8_clamped_array(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isBigInt64Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_big_int64_array(value: f64) -> f64 {
     nanbox_bool(
@@ -242,6 +274,7 @@ pub extern "C" fn js_util_types_is_big_int64_array(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isBigUint64Array", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_big_uint64_array(value: f64) -> f64 {
     nanbox_bool(
@@ -249,31 +282,37 @@ pub extern "C" fn js_util_types_is_big_uint64_array(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isMap", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_map(value: f64) -> f64 {
     nanbox_bool(crate::map::is_registered_map(jsvalue_addr(value)))
 }
 
+crate::realm_decl! { "node:util/types.isWeakMap", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_weak_map(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKMAP))
 }
 
+crate::realm_decl! { "node:util/types.isSet", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_set(value: f64) -> f64 {
     nanbox_bool(crate::set::is_registered_set(jsvalue_addr(value)))
 }
 
+crate::realm_decl! { "node:util/types.isWeakSet", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_weak_set(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKSET))
 }
 
+crate::realm_decl! { "node:util/types.isDate", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
     nanbox_bool(crate::date::is_date_value(value))
 }
 
+crate::realm_decl! { "node:util/types.isRegExp", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
@@ -286,6 +325,7 @@ pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isAsyncFunction", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_async_function(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
@@ -302,6 +342,7 @@ pub extern "C" fn js_util_types_is_async_function(value: f64) -> f64 {
     nanbox_bool(is_async)
 }
 
+crate::realm_decl! { "node:util/types.isGeneratorFunction", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_generator_function(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
@@ -342,6 +383,7 @@ pub extern "C" fn js_util_types_is_generator_object(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isNativeError", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
@@ -367,16 +409,19 @@ pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
     nanbox_bool(matches)
 }
 
+crate::realm_decl! { "node:util/types.isProxy", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_proxy(value: f64) -> f64 {
     nanbox_bool(crate::proxy_hooks::proxy_is_proxy(value) != 0)
 }
 
+crate::realm_decl! { "node:util/types.isExternal", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_external(_value: f64) -> f64 {
     nanbox_bool(false)
 }
 
+crate::realm_decl! { "node:util/types.isModuleNamespaceObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_module_namespace_object(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
@@ -397,6 +442,7 @@ pub extern "C" fn js_util_types_is_module_namespace_object(value: f64) -> f64 {
     nanbox_bool(is_namespace)
 }
 
+crate::realm_decl! { "node:util/types.isKeyObject", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_key_object(value: f64) -> f64 {
     let addr = jsvalue_addr(value);
@@ -405,11 +451,13 @@ pub extern "C" fn js_util_types_is_key_object(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isCryptoKey", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_crypto_key(value: f64) -> f64 {
     nanbox_bool(crate::buffer::crypto_key_meta(jsvalue_addr(value)).is_some())
 }
 
+crate::realm_decl! { "node:util/types.isMapIterator", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_map_iterator(value: f64) -> f64 {
     let addr = jsvalue_addr(value);
@@ -422,6 +470,7 @@ pub extern "C" fn js_util_types_is_map_iterator(value: f64) -> f64 {
     )
 }
 
+crate::realm_decl! { "node:util/types.isSetIterator", effects = { returns(prim(bool)) } }
 #[no_mangle]
 pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
     let addr = jsvalue_addr(value);

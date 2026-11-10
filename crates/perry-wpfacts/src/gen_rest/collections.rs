@@ -3,6 +3,21 @@
 use super::*;
 
 impl<'a> Gen<'a> {
+    /// The receiver of a generic in-place permutation (`reverse`,
+    /// `copyWithin` through `.call`): its arrays' lengths are ⊤ with the
+    /// length floor on (`solve::arr_len`).
+    fn permuted_len(&mut self, r: NodeId) {
+        if !self.m.arr_floor_off {
+            self.m.cons(
+                r,
+                Cons::LenIndex {
+                    lo: crate::model::Iv::TOP.lo,
+                    hi: crate::model::Iv::TOP.hi,
+                },
+            );
+        }
+    }
+
     pub(super) fn expr_rest_collections(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -29,7 +44,15 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
-            Expr::ArrayReverseValue { receiver } => self.expr(fx, receiver),
+            // `Array.prototype.reverse.call(r)`: with the length floor on, a
+            // permutation of an Array whose length may grow is ⊤ (Q1,
+            // `Model::arr_len_permuted`); this generic form makes it ⊤ for
+            // every array receiver, as `pop` does.
+            Expr::ArrayReverseValue { receiver } => {
+                let r = self.expr(fx, receiver);
+                self.permuted_len(r);
+                r
+            }
             Expr::ArrayCopyWithinValue {
                 receiver,
                 target,
@@ -37,6 +60,7 @@ impl<'a> Gen<'a> {
                 end,
             } => {
                 let r = self.expr(fx, receiver);
+                self.permuted_len(r);
                 let _ = self.prim_op(
                     fx,
                     &[target, start],
