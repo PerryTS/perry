@@ -853,10 +853,7 @@ impl<'a, 'g> Scan<'a, 'g> {
         if self.rec_of.contains_key(&c) {
             return c;
         }
-        let Some(&o) = self.orig_of.get(&n) else {
-            return c;
-        };
-        let found = match i {
+        let by_node = self.orig_of.get(&n).and_then(|&o| match i {
             Some(i) => self
                 .arg_of
                 .get(&o)
@@ -871,8 +868,22 @@ impl<'a, 'g> Scan<'a, 'g> {
                 .flatten()
                 .find(|c0| self.rec_of.contains_key(c0))
                 .copied(),
-        };
-        found.unwrap_or(c)
+        });
+        by_node.or_else(|| self.source_by_ret(c)).unwrap_or(c)
+    }
+
+    /// The source call of instance call `c` through its own result node,
+    /// a copy of the source call's result (when its argument is a body node
+    /// every instance shares).
+    fn source_by_ret(&self, c: CallId) -> Option<CallId> {
+        let ret = self.g.m.calls.get(c as usize)?.ret;
+        let o = self.orig_of.get(&ret)?;
+        self.ret_of
+            .get(o)
+            .into_iter()
+            .flatten()
+            .find(|c0| self.rec_of.contains_key(c0))
+            .copied()
     }
 
     /// `source_call` for a binding constraint (`ArgInto`, `RetInto`) of `n`.
@@ -880,23 +891,35 @@ impl<'a, 'g> Scan<'a, 'g> {
         if self.rec_of.contains_key(&c) {
             return c;
         }
-        let Some(&o) = self.orig_of.get(&n) else {
-            return c;
-        };
-        self.arg_of
-            .get(&o)
-            .into_iter()
-            .flatten()
-            .map(|(c0, _)| *c0)
-            .chain(self.ret_of.get(&o).into_iter().flatten().copied())
-            .find(|c0| self.rec_of.contains_key(c0))
-            .unwrap_or(c)
+        let by_node = self.orig_of.get(&n).and_then(|o| {
+            self.arg_of
+                .get(o)
+                .into_iter()
+                .flatten()
+                .map(|(c0, _)| *c0)
+                .chain(self.ret_of.get(o).into_iter().flatten().copied())
+                .find(|c0| self.rec_of.contains_key(c0))
+        });
+        by_node.or_else(|| self.source_by_ret(c)).unwrap_or(c)
     }
 
     fn site(&self, c: CallId) -> String {
         match self.rec_of.get(&c) {
             Some(r) => format!("{}:{}", self.module_name(r.module), r.offset),
-            None => format!("call#{c}"),
+            // A call no source site records (a summary instance's, or one the
+            // solver or a builtin makes): its receiver or result, for the
+            // ledger reader.
+            None => {
+                let m = &self.g.m;
+                let cs = m.calls.get(c as usize);
+                let recv = self
+                    .mcall_recv
+                    .get(&c)
+                    .map(|&r| format!(" recv={}", node_at(m, r)))
+                    .unwrap_or_default();
+                let ret = cs.map(|cs| node_at(m, cs.ret)).unwrap_or_default();
+                format!("call#{c} ret={ret}{recv}")
+            }
         }
     }
 
@@ -911,12 +934,14 @@ impl<'a, 'g> Scan<'a, 'g> {
     /// The program body call `c` is a typed call of (B3), or why not.
     fn typed_target(&self, c: CallId) -> Result<FnIdx, RecordReject> {
         let m = &self.g.m;
+        let untyped = |why: &str| RecordReject::R5UntypedCall(format!("{} {why}", self.site(c)));
         let Some(r) = self.rec_of.get(&c) else {
-            return Err(RecordReject::R5UntypedCall(self.site(c)));
+            return Err(untyped("no source call"));
         };
         match self.targets.get(&(r.module, r.offset)) {
             Some(&f) if crate::signatures::may_type(self.g, &m.funcs[f as usize]) => Ok(f),
-            _ => Err(RecordReject::R5UntypedCall(self.site(c))),
+            Some(_) => Err(untyped("callee takes no typed signature")),
+            None => Err(untyped("not one body")),
         }
     }
 
@@ -1264,7 +1289,19 @@ impl<'a, 'g> Scan<'a, 'g> {
                             Some(o) => m.tmpls[o as usize].display.clone(),
                             None => "a builtin object".into(),
                         };
-                        why = Some(R5StoreHeap(o));
+                        // An iterator's value slot over one of the record's
+                        // own arrays (`for (const u of played)`): the for-of
+                        // intrinsic of §5.3, R6's to decide.
+                        let iterates_own = owner.flatten().is_some_and(|o| {
+                            matches!(m.tmpls[o as usize].kind, TmplKind::BObj { what, .. } if what.contains("Iterator"))
+                        }) && recs
+                            .iter()
+                            .any(|tm| linked.values().any(|r| r == tm));
+                        why = Some(if iterates_own {
+                            R6Op("iterate".into())
+                        } else {
+                            R5StoreHeap(o)
+                        });
                     } else if self.regions.contains(&n) {
                         why = Some(R5Throw);
                     } else if self.captured.contains(&n) {
