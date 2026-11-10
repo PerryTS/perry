@@ -1009,6 +1009,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 | "with"
         )
     );
+    if !crate::const_arrays::method_reads_only(name) {
+        m.arr_written(t);
+    }
     if name == Some("push") {
         m.arr_len_append(t);
     } else if !keeps_length {

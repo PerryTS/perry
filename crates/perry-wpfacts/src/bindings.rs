@@ -162,6 +162,10 @@ pub struct ArrRep {
     /// a signature slot over its copies) keeps or drops it with the rest,
     /// and no consumer asks a second fact (`const_length`) for it.
     pub fixed: bool,
+    /// Every token is immutable (`const_arrays`): nothing writes it after
+    /// its birth, so each index holds its birth value for the whole
+    /// program. Implies `fixed`.
+    pub im: bool,
 }
 
 /// The encoding of a value's slot: how its word is stored and passed.
@@ -199,6 +203,7 @@ impl ArrRep {
             floor: a.floor.min(b.floor),
             dense: a.dense && b.dense,
             fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
         }
     }
 }
@@ -234,11 +239,12 @@ impl Rep {
             Rep::F64 => "f64".into(),
             Rep::I32 => "i32".into(),
             Rep::Arr(r) => format!(
-                "arr<{},{}{}{}>",
+                "arr<{},{}{}{}{}>",
                 r.elem.name(),
                 r.floor,
                 if r.dense { ",dense" } else { "" },
-                if r.fixed { ",fixed" } else { "" }
+                if r.fixed { ",fixed" } else { "" },
+                if r.im { ",im" } else { "" }
             ),
         }
     }
@@ -279,6 +285,10 @@ pub struct BindingFacts {
     /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
     /// that constant.
     pub const_length: Option<i64>,
+    /// It holds only immutable Arrays (`ArrRep::im`) born from Number
+    /// literals with the same elements (`const_arrays`): index `i` reads
+    /// the Number with bits `const_elems[i]`, for the whole program.
+    pub const_elems: Option<Vec<u64>>,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -602,6 +612,9 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
         Some(r) => Rep::Arr(r),
         None => rep_of(&out),
     };
+    if matches!(out.rep, Rep::Arr(r) if r.im) {
+        out.const_elems = crate::const_arrays::const_elems(m, n);
+    }
     out
 }
 
@@ -701,6 +714,7 @@ fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
         floor,
         dense: hole_free && floor > 0,
         fixed,
+        im: fixed && m.arr_immutable(t),
     }
 }
 

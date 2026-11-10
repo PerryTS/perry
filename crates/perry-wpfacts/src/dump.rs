@@ -135,6 +135,17 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                     b.rep.name()
                 ));
             }
+            // Fact IM (`const_arrays`): the binding's constant contents.
+            if let Some(c) = &b.const_elems {
+                let v: Vec<String> = c
+                    .iter()
+                    .map(|b| format!("{}", f64::from_bits(*b)))
+                    .collect();
+                out.push_str(&format!(
+                    "# const_array module={mi} local={id} elems=[{}]\n",
+                    v.join(",")
+                ));
+            }
         }
     }
     out.push_str(&format!(

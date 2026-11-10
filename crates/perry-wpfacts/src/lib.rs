@@ -19,6 +19,7 @@
 pub mod bindings;
 mod builtins;
 pub mod canonical_numbers;
+mod const_arrays;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
@@ -86,6 +87,9 @@ pub struct FactsConfig {
     /// No plain Array births, fused-fill birth or `Rep::Arr`
     /// (`PERRY_FACTS_ARRAY_REPS=0`, DESIGN-p4l1 PR-B).
     pub no_array_reps: bool,
+    /// No immutable Arrays and no constant contents
+    /// (`PERRY_FACTS_CONST_ARRAYS=0`, `const_arrays`).
+    pub no_const_arrays: bool,
     /// An element read's past-the-end `undefined` is unconditional again
     /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
     pub no_elem_undef: bool,
@@ -476,6 +480,8 @@ fn generate<'a>(
     g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
     g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
     g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
+    g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
+    g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;

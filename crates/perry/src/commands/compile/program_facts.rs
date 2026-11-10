@@ -147,6 +147,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_const_arrays: matches!(
+            std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -630,6 +634,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if let Some(n) = b.const_length {
                 out.const_length_inputs.insert(*id, n);
             }
+            if let Some(c) = &b.const_elems {
+                out.const_arrays.insert(*id, c.clone());
+            }
         }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
@@ -881,6 +888,10 @@ pub(crate) fn activation(
             std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_const_arrays: matches!(
+            std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_elem_undef: matches!(
             std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -1023,6 +1034,7 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
             floor: a.floor,
             dense: a.dense,
             fixed: a.fixed,
+            im: a.im,
         }),
     }
 }

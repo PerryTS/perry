@@ -1646,6 +1646,11 @@ impl<'a> Gen<'a> {
                 if self.arr_lengths {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
                 }
+                if self.m.const_arrays {
+                    if let Some(c) = crate::const_arrays::literal_numbers(elems) {
+                        self.m.arr_const.insert(tm, c);
+                    }
+                }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
