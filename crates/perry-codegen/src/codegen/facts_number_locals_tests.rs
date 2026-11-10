@@ -118,21 +118,12 @@ fn proven_bindings_take_raw_double_ops_and_own_no_root_slot() {
         0,
         "a proven Number binding never holds a pointer:\n{body}"
     );
-    // P3 B1, C4: a proven Number is a plain double (the NUM fact is audited,
-    // `perry-wpfacts/NUM_SEEDS.md`), so the parameter takes its argument's bits
-    // with no INT32 decode at entry; the entry witness checks it in check
-    // mode. `PERRY_FACTS_CANONICAL_NUMBERS=0` restores the decode.
-    if crate::expr::facts_canonical::enabled() {
-        assert!(
-            !body.contains(crate::nanbox::INT32_TAG_I64),
-            "a proven parameter takes its argument's bits at entry:\n{body}"
-        );
-    } else {
-        assert!(
-            body.contains(crate::nanbox::INT32_TAG_I64),
-            "a proven parameter converts an INT32 box at entry:\n{body}"
-        );
-    }
+    // A Number is a plain double, so the parameter takes its argument's bits
+    // with no decode at entry; the entry witness checks it in check mode.
+    assert!(
+        !body.contains(crate::nanbox::INT32_TAG_I64),
+        "a proven parameter takes its argument's bits at entry:\n{body}"
+    );
 }
 
 #[test]

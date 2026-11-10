@@ -702,7 +702,7 @@ pub(crate) fn try_lower_typed_method_call(
 
 /// The boxed entry: the public `F` of a typed function (§3.3). Each argument
 /// takes its literal default when it is `undefined` (§4.1), is decoded to
-/// its parameter's representation (§4.2: `emit_entry_number`, then one
+/// its parameter's representation (§4.2: a Number is its own bits, then one
 /// `fptosi` for I32), is witnessed in check mode (R2), and the entry
 /// tail-calls `F$sig`; an I32 result goes back as a canonical double (R4).
 pub(crate) fn emit_boxed_entry(
@@ -869,7 +869,6 @@ fn emit_entry(
             raw.push((DOUBLE, value));
             continue;
         }
-        let value = super::facts_number_locals::emit_entry_number(blk, &value);
         if let Some(site) = &sites[i] {
             let ok = emit_rep_test(blk, rep, sig.ranges[i], &value).unwrap();
             blk.call_void("perry_verify_facts_tick", &[]);

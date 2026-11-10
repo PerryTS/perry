@@ -474,9 +474,82 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
     }
 }
 
+/// N6 (`Model::const_numbers`): the exact result of a bitwise operator where
+/// [`eval`] gives only its int32 hull. Two operands that are each one int32
+/// value give the one value the operator computes; a left shift by one
+/// count scales both bounds when neither leaves the int32 range. `None`:
+/// `eval` decides. Each result lies inside `eval`'s for the same operands.
+pub fn eval_exact(op: RangeOp, l: Iv, r: Iv) -> Option<Iv> {
+    let point = |a: Iv| (!a.is_empty() && !a.is_top() && a.lo == a.hi).then_some(a.lo);
+    if l.is_empty() || l.is_top() || !l.within(Iv::I32) {
+        return None;
+    }
+    // ToUint32 of the count, masked to five bits.
+    let count = point(r).map(|k| (k & 31) as u32);
+    if op == RangeOp::Shl {
+        let (lo, hi) = (l.lo << count?, l.hi << count?);
+        let iv = Iv { lo, hi };
+        return iv.within(Iv::I32).then_some(iv);
+    }
+    let a = point(l)? as i32;
+    let v = match op {
+        RangeOp::UShr => i64::from((a as u32) >> count?),
+        RangeOp::BitAnd | RangeOp::BitOr | RangeOp::BitXor => {
+            let b = point(r).filter(|_| r.within(Iv::I32))? as i32;
+            i64::from(match op {
+                RangeOp::BitAnd => a & b,
+                RangeOp::BitOr => a | b,
+                _ => a ^ b,
+            })
+        }
+        _ => return None,
+    };
+    Some(Iv { lo: v, hi: v })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_bitwise_results_lie_inside_the_hull() {
+        let p = |v: i64| Iv::int(v, v);
+        assert_eq!(eval_exact(RangeOp::Shl, p(1), p(17)), Some(p(131072)));
+        assert_eq!(eval_exact(RangeOp::Shl, p(1), p(49)), Some(p(131072)));
+        assert_eq!(eval_exact(RangeOp::Shl, p(-3), p(4)), Some(p(-48)));
+        assert_eq!(
+            eval_exact(RangeOp::Shl, Iv::int(0, 7), p(4)),
+            Some(Iv::int(0, 112))
+        );
+        // `1 << 31` is int32 MIN: the bounds leave the range.
+        assert_eq!(eval_exact(RangeOp::Shl, p(1), p(31)), None);
+        assert_eq!(eval_exact(RangeOp::Shl, Iv::int(0, 7), Iv::int(1, 2)), None);
+        assert_eq!(eval_exact(RangeOp::Shl, Iv::TOP, p(1)), None);
+        assert_eq!(eval_exact(RangeOp::Shl, Iv::int(0, 1 << 40), p(1)), None);
+        assert_eq!(
+            eval_exact(RangeOp::BitOr, p(1 << 17), p(1 << 18)),
+            Some(p(393216))
+        );
+        assert_eq!(eval_exact(RangeOp::BitAnd, p(-1), p(255)), Some(p(255)));
+        assert_eq!(eval_exact(RangeOp::BitXor, p(-1), p(1)), Some(p(-2)));
+        assert_eq!(eval_exact(RangeOp::BitOr, p(1), Iv::int(0, 1)), None);
+        assert_eq!(eval_exact(RangeOp::BitOr, p(1), p(1 << 40)), None);
+        assert_eq!(
+            eval_exact(RangeOp::UShr, p(-1), p(0)),
+            Some(p(u32::MAX as i64))
+        );
+        assert_eq!(eval_exact(RangeOp::Add, p(1), p(1)), None);
+        for (op, l, r) in [
+            (RangeOp::Shl, p(5), p(3)),
+            (RangeOp::Shl, Iv::int(-4, 9), p(2)),
+            (RangeOp::BitAnd, p(-7), p(12)),
+            (RangeOp::BitOr, p(6), p(9)),
+            (RangeOp::BitXor, p(6), p(-9)),
+            (RangeOp::UShr, p(-6), p(3)),
+        ] {
+            assert!(eval_exact(op, l, r).unwrap().within(eval(op, l, r)));
+        }
+    }
 
     #[test]
     fn literals_are_points_except_negative_zero_and_fractions() {

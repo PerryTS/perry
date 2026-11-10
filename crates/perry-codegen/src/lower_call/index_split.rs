@@ -2,11 +2,10 @@
 //! proven Numbers.
 //!
 //! The public entry of such a method guards a boxed argument with the exact
-//! i32 test: an INT32 box or a double that converts exactly, then a sign
-//! test. A call site that proves the argument a canonical double
-//! (`expr_produces_canonical_raw_f64`) applies that predicate's plain-double
-//! half (`emit_typed_i32_plain_guard_and_raw`, the very half the public guard
-//! uses) inline and selects the clone or the generic body itself: the clone
+//! i32 test: a double that converts exactly, then a sign test. A call site
+//! that proves the argument a canonical double
+//! (`expr_produces_canonical_raw_f64`) applies that predicate
+//! (`emit_typed_i32_plain_guard_and_raw`) inline and selects the clone or the generic body itself: the clone
 //! admits exactly the values the public guard admits (no `-0`, NaN, fraction
 //! or value outside the i32 range).
 //!
@@ -153,8 +152,8 @@ pub(crate) fn number_index_positions(
 }
 
 /// Check mode (`PERRY_VERIFY_FACTS=1`): the argument the proof covers is an
-/// exact int32 (a canonical double, never `-0`; an INT32 box too with
-/// `PERRY_WP_REP_P3=0`) and not negative (fact `index argument`).
+/// exact int32 (a plain double, never `-0`) and not negative (fact `index
+/// argument`).
 fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::IndexArgument,
@@ -165,14 +164,9 @@ fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
         return;
     }
     let blk = ctx.block();
-    // A proven Number is a canonical double (P3): the witness admits an
-    // exact int32 double only, never an INT32 box.
-    let (exact, int) = if crate::codegen::facts_rep::canonical_numbers() {
-        let bits = blk.bitcast_double_to_i64(value);
-        crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, value, &bits)
-    } else {
-        crate::codegen::emit_typed_i32_guard_and_raw(blk, value)
-    };
+    // A Number is a plain double: the witness admits an exact int32 double.
+    let bits = blk.bitcast_double_to_i64(value);
+    let (exact, int) = crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, value, &bits);
     let nonnegative = blk.icmp_sge(I32, &int, "0");
     let ok = blk.and(I1, &exact, &nonnegative);
     crate::verify_facts::tick(ctx);
@@ -212,14 +206,10 @@ fn proven_raw(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> String {
     proven_number_raw(ctx, value)
 }
 
-/// The i32 of `value`, a Number the facts prove an int32: a canonical
-/// double (P3, `facts_rep::canonical_numbers`), so one `fptosi`. With
-/// `PERRY_WP_REP_P3=0` an INT32 box converts through its payload.
+/// The i32 of `value`, a Number the facts prove an int32: a plain double, so
+/// one `fptosi`.
 fn proven_number_raw(ctx: &mut FnCtx<'_>, value: &str) -> String {
-    if crate::codegen::facts_rep::canonical_numbers() {
-        return ctx.block().fptosi(crate::types::DOUBLE, value, I32);
-    }
-    crate::codegen::emit_typed_i32_raw_assuming_guarded(ctx.block(), value)
+    ctx.block().fptosi(crate::types::DOUBLE, value, I32)
 }
 
 /// Call `target`'s `$idx_u31` clone when every selected argument is a
@@ -248,8 +238,7 @@ pub(crate) fn emit_number_index_split(
             continue;
         }
         let blk = ctx.block();
-        // The public entry's own predicate, restricted to a canonical double
-        // (its INT32-box half can never match): both admit the same set, and
+        // The public entry's own predicate: both admit the same set, and
         // `-0` is excluded because the clone reads its index back as `+0`.
         let bits = blk.bitcast_double_to_i64(&value);
         let (exact, int) = crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, &value, &bits);
