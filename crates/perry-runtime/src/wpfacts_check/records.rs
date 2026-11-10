@@ -5,18 +5,15 @@
 //! record at its birth (`perry_verify_facts_record_claim`: the OBJECT header
 //! bit `OBJ_FLAG_RECORD_CLAIM`). The facts say such an object's identity is
 //! never observed (R4): compiled `===`/`==`/`switch` call
-//! `perry_verify_facts_record_identity` with both operands, and the runtime's
-//! identity routes in `value/equality.rs` call [`route`] (Map and Set keys are
-//! not hooked: their compare is hot in release code).
-//! Either aborts with rc 86 when an operand carries the claim.
+//! `perry_verify_facts_record_identity` with both operands, which aborts with
+//! rc 86 when one carries the claim.
 //!
-//! A release program never sets the bit and never arms the routes: [`route`]
-//! is one relaxed load of `ARMED` (set by the first claim) on paths that
-//! compare two values.
+//! The runtime's own identity routes (`value/equality.rs`, Map and Set keys)
+//! are not hooked: even a flag test there costs release code (it moved chess
+//! search by 2.2 M instructions), so they wait for VR-3's copies, which a
+//! check-mode materializer can mark. A release program never sets the bit.
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static ARMED: AtomicBool = AtomicBool::new(false);
+use std::sync::atomic::Ordering;
 
 /// The OBJECT header of `bits`, when it is one.
 fn object_header(bits: u64) -> Option<*mut crate::gc::GcHeader> {
@@ -45,7 +42,6 @@ pub(crate) fn claimed(bits: u64) -> bool {
 pub extern "C" fn perry_verify_facts_record_claim(value: f64) {
     if let Some(h) = object_header(value.to_bits()) {
         unsafe { (*h)._reserved |= crate::gc::OBJ_FLAG_RECORD_CLAIM };
-        ARMED.store(true, Ordering::Relaxed);
     }
 }
 
@@ -61,35 +57,13 @@ pub extern "C" fn perry_verify_facts_record_identity(
     CHECKS.fetch_add(1, Ordering::Relaxed);
     for v in [a.to_bits(), b.to_bits()] {
         if claimed(v) {
-            Witness::raw(site, site_len).receiver(v).fail(
-                "value record identity",
-                "a value record's identity is compared".into(),
-            )
+            // The site metadata carries the predicate (`site_arg`).
+            Witness::raw(site, site_len)
+                .receiver(v)
+                .fail_static("a value record's identity is compared".into())
         }
     }
     0
-}
-
-/// A runtime identity route (`what`) comparing `a` and `b`.
-#[inline(always)]
-pub(crate) fn route(a: u64, b: u64, what: &'static str) {
-    if ARMED.load(Ordering::Relaxed) {
-        route_slow(a, b, what);
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn route_slow(a: u64, b: u64, what: &'static str) {
-    if claimed(a) || claimed(b) {
-        let line = format!(
-            "{{\"marker\":\"PERRY_FALSE_PROOF\",\"predicate\":\"value record identity\",\"route\":\"{what}\"}}\n"
-        );
-        unsafe {
-            libc::write(2, line.as_ptr().cast(), line.len() as _);
-            libc::_exit(86)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -106,8 +80,5 @@ mod tests {
         assert!(!claimed(boxed));
         perry_verify_facts_record_claim(f64::from_bits(boxed));
         assert!(claimed(boxed));
-        assert!(ARMED.load(Ordering::Relaxed));
-        // An unclaimed pair passes the armed route.
-        route(1.0f64.to_bits(), 2.0f64.to_bits(), "test");
     }
 }

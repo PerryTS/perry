@@ -52,8 +52,6 @@ pub(crate) fn normalize_raw_object_bits(bits: u64) -> u64 {
 pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
     let abits = normalize_raw_object_bits(a.to_bits());
     let bbits = normalize_raw_object_bits(b.to_bits());
-    // Value records' check mode (DESIGN-p4l4 B7): an identity route.
-    crate::wpfacts_check::records::route(abits, bbits, "js_jsvalue_equals");
     let a = f64::from_bits(abits);
     let b = f64::from_bits(bbits);
 
@@ -224,7 +222,6 @@ pub(crate) fn resolve_forwarding(mut addr: usize) -> usize {
 pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
     let abits = normalize_raw_object_bits(a.to_bits());
     let bbits = normalize_raw_object_bits(b.to_bits());
-    crate::wpfacts_check::records::route(abits, bbits, "js_jsvalue_loose_equals");
     let a = f64::from_bits(abits);
     let b = f64::from_bits(bbits);
 
