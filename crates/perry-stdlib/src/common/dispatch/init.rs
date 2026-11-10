@@ -81,6 +81,12 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
     if crate::string_decoder::is_string_decoder_handle(handle) {
         return crate::string_decoder::string_decoder_prototype_value();
     }
+    // A Web Streams handle's prototype is its interface's (the lazy stream
+    // families are born on first observation).
+    let proto = perry_runtime::object::web_stream_prototype_value(handle as usize);
+    if proto.to_bits() != perry_runtime::JSValue::undefined().bits() {
+        return proto;
+    }
     try_arm!(PROTOTYPE_CRYPTO, handle);
     f64::from_bits(perry_runtime::JSValue::undefined().bits())
 }
@@ -501,7 +507,9 @@ pub(super) unsafe fn install_streams_registrations() {
     }
     STREAM_PROPERTY_BAG.set(stream_property_bag);
 
-    crate::streams::install_readable_stream_from_static();
+    // RSTREAM R5: the ReadableStream families' prototype members and
+    // `ReadableStream.from`, both installed by the family's lazy birth.
+    crate::streams::install_stream_prototypes();
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream
     // dispatch arms in `js_handle_method_dispatch`.

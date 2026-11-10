@@ -704,6 +704,9 @@ js_buffer_write_uint8	void	f64,f64,i32s
 js_buffer_write_uint_be	void	f64,f64,i32s,i32s
 js_buffer_write_uint_le	void	f64,f64,i32s,i32s
 js_build_class_keys_array	ptr	i32u,i32u,ptr,i32u,i64
+js_builtin_define_getter	void	ptr,ptr,usize,ptr,bool
+js_builtin_define_method	f64	ptr,ptr,usize,ptr,i32u,i8u
+js_builtin_define_symbol_method	void	ptr,ptr,usize,f64
 js_builtin_namespace_contract_check	void	i64,ptr,usize
 js_builtin_namespace_member	f64	f64,ptr,usize
 js_builtin_namespace_value	f64	i64
@@ -1910,7 +1913,6 @@ js_in_operator	f64	f64,f64
 js_inline_arena_slow_alloc	ptr	ptr,usize,usize
 js_inline_arena_state	ptr	
 js_install_global_value_surfaces	void	
-js_install_readable_stream_from	void	ptr
 js_instanceof	f64	f64,i32u
 js_instanceof_dynamic	f64	f64,f64
 js_instanceof_noncallable_rhs	f64	
@@ -3633,6 +3635,7 @@ js_runtime_install_messaging	void
 js_runtime_install_mod_dgram	void	
 js_runtime_install_mod_http2_constants	void	
 js_runtime_install_mod_node_test	void	
+js_runtime_install_navigator	void	
 js_runtime_install_node_api_host	void	
 js_runtime_install_os	void	
 js_runtime_install_perf_hooks	void	
@@ -3646,6 +3649,7 @@ js_runtime_install_turnloop	void
 js_runtime_install_typedarray	void	
 js_runtime_install_url_engine	void	
 js_runtime_install_wasm_host	void	
+js_runtime_provide_external_families	void	ptr,ptr
 js_runtime_register_feature_installer	void	ptr
 js_runtime_set_component_host_ops	void	ptr
 js_runtime_set_wasm_host_ops	void	ptr

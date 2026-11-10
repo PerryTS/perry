@@ -318,7 +318,9 @@ fn transform_terminate_closes_readable_and_errors_writable() {
     let readable = unsafe { js_transform_stream_readable(transform) };
     let writable = unsafe { js_transform_stream_writable(transform) };
 
-    assert!(unsafe { dispatch_stream_method(readable, "terminate", &[]) }.is_some());
+    assert!(unsafe { dispatch_stream_method(readable, "terminate", &[]) }.is_none());
+    let controller = controller_value(stream_id(readable));
+    assert!(unsafe { dispatch_stream_method(controller, "terminate", &[]) }.is_some());
     assert!(matches!(
         READABLE_STREAMS
             .lock()
@@ -658,10 +660,19 @@ fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
             assert!(dispatch_stream_method(handle, wrong_method, &[]).is_none());
             assert!(dispatch_stream_method(handle, "unknown", &[]).is_none());
         }
-        assert!(dispatch_stream_method(readable, "enqueue", &[42.0]).is_some());
+        // RSTREAM R3: controller methods answer on the controller, never on
+        // the stream; a TransformStream's controller has terminate, not close.
+        let controller = controller_value(stream_id(readable));
+        for method in ["enqueue", "close", "terminate", "error"] {
+            assert!(dispatch_stream_method(readable, method, &[42.0]).is_none());
+        }
+        assert!(dispatch_stream_method(controller, "getReader", &[]).is_none());
+        assert!(dispatch_stream_method(controller, "close", &[]).is_none());
+        assert_eq!(js_stream_handle_kind(stream_id(controller)), 7);
+        assert!(dispatch_stream_method(controller, "enqueue", &[42.0]).is_some());
         assert!(dispatch_stream_method(reader, "releaseLock", &[]).is_some());
         assert!(dispatch_stream_method(writer, "releaseLock", &[]).is_some());
-        assert!(dispatch_stream_method(readable, "close", &[]).is_some());
+        assert!(dispatch_stream_method(controller, "terminate", &[]).is_some());
         assert!(matches!(
             READABLE_STREAMS
                 .lock()
@@ -743,4 +754,20 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
         before,
         "the drain consumed the errored read; it must not stay unhandled"
     );
+}
+
+/// RSTREAM R1: a controller id is its stream id plus the controller bit, the
+/// allocator never hands out an id with that bit, and a plain readable's
+/// controller is the default family.
+#[test]
+fn controller_value_round_trips_and_stays_out_of_the_allocator() {
+    let _serial = serial_guard();
+    let id = alloc_readable(0, 0, 0, 1.0);
+    assert!(id < STREAM_ALLOC_END);
+    let controller = controller_value(id);
+    assert_ne!(stream_id(controller), id);
+    assert_eq!(controller_stream_id(controller), id);
+    assert_eq!(controller_stream_id(stream_value(id)), 0);
+    assert_eq!(js_stream_handle_kind(stream_id(controller)), 6);
+    assert_eq!(js_stream_handle_kind(id), 1);
 }
