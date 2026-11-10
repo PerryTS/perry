@@ -1947,13 +1947,8 @@ pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
 /// result grows at most once per operand growth. Past `WIDEN_LIMIT` growths
 /// it still climbs the ladder (a backstop that bounds even a cycle the
 /// argument missed).
-pub(crate) fn grow_rule_range(node: &mut Node, iv: Iv, sabotage: bool) -> bool {
+pub(crate) fn grow_rule_range(node: &mut Node, iv: Iv) -> bool {
     use crate::model::range::{widen, WIDEN_LIMIT};
-    // Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): the result keeps
-    // its first interval, whatever its operands grow to.
-    if sabotage && !node.range.is_empty() {
-        return false;
-    }
     let joined = node.range.join(iv);
     if joined == node.range {
         return false;

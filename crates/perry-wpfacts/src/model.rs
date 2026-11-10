@@ -1263,9 +1263,9 @@ pub struct Model {
     /// without widening (`solve::grow_rule_range`); only copy targets widen.
     /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
     pub exact_rules: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): a rule result
-    /// keeps its first interval, a claim too narrow for the values its
-    /// operands grow to, which the witnesses must catch.
+    /// Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): with the exact
+    /// rule results, a sum is the hull of its operands instead of their
+    /// sum, a claim too narrow that the witnesses must catch.
     pub exact_rule_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
     /// counts as one inside its array's birth length (`arr_len_index`).
