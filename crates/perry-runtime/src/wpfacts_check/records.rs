@@ -101,7 +101,7 @@ mod tests {
         assert!(!claimed(1.5f64.to_bits()));
         assert!(!claimed(crate::value::TAG_UNDEFINED));
         let o = crate::object::js_object_alloc(0, 0);
-        let boxed = POINTER_TAG | (o as u64 & POINTER_MASK);
+        let boxed = POINTER_TAG | (o as usize as u64 & POINTER_MASK);
         assert!(!claimed(boxed));
         perry_verify_facts_record_claim(f64::from_bits(boxed));
         assert!(claimed(boxed));

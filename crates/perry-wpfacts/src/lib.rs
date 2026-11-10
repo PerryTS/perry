@@ -912,7 +912,13 @@ fn compute_act<'a>(
     };
     // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
     // the templates and sites, before any representation reads them.
-    let record_arrays = records::derive(&g, &mut templates, &sites, interp_guard.as_deref());
+    let record_arrays = records::derive(
+        &g,
+        &mut templates,
+        &sites,
+        interp_guard.as_deref(),
+        cfg.sabotage.as_deref(),
+    );
     g.m.records = templates
         .iter()
         .filter(|t| t.record.is_ok())

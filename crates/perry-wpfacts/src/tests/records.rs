@@ -263,3 +263,10 @@ fn a_record_join_is_its_template_only() {
     assert_eq!(Rep::join(a, Rep::F64), Rep::Boxed);
     assert_eq!(Rep::join(Rep::Boxed, a), Rep::Boxed);
 }
+
+#[test]
+fn a_captured_record_rejects() {
+    // Closure capture by value is VR-7: a captured local is a heap cell.
+    let r = rejected("const u = mk(1);\nconst f = () => use(u);\nconsole.log(f());\n");
+    assert_eq!(r, "R5StoreHeap(closure capture)");
+}
