@@ -98,6 +98,7 @@ mod global_namespace_store;
 mod gopd_key;
 mod host_objects;
 mod hub_tokens;
+mod identity_routes;
 mod idx_prim_call;
 mod indexed_callees;
 mod indexed_owner;
