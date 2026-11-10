@@ -748,11 +748,12 @@ fn rep_of(b: &BindingFacts) -> Rep {
 }
 
 /// The dump's representation probe (N1, `PERRY_FACTS_DUMP` only): one
-/// `# rep` line per Number-holding local with what decides its
-/// representation (RFC §10.3): the prims, the interval, int demand and
-/// whether the binding is itself an int consumer's operand. A local is
-/// named by its node, readable with `PERRY_FACTS_RELATIONS=1`; otherwise
-/// by its id (`local=`), the HIR local id codegen reports.
+/// `# rep` line per Number local (F64, I32, an interval or an int use)
+/// with what decides its representation (RFC §10.3): the prims, the
+/// interval, int demand and whether the binding is itself an int
+/// consumer's operand. A local is named by its node, readable with
+/// `PERRY_FACTS_RELATIONS=1`; otherwise by its id (`local=`), the HIR
+/// local id codegen reports.
 pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let mut out = Vec::new();
@@ -761,10 +762,10 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
         ls.sort_unstable();
         for (id, n) in ls {
             let node = &m.nodes[n as usize];
-            if node.prim & crate::model::prim::NUM == 0 {
+            let b = facts_of(g, n);
+            if !(matches!(b.rep, Rep::F64 | Rep::I32) || b.int_range.is_some() || node.int_use) {
                 continue;
             }
-            let b = facts_of(g, n);
             let range = b
                 .int_range
                 .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));

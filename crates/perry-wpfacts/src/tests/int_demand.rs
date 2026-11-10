@@ -153,12 +153,11 @@ fn a_body_that_may_complete_returns_undefined() {
 fn an_equality_test_against_an_int_constant_is_an_int_consumer() {
     // N1 (`demand::compare_demand`): `d === 1` and a `switch` case are
     // integer compares on an I32 operand; `d` and `k` meet no other int
-    // consumer.
+    // consumer. (A `while (d < 6)` counter has a ⊤ interval: no loop clip.)
     let r = reps(
         "let found = 0;\n\
          for (let s = 0; s < 8; s++) {\n\
-           let d = 1;\n\
-           while (d < 6) { if (d === 1) found++; d++; }\n\
+           for (let d = 1; d < 6; d++) { if (d === 1) found++; }\n\
            const k = s % 3;\n\
            switch (k) { case 0: found += 2; break; case 2: found += 3; break; }\n\
          }\n\
