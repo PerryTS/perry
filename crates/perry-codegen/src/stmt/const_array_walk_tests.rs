@@ -85,6 +85,19 @@ fn without_the_fact_the_walk_keeps_its_entry() {
     assert!(f.contains("forof.walk.header"), "the inline entry\n{f}");
     assert!(f.contains("js_array_record_enter_counted"), "{f}");
     assert_eq!(blocks(&f, "forof.im."), 0, "{f}");
+    // The copy into the walk's temp keeps its string demote.
+    assert!(blocks(&f, "str_addref.call") >= 1, "{f}");
+}
+
+#[test]
+fn a_copy_into_an_immutable_array_local_has_no_string_demote() {
+    let with = ir(true, 3, Some(vec![1.0, 2.0, 3.0]));
+    let without = ir(false, 3, None);
+    assert_eq!(
+        blocks(&with, "str_addref.call") + 1,
+        blocks(&without, "str_addref.call"),
+        "one demote test less\n{with}"
+    );
 }
 
 #[test]
