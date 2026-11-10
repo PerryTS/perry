@@ -524,6 +524,14 @@ fn compute_object_cache_key_with_env(
         "entry_source_path",
         opts.app_metadata.entry_source_path.as_deref().unwrap_or(""),
     );
+    // Every source module retains its path in a stack-frame info.
+    h.field(
+        "module_source_path",
+        opts.app_metadata
+            .module_source_path
+            .as_deref()
+            .unwrap_or(""),
+    );
     // The declared format decides the entry's tick/microtask checkpoint.
     h.field(
         "entry_declared_esm",

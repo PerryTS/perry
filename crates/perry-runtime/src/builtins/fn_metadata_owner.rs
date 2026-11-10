@@ -419,44 +419,81 @@ impl<'a> Record<'a> {
 }
 
 /// Borrow the images' records for IP resolution. This is a view, not a name
-/// snapshot or address-to-id cache. The rare stack path orders actual code
-/// locations at query time; ordinary closure reads never search this list.
+/// snapshot or address-to-id cache. ELF lookup reads linker-ordered records
+/// directly; other formats and unloadable copies use an allocation-free scan.
 pub(crate) struct BundleFunctionNames<'a>(&'a [ImageRecords]);
-impl BundleFunctionNames<'_> {
-    /// Every named body, `(code, name)`, until `visit` returns true. One
-    /// non-generic walk shared by every query.
-    fn visit(&self, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) {
-        for image in self.0 {
-            match *image {
-                // SAFETY: a permanent image's records stay mapped.
-                ImageRecords::Image(bounds) => {
-                    for info in unsafe { image_infos(bounds) } {
-                        let Some(bytes) = super::fn_metadata::info_name_bytes(info) else {
-                            continue;
-                        };
-                        if !bytes.is_empty() && visit(info.code as usize, bytes) {
-                            return;
-                        }
-                    }
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+#[path = "ordered_function_records.rs"]
+mod ordered_records;
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+core::arch::global_asm!(".weak perry_fnrec_bounds\n.hidden perry_fnrec_bounds");
+
+fn static_record_bounds() -> Option<&'static FunctionRecordBounds> {
+    unsafe extern "C" {
+        #[linkage = "extern_weak"]
+        static perry_fnrec_bounds: *const FunctionRecordBounds;
+    }
+    // SAFETY: an undefined weak reference is null; a definition is the
+    // local image's immutable, linker-bounded record section.
+    unsafe { perry_fnrec_bounds.as_ref() }
+}
+fn visit_image(image: ImageRecords, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) -> bool {
+    match image {
+        // SAFETY: a permanent image's records stay mapped.
+        ImageRecords::Image(bounds) => {
+            for info in unsafe { image_infos(bounds) } {
+                let Some(bytes) = super::fn_metadata::info_name_bytes(info) else {
+                    continue;
+                };
+                if !bytes.is_empty() && visit(info.code as usize, bytes) {
+                    return true;
                 }
-                ImageRecords::Copied(states) => {
-                    for state in states {
-                        for entry in state.copied.get().into_iter().flatten() {
-                            let Some(entry) = entry.get() else { continue };
-                            let Some(bytes) = entry.name.as_deref() else {
-                                continue;
-                            };
-                            if !bytes.is_empty() && visit(entry.code, bytes) {
-                                return;
-                            }
-                        }
+            }
+        }
+        ImageRecords::Copied(states) => {
+            for state in states {
+                for entry in state.copied.get().into_iter().flatten() {
+                    let Some(entry) = entry.get() else { continue };
+                    let Some(bytes) = entry.name.as_deref() else {
+                        continue;
+                    };
+                    if !bytes.is_empty() && visit(entry.code, bytes) {
+                        return true;
                     }
                 }
             }
         }
     }
+    false
+}
+impl BundleFunctionNames<'_> {
+    /// Every named body, `(code, name)`, until `visit` returns true. One
+    /// non-generic walk shared by every query.
+    fn visit(&self, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) {
+        if let Some(bounds) = static_record_bounds().filter(|bounds| {
+            !self
+                .0
+                .iter()
+                .any(|image| matches!(image, ImageRecords::Image(b) if std::ptr::eq(*b, *bounds)))
+        }) {
+            for info in unsafe { image_infos(bounds) } {
+                let Some(bytes) = super::fn_metadata::info_name_bytes(info) else {
+                    continue;
+                };
+                if !bytes.is_empty() && visit(info.code as usize, bytes) {
+                    return;
+                }
+            }
+        }
+        for image in self.0 {
+            if visit_image(*image, visit) {
+                return;
+            }
+        }
+    }
     /// The entry the key order picks: the greatest under `better`.
-    #[cfg(test)]
     fn best(
         &self,
         keep: &dyn Fn(usize) -> bool,
@@ -471,77 +508,59 @@ impl BundleFunctionNames<'_> {
         });
         best
     }
-    /// The images' identities and entry counts: images are only appended and
-    /// an unloadable image's copies are set once, so this names the view's
-    /// exact contents.
-    fn owner_key(&self) -> Vec<(usize, usize)> {
-        let mut key = vec![(self.0.as_ptr() as usize, self.0.len())];
-        key.extend(self.0.iter().map(|image| {
-            match *image {
-                ImageRecords::Image(bounds) => (bounds as *const FunctionRecordBounds as usize, 0),
-                ImageRecords::Copied(states) => (
-                    states.as_ptr() as usize,
-                    states
-                        .iter()
-                        .map(|state| state.copied.get().map_or(0, |c| c.len()))
-                        .sum(),
-                ),
-            }
-        }));
-        key
-    }
-    /// Every named body in visit order (later registrations last).
-    fn entries(&self) -> Vec<(usize, &'static [u8])> {
-        let mut out = Vec::new();
-        self.visit(&mut |code, bytes| {
-            out.push((code, bytes));
+    pub(crate) fn len(&self) -> usize {
+        let mut len = 0;
+        self.visit(&mut |_, _| {
+            len += 1;
             false
         });
-        out
-    }
-    /// The view's entries ordered by code address, built on the first stack
-    /// query (never at startup) and reused until an owner is added. A stack
-    /// capture resolves every raw frame: scanning all descriptors per frame
-    /// made each `new Error` cost frames x functions (a 50k-function program
-    /// spent seconds per error). Stable sort: among equal addresses the
-    /// later-registered entry stays last, as the scans' `max_by_key` chose it.
-    fn sorted(&self) -> Arc<Vec<(usize, &'static [u8])>> {
-        type Index = (Vec<(usize, usize)>, Arc<Vec<(usize, &'static [u8])>>);
-        static INDEX: Mutex<Option<Index>> = Mutex::new(None);
-        let key = self.owner_key();
-        let mut cached = INDEX.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((k, index)) = cached.as_ref() {
-            if *k == key {
-                return index.clone();
-            }
-        }
-        let mut entries = self.entries();
-        entries.sort_by_key(|(code, _)| *code);
-        let index = Arc::new(entries);
-        *cached = Some((key, index.clone()));
-        index
-    }
-    pub(crate) fn len(&self) -> usize {
-        self.sorted().len()
+        len
     }
     #[cfg(test)]
     pub(crate) fn contains_key(&self, address: &usize) -> bool {
-        let index = self.sorted();
-        let at = index.partition_point(|(code, _)| *code < *address);
-        index.get(at).is_some_and(|(code, _)| code == address)
+        self.predecessor(*address)
+            .is_some_and(|(code, _)| code == *address)
     }
-    /// The named body at the greatest code address at or below `ip` (the
-    /// last such entry on a tie, as `max_by_key` picks).
+    /// Greatest named address at or below `ip`; later image wins a tie.
     pub(crate) fn predecessor(&self, ip: usize) -> Option<(usize, &'static [u8])> {
-        let index = self.sorted();
-        let at = index.partition_point(|(code, _)| *code <= ip);
-        at.checked_sub(1).map(|i| index[i])
+        let local = static_record_bounds().filter(|bounds| {
+            !self
+                .0
+                .iter()
+                .any(|image| matches!(image, ImageRecords::Image(b) if std::ptr::eq(*b, *bounds)))
+        });
+        local
+            .map(ImageRecords::Image)
+            .into_iter()
+            .chain(self.0.iter().copied())
+            .filter_map(|image| {
+                #[cfg(all(unix, not(target_vendor = "apple")))]
+                if let ImageRecords::Image(bounds) = image {
+                    return ordered_records::predecessor(bounds, ip);
+                }
+                BundleFunctionNames(std::slice::from_ref(&image)).scan_image_predecessor(ip)
+            })
+            .max_by_key(|(code, _)| *code)
+    }
+    /// Scan only these entries: the local static image is handled separately.
+    fn scan_image_predecessor(&self, ip: usize) -> Option<(usize, &'static [u8])> {
+        let mut best = None;
+        for image in self.0 {
+            let mut visit = |code, bytes| {
+                if code <= ip && best.is_none_or(|(seen, _)| code >= seen) {
+                    best = Some((code, bytes));
+                }
+                false
+            };
+            visit_image(*image, &mut visit);
+        }
+        best
     }
     pub(crate) fn first_key_value(&self) -> Option<(usize, &'static [u8])> {
-        self.sorted().first().copied()
+        self.best(&|_| true, &|code, seen| code < seen)
     }
     pub(crate) fn last_key_value(&self) -> Option<(usize, &'static [u8])> {
-        self.sorted().last().copied()
+        self.best(&|_| true, &|code, seen| code >= seen)
     }
     #[cfg(test)]
     fn scan_predecessor(&self, ip: usize) -> Option<(usize, &'static [u8])> {
