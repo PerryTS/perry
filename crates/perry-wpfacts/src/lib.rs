@@ -42,6 +42,7 @@ pub mod model;
 pub mod native_effects;
 pub mod pts;
 pub mod records;
+mod rest_elems;
 pub mod signatures;
 mod rooted;
 mod solve;
@@ -524,6 +525,8 @@ fn generate<'a>(
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
+    g.m.rest_elems = rest_elems::enabled();
+    g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
     g.m.zero_sign =
@@ -977,7 +980,14 @@ fn compute_act<'a>(
     if !demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
         demand::solve(&mut g.m);
     }
+    // I32 at rest (PR B): the at-rest templates, which `ArrRep::at_rest`
+    // (`bindings::collect`) reads. After demand: an element rep reads it.
+    if !g.m.aborted {
+        let (rest, refused) = rest_elems::admit(&g, interp_guard.is_some());
+        (g.m.rest_tmpls, g.m.rest_refused) = (rest, refused);
+    }
     let mut bindings = bindings::collect(&g);
+    rest_elems::export(&g, &mut bindings);
     let rep_probe = if cfg.diagnostics && !g.m.aborted {
         let mut p = bindings::rep_probe(&g);
         if g.m.zero_sign {

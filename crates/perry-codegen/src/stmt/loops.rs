@@ -6812,6 +6812,17 @@ pub(super) fn lower_for_tiers(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
+    // I32 at rest: the tiers below read element words raw; a loop with an
+    // at-rest site keeps only the counter tiers (`expr::rest_elems`).
+    let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+    if crate::expr::rest_elems::in_loop(ctx, &controls, body) {
+        return lower_static_counter_versioned(ctx, init, condition, update, body, &mut |ctx| {
+            match i32_counter::lower(ctx, init, condition, update, body)? {
+                true => Ok(()),
+                false => lower_for_after_init(ctx, init, condition, update, body, "for"),
+            }
+        });
+    }
     // A byte loop over a Buffer/Uint8Array parameter whose body cannot run
     // JS: one receiver admission proves the whole loop (`byte_view_loop`).
     if super::byte_view_loop::lower(ctx, init, condition, update, body)? {
@@ -10513,6 +10524,11 @@ fn lower_while_after_bases(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    if crate::expr::rest_elems::in_loop(ctx, &[condition], body) {
+        return super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_while_impl(c, condition, body)
+        });
+    }
     // A while loop is the same Number induction with no init/update clause.
     if super::number_local_loop::lower(ctx, None, Some(condition), None, body)? {
         return Ok(());
@@ -10607,6 +10623,13 @@ pub(crate) fn lower_do_while(
     condition: &perry_hir::Expr,
 ) -> Result<()> {
     let based = super::field_base::begin(ctx, None, &[condition], body)?;
+    if crate::expr::rest_elems::in_loop(ctx, &[condition], body) {
+        let lowered = super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_do_while_impl(c, body, condition)
+        });
+        super::field_base::end(ctx, based);
+        return lowered;
+    }
     let region = super::region_loop::begin(ctx, Some(condition), body, None);
     let lowered = region.and_then(|region| {
         let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {

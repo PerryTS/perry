@@ -325,7 +325,9 @@ fn lower_stmts_list(
         // range-loop tiers to version). Probes the accessed arrays once at
         // region entry and branches into a fast copy whose masked reads are
         // bare inline loads; consumes the whole region on a match.
-        if let Some(region) = (!born)
+        // I32 at rest: the region's fast copy reads element words raw.
+        let rest = crate::expr::rest_elems::in_loop(ctx, &[], &stmts[i..limit]);
+        if let Some(region) = (!born && !rest)
             .then(|| masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit]))
             .flatten()
         {

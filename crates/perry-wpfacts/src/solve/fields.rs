@@ -111,6 +111,7 @@ impl Model {
     /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
     /// keys unknown; an unmodeled target takes `s`'s values.
     pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId, from: NodeId) {
+        self.rest_used(s);
         if !self.spread_done.insert((s, d)) {
             return;
         }
@@ -404,6 +405,7 @@ impl Model {
 
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
+        self.rest_used(t);
         let opaque = !self.own_props_modelled(t);
         if opaque {
             self.add_top(dst, |_| "own values of an unmodeled object".into());

@@ -537,6 +537,9 @@ pub(crate) fn lower(
             value,
             ..
         } => {
+            if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {
+                return super::rest_elems::lower_write(ctx, object, index, value, floor);
+            }
             if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                 ctx,
                 object,

@@ -1367,6 +1367,13 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         );
         return Ok(lowered);
     }
+    if let (Some(floor), Expr::IndexGet { object, index, .. }) =
+        (super::rest_elems::read_floor(ctx, e), e)
+    {
+        let want = super::rest_elems::Want::I32;
+        let value = super::rest_elems::lower_read(ctx, object, index, floor, want)?;
+        return Ok(i32_lowered(value));
+    }
     if let Some(lowered) = lower_packed_i32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }

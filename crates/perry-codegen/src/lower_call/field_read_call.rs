@@ -115,23 +115,14 @@ pub(crate) fn try_lower(
         || serde_json::json!({ "call": site }),
     );
     crate::facts_consumed::used();
-    // PR-D: a loop that holds the field's element base serves the read.
-    let held = crate::expr::index_get::field_base::try_lower_read(ctx, site, &read)?;
-    let served = held.is_some();
-    let value = if let Some(value) = held {
-        value
-    } else {
-        match in_floor(ctx, site, &read) {
-            Some((object, index, rep, floor)) => {
-                // The index is inert and reaches no ender (the accessor), so
-                // no collection runs between it and the field load.
-                let idx = crate::expr::lower_expr_as_i32(ctx, index)?;
-                let arr = crate::expr::lower_expr(ctx, object)?;
-                crate::expr::index_get::proven_array::lower_in_floor(ctx, &arr, &idx, rep, floor)
-            }
-            None => crate::expr::lower_expr(ctx, &read)?,
-        }
-    };
+    // I32 at rest: the body's read is at rest or not wherever the call is
+    // (`expr::rest_elems`); at rest, it is that read, not a held or C3 load.
+    let fact = &ctx.wpfacts.field_read_calls[&site];
+    let rest = (fact.element_offset, fact.rest);
+    let saved = ctx.rest_b1.replace(rest);
+    let value = lower_read(ctx, site, &read, rest.1.is_some());
+    ctx.rest_b1 = saved;
+    let (value, served) = value?;
     if crate::verify_facts::enabled() {
         witness(ctx, callee, args, &value, site)?;
         if served {
@@ -140,6 +131,29 @@ pub(crate) fn try_lower(
         }
     }
     Ok(Some(value))
+}
+
+/// The read `read` of the call at `site`, and whether a held base served
+/// it. `rest`: the body's read is at rest.
+fn lower_read(ctx: &mut FnCtx<'_>, site: u32, read: &Expr, rest: bool) -> Result<(String, bool)> {
+    if rest {
+        return Ok((crate::expr::lower_expr(ctx, read)?, false));
+    }
+    // PR-D: a loop that holds the field's element base serves the read.
+    if let Some(value) = crate::expr::index_get::field_base::try_lower_read(ctx, site, read)? {
+        return Ok((value, true));
+    }
+    let value = match in_floor(ctx, site, read) {
+        Some((object, index, rep, floor)) => {
+            // The index is inert and reaches no ender (the accessor), so
+            // no collection runs between it and the field load.
+            let idx = crate::expr::lower_expr_as_i32(ctx, index)?;
+            let arr = crate::expr::lower_expr(ctx, object)?;
+            crate::expr::index_get::proven_array::lower_in_floor(ctx, &arr, &idx, rep, floor)
+        }
+        None => crate::expr::lower_expr(ctx, read)?,
+    };
+    Ok((value, false))
 }
 
 /// The in-floor form of the proven read `read` of the call at `site`
