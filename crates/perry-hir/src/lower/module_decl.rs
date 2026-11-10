@@ -1518,6 +1518,7 @@ pub(crate) fn lower_module_decl(
                                 type_only: false,
                                 runtime_erased: false,
                                 is_dynamic: false,
+                                is_deferred: false,
                                 is_dynamic_target: false,
                                 is_deferred_require: false,
                                 is_adopted_require: false,

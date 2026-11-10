@@ -189,7 +189,8 @@ pub unsafe extern "C" fn js_deferred_module_ready(
     dependencies: i64,
     has_tla: i32,
 ) -> i32 {
-    match *(guard as *const u8) {
+    // A zero guard means the program has no per-module init byte to inspect.
+    match if guard == 0 { 0 } else { *(guard as *const u8) } {
         2 => return 1,
         1 => return 0,
         _ if has_tla != 0 => return 0,

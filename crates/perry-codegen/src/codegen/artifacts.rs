@@ -482,6 +482,7 @@ pub(super) fn emit_module_artifacts(
         &module_prefix,
         opts.is_entry_module,
         hir.has_top_level_await,
+        cross_module.program_has_tla,
         &cross_module.module_deferred_readiness,
     );
     let mut namespace_key_globals: Vec<(String, usize)> = Vec::new();

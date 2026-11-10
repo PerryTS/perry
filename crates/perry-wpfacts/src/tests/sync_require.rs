@@ -64,6 +64,7 @@ fn program(main: &str, paths: &[&str], sync: bool) -> ProgramFacts {
             if sites > 0 {
                 for source in paths {
                     hir.imports.push(perry_hir::Import {
+                        is_deferred: false,
                         source: source.to_string(),
                         specifiers: Vec::new(),
                         is_native: false,

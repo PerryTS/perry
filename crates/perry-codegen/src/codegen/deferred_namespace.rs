@@ -68,6 +68,7 @@ pub(super) fn emit_readiness(
     prefix: &str,
     is_entry: bool,
     has_tla: bool,
+    program_has_tla: bool,
     deps: &[String],
 ) {
     let guard = format!("__perry_init_done_{prefix}");
@@ -90,7 +91,13 @@ pub(super) fn emit_readiness(
     let f = llmod.define_function(&format!("{prefix}__deferred_ready"), I32, vec![]);
     f.create_block("entry");
     let b = f.block_mut(0).unwrap();
-    let guard_addr = b.ptrtoint(&format!("@{guard}"), I64);
+    // A TLA program evaluates through the async record, so no module defines
+    // the one-byte init guard; the runtime then has no state to read.
+    let guard_addr = if program_has_tla {
+        "0".to_string()
+    } else {
+        b.ptrtoint(&format!("@{guard}"), I64)
+    };
     let callback = format!("ptrtoint (ptr @{scan} to i64)");
     let ready = b.call(
         I32,
