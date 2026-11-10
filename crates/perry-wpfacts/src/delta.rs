@@ -163,6 +163,30 @@ impl Delta {
         });
         batch.0.chunks.len().saturating_sub(1) as u64
     }
+    /// Drops the values `keep` refuses. Each event keeps its subscribers
+    /// (its boundary); its values are rebuilt, never changed in shared
+    /// storage. Returns how many were dropped.
+    pub(crate) fn retain(&mut self, keep: impl Fn(u32) -> bool) -> usize {
+        let mut len = 0;
+        for e in &mut self.events {
+            let v: Vec<u32> = match &e.values {
+                Values::Owned(v) => v.iter().copied().filter(|&t| keep(t)).collect(),
+                Values::Shared(s) => s
+                    .chunks
+                    .iter()
+                    .flat_map(|c| c.iter().copied())
+                    .filter(|&t| keep(t))
+                    .collect(),
+            };
+            if v.len() != e.values.len() {
+                e.values = Values::Owned(v);
+            }
+            len += e.values.len();
+        }
+        let dropped = self.len - len;
+        self.len = len;
+        dropped
+    }
     pub(crate) fn prepare(&mut self) {
         for e in &mut self.events {
             e.values.prepare();

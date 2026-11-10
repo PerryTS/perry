@@ -74,6 +74,7 @@ mod enum_member_type;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
+mod escaped_beside_top;
 mod export_star;
 mod field_array_push;
 mod fn_inst_default_proto;

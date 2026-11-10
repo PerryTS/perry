@@ -38,6 +38,22 @@ mod virt;
 
 // Property-key ranges come from value deltas, not source annotations. Keep
 // computed reads and calls on the same partition of ToPropertyKey's inputs.
+/// An escaped value (unknown code holds it) that is no parameter or
+/// argument marker: beside ⊤ it is that ⊤, since every rule does to ⊤ at
+/// least what it does to the value. The one predicate of the arrival rule
+/// (`add_tokens_s`, with the markers that read as ⊤, DECISIONS 42), of ⊤'s
+/// arrival at a node that lists the value, and of a ⊤ node's pop.
+pub(crate) fn escaped_beside_top<V>(
+    esc_bits: &[u64],
+    param_marker: &crate::pts::FxHashMap<Tok, V>,
+    arg_bits: &[u64],
+    t: Tok,
+) -> bool {
+    t != TOP
+        && marker_top_bit(esc_bits, t)
+        && !(param_marker.contains_key(&t) || marker_top_bit(arg_bits, t))
+}
+
 fn index_needs_general_key(toks: Tokens<'_>, prim: u16) -> bool {
     prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty()
 }
@@ -167,9 +183,9 @@ impl Model {
             // other tokens, once it is known whether ⊤ arrived with them. So
             // is an escaped value (`Model::top_beside`): unknown code holds
             // it, so beside ⊤ it is that ⊤.
-            let escaped_value = marker_top_bit(&self.esc_bits, t)
-                && !(self.param_marker.contains_key(&t) || marker_top_bit(&self.arg_bits, t));
-            if marker_top_bit(&self.marker_top, t) || escaped_value {
+            if marker_top_bit(&self.marker_top, t)
+                || escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+            {
                 later.push(t);
                 continue;
             }
@@ -203,6 +219,19 @@ impl Model {
         if !fresh.is_empty() {
             let old = std::mem::take(&mut node.pts);
             node.pts = self.sets.extend(old, &fresh);
+        }
+        // ⊤ arrived: a member listed before it and escaped since is that ⊤
+        // now, and leaves (the set is rebuilt). One still in the node's
+        // delta leaves at the node's pop, which follows (top_new queued it).
+        if top_new {
+            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let old = std::mem::take(&mut node.pts);
+            let before = old.len();
+            node.pts = self.sets.retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
+            if node.pts.len() != before {
+                node.dropped = true;
+            }
+            self.charge_work(before as u64);
         }
         self.fresh = fresh;
         self.fresh_seen = seen;
@@ -776,6 +805,23 @@ impl Model {
                     std::mem::take(&mut node.drange) && node.prim & (prim::NUM | prim::STR) != 0,
                 )
             };
+            // A node that holds ⊤ delivers no member that escaped after it
+            // was listed: beside ⊤ it is that ⊤, which the node delivered.
+            // It leaves the delta and the set (both rebuilt, not changed in
+            // shared storage).
+            if !delta.is_empty() && self.nodes[n as usize].pts.contains_tok(TOP) {
+                let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+                let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
+                if delta.iter().any(|&t| cover(t)) {
+                    delta.retain(|t| !cover(t));
+                    let node = &mut self.nodes[n as usize];
+                    let old = std::mem::take(&mut node.pts);
+                    let before = old.len() as u64;
+                    node.pts = self.sets.retain(old, |t| !cover(t));
+                    node.dropped = true;
+                    self.charge_work(before);
+                }
+            }
             if delta.is_empty() && dprim == 0 && !dstrs && !drange {
                 continue;
             }
