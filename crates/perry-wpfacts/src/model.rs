@@ -1375,7 +1375,7 @@ pub struct Model {
     /// The templates admitted at rest (`rest_elems::admit`), and why each
     /// other candidate was not (`rest_elems::probe`).
     pub rest_tmpls: crate::pts::FxHashSet<TmplId>,
-    pub rest_refused: FxHashMap<TmplId, &'static str>,
+    pub rest_refused: FxHashMap<TmplId, String>,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,

@@ -171,7 +171,7 @@ fn index_store(m: &Model, site: SiteId) -> bool {
 
 /// The constraint `c` on a node holding an Array, when it is a use
 /// (module docs): its kind.
-fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Option<&'static str> {
+fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Option<String> {
     let ok = match *c {
         Cons::Load { key, dst } => {
             matches!(key, crate::model::Key::Named(a) if m.atoms[a as usize] == "length")
@@ -194,7 +194,15 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         // The fused fill's receiver: the birth and its native fill.
         _ => fill_recv,
     };
-    (!ok).then(|| c.kind_name())
+    (!ok).then(|| match *c {
+        Cons::Store { site, .. } => {
+            format!(
+                "store {}",
+                m.stores.get(site as usize).map_or("", |s| s.desc.as_str())
+            )
+        }
+        _ => c.kind_name().to_string(),
+    })
 }
 
 /// The node a constraint elsewhere names as the object it writes or guards,
@@ -245,9 +253,9 @@ fn only(m: &Model, n: NodeId, cand: &FxHashSet<TmplId>, buf: &mut Vec<Tok>) -> b
 pub(crate) fn admit(
     g: &Gen<'_>,
     interpreted: bool,
-) -> (FxHashSet<TmplId>, FxHashMap<TmplId, &'static str>) {
+) -> (FxHashSet<TmplId>, FxHashMap<TmplId, String>) {
     let m = &g.m;
-    let mut refused: FxHashMap<TmplId, &'static str> = FxHashMap::default();
+    let mut refused: FxHashMap<TmplId, String> = FxHashMap::default();
     let mut cand: FxHashSet<TmplId> = FxHashSet::default();
     if !m.rest_elems || !m.array_reps || m.aborted || m.unit_mode || m.rest_fills.is_empty() {
         return (cand, refused);
@@ -273,7 +281,7 @@ pub(crate) fn admit(
                     .and_then(|&t| m.tmpl_of(t))
                     == Some(tm)
         }) {
-            refused.insert(tm, "no offset");
+            refused.insert(tm, "no offset".to_string());
             continue;
         }
         // A token the fill wrote has an element node; one with none (the
@@ -289,7 +297,7 @@ pub(crate) fn admit(
         };
         match why {
             Some(w) => {
-                refused.insert(tm, w);
+                refused.insert(tm, w.to_string());
             }
             None => {
                 cand.insert(tm);
@@ -314,10 +322,10 @@ pub(crate) fn admit(
         }
     }
     let mut buf = Vec::new();
-    let mut refuse = |cand: &mut FxHashSet<TmplId>, tms: Vec<TmplId>, why: &'static str| {
+    let mut refuse = |cand: &mut FxHashSet<TmplId>, tms: Vec<TmplId>, why: &str| {
         for tm in tms {
             if cand.remove(&tm) {
-                refused.insert(tm, why);
+                refused.insert(tm, why.to_string());
             }
         }
     };
@@ -343,7 +351,7 @@ pub(crate) fn admit(
             .iter()
             .find_map(|c| use_of(m, c, fill_recv, &reads))
         {
-            refuse(&mut cand, hit, why);
+            refuse(&mut cand, hit, &why);
         }
     }
     // Co-occurrence, to the fixpoint.
