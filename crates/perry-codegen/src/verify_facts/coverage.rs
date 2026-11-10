@@ -44,6 +44,7 @@ pub(crate) enum Fact {
     Signature,
     ArrayRep,
     ConstArray,
+    FieldRep,
     UnsignedBound,
 }
 impl Fact {
@@ -88,6 +89,7 @@ impl Fact {
             Self::Signature => "signature",
             Self::ArrayRep => "array rep",
             Self::ConstArray => "constant array",
+            Self::FieldRep => "field rep",
             Self::UnsignedBound => "unsigned bound",
         }
     }

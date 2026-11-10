@@ -731,6 +731,42 @@ fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
     }
 }
 
+/// The Number representation of what `nodes` hold together (a field over
+/// its template's tokens; I32 at rest, RFC §10.7): F64 when every value is
+/// a Number, I32 when also every one is an int32 (the joined interval) and
+/// one reaches an int consumer (demand); Boxed for anything else, and for
+/// no node or no value. The negative control `restfield` claims I32 for
+/// any Number field.
+pub(crate) fn number_rep_of_nodes(m: &Model, nodes: &[NodeId]) -> Rep {
+    let mut range = crate::model::Iv::EMPTY;
+    let mut demand = false;
+    let mut values = false;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if !node.pts.is_empty() || node.prim & !crate::model::prim::NUM != 0 {
+            return Rep::Boxed;
+        }
+        values |= node.prim != 0;
+        range = range.join(node.range);
+        demand |= node.int_demand;
+    }
+    if !values {
+        return Rep::Boxed;
+    }
+    if m.rest_field_sabotage {
+        return Rep::I32;
+    }
+    let int32 = !range.is_top()
+        && !range.is_empty()
+        && range.lo >= i64::from(i32::MIN)
+        && range.hi <= i64::from(i32::MAX);
+    if int32 && demand {
+        Rep::I32
+    } else {
+        Rep::F64
+    }
+}
+
 /// The representation the facts give: F64 for a binding of only Numbers,
 /// I32 for one of only int32 Numbers that an int consumer reads.
 fn rep_of(b: &BindingFacts) -> Rep {
@@ -779,6 +815,77 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
                 b.int_demand as u8,
                 node.int_use as u8,
             ));
+        }
+    }
+    out.extend(rest_probe(m));
+    out
+}
+
+/// The at-rest probe (I32 at rest, RFC §10.7; `PERRY_FACTS_DUMP` only): one
+/// `# rest field` line per class or literal field whose nodes hold Numbers
+/// and one `# rest elem` line per plain Array template whose element nodes
+/// do, each with the join over the template's tokens of what decides the
+/// slot's representation (RFC §10.3): the prims, the tokens, the interval
+/// and int demand.
+fn rest_probe(m: &Model) -> Vec<String> {
+    let mut out = Vec::new();
+    for (tm, tpl) in m.tmpls.iter().enumerate() {
+        let tm = tm as u32;
+        let toks = m.tmpl_toks(tm);
+        if toks.is_empty() {
+            continue;
+        }
+        let line = |what: &str, nodes: &[NodeId]| -> Option<String> {
+            let mut prims = 0u16;
+            let mut other = false;
+            let mut range = crate::model::Iv::EMPTY;
+            let mut demand = false;
+            for &n in nodes {
+                let node = &m.nodes[n as usize];
+                prims |= node.prim;
+                other |= !node.pts.is_empty();
+                range = range.join(node.range);
+                demand |= node.int_demand;
+            }
+            if prims & crate::model::prim::NUM == 0 {
+                return None;
+            }
+            let range = if range.is_top() || range.is_empty() {
+                "top".to_string()
+            } else {
+                format!("[{},{}]", range.lo, range.hi)
+            };
+            Some(format!(
+                "# rest {what} prims={prims:#x} other={} range={range} demand={}",
+                other as u8, demand as u8
+            ))
+        };
+        if let TmplKind::Arr { plain: true, .. } = tpl.kind {
+            let nodes: Vec<NodeId> = toks
+                .iter()
+                .filter_map(|t| m.all_fields.get(t).copied())
+                .collect();
+            if let Some(l) = line(&format!("elem {}", tpl.display.replace(' ', "_")), &nodes) {
+                out.push(l);
+            }
+            continue;
+        }
+        if !matches!(tpl.kind, TmplKind::Class { .. } | TmplKind::Lit { .. }) {
+            continue;
+        }
+        for &a in &tpl.birth_keys {
+            let nodes: Vec<NodeId> = toks
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            let what = format!(
+                "field {}.{}",
+                tpl.display.replace(' ', "_"),
+                crate::model::esc_key(&m.atoms[a as usize])
+            );
+            if let Some(l) = line(&what, &nodes) {
+                out.push(l);
+            }
         }
     }
     out

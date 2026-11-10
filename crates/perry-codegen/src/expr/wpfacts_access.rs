@@ -114,6 +114,11 @@ pub(crate) struct FieldProof {
     /// anything but plain program Arrays, and for a guarded or possibly
     /// absent read, whose value may come from elsewhere.
     pub array: Option<crate::codegen::FactsArrRep>,
+    /// The field's Number representation over the class set (I32 at rest,
+    /// PR A: wpfacts `FieldFacts::rep` F64 or I32, joined): `None` when
+    /// some class's field may hold anything but Numbers, and for a guarded
+    /// or possibly absent read. PR A consumes it only in check mode.
+    pub num_rep: Option<crate::codegen::FactsRep>,
 }
 
 impl FieldProof {
@@ -251,6 +256,28 @@ fn class_set_array(
             return None;
         }
         out = Some(out.map_or(r, |o| FactsArrRep::join(o, r)));
+    }
+    out
+}
+
+/// The join of the field `property`'s Number representation (F64 or I32)
+/// over the classes `class_ids`, when it is one in each (I32 at rest).
+fn class_set_number(
+    ctx: &FnCtx<'_>,
+    class_ids: &[u32],
+    property: &str,
+) -> Option<crate::codegen::FactsRep> {
+    use crate::codegen::FactsRep;
+    let mut out: Option<FactsRep> = None;
+    for &cid in class_ids {
+        let f = ctx.wpfacts.field(cid, property)?;
+        if f.declared || f.reserved || !matches!(f.rep, FactsRep::F64 | FactsRep::I32) {
+            return None;
+        }
+        out = Some(match (out, f.rep) {
+            (Some(FactsRep::I32), FactsRep::I32) | (None, FactsRep::I32) => FactsRep::I32,
+            _ => FactsRep::F64,
+        });
     }
     out
 }
@@ -625,6 +652,11 @@ pub(crate) fn prove(
         } else {
             class_set_array(ctx, &recv.class_ids, property)
         },
+        num_rep: if guarded || maybe_absent {
+            None
+        } else {
+            class_set_number(ctx, &recv.class_ids, property)
+        },
     };
     crate::verify_facts::field_consumed(&proof, property);
     Some(proof)
@@ -970,6 +1002,15 @@ pub(crate) fn try_lower_get(
                 &val,
                 r,
                 &format!("field {property} of {}", p.binding),
+            );
+        }
+        if let Some(r) = p.num_rep {
+            // Check mode (I32 at rest): the field's Number rep.
+            crate::codegen::signature_entry::witness_field_rep(
+                ctx,
+                r,
+                &val,
+                &format!("{property} of {}", p.binding),
             );
         }
         // A Number has one encoding in every JS value (the raw double), so

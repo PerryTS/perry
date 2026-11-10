@@ -919,6 +919,23 @@ fn template_facts(
         } else {
             crate::bindings::Rep::Boxed
         };
+        // I32 at rest (RFC §10.7, PR A): a whole-life field that holds only
+        // Numbers has the Number representation of its joined nodes.
+        let rep = if rep == crate::bindings::Rep::Boxed
+            && definite
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+            && crate::demand::at_rest_demand()
+        {
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            crate::bindings::number_rep_of_nodes(m, &nodes)
+        } else {
+            rep
+        };
         fields.push(FieldFacts {
             rep,
             fns,
