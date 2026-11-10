@@ -18,6 +18,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
             module: 0,
             site: tm,
             hole_free,
+            plain: false,
         },
         display: format!("arr{tm}"),
         birth_keys: vec![],

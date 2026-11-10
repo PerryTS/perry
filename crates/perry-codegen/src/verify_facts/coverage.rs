@@ -41,6 +41,7 @@ pub(crate) enum Fact {
     CanonicalNumber,
     ElementFloor,
     Signature,
+    ArrayRep,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -81,6 +82,7 @@ impl Fact {
             Self::CanonicalNumber => "canonical number",
             Self::ElementFloor => "element floor",
             Self::Signature => "signature",
+            Self::ArrayRep => "array rep",
         }
     }
 }

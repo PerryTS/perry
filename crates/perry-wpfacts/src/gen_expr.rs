@@ -83,8 +83,16 @@ impl<'a> Gen<'a> {
     /// call of it by that token (`builtins::solved_namespace_call`), so a
     /// direct HIR call of it runs the same arm a call through the namespace
     /// runs.
+    /// A member whose effects the runtime declares at its body
+    /// (`builtins::declared_member`: `node:util/types.isArrayBufferView`)
+    /// is called the same way: the solver runs the declaration.
     pub(crate) fn namespace_member_callee(&mut self, module: &str, method: &str) -> Option<Tok> {
-        let identity = crate::builtins::solved_namespace_call(module, method)?;
+        let identity = crate::builtins::solved_namespace_call(module, method).or_else(|| {
+            let bare = module.strip_prefix("node:").unwrap_or(module);
+            crate::builtins::declared_member(&format!("node:{bare}.{method}"))
+                .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
+                .map(|e| e.name)
+        })?;
         Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
     }
 
@@ -187,7 +195,7 @@ impl<'a> Gen<'a> {
                     // elements of a list. A call site's spread entry is read
                     // at its elements, whatever made it.
                     let v = self.expr(fx, e);
-                    let tm = self.new_arr_birth(fx.module, "spread-args", true);
+                    let tm = self.new_arr_birth(fx.module, "spread-args", true, false);
                     let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                     let fa = self.m.field_any(t);
                     let it = self.iterate(v);
@@ -1634,7 +1642,7 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::Array(elems, _) => {
-                let tm = self.new_arr_birth(mi, "lit", true);
+                let tm = self.new_arr_birth(mi, "lit", true, true);
                 if self.arr_lengths {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
                 }
@@ -1648,7 +1656,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArraySpread(elems) => {
                 let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
-                let tm = self.new_arr_birth(mi, "spread", dense);
+                let tm = self.new_arr_birth(mi, "spread", dense, true);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {

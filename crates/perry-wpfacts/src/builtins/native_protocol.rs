@@ -27,13 +27,22 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
-/// The value of the global object's declared constructor that class `tm`'s
-/// built-in parent names (`extends Error`: the realm's `Error`); `None`
-/// when the class has no built-in parent or the global declares none
-/// under that name (`EventEmitter` is a module export).
+/// The value of the declared constructor that class `tm`'s built-in parent
+/// names, read where the heritage binding reads it: the global object's
+/// (`extends Error`: the realm's `Error`) or the node module's export
+/// (`import { EventEmitter } from "events"`: the module's `EventEmitter`,
+/// the value the class object's [[Prototype]] holds). `None` when the class
+/// has no built-in parent or its holder declares none under that name.
 pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
-    let (_, name) = m.tmpls[tm as usize].native_parent.clone()?;
-    let identity = m.namespace_property(BuiltinNs::GlobalThis, &name)?.native?;
+    let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let ns = if module == "builtin" {
+        BuiltinNs::GlobalThis
+    } else {
+        let ns = node_module_ns(&module)?;
+        m.tok(TokKind::Builtin(ns));
+        ns
+    };
+    let identity = m.namespace_property(ns, &name)?.native?;
     Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
 }
 
