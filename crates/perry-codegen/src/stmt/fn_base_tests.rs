@@ -32,8 +32,8 @@ const SRC: &str = "export class B {\n\
   three(n: number): number { return this.at(3) + this.at(5) + this.at(7); }\n\
   one(n: number): number { return this.at(9); }\n\
   calls(n: number): number { let s = this.at(1); this.board.push(1); s += this.at(2); return s; }\n\
-  after(n: number): number { this.board.push(2); let s = this.at(4); return s + this.at(6); }\n\
-  outer(n: number): number { let s = this.at(8); let i = 0; while (i < 100) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
+  after(n: number): number { this.board.push(2); return this.at(4) + this.at(6); }\n\
+  outer(n: number): number { let s = 0; if (this.at(8) === 1) s = 5; let i = 0; while (i < 100) { const p = this.at(i & 127); if (p !== 0) break; s += 1; i += 3; } return s; }\n\
 }\n";
 
 const GROWABLE: FactsArrRep = FactsArrRep {
