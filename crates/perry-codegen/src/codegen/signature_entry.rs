@@ -532,11 +532,17 @@ fn witness_value(
 /// field loaded is of the field's representation over the receiver's class
 /// set (`FieldProof::num_rep`): a plain Number for F64, an exact int32 that
 /// is not `-0` for I32. A miss exits 86 (`Fact::FieldRep`).
-pub(crate) fn witness_field_rep(ctx: &mut FnCtx<'_>, rep: FactsRep, value: &str, what: &str) {
+/// `zero_ok` (−0 tolerance, PR D): the field's nodes are tolerated.
+pub(crate) fn witness_field_rep(
+    ctx: &mut FnCtx<'_>,
+    rep: FactsRep,
+    value: &str,
+    what: &str,
+    zero_ok: bool,
+) {
     if !crate::verify_facts::enabled() {
         return;
     }
-    let zero_ok = ctx.wpfacts.zero_sign_tolerated;
     let Some(ok) = emit_rep_test(ctx.block(), rep, None, value, zero_ok) else {
         return;
     };

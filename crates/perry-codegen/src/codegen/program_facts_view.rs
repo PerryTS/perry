@@ -290,8 +290,12 @@ pub struct ElisionFacts {
     pub zero_tolerant_locals: std::collections::BTreeSet<u32>,
     /// Some Number node keeps its interval by −0 tolerance
     /// (`ProgramFacts::zero_sign_tolerated`): check mode's int32 witnesses
-    /// of fields and elements admit `-0`.
+    /// of elements and signatures admit `-0`.
     pub zero_sign_tolerated: bool,
+    /// (class id, key) of the fields whose nodes keep an int32 interval by
+    /// −0 tolerance (wpfacts `FieldFacts::zero_tol`): the field-rep witness
+    /// admits `-0` for them only.
+    pub zero_tolerant_fields: std::collections::BTreeSet<(u32, String)>,
     /// Local id → the representation the whole-program facts give it
     /// (representation RFC §10.3, wpfacts `BindingFacts::rep`). A local the
     /// facts cover takes exactly this one; codegen does not choose.

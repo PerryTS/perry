@@ -735,6 +735,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
+                if f.zero_tol {
+                    out.zero_tolerant_fields.insert((cid, f.key.clone()));
+                }
                 Some(FactsField {
                     classes,
                     nullable,

@@ -117,6 +117,9 @@ pub struct FieldFacts {
     /// `PERRY_FACTS_ARRAY_FIELDS=0`. A read of the field is a value of this
     /// representation (PR-C3: codegen's `FieldProof::array`).
     pub rep: crate::bindings::Rep,
+    /// −0 tolerance (PR D): one of the field's nodes keeps its int32 interval
+    /// although it may hold `-0`, which no use observes (`Node::zs_tol`).
+    pub zero_tol: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -930,6 +933,7 @@ fn template_facts(
         };
         // I32 at rest (RFC §10.7, PR A): a whole-life field that holds only
         // Numbers has the Number representation of its joined nodes.
+        let mut zero_tol = false;
         let rep = if rep == crate::bindings::Rep::Boxed
             && definite
             && !is_accessor
@@ -941,12 +945,14 @@ fn template_facts(
                 .iter()
                 .filter_map(|t| m.fields.get(&(*t, a)).copied())
                 .collect();
+            zero_tol = nodes.iter().any(|&n| m.nodes[n as usize].zs_tol);
             crate::bindings::number_rep_of_nodes(m, &nodes)
         } else {
             rep
         };
         fields.push(FieldFacts {
             rep,
+            zero_tol,
             fns,
             ta_stable,
             ta_kind,
