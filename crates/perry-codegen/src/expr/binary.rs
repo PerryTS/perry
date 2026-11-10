@@ -377,6 +377,13 @@ fn lower_guarded_numeric_arith(
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
+        // The helper is the arm for a BigInt or a value that needs ToNumeric.
+        let all_num = if crate::module::cold_paths_enabled() {
+            ctx.block()
+                .call(I1, "llvm.expect.i1", &[(I1, &all_num), (I1, "true")])
+        } else {
+            all_num
+        };
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
