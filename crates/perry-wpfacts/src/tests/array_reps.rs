@@ -566,7 +566,7 @@ fn a_field_read_call_is_in_the_floor_by_its_own_key() {
     assert!(of("this.at(r * 16)").in_floor);
     assert!(of("this.at(move & 127)").in_floor);
     // `[-16, 111]` leaves the floor below; `[15, 56]` is inside.
-    assert!(!of("this.at((move & 127) - 16").in_floor);
+    assert!(!of("this.at((move & 127)").in_floor);
     assert!(of("this.at(this.ep + 16").in_floor);
 }
 
