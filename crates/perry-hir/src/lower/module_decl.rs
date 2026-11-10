@@ -556,6 +556,7 @@ pub(crate) fn lower_module_decl(
                 type_only: whole_decl_type_only,
                 runtime_erased,
                 is_dynamic: false,
+                is_deferred: import_decl.phase == ast::ImportPhase::Defer,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -1520,6 +1521,7 @@ pub(crate) fn lower_module_decl(
                                     type_only: false,
                                     runtime_erased: false,
                                     is_dynamic: false,
+                                    is_deferred: false,
                                     is_dynamic_target: false,
                                     is_deferred_require: false,
                                     is_adopted_require: false,
@@ -1593,7 +1595,14 @@ pub(crate) fn lower_module_decl(
                         // not a bare `perry_fn_<mod>__z` function symbol. This is
                         // exactly how zod re-exports `z`, so without this every
                         // `z.object` / `z.coerce` in consumer code is undefined.
-                        if let Some(ns_source) = ctx.namespace_import_sources.get(&local).cloned() {
+                        let deferred_namespace = module.imports.iter().any(|import| import.is_deferred
+                            && import.specifiers.iter().any(|s| matches!(s, ImportSpecifier::Namespace { local: name } if name == &local)));
+                        if let Some(ns_source) = ctx
+                            .namespace_import_sources
+                            .get(&local)
+                            .filter(|_| !deferred_namespace)
+                            .cloned()
+                        {
                             module.exports.push(Export::NamespaceReExport {
                                 source: ns_source,
                                 name: exported.clone(),

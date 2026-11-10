@@ -206,6 +206,7 @@ impl SH for Import {
             type_only,
             runtime_erased,
             is_dynamic,
+            is_deferred,
             is_dynamic_target,
             is_deferred_require,
             is_adopted_require,
@@ -223,6 +224,9 @@ impl SH for Import {
             tag(h, 0x5254);
         }
         is_dynamic.hash(h);
+        if *is_deferred {
+            tag(h, 0x4446);
+        }
         is_dynamic_target.hash(h);
         is_deferred_require.hash(h);
         is_adopted_require.hash(h);

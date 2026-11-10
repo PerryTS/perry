@@ -531,6 +531,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset,
             deferred_error,
             synchronous,
+            deferred,
         } => Expr::DynamicImport {
             paths: paths.clone(),
             arg: Shallow::shallow(arg, n),
@@ -538,6 +539,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset: byte_offset.clone(),
             deferred_error: deferred_error.clone(),
             synchronous: synchronous.clone(),
+            deferred: *deferred,
         },
         Expr::WorkerNew {
             paths,
