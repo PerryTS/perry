@@ -6262,24 +6262,13 @@ pub fn run_with_parse_cache(
             i18n_table: i18n_snapshot.clone(),
             fast_math: ctx.fast_math,
             fp_contract_mode: ctx.fp_contract_mode,
-            app_metadata: perry_codegen::AppMetadata {
-                entry_source_path: if is_entry && args.output_type == "executable" {
-                    Some(path.to_string_lossy().into_owned())
-                } else {
-                    None
-                },
-                entry_declared_esm: if is_entry {
-                    super::cjs_wrap::declared_module_format_is_esm(path)
-                } else {
-                    None
-                },
-                native_provider_installs: if is_entry {
-                    native_provider_installs.clone()
-                } else {
-                    Vec::new()
-                },
-                ..ctx.app_metadata.clone()
-            },
+            app_metadata: super::app_metadata::for_module(
+                &ctx.app_metadata,
+                path,
+                is_entry,
+                &args.output_type,
+                &native_provider_installs,
+            ),
             // Issue #100: namespace_entries empty unless this
             // module is a dynamic-import target; the consumer-side
             // dispatch map is empty unless this module performs

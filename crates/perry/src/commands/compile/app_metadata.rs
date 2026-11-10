@@ -461,3 +461,28 @@ app_group = "group.com.example.fallback"
         assert!(apply_libc_to_target(Some("linux".into()), Some("uclibc")).is_err());
     }
 }
+
+/// Source identity belongs to every module; process and provider setup belongs
+/// only to the program entry.
+pub(super) fn for_module(
+    app: &perry_codegen::AppMetadata,
+    path: &std::path::Path,
+    is_entry: bool,
+    output_type: &str,
+    native_provider_installs: &[String],
+) -> perry_codegen::AppMetadata {
+    perry_codegen::AppMetadata {
+        module_source_path: Some(path.to_string_lossy().into_owned()),
+        entry_source_path: (is_entry && output_type == "executable")
+            .then(|| path.to_string_lossy().into_owned()),
+        entry_declared_esm: is_entry
+            .then(|| super::cjs_wrap::declared_module_format_is_esm(path))
+            .flatten(),
+        native_provider_installs: if is_entry {
+            native_provider_installs.to_vec()
+        } else {
+            Vec::new()
+        },
+        ..app.clone()
+    }
+}
