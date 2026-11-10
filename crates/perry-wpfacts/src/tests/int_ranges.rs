@@ -61,8 +61,19 @@ fn literals_and_operators_have_exact_intervals() {
     );
     assert_eq!(r["x"], Some((5, 5)));
     assert_eq!(r["y"], Some((7, 7)));
-    assert_eq!(r["z"], Some((0, 7)));
+    // Two single values: the mask's exact result (`range::eval_exact`).
+    assert_eq!(r["z"], Some((7, 7)));
     assert!(covers(&r, "w", 1, 1));
+}
+
+/// A mask of an interval that is not one value keeps the mask's bound.
+#[test]
+fn a_mask_of_an_interval_is_bounded_by_the_mask() {
+    let r = ranges(
+        "function f(n: number): number { let s = 0; for (let i = 0; i < 9; i++) { const z = (i + n) & 127; s += z; } return s; }\n\
+         console.log(f(1), f(2));",
+    );
+    assert_eq!(r["z"], Some((0, 127)));
 }
 
 #[test]
