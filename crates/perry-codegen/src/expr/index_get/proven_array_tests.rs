@@ -110,7 +110,9 @@ fn rep_ir(rep: FactsArrRep, key: Option<(i64, i64)>, number: bool) -> String {
     let m = lower(REP_SRC);
     let mut elision = ElisionFacts::default();
     for f in &m.functions {
-        elision.local_reps.insert(f.params[0].id, FactsRep::Arr(rep));
+        elision
+            .local_reps
+            .insert(f.params[0].id, FactsRep::Arr(rep));
     }
     for (i, _) in REP_SRC.match_indices("a[i & 255]") {
         if let Some(k) = key {
@@ -218,7 +220,10 @@ fn a_growable_array_keeps_its_forwarding_test() {
     let f = body(&ir, "__at").join("\n");
     assert!(forwarding_test(&f), "forwarding test\n{f}");
     assert!(f.contains("arep.live") && f.contains("arep.cold"), "{f}");
-    assert!(!bound_128(&f) && !f.contains("arep.inside"), "no bound\n{f}");
+    assert!(
+        !bound_128(&f) && !f.contains("arep.inside"),
+        "no bound\n{f}"
+    );
     assert!(!f.contains("arep.own"), "no hole test\n{f}");
 }
 

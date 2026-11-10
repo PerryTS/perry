@@ -408,7 +408,8 @@ fn key_at(src: &str, at: &str, cfg: FactsConfig) -> Option<(i64, i64)> {
         .map(|(_, k)| *k)
 }
 
-const TABLE: &str = "const K = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];\n";
+const TABLE: &str =
+    "const K = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];\n";
 
 #[test]
 fn an_element_read_exports_its_key_interval() {
@@ -417,7 +418,10 @@ fn an_element_read_exports_its_key_interval() {
         "{TABLE}export function f(i: number): number {{ return K[i & 7] ?? 0; }}\n\
          console.log(f(3));"
     );
-    assert_eq!(key_at(&src, "K[i & 7]", FactsConfig::default()), Some((0, 7)));
+    assert_eq!(
+        key_at(&src, "K[i & 7]", FactsConfig::default()),
+        Some((0, 7))
+    );
     // A key that may be a fraction is no integer interval.
     let src = format!(
         "{TABLE}export function f(i: number): number {{ return K[i / 2] ?? 0; }}\n\

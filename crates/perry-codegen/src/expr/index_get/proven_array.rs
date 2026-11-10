@@ -135,9 +135,8 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
             .element_keys
             .get(&element_offset)
             .is_some_and(|&(lo, hi)| lo >= 0 && hi < i64::from(rep.floor));
-    let number =
-        crate::expr::facts_canonical::element(ctx, element_offset)
-            == Some(crate::expr::facts_canonical::Num::Number);
+    let number = crate::expr::facts_canonical::element(ctx, element_offset)
+        == Some(crate::expr::facts_canonical::Num::Number);
     Some(RepRead {
         rep,
         in_floor,
