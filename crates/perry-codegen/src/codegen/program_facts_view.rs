@@ -303,6 +303,10 @@ pub struct ElisionFacts {
     /// whole program (wpfacts `ModuleBindings::const_numbers`, N6): a read
     /// of its module global is that constant (`expr::literals_vars::facts_const_number`).
     pub const_numbers: std::collections::BTreeMap<u32, i64>,
+    /// Element reads (by `element_offset`) whose key is an integer Number at
+    /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
+    /// PR-C2; `expr::index_get::proven_array`).
+    pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the

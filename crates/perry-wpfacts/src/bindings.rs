@@ -460,6 +460,10 @@ pub struct ModuleBindings {
     /// Module-scope bindings (by local id) whose every value is this one
     /// integer Number, sorted (`const_numbers`, N6).
     pub const_numbers: Vec<(u32, i64)>,
+    /// PR-C2: element reads by `element_offset` whose key is an integer
+    /// Number at every copy, with the hull of its interval; sorted
+    /// (`element_keys`).
+    pub element_keys: Vec<(u32, (i64, i64))>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
