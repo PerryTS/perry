@@ -96,6 +96,17 @@ pub(crate) fn int32_constant(e: &perry_hir::Expr) -> bool {
         && v <= f64::from(i32::MAX)
 }
 
+/// I32 at rest (RFC §10.7, PR A): demand flows through value filters and
+/// guards (`l ?? r`, `l && r`, `l || r`, presence narrowings), so an
+/// element or field read behind `?? 0` meets the int consumers of its
+/// result. `PERRY_FACTS_AT_REST=0` restores the copy-edge-only walk.
+pub(crate) fn at_rest_demand() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_AT_REST").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 pub(crate) fn enabled() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_INT_DEMAND").as_deref(),
@@ -109,6 +120,7 @@ pub(crate) fn solve(m: &mut Model) {
     // The reverse graph, in compressed rows: `preds[start[d]..start[d + 1]]`
     // are the nodes demand on `d` reaches.
     let mut start = vec![0u32; n + 1];
+    let filters = at_rest_demand();
     let each_edge = |m: &Model, f: &mut dyn FnMut(NodeId, NodeId)| {
         for (src, node) in m.nodes.iter().enumerate() {
             let src = src as NodeId;
@@ -116,10 +128,24 @@ pub(crate) fn solve(m: &mut Model) {
                 f(src, d);
             }
             for c in &node.cons {
-                if let Cons::Range { op, dst, .. } = c {
-                    if carries(*op) {
-                        f(src, *dst);
+                match c {
+                    Cons::Range { op, dst, .. } if carries(*op) => f(src, *dst),
+                    // I32 at rest (`filters`): a filter delivers some of
+                    // its host's values unchanged (`l ?? r`, `l && r`, a
+                    // presence narrowing), and a guard delivers its `from`
+                    // operand's (`r` of `l ?? r`, `l || r`, `l && r`): a
+                    // copy of values, so demand on the result is demand on
+                    // the operand.
+                    Cons::NotNullish { dst }
+                    | Cons::Defined { dst }
+                    | Cons::NotUndefined { dst }
+                    | Cons::Falsy { dst }
+                        if filters =>
+                    {
+                        f(src, *dst)
                     }
+                    Cons::Guard { from, dst, .. } if filters => f(*from, *dst),
+                    _ => {}
                 }
             }
         }

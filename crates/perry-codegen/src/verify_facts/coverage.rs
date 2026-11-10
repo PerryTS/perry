@@ -44,6 +44,7 @@ pub(crate) enum Fact {
     Signature,
     ArrayRep,
     ConstArray,
+    FieldRep,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -87,6 +88,7 @@ impl Fact {
             Self::Signature => "signature",
             Self::ArrayRep => "array rep",
             Self::ConstArray => "constant array",
+            Self::FieldRep => "field rep",
         }
     }
 }

@@ -497,6 +497,7 @@ fn generate<'a>(
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
+    g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;

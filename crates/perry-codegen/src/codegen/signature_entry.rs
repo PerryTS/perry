@@ -522,6 +522,42 @@ fn witness_value(
     ctx.current_block = next;
 }
 
+/// Check mode (I32 at rest, PR A): the word a proven read of a Number
+/// field loaded is of the field's representation over the receiver's class
+/// set (`FieldProof::num_rep`): a plain Number for F64, an exact int32 that
+/// is not `-0` for I32. A miss exits 86 (`Fact::FieldRep`).
+pub(crate) fn witness_field_rep(ctx: &mut FnCtx<'_>, rep: FactsRep, value: &str, what: &str) {
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    let Some(ok) = emit_rep_test(ctx.block(), rep, None, value) else {
+        return;
+    };
+    crate::verify_facts::covered(Fact::FieldRep, || serde_json::json!({ "field": what }));
+    crate::verify_facts::tick(ctx);
+    let miss = ctx.new_block("field_rep.verify_miss");
+    let next = ctx.new_block("field_rep.admitted");
+    let miss_l = ctx.block_label(miss);
+    let next_l = ctx.block_label(next);
+    ctx.block().cond_br(&ok, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        &format!("field rep of {what}: {rep:?}"),
+        Fact::FieldRep,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, value)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
+}
+
 /// Check mode: a value `F$sig` returns is in its `ret` (§5).
 pub(crate) fn witness_return(ctx: &mut FnCtx<'_>, rep: FactsRep, value: &str) {
     witness_value(ctx, rep, None, value, "signature return");

@@ -1340,6 +1340,10 @@ pub struct Model {
     /// representation ignores the `null` and `undefined` it also holds, a
     /// wrong claim the witness at the field read must catch.
     pub arr_field_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restfield`): a Number
+    /// field's representation is I32 whatever its interval (I32 at rest,
+    /// PR A), a wrong claim the witness at the field read must catch.
+    pub rest_field_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
