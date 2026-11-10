@@ -66,7 +66,9 @@ pub(super) fn family_load(
 ) {
     let name = m.atoms[a as usize].clone();
     // An internal slot (`effects::internal_atom`) is no property: no chain
-    // has it and no program store, even one under an unknown key, writes it.
+    // has it. Its storage is an ordinary own field of the object, read by
+    // `load_from` (an unknown-key store reaches it through `field_any`, and
+    // an escape of the object sinks ⊤ into it); only the chain read stops.
     if super::effects::is_internal_key(&name) {
         return;
     }
@@ -567,8 +569,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_tok(dst, o);
             }
             // An accessor the object holds or inherits (`performance
-            // .timeOrigin`, on `Performance.prototype`) whose getter returns
-            // primitives and receiver slots: its value on this object.
+            // .timeOrigin`, on `Performance.prototype`) with a declared
+            // getter: its declared result on this object.
             Some(n) if !m.unit_mode && module_getter(m, t, n).is_some() => {
                 let Key::Named(a) = key else { unreachable!() };
                 let e = module_getter(m, t, n).expect("guarded");
@@ -576,7 +578,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     return opaque_member(m, dst);
                 }
                 m.native_missing.push((t, a, NativeMiss::Load(dst)));
-                super::effects::getter_value(m, e, t, dst);
+                super::effects::getter_load(m, e, t, a, dst);
             }
             _ => {
                 m.add_top(dst, |_| {
@@ -794,15 +796,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     // A getter the realm declares on the prototype of an
                     // object a declaration made (`AbortController.prototype
-                    // .signal`) that returns primitives and the receiver's
-                    // slots: its value; a write of the key onto the chain
-                    // (now, or later: the replay) reads what was stored.
+                    // .signal`): its declared result, never the getter
+                    // function; a write of the key onto the chain (now, or
+                    // later: the replay) reads what was stored.
                     (Key::Named(a), Some(n))
                         if what.ends_with(".prototype")
                             && super::effects::declared_getter(what, n).is_some() =>
                     {
                         let e = super::effects::declared_getter(what, n).expect("declared");
-                        super::effects::getter_value(m, e, t, dst);
+                        super::effects::getter_load(m, e, t, a, dst);
                         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                             opaque_member(m, dst);
                         }
