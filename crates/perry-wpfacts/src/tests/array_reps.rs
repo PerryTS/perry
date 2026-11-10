@@ -416,7 +416,7 @@ fn an_element_read_exports_its_key_interval() {
     // A masked key is an integer in the mask's interval.
     let src = format!(
         "{TABLE}export function f(i: number): number {{ return K[i & 7] ?? 0; }}\n\
-         console.log(f(process.argv.length));"
+         console.log(f(3) + f(12));"
     );
     assert_eq!(
         key_at(&src, "K[i & 7]", FactsConfig::default()),

@@ -300,7 +300,6 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
             );
             for (at, _) in src.match_indices("d[") {
                 elision.element_keys.insert(at as u32 + 1, (0, 3));
-                elision.number_element_reads.insert(at as u32 + 1, false);
             }
         }
         let opts = CompileOptions {
