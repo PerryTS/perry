@@ -81,7 +81,8 @@ fn a_length_that_moves_or_a_non_int_element_keeps_the_array_double() {
     for (extra, why) in [
         ("a.push(1);", ""),
         ("a[0] = 2147483648;", "elem_not"),
-        ("a[1] = (s & 1) * -1;", "elem_not"),
+        // A possible -0 is tolerated (PR D) unless a use observes its sign.
+        ("a[1] = (s & 1) * -1; console.log(1 / a[1]);", "elem_not"),
         ("a[2] = s / 3;", "elem_not"),
     ] {
         let line = arr_line(&program(extra));
