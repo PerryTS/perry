@@ -187,6 +187,8 @@ pub struct Module {
     /// deferred-import dispatch to chain the init promise rather than
     /// returning a pre-resolved namespace.
     pub has_top_level_await: bool,
+    /// Resumable module body; its lexical bindings remain module globals.
+    pub async_init_function: Option<crate::types::FuncId>,
     /// Issue #100: eager vs deferred init. Modules reachable from the
     /// entry over only static-import edges init at program start (Eager).
     /// Modules only reachable through dynamic `import()` init lazily on
@@ -348,6 +350,7 @@ impl Module {
             extern_funcs: Vec::new(),
             init_was_unrolled: false,
             has_top_level_await: false,
+            async_init_function: None,
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),

@@ -494,6 +494,10 @@ pub struct CompileOptions {
     /// module globals. For Eager modules the redundant calls
     /// short-circuit on the guard's first-write check.
     pub module_init_deps: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
 
     /// Issue #842: true iff this module is the target of at least one
     /// `await import("./this_module.ts")` site anywhere in the program.
@@ -1388,6 +1392,10 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// fires before the body — transitively pulls in any Deferred dep
     /// chain reached only through this module's re-exports.
     pub module_init_deps: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
     /// Issue #842: true iff this module is the target of at least one
     /// dynamic `import()` site in the program. Forces emission of
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
