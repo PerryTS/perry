@@ -110,6 +110,7 @@ mod logical_and;
 mod map_identity_ops;
 mod memo_context;
 mod named_accessors;
+mod named_method_on_class_value;
 mod native_accessor_get;
 mod native_array_proto;
 mod native_regexp_proto;
