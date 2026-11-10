@@ -448,8 +448,15 @@ const COLD_HELPERS: &[&str] = &[
 /// Helpers that exist only as the slow arm of an inline fast path: the loop
 /// poll's call behind the arming word, the outlined element read behind the
 /// plain-array guards, the F64-kind store's note behind its kind test (it
-/// clears the kind, so it runs once per array). `cold` like the list above;
-/// kept apart because `PERRY_COLD_PATHS=0` takes these back out.
+/// clears the kind, so it runs once per array). Declared `cold` like the
+/// list above, under `PERRY_COLD_PATHS`.
+///
+/// These, and only these, are also marked at their call sites
+/// (`inprocess/cold_paths.rs`). The statepoint rewrite keeps a call site's
+/// attributes and drops the callee's, so `COLD_HELPERS`' `cold` reaches LLVM
+/// only where the call is not a statepoint. Marking those sites as well was
+/// measured and left out: TypeScript compiled from source grew by 725 KB of
+/// code (1.1%) for 0.04% fewer instructions.
 const COLD_ARM_HELPERS: &[&str] = &[
     "js_array_note_numeric_write_value",
     "js_gc_loop_safepoint",
@@ -469,6 +476,11 @@ pub(crate) fn cold_paths_enabled() -> bool {
 
 pub(crate) fn cold_paths_enabled_from_env(value: Option<&str>) -> bool {
     !matches!(value, Some("0" | "off" | "false"))
+}
+
+/// Whether calls of `name` are marked cold at the call site.
+pub(crate) fn is_cold_arm_helper(name: &str) -> bool {
+    COLD_ARM_HELPERS.contains(&name)
 }
 
 /// Whether `name` is declared `cold`; `cold_arms` is [`cold_paths_enabled`].

@@ -1,25 +1,27 @@
-//! Cold paths stay cold through the statepoint rewrite.
+//! Cold arms stay cold through the statepoint rewrite.
 //!
-//! A `cold` helper declaration tells LLVM that the blocks leading to its call
-//! are unlikely. Block frequencies follow, and with them block placement and
-//! the register allocator's split and spill decisions: a value that is live
-//! across an unlikely call is saved and restored next to that call instead of
-//! living in memory on the likely path.
+//! LLVM learns that a call is unlikely from `cold`. Block frequencies follow,
+//! and with them block placement and the register allocator's split and spill
+//! decisions: a value that is live across an unlikely call is saved and
+//! restored next to that call instead of living in memory on the likely path.
 //!
-//! The fact lives on the callee. `rewrite-statepoints-for-gc` runs before the
-//! optimizer and replaces a collecting call by
-//! `gc.statepoint(..., @callee, ...)`, keeping the attributes of the call
-//! SITE only. So for every collecting helper the fact was gone before any
-//! pass could use it: the loop poll's call, the shared cold element read and
-//! the inline-cache misses were weighed like the code around them.
+//! On a helper's declaration the fact does not survive.
+//! `rewrite-statepoints-for-gc` runs before the optimizer and replaces a
+//! collecting call by `gc.statepoint(..., @callee, ...)`, keeping the
+//! attributes of the call SITE only. The loop poll's call and the shared cold
+//! element read are collecting calls inside the hottest loops: LLVM weighed
+//! them like the code around them, and values live across them were stored
+//! and reloaded on the likely path.
 //!
-//! This pass runs before the rewrite and states the fact where it survives:
-//! - every call to a `cold` callee gets the `cold` call-site attribute;
+//! This pass runs before the rewrite. For the helpers that exist only as the
+//! slow arm of an inline fast path (`module::is_cold_arm_helper`):
+//! - every call gets the `cold` call-site attribute;
 //! - a conditional branch with exactly one side that cannot avoid such a call
 //!   gets the `branch_weights` an `llvm.expect` on its condition would give.
 //!
 //! Nothing about the call changes: same callee, same convention, same
-//! statepoint, same roots.
+//! statepoint, same roots. The cost is code size: the save and restore that
+//! one spill used to share now sit at each cold call.
 
 use inkwell::module::Module;
 use inkwell::values::{AsValueRef, InstructionOpcode};
@@ -65,14 +67,13 @@ fn mark(module: &Module<'_>) -> (usize, usize) {
                     }
                     let site = instruction.as_value_ref();
                     let callee = LLVMGetCalledValue(site);
-                    if LLVMIsAFunction(callee).is_null()
-                        || LLVMGetEnumAttributeAtIndex(
-                            callee,
-                            LLVMAttributeFunctionIndex,
-                            cold_kind,
-                        )
-                        .is_null()
-                    {
+                    if LLVMIsAFunction(callee).is_null() {
+                        continue;
+                    }
+                    let mut len = 0usize;
+                    let name = LLVMGetValueName2(callee, &mut len);
+                    let name = std::slice::from_raw_parts(name.cast::<u8>(), len);
+                    if !std::str::from_utf8(name).is_ok_and(crate::module::is_cold_arm_helper) {
                         continue;
                     }
                     LLVMAddCallSiteAttribute(
@@ -151,14 +152,15 @@ mod tests {
     use inkwell::context::Context;
 
     const IR: &str = r#"
-declare void @slow() cold
+declare void @js_gc_loop_safepoint() cold
+declare void @js_object_get_field_slow() cold
 declare void @plain()
 declare i32 @personality(...)
 define void @diamond(i1 %c, ptr %f) {
 entry:
   br i1 %c, label %arm, label %join
 arm:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   call void %f()
   br label %join
 join:
@@ -168,7 +170,7 @@ define void @cold_on_false(i1 %c) {
 entry:
   br i1 %c, label %join, label %arm
 arm:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   br label %join
 join:
   ret void
@@ -183,7 +185,7 @@ arm.a:
 arm.b:
   br label %arm
 arm:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   br label %join
 join:
   ret void
@@ -194,10 +196,10 @@ entry:
 pick:
   br i1 %c, label %a, label %b
 a:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   ret void
 b:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   ret void
 out:
   ret void
@@ -211,11 +213,20 @@ arm:
 join:
   ret void
 }
+define void @declared_cold_only(i1 %c) {
+entry:
+  br i1 %c, label %arm, label %join
+arm:
+  call void @js_object_get_field_slow()
+  br label %join
+join:
+  ret void
+}
 define void @weighted_already(i1 %c) {
 entry:
   br i1 %c, label %arm, label %join, !prof !0
 arm:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   br label %join
 join:
   ret void
@@ -224,7 +235,7 @@ define void @invoked(i1 %c) personality ptr @personality {
 entry:
   br i1 %c, label %arm, label %join
 arm:
-  invoke void @slow() to label %join unwind label %pad
+  invoke void @js_gc_loop_safepoint() to label %join unwind label %pad
 join:
   ret void
 pad:
@@ -289,11 +300,11 @@ pad:
         assert_eq!(branches, 5, "{ir}");
         let diamond = body(&ir, "diamond");
         assert!(
-            site_attrs(&ir, "call void @slow()").contains("cold"),
+            site_attrs(&ir, "call void @js_gc_loop_safepoint()").contains("cold"),
             "{ir}"
         );
         assert!(
-            site_attrs(&ir, "invoke void @slow()").contains("cold"),
+            site_attrs(&ir, "invoke void @js_gc_loop_safepoint()").contains("cold"),
             "{ir}"
         );
         assert_eq!(
@@ -340,6 +351,13 @@ pad:
         let plain = body(&ir, "not_cold");
         assert!(!plain.contains("!prof"), "{ir}");
         assert_eq!(site_attrs(&ir, "call void @plain()"), "", "{ir}");
+        // `cold` on a declaration alone does not make a helper a cold arm.
+        assert!(!body(&ir, "declared_cold_only").contains("!prof"), "{ir}");
+        assert_eq!(
+            site_attrs(&ir, "call void @js_object_get_field_slow()"),
+            "",
+            "{ir}"
+        );
         assert_eq!(site_attrs(&ir, "call void %f()"), "", "{ir}");
         assert_eq!(
             weights(&ir, body(&ir, "weighted_already"), "br i1 %c"),
@@ -349,12 +367,12 @@ pad:
     }
 
     const GC_IR: &str = r#"
-declare void @slow() cold
+declare void @js_gc_loop_safepoint() cold
 define ptr addrspace(1) @rooted(ptr addrspace(1) %p, i1 %c) gc "statepoint-example" {
 entry:
   br i1 %c, label %arm, label %join
 arm:
-  call void @slow()
+  call void @js_gc_loop_safepoint()
   br label %join
 join:
   ret ptr addrspace(1) %p
