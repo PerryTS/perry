@@ -1308,6 +1308,12 @@ pub struct Model {
     /// (`Gen::json_value`) returns a plain Array of Numbers, a wrong claim the witness must
     /// catch at a lazy JSON array header.
     pub arr_lazy_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrfront`): `shift` keeps
+    /// the receiver's length interval, so an Array whose first slot was
+    /// removed (its elements no longer start at the front of its
+    /// allocation) keeps its floor, a wrong claim the element tier's
+    /// front-offset witness must catch.
+    pub arr_front_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -1639,9 +1645,11 @@ pub struct Model {
     pub bound_synth: crate::pts::FxHashSet<CallId>,
     /// (bound value, `new`) → its merged call.
     pub bound_merged: FxHashMap<(u32, bool), CallId>,
-    /// (receiver, member) → the one call a builtin method makes of that
-    /// member of the receiver (`collections::recv_call`).
-    pub recv_calls: FxHashMap<(Tok, Atom), CallId>,
+    /// (receiver, member, getter) → the one call a builtin method makes of
+    /// that member of the receiver (`collections::recv_call`), or, with
+    /// `true`, the one run of the member's declared getter on the receiver
+    /// that every load of the key reads (`collections::getter_call`).
+    pub recv_calls: FxHashMap<(Tok, Atom, bool), CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,

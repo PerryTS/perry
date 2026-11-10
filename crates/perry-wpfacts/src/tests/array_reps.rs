@@ -395,3 +395,98 @@ fn a_packet_birth_names_a_plain_array() {
         packet.births
     );
 }
+
+/// PR-C2: the key interval of the read whose object starts at `at`
+/// (`ModuleBindings::element_keys`; SWC offsets are 1-based).
+fn key_at(src: &str, at: &str, cfg: FactsConfig) -> Option<(i64, i64)> {
+    let offset = src.find(at).expect("read in source") as u32 + 1;
+    let pf = facts_with(src, cfg);
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    mb.element_keys
+        .iter()
+        .find(|(o, _)| *o == offset)
+        .map(|(_, k)| *k)
+}
+
+const TABLE: &str =
+    "const K = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];\n";
+
+#[test]
+fn an_element_read_exports_its_key_interval() {
+    // A masked key is an integer in the mask's interval.
+    let src = format!(
+        "{TABLE}export function f(i: number): number {{ return K[i & 7] ?? 0; }}\n\
+         console.log(f(3) + f(12));"
+    );
+    assert_eq!(
+        key_at(&src, "K[i & 7]", FactsConfig::default()),
+        Some((0, 7))
+    );
+    // A key that may be a fraction is no integer interval.
+    let src = format!(
+        "{TABLE}export function f(i: number): number {{ return K[i / 2] ?? 0; }}\n\
+         console.log(f(3));"
+    );
+    assert_eq!(key_at(&src, "K[i / 2]", FactsConfig::default()), None);
+    // A string key is no Number.
+    let src = format!(
+        "{TABLE}export function f(k: string): unknown {{ return (K as any)[k]; }}\n\
+         console.log(f(\"length\"));"
+    );
+    assert_eq!(key_at(&src, "(K as any)[k]", FactsConfig::default()), None);
+}
+
+#[test]
+fn a_key_interval_is_the_hull_over_every_caller() {
+    // The parameter joins both callers' arguments, and may be negative.
+    let src = format!(
+        "{TABLE}function at(i: number): number {{ return K[i] ?? 0; }}\n\
+         console.log(at(2) + at(-1) + at(19));"
+    );
+    assert_eq!(key_at(&src, "K[i]", FactsConfig::default()), Some((-1, 19)));
+}
+
+#[test]
+fn the_switch_off_exports_no_key_interval() {
+    let src = format!(
+        "{TABLE}export function f(i: number): number {{ return K[i & 7] ?? 0; }}\n\
+         console.log(f(3));"
+    );
+    let off = FactsConfig {
+        no_array_reps: true,
+        ..Default::default()
+    };
+    assert_eq!(key_at(&src, "K[i & 7]", off), None);
+}
+
+#[test]
+fn a_shift_takes_the_floor_away_unless_sabotaged() {
+    // `shift` moves the front of the storage: the length is no longer
+    // defined, so the rep keeps no floor (the tier then addresses the slot
+    // through the header). The negative control `arrfront` keeps it.
+    let src = format!("{TABLE}K.shift();{READ}");
+    let a = arr(&src, "K");
+    assert_eq!((a.floor, a.dense, a.fixed), (0, false, false));
+    let sabotaged = FactsConfig {
+        sabotage: Some("arrfront".into()),
+        ..Default::default()
+    };
+    match rep_with(&src, "K", sabotaged) {
+        Rep::Arr(a) => assert_eq!((a.floor, a.fixed), (20, true)),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_redefined_or_deleted_element_gives_no_array_rep() {
+    // The tier reads the slot itself: an element descriptor or a deleted
+    // element must leave no `Arr` (a hard marker, `arr_rep`).
+    for stmt in [
+        "Object.defineProperty(K, 0, { get() { return 7; } });",
+        "delete (K as any)[1];",
+        "Object.freeze(K);",
+    ] {
+        let src = format!("{TABLE}{stmt}{READ}");
+        assert_eq!(rep(&src, "K"), Rep::Boxed, "{stmt}");
+    }
+}
