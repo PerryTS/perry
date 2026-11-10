@@ -35,6 +35,7 @@ mod bound_class;
 mod bound_in_summary;
 mod box_chain;
 pub(crate) mod box_computed_read;
+mod described_holder_computed_read;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
 mod builtin_members;

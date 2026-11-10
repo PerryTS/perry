@@ -678,7 +678,7 @@ impl Model {
             // An ordinary object a builtin made finds `Object.prototype`'s
             // members in `tok_load`; a prototype the program gave it
             // (`Object.setPrototypeOf`) is on its chain: its values.
-            if crate::builtins::ordinary_box(self, t) {
+            if crate::builtins::ordinary_box(self, t) || crate::builtins::array_chain(self, t) {
                 let cv = self.cv_of(t, key, false);
                 self.edge(cv, dst);
             }

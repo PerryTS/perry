@@ -1384,28 +1384,82 @@ fn is_site_builtin(m: &Model, t: Tok) -> bool {
         if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
 }
 
-/// `dst` ⊇ what a key that may name any member reads on family `fam`'s
-/// intrinsic chain: its `constructor`, its own prototype's members (opaque
-/// builtin functions, data kinds), `Object.prototype`'s methods
+/// Is `t` an array: an array literal or result (`TmplKind::Arr`), or an
+/// array a builtin makes (`members::box_chain` Array: `Object.keys`, the
+/// `arraybox` results)? Its chain is `%Array.prototype%` ->
+/// `%Object.prototype%`, or a prototype the program gave it
+/// (`Model::load_from` reads that one on the chain).
+pub(crate) fn array_chain(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if match &m.tmpls[tm as usize].kind {
+            TmplKind::Arr { .. } => true,
+            TmplKind::BObj { what, .. } => members::bobj_family(what) == Family::Box
+                && members::box_chain(what) == members::BoxChain::Array,
+            _ => false,
+        })
+}
+
+/// `dst` ⊇ what computed key `key` reads on family `fam`'s intrinsic chain
+/// (of a value of kind `what`): the member under every name of the chain
+/// the key may spell, as its named read finds it (`loads::family_member`:
+/// the exact natives, `constructor`, data kinds), the methods of
+/// `Object.prototype` the family does not shadow
 /// (`BuiltinNs::ObjectProtoMethod`), and what a store into ⊤ wrote. Not
 /// `__proto__`: the prototype would be `ObjectProto`, which stands for
-/// every builtin prototype, as a value (an open gap, as before). Where the
-/// chain of `of` is final under any key (`locked_chain_read` of
-/// `STAR_KEY`, DEC 250), only `constructor`, which the lock exempts, may
-/// have been written there.
-fn family_any(m: &mut Model, of: Tok, fam: Family, dst: NodeId) {
-    family_ctor(m, fam, dst);
-    let (fns, prims) = members::any_member(fam);
-    if fns {
-        let bf = builtin_fn(m, "computed key on a described chain");
-        m.add_tok(dst, bf);
+/// every builtin prototype, as a value (an open gap, as before). Where
+/// the chain of `of` (a primitive's: `None`) is final under any key
+/// (`locked_chain_read` of `STAR_KEY`, DEC 250), only `constructor`, which
+/// the lock exempts, may have been written there. A family with no member
+/// table (Box, Wrapper, Opaque) reads an undescribed builtin function.
+pub(super) fn family_any(
+    m: &mut Model,
+    of: Option<Tok>,
+    fam: Family,
+    what: Option<&'static str>,
+    key: Key,
+    dst: NodeId,
+) {
+    match members::chain_names(fam) {
+        Some(names) => {
+            let mut object_method = false;
+            for name in names {
+                if name == "__proto__" || !m.key_may_name_str(key, name) {
+                    continue;
+                }
+                if members::own(fam, name).is_none()
+                    && matches!(members::member(Family::Object, name), Some(Mem::Fn))
+                {
+                    object_method = true;
+                    continue;
+                }
+                let a = m.atom(name);
+                loads::family_member(m, fam, what, a, dst);
+            }
+            if object_method {
+                let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+                m.add_tok(dst, f);
+            }
+        }
+        None => {
+            family_ctor(m, fam, dst);
+            let bf = builtin_fn(m, "computed key on a described chain");
+            m.add_tok(dst, bf);
+            m.add_prim(dst, prim::ALL);
+            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+            m.add_tok(dst, f);
+        }
     }
-    m.add_prim(dst, prims | prim::UNDEF);
-    let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
-    m.add_tok(dst, f);
+    m.add_prim(dst, prim::UNDEF);
     let star = m.atom(crate::STAR_KEY);
-    if !locked_chain_read(m, of, star) {
+    let locked = match of {
+        Some(of) => locked_chain_read(m, of, star),
+        None => members::locked_read(fam, what, crate::STAR_KEY),
+    };
+    if !locked {
         return any_written(m, dst);
+    }
+    if !m.key_may_name_str(key, "constructor") {
+        return;
     }
     let ctor = m.atom("constructor");
     if !intrinsic_miss(m, ctor, NativeMiss::Load(dst)) {
