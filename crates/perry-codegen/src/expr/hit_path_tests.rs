@@ -478,7 +478,11 @@ fn typed_public_entries_guard_inline_and_test_plain_doubles_first() {
         add_entry.contains("9221401712017801215"),
         "tier 1 must be the plain-double compare:\n{add_entry}"
     );
-    assert!(add_entry.contains("_public.int32"), "{add_entry}");
+    assert!(add_entry.contains("_public.nan"), "{add_entry}");
+    assert!(
+        !add_entry.contains(crate::nanbox::INT32_TAG_I64) && !add_entry.contains("phi double"),
+        "tier 2 admits NaN Numbers and converts nothing:\n{add_entry}"
+    );
     assert_eq!(
         add_entry.matches("add$spec_").count() + add_entry.matches("add$typed_").count(),
         1,

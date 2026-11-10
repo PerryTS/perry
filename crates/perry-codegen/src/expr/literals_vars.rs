@@ -24,6 +24,8 @@ use super::{
     TrustedBoxCapturePtr,
 };
 
+mod facts_const_number;
+
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
 /// retain their existing ABI; trusted inline loads pass the name only on
 /// their cold TDZ arm. Names come from permanent, GC-rooted string globals.
@@ -473,6 +475,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::LocalGet(id) => {
             crate::codegen::arguments::ensure_arguments_object(ctx, *id);
+            if let Some(value) = facts_const_number::read(ctx, *id) {
+                return Ok(value);
+            }
             if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
                 return Ok(value);
             }

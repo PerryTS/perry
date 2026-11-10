@@ -148,6 +148,14 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             }
         }
     }
+    // N6: each module binding the facts give one Number.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (id, value) in &bindings.const_numbers {
+            out.push_str(&format!(
+                "# const_number module={mi} local={id} value={value}\n"
+            ));
+        }
+    }
     out.push_str(&format!(
         "# indexed_metadata_pristine {}\n",
         pf.indexed_metadata_pristine()

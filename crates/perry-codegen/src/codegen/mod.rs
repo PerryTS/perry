@@ -361,8 +361,8 @@ mod typed_abi;
 mod typed_abi_opt_report;
 mod typed_entry;
 pub(crate) use typed_entry::{
-    emit_int32_bits_test, emit_int32_box_test, emit_ordered_number_test,
-    emit_plain_number_bits_test, emit_plain_number_test, typed_entry_arg_guard,
+    emit_ordered_number_test, emit_plain_number_bits_test, emit_plain_number_test,
+    typed_entry_arg_guard,
 };
 #[cfg(test)]
 mod unknown_func_tests;
@@ -386,11 +386,9 @@ pub(crate) use spec_abi::{
     spec_abi_enabled, spec_entry_name, spec_function_name, SpecDispatch, SpecFnPlan,
 };
 pub(crate) use typed_abi::{
-    emit_typed_arg_guard, emit_typed_arg_to_raw, emit_typed_f64_guard,
-    emit_typed_f64_to_raw_guarded, emit_typed_i1_guard, emit_typed_i32_guard_and_raw,
-    emit_typed_i32_plain_guard_and_raw, emit_typed_i32_raw_assuming_guarded,
-    emit_typed_string_guard, generic_closure_body_name, generic_function_body_name,
-    generic_method_body_name, nonnegative_index_fast_array_method_name,
+    emit_typed_arg_guard, emit_typed_arg_to_raw, emit_typed_f64_guard, emit_typed_i1_guard,
+    emit_typed_i32_plain_guard_and_raw, emit_typed_string_guard, generic_closure_body_name,
+    generic_function_body_name, generic_method_body_name, nonnegative_index_fast_array_method_name,
     nonnegative_index_fast_array_params, nonnegative_index_method_name,
     typed_arg_is_guard_candidate, typed_f64_closure_name, typed_f64_function_name,
     typed_f64_method_name, typed_f64_receiver_method_info, typed_f64_receiver_method_name,

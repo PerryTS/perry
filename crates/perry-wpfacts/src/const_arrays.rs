@@ -105,9 +105,15 @@ impl Model {
         }
     }
 
-    /// Plain Array token `t` with a fixed length is never written.
+    /// Plain Array token `t` with a fixed length is never written. One unit
+    /// of a per-unit solve sees the other units' writes only through
+    /// contracts (`Config::unit`): no Array is immutable there, as no
+    /// binding is a constant Number (`const_numbers`).
     pub(crate) fn arr_immutable(&self, t: Tok) -> bool {
-        self.const_arrays && !self.arr_stored.contains(&t) && !self.cell_arrs.contains_key(&t)
+        self.const_arrays
+            && !self.unit_mode
+            && !self.arr_stored.contains(&t)
+            && !self.cell_arrs.contains_key(&t)
     }
 }
 

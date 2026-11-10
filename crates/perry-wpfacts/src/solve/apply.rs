@@ -1471,7 +1471,10 @@ impl Model {
                     if self.range_sabotage && op == RangeOp::Add {
                         l
                     } else {
-                        crate::model::range::eval(op, l, r)
+                        self.const_numbers
+                            .then(|| crate::model::range::eval_exact(op, l, r))
+                            .flatten()
+                            .unwrap_or_else(|| crate::model::range::eval(op, l, r))
                     }
                 };
                 if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
