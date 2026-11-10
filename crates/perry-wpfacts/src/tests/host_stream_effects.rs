@@ -33,7 +33,10 @@ fn controller_site(pf: &ProgramFacts, key: &str) -> bool {
         && s
             .receivers
             .iter()
-            .all(|r| r.contains("ReadableStreamDefaultController.prototype"))
+            .all(|r| {
+                r.contains("ReadableStreamDefaultController.prototype")
+                    || r.contains("ReadableByteStreamController.prototype")
+            })
 }
 
 fn no_unknown_ctor(pf: &ProgramFacts) -> bool {
@@ -49,22 +52,31 @@ const S1: &str = r#"
 "#;
 
 /// S1: the start callback is called with the stream's default controller;
-/// what it enqueues is what the default reader's read() fulfills with.
+/// what it enqueues is what the default reader's read() fulfills with. The
+/// stream may be a byte stream (no value-conditional form), whose queue also
+/// holds the Uint8Array remainders the runtime makes, and getReader() may
+/// be a BYOB reader whose read fulfills with typed arrays: `x` sees C and
+/// typed arrays, nothing else.
 #[test]
-#[ignore = "HELD on rstream-a2: the byte-stream families replace `unknown` in the constructor's controller and getReader's reader unions (PROGRESS-B.md)"]
 fn s1_start_controller_is_declared() {
     let pf = facts(&format!("{S1}\nexport const keep = 1;\n"));
     show(&pf, &["enqueue", "close", "x"], &["C"]);
     assert!(controller_site(&pf, "enqueue") && controller_site(&pf, "close"), "{}", pf.dump_text());
     let x = site(&pf, "x");
-    assert!(!x.top && x.receivers.len() == 1 && x.receivers[0].contains('C'), "{:?}\n{}", x.receivers, pf.dump_text());
+    assert!(
+        !x.top
+            && x.receivers.iter().any(|r| r.contains('C'))
+            && x.receivers.iter().all(|r| r.contains('C') || r.contains("Array.prototype")),
+        "{:?}\n{}",
+        x.receivers,
+        pf.dump_text()
+    );
     assert!(!esc(&pf, "C") && no_unknown_ctor(&pf), "{}", pf.dump_text());
 }
 
 /// S2: three.js FileLoader's stream (three.core.js FileLoader.load), handed
 /// back through a plain function instead of `new Response(..)`.
 #[test]
-#[ignore = "HELD on rstream-a2: the byte-stream families replace `unknown` in the constructor's controller and getReader's reader unions (PROGRESS-B.md)"]
 fn s2_fileloader_shape() {
     let pf = facts(
         r#"
@@ -144,33 +156,43 @@ fn s4_start_thenable() {
     assert!(!esc(&pf, "T") && no_unknown_ctor(&pf), "{}", pf.dump_text());
 }
 
-/// C1 (control): a stream handed to unknown code. Its queue is reachable
-/// (the chunk class escapes), and unknown code may cancel it with any
-/// reason, so the cancel callback's parameter is ⊤. The start callback and
-/// its controller stay the program's. The callee is read off globalThis
-/// first: a call with globalThis as its receiver would let unknown code
-/// write the global constructor (c2).
+const C1: &str = r#"
+    class C { x = 1; }
+    class R { y = 2; }
+    const s = new ReadableStream({
+        start(c: any) { c.enqueue(new C()); c.close(); },
+        cancel(r: any) { console.log(r.y); },
+    });
+    s.cancel(new R());
+"#;
+
+/// C1 (control): a stream handed to unknown code (`new Function`): that code
+/// may read the queue and cancel with any reason, so C escapes and `r.y` is
+/// not proven; the controller the constructor makes stays the program's.
 #[test]
-#[ignore = "HELD: c1, a false proof: unknown code can neither read nor cancel an escaped stream (PROGRESS-B.md); a separate design phase writes the rule"]
 fn c1_stream_given_to_unknown_code() {
-    let pf = facts(
-        r#"
-        class C { x = 1; }
-        class R { y = 2; }
-        const s = new ReadableStream({
-            start(c: any) { c.enqueue(new C()); c.close(); },
-            cancel(r: any) { console.log(r.y); },
-        });
-        s.cancel(new R());
-        const sink = (globalThis as any).sink;
-        sink(s);
-        export const keep = 1;
-    "#,
-    );
+    let pf = facts(&format!("{C1}\nnew Function(\"v\", process.argv[2])(s);\nexport const keep = 1;\n"));
     show(&pf, &["enqueue", "close", "y"], &["C", "R"]);
     assert!(esc(&pf, "C"), "the queue of an escaped stream is reachable\n{}", pf.dump_text());
     assert!(site(&pf, "y").top, "unknown code may cancel with any reason\n{}", pf.dump_text());
     assert!(controller_site(&pf, "enqueue") && controller_site(&pf, "close"), "{}", pf.dump_text());
+}
+
+/// C1 closed: `globalThis.sink` is never written in a closed program, so
+/// `f(s)` has no callee (it throws) and the stream reaches no other code:
+/// the only cancel reason is R.
+#[test]
+fn c1_closed_world_sink() {
+    let pf = facts(&format!("{C1}\nconst f = (globalThis as any).sink;\nf(s);\nexport const keep = 1;\n"));
+    show(&pf, &["y"], &["C", "R"]);
+    let y = site(&pf, "y");
+    assert!(
+        !y.top && !y.receivers.is_empty() && y.receivers.iter().all(|r| r.contains('R')),
+        "{:?}\n{}",
+        y.receivers,
+        pf.dump_text()
+    );
+    assert!(!esc(&pf, "R") && no_unknown_ctor(&pf), "{}", pf.dump_text());
 }
 
 /// C2 (control): a written global constructor is not the realm's.
@@ -187,9 +209,60 @@ fn c2_written_global() {
     assert!(pf.dump_text().contains("argument of written constructor"), "{}", pf.dump_text());
 }
 
-/// C3 (control): `type: "bytes"` makes a ReadableByteStreamController, so
-/// the start callback's controller is never claimed to be only the
-/// default controller.
+const S5: &str = r#"
+    const s = new ReadableStream({
+        type: "bytes",
+        start(c: any) { c.enqueue(new Uint8Array(4)); },
+        pull(c: any) {
+            const q = c.byobRequest;
+            if (q) { console.log(q.view.byteLength); q.respond(0); }
+        },
+    });
+    const r = s.getReader({ mode: "byob" });
+"#;
+const S5_READ: &str = "r.read(new Uint16Array(2)).then((res: any) => { if (!res.done) console.log(res.value.length); });\nexport const keep = 1;\n";
+
+/// S3b (bytes): a byte stream's controller, BYOB request and BYOB reader run
+/// their declarations: byobRequest.view is the pending read's view, and
+/// read(view) fulfills with a typed array (or undefined).
+#[test]
+fn s3b_bytes() {
+    let pf = facts(&format!("{S5}\n{S5_READ}"));
+    show(&pf, &["enqueue", "respond", "byteLength", "length"], &[]);
+    assert!(controller_site(&pf, "enqueue"), "{}", pf.dump_text());
+    let q = site(&pf, "respond");
+    assert!(
+        !q.top && q.receivers.iter().any(|r| r.contains("ReadableStreamBYOBRequest.prototype")),
+        "{:?}\n{}",
+        q.receivers,
+        pf.dump_text()
+    );
+    for k in ["byteLength", "length"] {
+        let v = site(&pf, k);
+        assert!(
+            !v.top && !v.receivers.is_empty(),
+            "{k} {:?}\n{}",
+            v.receivers,
+            pf.dump_text()
+        );
+    }
+    assert!(no_unknown_ctor(&pf), "{}", pf.dump_text());
+}
+
+/// C3b (control): a view unknown code made, given to respondWithNewView, is
+/// what the pending BYOB read fulfills with, so `res.value.length` is not
+/// proven.
+#[test]
+fn c3b_bytes_unknown_view() {
+    let src = S5.replace("q.respond(0);", "q.respondWithNewView(new Function(process.argv[2])());");
+    assert_ne!(src, S5);
+    let pf = facts(&format!("{src}\n{S5_READ}"));
+    show(&pf, &["length"], &[]);
+    assert!(site(&pf, "length").top, "{}", pf.dump_text());
+}
+
+/// C3 (control): `type: "bytes"` makes a ReadableByteStreamController: the
+/// start callback's controller is never claimed to be only the default one.
 #[test]
 fn c3_bytes() {
     let pf = facts(
@@ -203,5 +276,13 @@ fn c3_bytes() {
     "#,
     );
     show(&pf, &["enqueue"], &["C"]);
-    assert!(!controller_site(&pf, "enqueue"), "{}", pf.dump_text());
+    let e = site(&pf, "enqueue");
+    assert!(controller_site(&pf, "enqueue"), "{}", pf.dump_text());
+    assert!(
+        e.receivers.iter().any(|r| r.contains("ReadableByteStreamController.prototype")),
+        "{:?}
+{}",
+        e.receivers,
+        pf.dump_text()
+    );
 }

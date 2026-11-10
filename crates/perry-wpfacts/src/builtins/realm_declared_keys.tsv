@@ -79,7 +79,12 @@ global	%Global%	PerformanceResourceTiming
 global	%Global%	Promise
 global	%Global%	Proxy
 global	%Global%	RangeError
+global	%Global%	ReadableByteStreamController
 global	%Global%	ReadableStream
+global	%Global%	ReadableStreamBYOBReader
+global	%Global%	ReadableStreamBYOBRequest
+global	%Global%	ReadableStreamDefaultController
+global	%Global%	ReadableStreamDefaultReader
 global	%Global%	ReferenceError
 global	%Global%	Reflect
 global	%Global%	RegExp
@@ -227,7 +232,12 @@ native	%Global%	PerformanceResourceTiming	PerformanceResourceTiming
 native	%Global%	Promise	Promise
 native	%Global%	Proxy	Proxy
 native	%Global%	RangeError	RangeError
+native	%Global%	ReadableByteStreamController	ReadableByteStreamController
 native	%Global%	ReadableStream	ReadableStream
+native	%Global%	ReadableStreamBYOBReader	ReadableStreamBYOBReader
+native	%Global%	ReadableStreamBYOBRequest	ReadableStreamBYOBRequest
+native	%Global%	ReadableStreamDefaultController	ReadableStreamDefaultController
+native	%Global%	ReadableStreamDefaultReader	ReadableStreamDefaultReader
 native	%Global%	ReferenceError	ReferenceError
 native	%Global%	RegExp	RegExp
 native	%Global%	Request	Request
@@ -1796,6 +1806,25 @@ native	RangeError	toLocaleString	Object.prototype.toLocaleString
 native	RangeError	toString	Function.prototype.toString
 native	RangeError	valueOf	Object.prototype.valueOf
 native	RangeError.prototype	constructor	RangeError
+native	ReadableByteStreamController	@@hasInstance	Function.prototype["@@hasInstance"]
+native	ReadableByteStreamController	__defineGetter__	Object.prototype.__defineGetter__
+native	ReadableByteStreamController	__defineSetter__	Object.prototype.__defineSetter__
+native	ReadableByteStreamController	__lookupGetter__	Object.prototype.__lookupGetter__
+native	ReadableByteStreamController	__lookupSetter__	Object.prototype.__lookupSetter__
+native	ReadableByteStreamController	apply	Function.prototype.apply
+native	ReadableByteStreamController	bind	Function.prototype.bind
+native	ReadableByteStreamController	call	Function.prototype.call
+native	ReadableByteStreamController	constructor	Function
+native	ReadableByteStreamController	hasOwnProperty	Object.prototype.hasOwnProperty
+native	ReadableByteStreamController	isPrototypeOf	Object.prototype.isPrototypeOf
+native	ReadableByteStreamController	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	ReadableByteStreamController	toLocaleString	Object.prototype.toLocaleString
+native	ReadableByteStreamController	toString	Function.prototype.toString
+native	ReadableByteStreamController	valueOf	Object.prototype.valueOf
+native	ReadableByteStreamController.prototype	close	ReadableByteStreamController.prototype.close
+native	ReadableByteStreamController.prototype	constructor	ReadableByteStreamController
+native	ReadableByteStreamController.prototype	enqueue	ReadableByteStreamController.prototype.enqueue
+native	ReadableByteStreamController.prototype	error	ReadableByteStreamController.prototype.error
 native	ReadableStream	@@hasInstance	Function.prototype["@@hasInstance"]
 native	ReadableStream	__defineGetter__	Object.prototype.__defineGetter__
 native	ReadableStream	__defineSetter__	Object.prototype.__defineSetter__
@@ -1812,7 +1841,89 @@ native	ReadableStream	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	ReadableStream	toLocaleString	Object.prototype.toLocaleString
 native	ReadableStream	toString	Function.prototype.toString
 native	ReadableStream	valueOf	Object.prototype.valueOf
+native	ReadableStream.prototype	@@asyncIterator	ReadableStream.prototype.values
+native	ReadableStream.prototype	cancel	ReadableStream.prototype.cancel
 native	ReadableStream.prototype	constructor	ReadableStream
+native	ReadableStream.prototype	getReader	ReadableStream.prototype.getReader
+native	ReadableStream.prototype	pipeThrough	ReadableStream.prototype.pipeThrough
+native	ReadableStream.prototype	pipeTo	ReadableStream.prototype.pipeTo
+native	ReadableStream.prototype	tee	ReadableStream.prototype.tee
+native	ReadableStream.prototype	values	ReadableStream.prototype.values
+native	ReadableStreamBYOBReader	@@hasInstance	Function.prototype["@@hasInstance"]
+native	ReadableStreamBYOBReader	__defineGetter__	Object.prototype.__defineGetter__
+native	ReadableStreamBYOBReader	__defineSetter__	Object.prototype.__defineSetter__
+native	ReadableStreamBYOBReader	__lookupGetter__	Object.prototype.__lookupGetter__
+native	ReadableStreamBYOBReader	__lookupSetter__	Object.prototype.__lookupSetter__
+native	ReadableStreamBYOBReader	apply	Function.prototype.apply
+native	ReadableStreamBYOBReader	bind	Function.prototype.bind
+native	ReadableStreamBYOBReader	call	Function.prototype.call
+native	ReadableStreamBYOBReader	constructor	Function
+native	ReadableStreamBYOBReader	hasOwnProperty	Object.prototype.hasOwnProperty
+native	ReadableStreamBYOBReader	isPrototypeOf	Object.prototype.isPrototypeOf
+native	ReadableStreamBYOBReader	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	ReadableStreamBYOBReader	toLocaleString	Object.prototype.toLocaleString
+native	ReadableStreamBYOBReader	toString	Function.prototype.toString
+native	ReadableStreamBYOBReader	valueOf	Object.prototype.valueOf
+native	ReadableStreamBYOBReader.prototype	cancel	ReadableStreamBYOBReader.prototype.cancel
+native	ReadableStreamBYOBReader.prototype	constructor	ReadableStreamBYOBReader
+native	ReadableStreamBYOBReader.prototype	read	ReadableStreamBYOBReader.prototype.read
+native	ReadableStreamBYOBReader.prototype	releaseLock	ReadableStreamBYOBReader.prototype.releaseLock
+native	ReadableStreamBYOBRequest	@@hasInstance	Function.prototype["@@hasInstance"]
+native	ReadableStreamBYOBRequest	__defineGetter__	Object.prototype.__defineGetter__
+native	ReadableStreamBYOBRequest	__defineSetter__	Object.prototype.__defineSetter__
+native	ReadableStreamBYOBRequest	__lookupGetter__	Object.prototype.__lookupGetter__
+native	ReadableStreamBYOBRequest	__lookupSetter__	Object.prototype.__lookupSetter__
+native	ReadableStreamBYOBRequest	apply	Function.prototype.apply
+native	ReadableStreamBYOBRequest	bind	Function.prototype.bind
+native	ReadableStreamBYOBRequest	call	Function.prototype.call
+native	ReadableStreamBYOBRequest	constructor	Function
+native	ReadableStreamBYOBRequest	hasOwnProperty	Object.prototype.hasOwnProperty
+native	ReadableStreamBYOBRequest	isPrototypeOf	Object.prototype.isPrototypeOf
+native	ReadableStreamBYOBRequest	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	ReadableStreamBYOBRequest	toLocaleString	Object.prototype.toLocaleString
+native	ReadableStreamBYOBRequest	toString	Function.prototype.toString
+native	ReadableStreamBYOBRequest	valueOf	Object.prototype.valueOf
+native	ReadableStreamBYOBRequest.prototype	constructor	ReadableStreamBYOBRequest
+native	ReadableStreamBYOBRequest.prototype	respond	ReadableStreamBYOBRequest.prototype.respond
+native	ReadableStreamBYOBRequest.prototype	respondWithNewView	ReadableStreamBYOBRequest.prototype.respondWithNewView
+native	ReadableStreamDefaultController	@@hasInstance	Function.prototype["@@hasInstance"]
+native	ReadableStreamDefaultController	__defineGetter__	Object.prototype.__defineGetter__
+native	ReadableStreamDefaultController	__defineSetter__	Object.prototype.__defineSetter__
+native	ReadableStreamDefaultController	__lookupGetter__	Object.prototype.__lookupGetter__
+native	ReadableStreamDefaultController	__lookupSetter__	Object.prototype.__lookupSetter__
+native	ReadableStreamDefaultController	apply	Function.prototype.apply
+native	ReadableStreamDefaultController	bind	Function.prototype.bind
+native	ReadableStreamDefaultController	call	Function.prototype.call
+native	ReadableStreamDefaultController	constructor	Function
+native	ReadableStreamDefaultController	hasOwnProperty	Object.prototype.hasOwnProperty
+native	ReadableStreamDefaultController	isPrototypeOf	Object.prototype.isPrototypeOf
+native	ReadableStreamDefaultController	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	ReadableStreamDefaultController	toLocaleString	Object.prototype.toLocaleString
+native	ReadableStreamDefaultController	toString	Function.prototype.toString
+native	ReadableStreamDefaultController	valueOf	Object.prototype.valueOf
+native	ReadableStreamDefaultController.prototype	close	ReadableStreamDefaultController.prototype.close
+native	ReadableStreamDefaultController.prototype	constructor	ReadableStreamDefaultController
+native	ReadableStreamDefaultController.prototype	enqueue	ReadableStreamDefaultController.prototype.enqueue
+native	ReadableStreamDefaultController.prototype	error	ReadableStreamDefaultController.prototype.error
+native	ReadableStreamDefaultReader	@@hasInstance	Function.prototype["@@hasInstance"]
+native	ReadableStreamDefaultReader	__defineGetter__	Object.prototype.__defineGetter__
+native	ReadableStreamDefaultReader	__defineSetter__	Object.prototype.__defineSetter__
+native	ReadableStreamDefaultReader	__lookupGetter__	Object.prototype.__lookupGetter__
+native	ReadableStreamDefaultReader	__lookupSetter__	Object.prototype.__lookupSetter__
+native	ReadableStreamDefaultReader	apply	Function.prototype.apply
+native	ReadableStreamDefaultReader	bind	Function.prototype.bind
+native	ReadableStreamDefaultReader	call	Function.prototype.call
+native	ReadableStreamDefaultReader	constructor	Function
+native	ReadableStreamDefaultReader	hasOwnProperty	Object.prototype.hasOwnProperty
+native	ReadableStreamDefaultReader	isPrototypeOf	Object.prototype.isPrototypeOf
+native	ReadableStreamDefaultReader	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	ReadableStreamDefaultReader	toLocaleString	Object.prototype.toLocaleString
+native	ReadableStreamDefaultReader	toString	Function.prototype.toString
+native	ReadableStreamDefaultReader	valueOf	Object.prototype.valueOf
+native	ReadableStreamDefaultReader.prototype	cancel	ReadableStreamDefaultReader.prototype.cancel
+native	ReadableStreamDefaultReader.prototype	constructor	ReadableStreamDefaultReader
+native	ReadableStreamDefaultReader.prototype	read	ReadableStreamDefaultReader.prototype.read
+native	ReadableStreamDefaultReader.prototype	releaseLock	ReadableStreamDefaultReader.prototype.releaseLock
 native	ReferenceError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	ReferenceError	__defineGetter__	Object.prototype.__defineGetter__
 native	ReferenceError	__defineSetter__	Object.prototype.__defineSetter__
@@ -8914,10 +9025,25 @@ ns	Proxy	revocable
 ns	RangeError	length
 ns	RangeError	name
 ns	RangeError	prototype
+ns	ReadableByteStreamController	length
+ns	ReadableByteStreamController	name
+ns	ReadableByteStreamController	prototype
 ns	ReadableStream	from
 ns	ReadableStream	length
 ns	ReadableStream	name
 ns	ReadableStream	prototype
+ns	ReadableStreamBYOBReader	length
+ns	ReadableStreamBYOBReader	name
+ns	ReadableStreamBYOBReader	prototype
+ns	ReadableStreamBYOBRequest	length
+ns	ReadableStreamBYOBRequest	name
+ns	ReadableStreamBYOBRequest	prototype
+ns	ReadableStreamDefaultController	length
+ns	ReadableStreamDefaultController	name
+ns	ReadableStreamDefaultController	prototype
+ns	ReadableStreamDefaultReader	length
+ns	ReadableStreamDefaultReader	name
+ns	ReadableStreamDefaultReader	prototype
 ns	ReferenceError	length
 ns	ReferenceError	name
 ns	ReferenceError	prototype

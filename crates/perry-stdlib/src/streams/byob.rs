@@ -232,15 +232,17 @@ pub unsafe extern "C" fn js_readable_stream_get_byob_reader(stream_handle: f64) 
         match g.get(&id) {
             Some(s) => s.is_byte_stream,
             None => {
-                throw_type_error(
-                    "ReadableStreamBYOBReader constructor requires a ReadableStream argument",
+                throw_type_error_with_code(
+                    "The \"stream\" argument must be an instance of ReadableStream.",
+                    "ERR_INVALID_ARG_TYPE",
                 );
             }
         }
     };
     if !is_byte_stream {
-        throw_type_error(
-            "Cannot construct a ReadableStreamBYOBReader for a stream not constructed with a byte source",
+        throw_type_error_with_code(
+            "The argument 'stream' must be a byte stream.",
+            "ERR_INVALID_ARG_VALUE",
         );
     }
     // Reuse the lock/closed-promise bookkeeping in the shared path; the
@@ -260,7 +262,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
     };
     if s.reader_handle.is_some() {
         drop(g);
-        throw_type_error("ReadableStream is locked");
+        throw_type_error_with_code("Invalid state: ReadableStream is locked", "ERR_INVALID_STATE");
     }
     let reader_id = next_stream_id();
     let closed_p = internal_promise();
@@ -402,49 +404,31 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handle: f64) -> f64 {
     let id = controller_stream_id(stream_handle);
-    let view_bits = {
-        let g = BYOB_PENDING.lock().unwrap();
-        match g.get(&id).and_then(|q| q.front()) {
-            Some(p) => p.view_bits,
-            None => return f64::from_bits(TAG_NULL),
-        }
-    };
-
-    let obj = js_object_alloc(0, 3);
-    let keys = js_array_alloc(3);
-    let k_view = js_string_from_bytes(b"view".as_ptr(), 4);
-    let k_respond = js_string_from_bytes(b"respond".as_ptr(), 7);
-    let k_rwnv = js_string_from_bytes(b"respondWithNewView".as_ptr(), 18);
-    js_array_push(keys, JSValue::string_ptr(k_view));
-    js_array_push(keys, JSValue::string_ptr(k_respond));
-    js_array_push(keys, JSValue::string_ptr(k_rwnv));
-    js_object_set_field(obj, 0, JSValue::from_bits(view_bits));
-
-    let respond = perry_runtime::closure::js_closure_alloc(
-        perry_runtime::fn_info!(byob_request_respond, 1; with_declared(1)),
-        1,
-    );
-    perry_runtime::closure::js_closure_set_capture_f64(respond, 0, id as f64);
-    js_object_set_field(obj, 1, JSValue::pointer(respond as *const u8));
-
-    let rwnv = perry_runtime::closure::js_closure_alloc(
-        perry_runtime::fn_info!(byob_request_respond_with_new_view, 1; with_declared(1)),
-        1,
-    );
-    perry_runtime::closure::js_closure_set_capture_f64(rwnv, 0, id as f64);
-    js_object_set_field(obj, 2, JSValue::pointer(rwnv as *const u8));
-
-    js_object_set_keys(obj, keys);
-    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+    if parked_view(id).is_none() {
+        return f64::from_bits(TAG_NULL);
+    }
+    byob_request_value(id)
 }
 
-extern "C" fn byob_request_respond(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    bytes_written: f64,
-) -> f64 {
+/// The view of the read parked on byte stream `stream_id`, if any.
+fn parked_view(stream_id: usize) -> Option<u64> {
+    BYOB_PENDING
+        .lock()
+        .unwrap()
+        .get(&stream_id)
+        .and_then(|q| q.front())
+        .map(|p| p.view_bits)
+}
+
+/// `ReadableStreamBYOBRequest.prototype.view`: the parked read's view, else null.
+pub(super) fn byob_request_view(request: f64) -> f64 {
+    let id = byob_request_id_stream(stream_id(request));
+    parked_view(id).map_or(f64::from_bits(TAG_NULL), f64::from_bits)
+}
+
+/// `ReadableStreamBYOBRequest.prototype.respond` on byte stream `stream_id`'s request.
+pub(super) fn byob_request_respond(stream_id: usize, bytes_written: f64) -> f64 {
     unsafe {
-        let stream_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as usize;
         let n = JSValue::from_bits(bytes_written.to_bits()).to_number();
         if n.is_nan() || n < 0.0 || n.fract() != 0.0 {
             throw_range_error_with_code(
@@ -513,13 +497,9 @@ extern "C" fn byob_request_respond(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn byob_request_respond_with_new_view(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    view: f64,
-) -> f64 {
+/// `ReadableStreamBYOBRequest.prototype.respondWithNewView` on byte stream `stream_id`'s request.
+pub(super) fn byob_request_respond_with_new_view(stream_id: usize, view: f64) -> f64 {
     unsafe {
-        let stream_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as usize;
         let view_bits = view.to_bits();
         let info = match view_info(view_bits) {
             Some(info) => info,

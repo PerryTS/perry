@@ -51,12 +51,12 @@ pub(super) unsafe fn construct(
         // WHATWG: the `AbortSignal` constructor throws; signals come from an
         // `AbortController` or the static factories. A direct `new`, a value
         // `new` and a live `super()` of a subclass all reach this switch.
-        BuiltinConstructorIdentity::ReadableStreamDefaultReader => {
+        // The two constructible reader families: the provider (the stdlib's
+        // streams install) checks the stream argument.
+        BuiltinConstructorIdentity::ReadableStreamDefaultReader
+        | BuiltinConstructorIdentity::ReadableStreamBYOBReader => {
             return Some(
-                crate::external_family::construct(
-                    BuiltinConstructorIdentity::ReadableStreamDefaultReader,
-                    args,
-                )
+                crate::external_family::construct(name, args)
                 .unwrap_or_else(|| {
                     // No provider linked: nothing can be a ReadableStream.
                     crate::fs::validate::throw_type_error_with_code(
@@ -68,7 +68,9 @@ pub(super) unsafe fn construct(
         }
         BuiltinConstructorIdentity::Navigator
         | BuiltinConstructorIdentity::AbortSignal
-        | BuiltinConstructorIdentity::ReadableStreamDefaultController => {
+        | BuiltinConstructorIdentity::ReadableStreamDefaultController
+        | BuiltinConstructorIdentity::ReadableByteStreamController
+        | BuiltinConstructorIdentity::ReadableStreamBYOBRequest => {
             return Some(crate::error::js_throw_illegal_constructor_type_error());
         }
         BuiltinConstructorIdentity::Iterator => {

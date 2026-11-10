@@ -1,6 +1,8 @@
 //! RSTREAM R5: the members of `ReadableStream.prototype`,
 //! `ReadableStreamDefaultController.prototype` and
-//! `ReadableStreamDefaultReader.prototype` are real functions. Each probes
+//! `ReadableStreamDefaultReader.prototype` and the byte-stream families
+//! (`ReadableByteStreamController`, `ReadableStreamBYOBReader`,
+//! `ReadableStreamBYOBRequest`) are real functions. Each probes
 //! `this` through the stream registry: the right kind runs the stream
 //! operation, any other receiver gets Node's error (operations that return a
 //! promise reject, the rest throw). The three families are the runtime's
@@ -13,6 +15,9 @@ use perry_runtime::object::BuiltinConstructorIdentity as Family;
 const READABLE_STREAM: u8 = Family::ReadableStream as u8;
 const DEFAULT_CONTROLLER: u8 = Family::ReadableStreamDefaultController as u8;
 const DEFAULT_READER: u8 = Family::ReadableStreamDefaultReader as u8;
+const BYTE_CONTROLLER: u8 = Family::ReadableByteStreamController as u8;
+const BYOB_READER: u8 = Family::ReadableStreamBYOBReader as u8;
+const BYOB_REQUEST: u8 = Family::ReadableStreamBYOBRequest as u8;
 
 // The runtime's generic define primitives, through the stable C ABI: this
 // archive carries its own copy of the runtime's Rust items, so a direct call
@@ -90,6 +95,9 @@ mod protos {
             READABLE_STREAM => "ReadableStream",
             DEFAULT_CONTROLLER => "ReadableStreamDefaultController",
             DEFAULT_READER => "ReadableStreamDefaultReader",
+            BYTE_CONTROLLER => "ReadableByteStreamController",
+            BYOB_READER => "ReadableStreamBYOBReader",
+            BYOB_REQUEST => "ReadableStreamBYOBRequest",
             _ => return None,
         };
         let value = unsafe {
@@ -107,6 +115,9 @@ mod protos {
 const KIND_READABLE: u8 = 1;
 const KIND_READER: u8 = 3;
 const KIND_DEFAULT_CONTROLLER: u8 = 6;
+const KIND_BYTE_CONTROLLER: u8 = 8;
+const KIND_BYOB_READER: u8 = 9;
+const KIND_BYOB_REQUEST: u8 = 10;
 
 fn kind_of(this: f64) -> u8 {
     js_stream_handle_kind(stream_id(this))
@@ -222,13 +233,70 @@ extern "C" fn reader_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 
     unsafe { call(receiver(this, KIND_READER, RSDR), "releaseLock", &[]) }
 }
 
+const RBSC: &str = "ReadableByteStreamController";
+const RSBYOBR: &str = "ReadableStreamBYOBReader";
+const RSBYOBREQ: &str = "ReadableStreamBYOBRequest";
+
+extern "C" fn bctl_byob_request(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe {
+        super::byob::js_readable_stream_controller_byob_request(receiver(
+            this,
+            KIND_BYTE_CONTROLLER,
+            RBSC,
+        ))
+    }
+}
+extern "C" fn bctl_desired_size(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { js_readable_stream_controller_desired_size(receiver(this, KIND_BYTE_CONTROLLER, RBSC)) }
+}
+extern "C" fn bctl_close(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "close", &[]) }
+}
+extern "C" fn bctl_enqueue(_: *const ClosureHeader, this: JsThis, chunk: f64) -> f64 {
+    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "enqueue", &[chunk]) }
+}
+extern "C" fn bctl_error(_: *const ClosureHeader, this: JsThis, reason: f64) -> f64 {
+    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "error", &[reason]) }
+}
+
+extern "C" fn byob_closed(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe {
+        promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| {
+            box_promise(js_reader_closed(r))
+        })
+    }
+}
+extern "C" fn byob_cancel(_: *const ClosureHeader, this: JsThis, reason: f64) -> f64 {
+    unsafe { promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| call(r, "cancel", &[reason])) }
+}
+extern "C" fn byob_read(_: *const ClosureHeader, this: JsThis, view: f64) -> f64 {
+    unsafe { promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| call(r, "read", &[view])) }
+}
+extern "C" fn byob_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { call(receiver(this, KIND_BYOB_READER, RSBYOBR), "releaseLock", &[]) }
+}
+
+/// The byte stream a BYOB request receiver belongs to.
+unsafe fn request_stream(this: JsThis) -> usize {
+    byob_request_id_stream(stream_id(receiver(this, KIND_BYOB_REQUEST, RSBYOBREQ)))
+}
+extern "C" fn req_view(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { super::byob::byob_request_view(receiver(this, KIND_BYOB_REQUEST, RSBYOBREQ)) }
+}
+extern "C" fn req_respond(_: *const ClosureHeader, this: JsThis, bytes_written: f64) -> f64 {
+    unsafe { super::byob::byob_request_respond(request_stream(this), bytes_written) }
+}
+extern "C" fn req_respond_with_new_view(_: *const ClosureHeader, this: JsThis, view: f64) -> f64 {
+    unsafe { super::byob::byob_request_respond_with_new_view(request_stream(this), view) }
+}
+
 /// The runtime's lazy birth of one family prototype, in Node's key order.
 extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
     match family {
         READABLE_STREAM => {
             protos::getter(proto, "locked", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.locked.<get>", effects = { returns(prim(bool)) })] export crate::streams::prototypes::rs_locked, 0; with_declared(0)));
             protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.cancel", effects = { stores(arg(0) -> islot(this, cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::rs_cancel, 1; with_declared(1)), 0);
-            protos::method(proto, "getReader", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.getReader", effects = { reads(field(arg(0), mode)); coerce(field(arg(0), mode), ToPrimitive); returns(fresh(ReadableStreamDefaultReader.prototype, slots = {stream: this}) | unknown) })] export crate::streams::prototypes::rs_get_reader, 1; with_declared(1)), 0);
+            protos::method(proto, "getReader", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.getReader", effects = { reads(field(arg(0), mode)); coerce(field(arg(0), mode), ToPrimitive); returns(fresh(ReadableStreamDefaultReader.prototype, slots = {stream: this}) | fresh(ReadableStreamBYOBReader.prototype, slots = {stream: this})) })] export crate::streams::prototypes::rs_get_reader, 1; with_declared(1)), 0);
             protos::method(proto, "pipeThrough", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.pipeThrough")] export crate::streams::prototypes::rs_pipe_through, 2; with_declared(2)), 1);
             protos::method(proto, "pipeTo", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.pipeTo")] export crate::streams::prototypes::rs_pipe_to, 2; with_declared(2)), 1);
             protos::method(proto, "tee", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.tee")] export crate::streams::prototypes::rs_tee, 0; with_declared(0)), 0);
@@ -249,17 +317,46 @@ extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
             protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.closed.<get>", effects = { returns(promise(prim(undefined), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_closed, 0; with_declared(0)));
             protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.cancel", effects = { stores(arg(0) -> islot(islot(this, stream), cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_cancel, 1; with_declared(1)), 0);
         }
+        // Byte-stream internal slots the declarations name (the stream's live in
+        // byob.rs): `queue` also holds the Uint8Array remainders the runtime
+        // makes (fill_view_from_queue, service_pending_with_chunk; the
+        // constructor declares them born with the stream), `pendingView` is the
+        // parked BYOB read's view (BYOB_PENDING, byobRequest.view),
+        // `filledView` the view respondWithNewView fulfills that read with, and
+        // the controller's `byobRequest` is the request object it hands out.
+        BYTE_CONTROLLER => {
+            protos::getter(proto, "byobRequest", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.byobRequest.<get>", effects = { returns(prim(null) | islot(this, byobRequest)) })] export crate::streams::prototypes::bctl_byob_request, 0; with_declared(0)));
+            protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.desiredSize.<get>", effects = { returns(prim(num | null)) })] export crate::streams::prototypes::bctl_desired_size, 0; with_declared(0)));
+            protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.close", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::bctl_close, 0; with_declared(0)), 0);
+            protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.enqueue", effects = { stores(arg(0) -> islot(islot(this, stream), queue)); returns(prim(undefined)) })] export crate::streams::prototypes::bctl_enqueue, 1; with_declared(1)), 1);
+            protos::method(proto, "error", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.error", effects = { stores(arg(0) -> islot(islot(this, stream), storedError)); returns(prim(undefined)) })] export crate::streams::prototypes::bctl_error, 1; with_declared(1)), 0);
+        }
+        BYOB_READER => {
+            protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.read", effects = { stores(arg(0) -> islot(islot(this, stream), pendingView)); returns(promise(fresh(Object.prototype, fields = {value: fresh(Int8Array.prototype) | fresh(Uint8Array.prototype) | fresh(Uint8ClampedArray.prototype) | fresh(Int16Array.prototype) | fresh(Uint16Array.prototype) | fresh(Int32Array.prototype) | fresh(Uint32Array.prototype) | fresh(Float16Array.prototype) | fresh(Float32Array.prototype) | fresh(Float64Array.prototype) | fresh(BigInt64Array.prototype) | fresh(BigUint64Array.prototype) | islot(islot(this, stream), queue) | islot(islot(this, stream), filledView) | prim(undefined), done: prim(bool)}), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_read, 1; with_declared(1)), 1);
+            protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.releaseLock", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::byob_release_lock, 0; with_declared(0)), 0);
+            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.closed.<get>", effects = { returns(promise(prim(undefined), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_closed, 0; with_declared(0)));
+            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.cancel", effects = { stores(arg(0) -> islot(islot(this, stream), cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_cancel, 1; with_declared(1)), 0);
+        }
+        BYOB_REQUEST => {
+            protos::getter(proto, "view", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.view.<get>", effects = { returns(prim(null) | islot(islot(this, stream), pendingView)) })] export crate::streams::prototypes::req_view, 0; with_declared(0)));
+            protos::method(proto, "respond", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.respond", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::req_respond, 1; with_declared(1)), 1);
+            protos::method(proto, "respondWithNewView", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.respondWithNewView", effects = { stores(arg(0) -> islot(islot(this, stream), filledView)); returns(prim(undefined)) })] export crate::streams::prototypes::req_respond_with_new_view, 1; with_declared(1)), 1);
+        }
         _ => {}
     }
 }
 
-/// `new ReadableStreamDefaultReader(stream)` (the one constructible family).
-extern "C" fn construct_reader(_family: u8, stream: f64) -> f64 {
+/// `new ReadableStreamDefaultReader(stream)` and
+/// `new ReadableStreamBYOBReader(stream)` (the constructible families).
+extern "C" fn construct_reader(family: u8, stream: f64) -> f64 {
     unsafe {
         if kind_of(stream) != KIND_READABLE {
             throw_invalid_arg_type(
                 "The \"stream\" argument must be an instance of ReadableStream.",
             );
+        }
+        if family == BYOB_READER {
+            return super::byob::js_readable_stream_get_byob_reader(stream);
         }
         js_readable_stream_get_reader(stream)
     }
@@ -277,6 +374,9 @@ pub(crate) fn prototype_member(kind: u8, name: &str) -> Option<f64> {
         KIND_READABLE => READABLE_STREAM,
         KIND_READER => DEFAULT_READER,
         KIND_DEFAULT_CONTROLLER => DEFAULT_CONTROLLER,
+        KIND_BYTE_CONTROLLER => BYTE_CONTROLLER,
+        KIND_BYOB_READER => BYOB_READER,
+        KIND_BYOB_REQUEST => BYOB_REQUEST,
         _ => return None,
     };
     protos::family_member(family, name)
@@ -285,7 +385,10 @@ pub(crate) fn prototype_member(kind: u8, name: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::protos::family_member;
-    use super::{DEFAULT_CONTROLLER, DEFAULT_READER, READABLE_STREAM};
+    use super::{
+        BYOB_READER, BYOB_REQUEST, BYTE_CONTROLLER, DEFAULT_CONTROLLER, DEFAULT_READER,
+        READABLE_STREAM,
+    };
 
     /// After the streams install, each family prototype holds its own
     /// methods (the realm declaration's rows) and nothing of the others.
@@ -307,12 +410,15 @@ mod tests {
             ),
             (DEFAULT_CONTROLLER, &["close", "enqueue", "error"][..]),
             (DEFAULT_READER, &["cancel", "read", "releaseLock"][..]),
+            (BYTE_CONTROLLER, &["close", "enqueue", "error"][..]),
+            (BYOB_READER, &["cancel", "read", "releaseLock"][..]),
+            (BYOB_REQUEST, &["respond", "respondWithNewView"][..]),
         ];
         for (family, keys) in rows {
             for key in keys {
                 assert!(family_member(family, key).is_some(), "{family:?}.{key}");
             }
-            let owns_enqueue = family == DEFAULT_CONTROLLER;
+            let owns_enqueue = family == DEFAULT_CONTROLLER || family == BYTE_CONTROLLER;
             assert_eq!(
                 family_member(family, "enqueue").is_some(),
                 owns_enqueue,

@@ -1248,7 +1248,12 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
         // Node's getters, installed only for a program that reaches navigator.
         "Navigator" => crate::navigator::populate_prototype(proto_obj),
         // External families (members from their provider), then the fixed tag.
-        "ReadableStream" | "ReadableStreamDefaultController" | "ReadableStreamDefaultReader" => {
+        "ReadableStream"
+        | "ReadableStreamDefaultController"
+        | "ReadableStreamDefaultReader"
+        | "ReadableByteStreamController"
+        | "ReadableStreamBYOBReader"
+        | "ReadableStreamBYOBRequest" => {
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"

@@ -1179,9 +1179,12 @@ pub extern "C" fn js_throw_json_constructor_type_error() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_throw_illegal_constructor_type_error() -> f64 {
-    let message = b"Illegal constructor";
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
+    // Node: `TypeError [ERR_ILLEGAL_CONSTRUCTOR]: Illegal constructor`.
+    crate::exception::throw_core(CoreError::with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+        1,
+    ))
 }
 
 fn value_to_lossy_string(value: f64) -> String {

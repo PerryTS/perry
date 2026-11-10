@@ -295,7 +295,30 @@ const B2_LAZY: &[&str] = &[
     "DisposableStack",
     "AsyncDisposableStack",
     "SuppressedError",
+    "ReadableByteStreamController",
+    "ReadableStreamBYOBReader",
+    "ReadableStreamBYOBRequest",
 ];
+
+/// RSTREAM A2: every Web Streams readable family, the byte-stream ones
+/// included, is an external family: its members are the streams provider's,
+/// so no stream code is linked into a program that never reaches one.
+#[test]
+fn readable_stream_families_are_external() {
+    for name in [
+        "ReadableStream",
+        "ReadableStreamDefaultController",
+        "ReadableStreamDefaultReader",
+        "ReadableByteStreamController",
+        "ReadableStreamBYOBReader",
+        "ReadableStreamBYOBRequest",
+    ] {
+        let declaration = crate::object::BuiltinConstructorIdentity::for_name(name)
+            .unwrap_or_else(|| panic!("{name} is not a builtin constructor"))
+            .declaration();
+        assert!(declaration.lazy && declaration.external, "{name}: lazy external");
+    }
+}
 
 #[test]
 fn b2_families_are_lazy_and_unborn_after_setup() {
