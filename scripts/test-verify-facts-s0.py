@@ -148,6 +148,11 @@ def main():
         # run with it off to reach the witness each was written for.
         older_array_arm = wrong_claim in ("arrlen", "densebirth", "arrfloor", "arrappend", "arrcap", "arrfwd")
         extra = {"PERRY_FACTS_ARRAY_REPS": "0"} if older_array_arm else {}
+        # I32 at rest (PR B): a cell array the sabotaged tolerance makes I32 is
+        # stored at rest, and the at-rest store witness reports the -0 first
+        # ("array rep"); the arm runs with B off to reach the sign witness.
+        if name == "zero-sign-elem-negative":
+            extra = {"PERRY_REST_ELEMS": "0"}
         for claim in ["", wrong_claim]:
             arm = name + ("-false" if claim else "-correct")
             exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim, **extra)
