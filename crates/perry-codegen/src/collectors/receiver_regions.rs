@@ -390,6 +390,27 @@ enum ActiveReceiverData {
     PackedF64Loop(PackedF64LoopFact),
     MaskedWindowArray(MaskedWindowArrayFact),
     BufferView(BufferViewSlot),
+    /// PR-D (DESIGN-p4l1 §4.3): the element base of `this.<field>` held
+    /// across a loop (`stmt::field_base`).
+    FieldBase(FieldBase),
+}
+
+/// The element base of the Array in `this.<field>`, held across a loop
+/// whose only region ender is its back-edge poll (`stmt::field_base`).
+///
+/// `base_slot` is an `i64` slot holding the live (never forwarded) head's
+/// handle; element `i` is at `base + 24 + 8 * i`. It is an address, so it
+/// is believed only under the poll's refresh recipe: the poll block, and
+/// the cold arm of a read that may collect, reload `read` from `this`'s
+/// root, resolve forwarding and store the head again.
+#[derive(Debug, Clone)]
+pub(crate) struct FieldBase {
+    pub(crate) field: String,
+    /// The field read the install and every refresh lower: `this.<field>`
+    /// as the field read call's own read writes it.
+    pub(crate) read: Expr,
+    pub(crate) rep: crate::codegen::FactsArrRep,
+    pub(crate) base_slot: String,
 }
 
 /// Active materialised receiver descriptors for one function lowering.
@@ -693,9 +714,92 @@ impl ReceiverDescriptorTable {
                 | ActiveReceiverData::BoundedIndex { .. }
                 | ActiveReceiverData::PackedF64Loop(_)
                 | ActiveReceiverData::MaskedWindowArray(_)
-                | ActiveReceiverData::BufferView(_) => None,
+                | ActiveReceiverData::BufferView(_)
+                | ActiveReceiverData::FieldBase(_) => None,
             }
         })
+    }
+
+    /// PR-D: hold the element base of `this.<field>` across a loop. The
+    /// contract is an address refreshed at the back-edge poll; every other
+    /// ender is refused by the installer's admission, and a cold arm that
+    /// may collect re-derives it (`stmt::field_base`). `false` when an
+    /// outer loop already holds this field's base.
+    pub(crate) fn materialize_field_base(&mut self, base: FieldBase) -> bool {
+        if self.field_base(&base.field).is_some() {
+            return false;
+        }
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors[field_base]",
+            receiver: u32::MAX,
+            claim: ReceiverClaim::Address,
+            boundary: FactBoundary::PollRefresh,
+            excludes_try: false,
+        };
+        boundary_admits(&contract, RegionEnder::BackEdgePoll)
+            .expect("a field base must survive its back-edge poll");
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            data: ActiveReceiverData::FieldBase(base),
+        });
+        true
+    }
+
+    /// Whether every held address is a field base and no byte-view proof is
+    /// installed: a cold arm that may collect then needs only the field
+    /// bases' re-derivation.
+    pub(crate) fn only_field_bases(&self) -> bool {
+        self.byte_view_params.is_empty()
+            && self.entries.iter().all(|entry| {
+                matches!(&entry.data, ActiveReceiverData::FieldBase(_))
+                    || !matches!(
+                        entry.contract.claim,
+                        ReceiverClaim::Address | ReceiverClaim::NonMovingAddress
+                    )
+            })
+    }
+
+    /// The active base of `this.<field>`.
+    pub(crate) fn field_base(&self, field: &str) -> Option<&FieldBase> {
+        self.entries.iter().find_map(|entry| match &entry.data {
+            ActiveReceiverData::FieldBase(base) if base.field == field => Some(base),
+            _ => None,
+        })
+    }
+
+    /// Every active field base, outermost first.
+    pub(crate) fn field_bases(&self) -> Vec<FieldBase> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.data {
+                ActiveReceiverData::FieldBase(base) => Some(base.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The field bases a back-edge poll re-derives, each checked at the
+    /// boundary like [`Self::poll_refreshes`].
+    pub(crate) fn field_base_refreshes(&self) -> Result<Vec<FieldBase>, BoundaryViolation> {
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            if let ActiveReceiverData::FieldBase(base) = &entry.data {
+                boundary_admits(&entry.contract, RegionEnder::BackEdgePoll)?;
+                out.push(base.clone());
+            }
+        }
+        Ok(out)
+    }
+
+    /// End the loop that holds `field`'s base.
+    pub(crate) fn dematerialize_field_base(&mut self, field: &str) -> bool {
+        let Some(index) = self.entries.iter().position(|entry| {
+            matches!(&entry.data, ActiveReceiverData::FieldBase(base) if base.field == field)
+        }) else {
+            return false;
+        };
+        self.entries.remove(index);
+        true
     }
 
     /// Record that `index_local_id` is in bounds for `receiver` throughout a

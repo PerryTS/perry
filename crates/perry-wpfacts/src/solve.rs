@@ -1979,3 +1979,36 @@ pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
     node.drange = true;
     true
 }
+
+/// Join `iv` into the result of a [`Cons::Range`] rule (R1, sum widening).
+///
+/// The rule's result is `op` over its operands' intervals at each
+/// evaluation, and every operand only grows, so the join is the rule over
+/// the operands' last intervals: a rule result needs no widening of its own.
+/// The operands are what widen: a loop counter (a copy target, `grow_range`)
+/// climbs the ladder and the loop test clips it back (`gen::narrow`), so
+/// `r * 16 + f` over `r, f` in `[0, 7]` is `[0, 119]`, where widening the
+/// sum after `WIDEN_STEPS` of its operands' growths jumped to a rung (127,
+/// then 255).
+///
+/// Termination: the rule results form no cycle among themselves (each
+/// rule's operands exist before its result node is ruled, and a result has
+/// one rule), so every cycle passes a copy target, which widens, and a
+/// result grows at most once per operand growth. Past `WIDEN_LIMIT` growths
+/// it still climbs the ladder (a backstop that bounds even a cycle the
+/// argument missed).
+pub(crate) fn grow_rule_range(node: &mut Node, iv: Iv) -> bool {
+    use crate::model::range::{widen, WIDEN_LIMIT};
+    let joined = node.range.join(iv);
+    if joined == node.range {
+        return false;
+    }
+    node.rsteps = node.rsteps.saturating_add(1);
+    node.range = if node.rsteps > WIDEN_LIMIT {
+        widen(node.range, joined)
+    } else {
+        joined
+    };
+    node.drange = true;
+    true
+}
