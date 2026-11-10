@@ -3,6 +3,8 @@ use super::*;
 impl Model {
     pub(super) fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
+            // An observation for the value-record derive: no flow.
+            Cons::Identity { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being

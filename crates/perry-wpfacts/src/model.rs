@@ -1337,6 +1337,10 @@ pub struct Model {
     /// Immutable Arrays and constant contents (`const_arrays`;
     /// `PERRY_FACTS_CONST_ARRAYS=0` turns them off).
     pub const_arrays: bool,
+    /// Value records (DESIGN-p4l4; `PERRY_FACTS_VALUE_RECORDS=1`): identity
+    /// observations are recorded (`Cons::Identity`). Off, the model is the
+    /// one without the lever.
+    pub value_records: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
     /// Array is not recorded (`Model::arr_written`), so a literal that is
     /// stored into keeps its constant contents, a wrong claim the constant
@@ -2445,6 +2449,15 @@ mod token_values;
 impl Model {
     pub(crate) fn charge_work(&self, amount: u64) {
         self.work.set(self.work.get() + amount);
+    }
+
+    /// The program observes the identity of what `n` holds (DESIGN-p4l4
+    /// §2.2). Recorded only with value records on, so the model without the
+    /// lever is unchanged.
+    pub(crate) fn identity(&mut self, n: NodeId, route: IdentityRoute) {
+        if self.value_records && n != NO_NODE {
+            self.cons(n, Cons::Identity { route });
+        }
     }
 }
 

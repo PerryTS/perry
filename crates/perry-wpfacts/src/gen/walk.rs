@@ -1346,11 +1346,13 @@ impl<'a> Gen<'a> {
                 cases,
             } => {
                 let d = self.expr(fx, discriminant);
-                // `===` against case values: no coercion.
+                // `===` against case values: no coercion, identity.
                 self.jumps += 1;
+                self.m.identity(d, IdentityRoute::Switch);
                 for c in cases {
                     if let Some(t) = &c.test {
                         let tv = self.expr(fx, t);
+                        self.m.identity(tv, IdentityRoute::Switch);
                         // N1: a case test is the strict equality it means.
                         self.equality_demand(discriminant, t, d, tv);
                     }

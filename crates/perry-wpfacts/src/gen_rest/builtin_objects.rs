@@ -398,6 +398,8 @@ impl<'a> Gen<'a> {
                 // serializing the source reads its values recursively (own
                 // getters run) and calls nothing.
                 let v = self.expr(fx, value);
+                // The copy keeps the sharing of what it copies.
+                self.m.identity(v, IdentityRoute::Clone);
                 let r = self.m.reason("structuredClone source");
                 self.m.cons(
                     v,

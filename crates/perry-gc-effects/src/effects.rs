@@ -176,7 +176,8 @@ fn runs_code(e: &RealmEffect) -> bool {
         | RealmEffect::AsyncResource(_)
         | RealmEffect::Open => true,
         RealmEffect::Returns(o) => species(o),
-        RealmEffect::StoresFresh => false,
+        // A comparison runs no program code.
+        RealmEffect::StoresFresh | RealmEffect::Identity(_) => false,
     }
 }
 
@@ -190,7 +191,7 @@ fn keeps(e: &RealmEffect) -> bool {
 
         RealmEffect::Returns(o) => fresh(o) || species(o),
         RealmEffect::Calls { args, this, .. } => species(this) || args.iter().any(species),
-        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } => false,
+        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } | RealmEffect::Identity(_) => false,
     }
 }
 
