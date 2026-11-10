@@ -224,7 +224,12 @@ impl<'a> Gen<'a> {
                     });
                 }
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
-                if let Some(f) = self.m.rest_fills.last_mut().filter(|f| fused_fill && f.recv == o) {
+                if let Some(f) = self
+                    .m
+                    .rest_fills
+                    .last_mut()
+                    .filter(|f| fused_fill && f.recv == o)
+                {
                     f.fill_site = self.m.calls[call as usize].site;
                 }
                 if let Some(a) = lit {
