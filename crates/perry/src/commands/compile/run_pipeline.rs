@@ -2713,7 +2713,8 @@ pub fn run_with_parse_cache(
     // `this.client.prepare(...)` failed with `prepare is not a function`.
     // Refs #645 deeper followup, #488.
     loop {
-        let mut new_func_entries: Vec<((String, String), usize, bool)> = Vec::new();
+        let mut new_func_entries: Vec<((String, String), usize, bool, (String, String))> =
+            Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
             for export in &hir_module.exports {
@@ -2732,7 +2733,12 @@ pub fn run_with_parse_cache(
                                             .get(&(src_path.clone(), func_name.clone()))
                                             .copied()
                                             .unwrap_or(false);
-                                        new_func_entries.push((key, param_count, has_rest));
+                                        new_func_entries.push((
+                                            key,
+                                            param_count,
+                                            has_rest,
+                                            (src_path.clone(), func_name.clone()),
+                                        ));
                                     }
                                 }
                             }
@@ -2756,7 +2762,12 @@ pub fn run_with_parse_cache(
                                             .get(&(src_path.clone(), func_name.clone()))
                                             .copied()
                                             .unwrap_or(false);
-                                        new_func_entries.push((key, param_count, has_rest));
+                                        new_func_entries.push((
+                                            key,
+                                            param_count,
+                                            has_rest,
+                                            (src_path.clone(), func_name.clone()),
+                                        ));
                                     }
                                 }
                             }
@@ -2790,7 +2801,12 @@ pub fn run_with_parse_cache(
                                                     .get(&key_src)
                                                     .copied()
                                                     .unwrap_or(false);
-                                                new_func_entries.push((key, param_count, has_rest));
+                                                new_func_entries.push((
+                                                    key,
+                                                    param_count,
+                                                    has_rest,
+                                                    key_src.clone(),
+                                                ));
                                             }
                                         }
                                     }
@@ -2805,10 +2821,16 @@ pub fn run_with_parse_cache(
         if new_func_entries.is_empty() {
             break;
         }
-        for (key, param_count, has_rest) in new_func_entries {
+        for (key, param_count, has_rest, src) in new_func_entries {
             exported_func_param_counts.insert(key.clone(), param_count);
             if has_rest {
-                exported_func_has_rest.insert(key, true);
+                exported_func_has_rest.insert(key.clone(), true);
+            }
+            if exported_func_synthetic_arguments.contains(&src) {
+                exported_func_synthetic_arguments.insert(key.clone());
+            }
+            if exported_func_rest_and_arguments.contains(&src) {
+                exported_func_rest_and_arguments.insert(key);
             }
         }
     }
