@@ -43,6 +43,7 @@ impl Model {
                     self.arr_len_index(t, Iv { lo, hi });
                 }
             }
+            Cons::LenPermuted { t } => self.arr_len_permuted_check(n, t),
             Cons::IndexHole => {
                 for &t in toks {
                     self.mark_hole(t);
@@ -1129,6 +1130,7 @@ impl Model {
                     self.idx_load_tok(idx, t, dst, shape);
                 }
             }
+            Cons::ElemUndef { obj, key, dst } => self.elem_undef(obj, key, dst),
             Cons::IdxOwnLoad { idx, dst, shape } => {
                 for &t in toks {
                     self.idx_own_load_tok(idx, t, dst, shape);
@@ -1469,7 +1471,10 @@ impl Model {
                     if self.range_sabotage && op == RangeOp::Add {
                         l
                     } else {
-                        crate::model::range::eval(op, l, r)
+                        self.const_numbers
+                            .then(|| crate::model::range::eval_exact(op, l, r))
+                            .flatten()
+                            .unwrap_or_else(|| crate::model::range::eval(op, l, r))
                     }
                 };
                 if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {

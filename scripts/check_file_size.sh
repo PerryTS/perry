@@ -24,7 +24,7 @@ crates/perry/src/commands/compile/run_pipeline.rs	6191
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2063
 # Representation-aware codegen core; further decomposition is tracked in #1435.
-crates/perry-codegen/src/codegen/mod.rs	3588
+crates/perry-codegen/src/codegen/mod.rs	3586
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2760
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
@@ -40,7 +40,7 @@ crates/perry-runtime/src/typed_feedback.rs	2437
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	3572
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	15680
+crates/perry-codegen/tests/native_proof_regressions.rs	15678
 # Representation feedback regression cases; test organization is a separate follow-up.
 crates/perry-runtime/src/typed_feedback/tests.rs	2304
 # Lowering report schema and its emitters; split emitters in a follow-up.

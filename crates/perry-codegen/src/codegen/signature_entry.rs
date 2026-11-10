@@ -24,7 +24,7 @@ use perry_hir::{CompareOp, Expr, Function, Stmt};
 
 use super::opts::CrossModuleCtx;
 use super::spec_abi::MainPublic;
-use super::{FactsRep, FactsSignature, SpecDispatch, SpecFnPlan};
+use super::{FactsEnc, FactsRep, FactsSignature, SpecDispatch, SpecFnPlan};
 use crate::block::LlBlock;
 use crate::collectors::SpecParamRep;
 use crate::expr::FnCtx;
@@ -115,7 +115,8 @@ fn typed_plan(
     triple: &str,
 ) -> Option<SpecFnPlan> {
     if sig.params.len() != f.params.len()
-        || (sig.ret == FactsRep::Boxed && sig.params.iter().all(|r| *r == FactsRep::Boxed))
+        || (sig.ret.encoding() == FactsEnc::Boxed
+            && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed))
     {
         return None;
     }
@@ -214,12 +215,13 @@ fn typed_plan(
     })
 }
 
-/// `have` is at least as precise as `want` (I32 ⊑ F64 ⊑ Boxed).
+/// `have`'s encoding is at least as precise as `want`'s (I32 ⊑ F64 ⊑
+/// Boxed; an `Arr` slot is Boxed).
 fn at_least(have: FactsRep, want: FactsRep) -> bool {
-    let rank = |r: FactsRep| match r {
-        FactsRep::I32 => 2,
-        FactsRep::F64 => 1,
-        FactsRep::Boxed => 0,
+    let rank = |r: FactsRep| match r.encoding() {
+        FactsEnc::I32 => 2,
+        FactsEnc::F64 => 1,
+        FactsEnc::Boxed => 0,
     };
     rank(have) >= rank(want)
 }
@@ -413,8 +415,8 @@ pub(crate) fn select_methods(
             // through its `this` layout: without one, `M$sig` would be the
             // public body again.
             if proven_this.is_none()
-                && sig.ret == FactsRep::Boxed
-                && sig.params.iter().all(|r| *r == FactsRep::Boxed)
+                && sig.ret.encoding() == FactsEnc::Boxed
+                && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed)
             {
                 continue;
             }
@@ -457,17 +459,18 @@ pub(crate) fn select_methods(
 }
 
 /// i1: double `value` is a value of `rep` within `range` (§5). `None` for
-/// Boxed, which claims nothing.
+/// a Boxed encoding, which claims nothing here (an `Arr` slot's claim is
+/// not a signature's: DESIGN-p4l1 §4.4).
 fn emit_rep_test(
     blk: &mut LlBlock,
     rep: FactsRep,
     range: Option<(i64, i64)>,
     value: &str,
 ) -> Option<String> {
-    match rep {
-        FactsRep::Boxed => None,
-        FactsRep::F64 => Some(super::typed_entry::emit_plain_number_test(blk, value)),
-        FactsRep::I32 => {
+    match rep.encoding() {
+        FactsEnc::Boxed => None,
+        FactsEnc::F64 => Some(super::typed_entry::emit_plain_number_test(blk, value)),
+        FactsEnc::I32 => {
             let (lo, hi) = range.unwrap_or((i32::MIN as i64, i32::MAX as i64));
             let (lo, hi) = (lo.max(i32::MIN as i64), hi.min(i32::MAX as i64));
             let ge = blk.fcmp("oge", value, &double_literal(lo as f64));
@@ -526,9 +529,9 @@ pub(crate) fn witness_return(ctx: &mut FnCtx<'_>, rep: FactsRep, value: &str) {
 
 /// The LLVM type of a signature slot in `F$sig`.
 pub(crate) fn sig_llvm_ty(rep: FactsRep) -> LlvmType {
-    match rep {
-        FactsRep::I32 => I32,
-        FactsRep::F64 | FactsRep::Boxed => DOUBLE,
+    match rep.encoding() {
+        FactsEnc::I32 => I32,
+        FactsEnc::F64 | FactsEnc::Boxed => DOUBLE,
     }
 }
 
@@ -581,9 +584,9 @@ pub(crate) fn try_emit_typed_call(
             &value,
             &format!("signature argument {i} @{offset}"),
         );
-        raw.push(match rep {
-            FactsRep::I32 => (I32, ctx.block().fptosi(DOUBLE, &value, I32)),
-            FactsRep::F64 | FactsRep::Boxed => (DOUBLE, value),
+        raw.push(match rep.encoding() {
+            FactsEnc::I32 => (I32, ctx.block().fptosi(DOUBLE, &value, I32)),
+            FactsEnc::F64 | FactsEnc::Boxed => (DOUBLE, value),
         });
     }
     let sig_name = super::spec_entry_name(fname, plan);
@@ -678,9 +681,9 @@ pub(crate) fn try_lower_typed_method_call(
             &value,
             &format!("signature argument {i} @{offset}"),
         );
-        raw.push(match rep {
-            FactsRep::I32 => (I32, ctx.block().fptosi(DOUBLE, &value, I32)),
-            FactsRep::F64 | FactsRep::Boxed => (DOUBLE, value),
+        raw.push(match rep.encoding() {
+            FactsEnc::I32 => (I32, ctx.block().fptosi(DOUBLE, &value, I32)),
+            FactsEnc::F64 | FactsEnc::Boxed => (DOUBLE, value),
         });
     }
     let sig_name = format!("{public}$sig");
@@ -699,7 +702,7 @@ pub(crate) fn try_lower_typed_method_call(
 
 /// The boxed entry: the public `F` of a typed function (§3.3). Each argument
 /// takes its literal default when it is `undefined` (§4.1), is decoded to
-/// its parameter's representation (§4.2: `emit_entry_number`, then one
+/// its parameter's representation (§4.2: a Number is its own bits, then one
 /// `fptosi` for I32), is witnessed in check mode (R2), and the entry
 /// tail-calls `F$sig`; an I32 result goes back as a canonical double (R4).
 pub(crate) fn emit_boxed_entry(
@@ -787,7 +790,7 @@ fn emit_entry(
         .iter()
         .enumerate()
         .map(|(i, rep)| {
-            (check && *rep != FactsRep::Boxed).then(|| {
+            (check && rep.encoding() != FactsEnc::Boxed).then(|| {
                 // A claim names the emission allocated next: record it right
                 // before its site.
                 crate::verify_facts::covered(
@@ -862,11 +865,10 @@ fn emit_entry(
             Some(literal) => emit_default_select(blk, &arg, literal),
             None => arg,
         };
-        if rep == FactsRep::Boxed {
+        if rep.encoding() == FactsEnc::Boxed {
             raw.push((DOUBLE, value));
             continue;
         }
-        let value = super::facts_number_locals::emit_entry_number(blk, &value);
         if let Some(site) = &sites[i] {
             let ok = emit_rep_test(blk, rep, sig.ranges[i], &value).unwrap();
             blk.call_void("perry_verify_facts_tick", &[]);

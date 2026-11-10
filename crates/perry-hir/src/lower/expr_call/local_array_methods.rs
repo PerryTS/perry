@@ -7,7 +7,7 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use super::url_search_params::build_url_search_params_method_call;
-use super::{is_typed_array_type, typed_array_lacks_array_method};
+use super::{is_qualified_type_name, is_typed_array_type, typed_array_lacks_array_method};
 use crate::ir::*;
 
 use super::super::{lower_expr, LoweringContext};
@@ -122,6 +122,7 @@ fn type_is_class_instance(
                 // instance's ObjectHeader as an ArrayHeader (silently
                 // corrupting it) and never ran the method.
                 || ctx.functions_index.contains_key(name.as_str())
+                || is_qualified_type_name(name)
         }
         // #11128: `InstanceType<typeof C>` is by definition whatever `C`
         // constructs — an instance whose own methods may share Array names
@@ -133,7 +134,8 @@ fn type_is_class_instance(
             !builtin_generic_bases.contains(&base.as_str())
                 && (ctx.lookup_class(base).is_some()
                     || ctx.is_interface_type(base)
-                    || is_imported_class_name(base))
+                    || is_imported_class_name(base)
+                    || is_qualified_type_name(base))
         }
         Type::Union(variants) => variants
             .iter()

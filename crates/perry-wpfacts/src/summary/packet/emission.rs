@@ -165,11 +165,15 @@ impl Model {
                 }
                 TmplKind::ObjCreate { module, .. } => (*module, BirthKind::ObjectCreate),
                 TmplKind::Arr {
-                    module, hole_free, ..
+                    module,
+                    hole_free,
+                    plain,
+                    ..
                 } => (
                     *module,
                     BirthKind::Array {
                         hole_free: *hole_free,
+                        plain: *plain,
                     },
                 ),
                 TmplKind::Args { module, .. } => (*module, BirthKind::Arguments),

@@ -283,7 +283,9 @@ extern "C" fn get_locks(
 }
 
 /// `Navigator.prototype`'s getters, in Node's key order (after `constructor`):
-/// enumerable, configurable, no setter. Installed by the program's `navigator`
+/// enumerable, configurable, no setter. A getter that returns a primitive
+/// declares its type (not its value: `userAgent` is `Node.js/{NODE_MAJOR}`),
+/// which wpfacts reads as the value of a load of the key. Installed by the program's `navigator`
 /// install ([`crate::feature_hooks::js_runtime_install_navigator`]) through
 /// [`PROTOTYPE_INSTALL`], so a program that never reaches navigator links none of them.
 pub(crate) fn install_prototype(proto: *mut crate::object::ObjectHeader) {
@@ -291,12 +293,12 @@ pub(crate) fn install_prototype(proto: *mut crate::object::ObjectHeader) {
     let get = |name: &str, func: *const crate::closure::JsFunctionInfo| {
         crate::event_target::prototype::accessor(proto, name, func, None, true)
     };
-    get("hardwareConcurrency", crate::fn_info!(#[realm("Navigator.prototype.hardwareConcurrency.<get>")] export crate::navigator::get_hardware_concurrency, 0; with_flags(crate::closure::FN_BUILTIN)));
+    get("hardwareConcurrency", crate::fn_info!(#[realm("Navigator.prototype.hardwareConcurrency.<get>", effects = { returns(prim(num)) })] export crate::navigator::get_hardware_concurrency, 0; with_flags(crate::closure::FN_BUILTIN)));
     get("locks", crate::fn_info!(#[realm("Navigator.prototype.locks.<get>")] export crate::navigator::get_locks, 0; with_flags(crate::closure::FN_BUILTIN)));
-    get("language", crate::fn_info!(#[realm("Navigator.prototype.language.<get>")] export crate::navigator::get_language, 0; with_flags(crate::closure::FN_BUILTIN)));
+    get("language", crate::fn_info!(#[realm("Navigator.prototype.language.<get>", effects = { returns(prim(str)) })] export crate::navigator::get_language, 0; with_flags(crate::closure::FN_BUILTIN)));
     get("languages", crate::fn_info!(#[realm("Navigator.prototype.languages.<get>")] export crate::navigator::get_languages, 0; with_flags(crate::closure::FN_BUILTIN)));
-    get("userAgent", crate::fn_info!(#[realm("Navigator.prototype.userAgent.<get>")] export crate::navigator::get_user_agent, 0; with_flags(crate::closure::FN_BUILTIN)));
-    get("platform", crate::fn_info!(#[realm("Navigator.prototype.platform.<get>")] export crate::navigator::get_platform, 0; with_flags(crate::closure::FN_BUILTIN)));
+    get("userAgent", crate::fn_info!(#[realm("Navigator.prototype.userAgent.<get>", effects = { returns(prim(str)) })] export crate::navigator::get_user_agent, 0; with_flags(crate::closure::FN_BUILTIN)));
+    get("platform", crate::fn_info!(#[realm("Navigator.prototype.platform.<get>", effects = { returns(prim(str)) })] export crate::navigator::get_platform, 0; with_flags(crate::closure::FN_BUILTIN)));
 }
 
 pub(crate) static PROTOTYPE_INSTALL: crate::feature_hooks::Hook<

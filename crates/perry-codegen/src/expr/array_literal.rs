@@ -406,7 +406,9 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
         let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
-        let arr_header_packed = (n as u64) | ((capacity as u64) << 32);
+        // `capacity >= n` (asserted): wpfacts' length floor for a literal
+        // is its `n` slots (`solve::arr_len`).
+        let arr_header_packed = perry_abi::array_birth_header(n as u32, capacity as u32);
         // GC_STORE_AUDIT(INIT): freshly allocated ArrayHeader length/capacity, no child pointer.
         blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
         let named = blk.gep(I8, &raw, &[(I64, "16")]);

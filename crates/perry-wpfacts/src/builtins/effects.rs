@@ -129,8 +129,15 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
 /// (`node:inspector.Session`) whose effects the runtime declares at its
 /// body (`declared_member`): what `new` of it does, in forms `run_construct`
 /// runs.
+/// A constructor a host object holds (`Intl.Collator`, declared at its own
+/// definition) is found by owner and key, as `declared_static`.
 pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
-    declared_member(name).filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
+    declared_member(name)
+        .or_else(|| {
+            let (owner, key) = name.rsplit_once('.')?;
+            declared_at(owner, key).filter(|e| !names_this(e.effects))
+        })
+        .filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
 }
 
 fn by_proto() -> &'static ByProto {
@@ -224,53 +231,38 @@ pub(crate) fn declared_static(identity: &str) -> Option<&'static RealmEntry> {
     declared_at(owner, key).filter(|e| !names_this(e.effects) && !names_callee(e.effects))
 }
 
-/// The declaration of getter `key` of `proto` (`AbortController.prototype`,
-/// `signal`), when it only returns primitives and slots of its receiver:
-/// a load reads its value directly (`getter_value`), no call runs.
-pub(super) fn declared_getter(proto: &str, key: &str) -> Option<&'static RealmEntry> {
-    fn simple(o: &RealmOperand) -> bool {
-        match o {
-            RealmOperand::Prim(_) => true,
-            RealmOperand::Slot(s) => {
-                s.root == RealmSlotRoot::This
-                    && s.steps.iter().all(|st| !matches!(st, RealmSlotStep::Elems))
-            }
-            RealmOperand::Union(us) => us.iter().all(simple),
-            _ => false,
-        }
+/// The declaration of prototype method `identity`
+/// (`Performance.prototype.now`) when the runtime declares what a call
+/// does without naming `this`: what the call does to its arguments and
+/// result, whatever the receiver (a receiver of another brand throws
+/// before any of it: the declaration is a superset).
+pub(crate) fn declared_proto_method(identity: &str) -> Option<&'static RealmEntry> {
+    let (owner, key) = identity.rsplit_once('.')?;
+    if !owner.ends_with(".prototype") || key.starts_with('<') {
+        return None;
     }
-    let e = declared_at(&format!("{proto}.{key}"), "<get>")?;
-    e.effects
-        .iter()
-        .all(|f| matches!(f, RealmEffect::Returns(o) if simple(o)))
-        .then_some(e)
+    declared_at(owner, key).filter(|e| !names_this(e.effects))
 }
 
-/// What getter `e` (`declared_getter`) returns on receiver `t`, into `dst`.
-pub(super) fn getter_value(m: &mut Model, e: &'static RealmEntry, t: Tok, dst: NodeId) {
-    fn operand(m: &mut Model, o: &RealmOperand, t: Tok, dst: NodeId) {
-        match o {
-            RealmOperand::Prim(ps) => m.add_prim(dst, prim_bits(ps)),
-            RealmOperand::Slot(s) => {
-                let mut at = m.node_l("native-get-this");
-                m.add_tok(at, t);
-                for st in s.steps.iter() {
-                    let key = step_key(m, st);
-                    let next = m.node_l("native-get");
-                    m.cons(at, Cons::Load { key, dst: next });
-                    at = next;
-                }
-                m.edge(at, dst);
-            }
-            RealmOperand::Union(us) => us.iter().for_each(|u| operand(m, u, t, dst)),
-            _ => unreachable!("declared_getter() takes primitives and receiver slots only"),
-        }
+/// The declaration of getter `key` of `proto` (`AbortController.prototype`,
+/// `signal`), when the runtime declares what a call of it does in forms
+/// `run_native` runs: a load of the key reads the getter's declared result
+/// (`getter_load`), never the getter function.
+pub(super) fn declared_getter(proto: &str, key: &str) -> Option<&'static RealmEntry> {
+    declared_at(&format!("{proto}.{key}"), "<get>")
+}
+
+/// `dst` ⊇ what getter `e` (`declared_getter`) of key `a` returns on
+/// receiver `t`: its declaration runs as a member call's does (`run_native`,
+/// one evaluator of declared results), in the one getter call on `t`
+/// (`collections::getter_call`); a `fresh` result is born at that call.
+pub(super) fn getter_load(m: &mut Model, e: &'static RealmEntry, t: Tok, a: Atom, dst: NodeId) {
+    let (call, made) = super::collections::getter_call(m, t, a);
+    if made {
+        run_native(m, e, t, call);
     }
-    for f in e.effects.iter() {
-        if let RealmEffect::Returns(o) = f {
-            operand(m, o, t, dst);
-        }
-    }
+    let ret = m.calls[call as usize].ret;
+    m.edge(ret, dst);
 }
 
 /// The declaration of setter `key` of `proto` (`AbortSignal.prototype`,
