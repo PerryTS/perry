@@ -175,7 +175,8 @@ fn const_elems(
                 Elem::Const { module, local, neg } => {
                     // `-N` of `N = 0` is `-0`, as the unary minus gives.
                     let v = number(module, local)? as f64;
-                    Some(if neg { -v } else { v }.to_bits())
+                    let v = if neg { -v } else { v };
+                    Some(v.to_bits())
                 }
             })
             .collect::<Option<Vec<u64>>>()?;
@@ -204,7 +205,7 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
             if !matches!(b.rep, Rep::Arr(r) if r.im) {
                 continue;
             }
-            if let Some(&n) = g.mods[mi].locals.get(id) {
+            if let Some(&n) = g.mods[mi].locals.get(&*id) {
                 b.const_elems = const_elems(&g.m, n, &number);
             }
         }
