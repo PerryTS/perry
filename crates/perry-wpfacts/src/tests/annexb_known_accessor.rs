@@ -25,9 +25,10 @@ fn check(src: &str, proven: bool) {
 /// may be `Debug.__defineGetter__(1, getter)`, an accessor under a computed
 /// key on `Debug`. `getter` is the second argument. The witness is a
 /// value `Debug` holds by name: it stays known exactly when `Debug` does not
-/// escape. (The `Payload` read is not the witness: an Object.prototype
-/// method run on `Debug` includes `__lookupGetter__`, whose result on a
-/// holder with computed-key stores is ⊤, a rule of its own.)
+/// escape. (The `Payload` read is not the witness: `Debug.payload` may be
+/// any Object.prototype method, `valueOf` among them, so `p` may be `Debug`.
+/// `Debug.assertNode(..)` may also be `Debug.__lookupGetter__(..)`: see
+/// `walk_result`.)
 fn debug_cache(prelude: &str, getter: &str) -> String {
     format!(
         r#"
@@ -196,5 +197,111 @@ fn class_setter_store_leaves_the_holder_known() {
         console.log(o.cell.witness);
     "#,
         true,
+    );
+}
+
+/// `debug_cache` with `stmt` in place of the `Debug.assertNode(1, ..)` call.
+fn debug_cache_with(getter: &str, stmt: &str) -> String {
+    let call = format!("Debug.assertNode(1, {getter});");
+    let src = debug_cache("class Marker {}", getter);
+    assert_eq!(src.matches(&call).count(), 1);
+    src.replace(&call, stmt)
+}
+
+/// The tsc shape (debug.ts:170/190 then `Debug.assertX(..)`): the call may be
+/// `Debug.__lookupGetter__(..)`, a walk for an ACCESSOR property. The
+/// computed-key stores on `Debug` are ordinary [[Set]]s: they make data
+/// properties, never an accessor, so the walk's result (`r`) holds no ⊤ and
+/// a store through it does not hand `cell` to unknown code.
+#[test]
+fn walk_result_over_computed_data_stores_holds_no_top() {
+    let src = debug_cache_with(
+        "Marker",
+        "const r: any = Debug.assertNode(1, Marker); r.k = cell;",
+    );
+    check(&src, true);
+}
+
+/// The same walk named directly, under an unknown key.
+#[test]
+fn walk_over_the_debug_namespace_under_an_unknown_key_holds_no_top() {
+    let src = debug_cache_with(
+        "Marker",
+        "Debug.assertNode(1, Marker); const r: any = (Debug as any).__lookupGetter__(process.argv[3]); r.k = cell;",
+    );
+    check(&src, true);
+}
+
+fn walk(setup: &str) -> String {
+    format!(
+        r#"
+        class Cell {{ witness = 1; }}
+        const cell = new Cell();
+        function noop(): void {{}}
+        const o: any = {{}};
+        {setup}
+        const g = o.__lookupGetter__(process.argv[3]);
+        g.k = cell;
+        console.log(cell.witness);
+    "#
+    )
+}
+
+/// A computed-key data store, then a walk under an unknown key: no accessor
+/// exists beyond the realm's own (`__proto__`); the result holds no ⊤.
+#[test]
+fn walk_over_a_computed_data_store_holds_no_top() {
+    check(&walk("o[process.argv[2]] = noop;"), true);
+}
+
+/// Control (K1): the holder reaches code nothing models, which may install
+/// any accessor on it (its any-key node holds ⊤): the walk is unknown.
+#[test]
+fn walk_over_an_escaped_holder_stays_unknown() {
+    check(
+        &walk("o[process.argv[2]] = noop; new Function(process.argv[4])(o);"),
+        false,
+    );
+}
+
+/// Control (K1, tsc shape): `Debug` itself reaches unknown code.
+#[test]
+fn walk_over_an_escaped_debug_namespace_stays_unknown() {
+    let getter = "(new Function(process.argv[2])(Debug), Marker)";
+    let src = debug_cache_with(
+        getter,
+        &format!("const r: any = Debug.assertNode(1, {getter}); r.k = cell;"),
+    );
+    check(&src, false);
+}
+
+/// Control (K2): an accessor defined under a computed key on a program
+/// object is recorded under STAR_KEY: the walk returns that getter, and its
+/// call runs its body (which hands `cell` to unknown code).
+#[test]
+fn walk_over_a_computed_key_accessor_returns_its_getter() {
+    check(
+        r#"
+        declare function external(x: unknown): void;
+        class Cell { witness = 1; }
+        const cell = new Cell();
+        const o: any = {};
+        Object.defineProperty(o, process.argv[2], { get() { external(cell); return 1; } });
+        const g = o.__lookupGetter__(process.argv[3]);
+        if (g) g.call(o);
+        console.log(cell.witness);
+    "#,
+        false,
+    );
+}
+
+/// Control (K2, ⊤ form): an accessor under a computed key on
+/// `Object.prototype` puts ⊤ into its any-key node (no walk names it): the
+/// walk down the chain is unknown.
+#[test]
+fn walk_over_a_computed_key_accessor_on_object_prototype_stays_unknown() {
+    check(
+        &walk("Object.defineProperty(Object.prototype, process.argv[2], { get() { return 1; } });"),
+        false,
     );
 }

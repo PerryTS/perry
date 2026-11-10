@@ -122,6 +122,7 @@ pub fn map_cons(
             from: n(from),
             reason,
         },
+        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
@@ -468,6 +469,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | TopIfTop { .. }
             | Guard { .. }
             | NotNullish { .. }
             | Falsy { .. }

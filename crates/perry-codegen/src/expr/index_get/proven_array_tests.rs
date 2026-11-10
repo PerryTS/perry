@@ -154,6 +154,7 @@ const BOARD: FactsArrRep = FactsArrRep {
     floor: 128,
     dense: true,
     fixed: true,
+    im: false,
 };
 
 /// The forwarding bit of the header word, as the tier tests it.
@@ -222,6 +223,7 @@ fn a_key_outside_the_floor_is_bounded_by_the_capacity() {
 fn a_growable_array_keeps_its_forwarding_test() {
     let rep = FactsArrRep {
         fixed: false,
+        im: false,
         ..BOARD
     };
     let ir = rep_ir(rep, Some((0, 127)), true);
@@ -254,6 +256,7 @@ fn an_array_without_a_floor_is_bounded_by_its_capacity() {
         floor: 0,
         dense: false,
         fixed: false,
+        im: false,
     };
     let ir = rep_ir(rep, Some((0, 7)), true);
     let f = body(&ir, "__at").join("\n");
@@ -296,6 +299,7 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
                     floor: 4,
                     dense: true,
                     fixed: true,
+                    im: false,
                 }),
             );
             for (at, _) in src.match_indices("d[") {
@@ -321,4 +325,208 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
     // The tier would mask the local's word to a pointer and load behind a
     // header; the read stays the scalar slots' own.
     assert_eq!(with, ir(false), "the rep changes nothing\n{f}");
+}
+
+// ---- PR-C3: a field read as the receiver, and the in-floor field read call ----
+
+const FIELD_SRC: &str = "export class Board {\n\
+  board: number[] = [];\n\
+  at(sq: number): number { return this.board[sq] ?? 0; }\n\
+  inFloor(): number { return this.at(5); }\n\
+  outside(): number { return this.at(200); }\n\
+  direct(m: number): number { return this.board[m & 127]; }\n\
+}\n";
+
+/// A growable board: dense below 128, storage that may move.
+const GROWABLE: FactsArrRep = FactsArrRep {
+    elem: FactsElemRep::F64,
+    floor: 128,
+    dense: true,
+    fixed: false,
+    im: false,
+};
+
+/// IR of `FIELD_SRC` with `this` a `Board` in every method, `board` of
+/// representation `rep`, both `this.at(...)` calls field read calls, and
+/// `inFloor`'s call in the floor when `in_floor`.
+fn field_ir(rep: FactsRep, in_floor: bool) -> String {
+    use crate::codegen::{FactsClass, FactsField, FactsFieldReadCall, FactsRecv};
+    let m = lower(FIELD_SRC);
+    let class = m.classes.iter().find(|c| c.name == "Board").expect("Board");
+    let mut elision = ElisionFacts::default();
+    for f in &class.methods {
+        elision.this_of.insert(
+            f.id,
+            FactsRecv {
+                class_ids: vec![class.id],
+                nullable: false,
+                checked: false,
+            },
+        );
+    }
+    elision.classes.insert(
+        class.id,
+        FactsClass {
+            display: class.name.clone(),
+            fixed_layout: true,
+            fields: vec![FactsField {
+                key: "board".into(),
+                slot: 0,
+                readonly: true,
+                kind_mask: 0x80,
+                ta_stable: false,
+                ta_kind: None,
+                declared: false,
+                reserved: false,
+                fns: Vec::new(),
+                classes: Vec::new(),
+                nullable: false,
+                rep,
+            }],
+        },
+    );
+    // SWC offsets are 1-based.
+    let at = |text: &str| FIELD_SRC.find(text).expect(text) as u32 + 1;
+    let read = FactsFieldReadCall {
+        field: "board".into(),
+        index_arg: 0,
+        default: Some(0f64.to_bits()),
+        element_offset: at("this.board[sq]"),
+        field_offset: at("this.board[sq]"),
+        in_floor: None,
+    };
+    let inside = at("this.at(5)");
+    let outside = at("this.at(200)");
+    elision.field_read_calls.insert(
+        inside,
+        FactsFieldReadCall {
+            in_floor: in_floor.then_some(128),
+            ..read.clone()
+        },
+    );
+    elision.field_read_calls.insert(outside, read);
+    elision.call_arg_ranges.insert(inside, vec![Some((5, 5))]);
+    elision
+        .call_arg_ranges
+        .insert(outside, vec![Some((200, 200))]);
+    // The body's own read joins every caller's key; the direct read has
+    // its own.
+    elision.element_keys.insert(at("this.board[sq]"), (5, 200));
+    elision
+        .element_keys
+        .insert(at("this.board[m & 127]"), (0, 127));
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        program_layouts: Arc::new(crate::layout_families::compute(
+            [("pa.ts", &m)],
+            true,
+            &Default::default(),
+        )),
+        program_facts: ProgramFactsView {
+            elision: Arc::new(elision),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&m, opts).expect("fixture compiles")).expect("UTF-8 IR")
+}
+
+/// The capacity bound of a read outside the floor.
+fn capacity_bound(ir: &str) -> bool {
+    ir.contains("arep.inside")
+}
+
+#[test]
+fn an_in_floor_field_read_call_is_the_field_load_and_the_slot_load() {
+    let ir = field_ir(FactsRep::Arr(GROWABLE), true);
+    let f = body(&ir, "inFloor").join("\n");
+    assert!(!f.contains(".guard.prefix"), "no guarded tier\n{f}");
+    assert!(!capacity_bound(&f), "no bound\n{f}");
+    assert!(!f.contains("arep.own"), "no hole test\n{f}");
+    assert!(!f.contains("arep.number"), "no number test\n{f}");
+    // Growable storage: exactly the forwarding test stays, with its cold
+    // read.
+    assert!(forwarding_test(&f), "{f}");
+    assert_eq!(
+        f.lines().filter(|l| l.starts_with("arep.live")).count(),
+        1,
+        "{f}"
+    );
+    assert!(
+        f.lines()
+            .any(|l| l.contains("add i64") && l.trim_end().ends_with(", 24")),
+        "front-offset address\n{f}"
+    );
+    // Fixed storage: one load, no test and no cold arm.
+    let ir = field_ir(FactsRep::Arr(BOARD), true);
+    let f = body(&ir, "inFloor").join("\n");
+    assert!(!f.contains("arep."), "{f}");
+    assert!(!f.contains("perry_array_read_cold_shared"), "{f}");
+    assert!(!forwarding_test(&f), "{f}");
+}
+
+#[test]
+fn a_field_read_call_outside_the_floor_keeps_its_bound_and_its_default() {
+    let ir = field_ir(FactsRep::Arr(GROWABLE), true);
+    let f = body(&ir, "outside").join("\n");
+    assert!(
+        !f.contains(".guard.prefix"),
+        "the tier, not the guards\n{f}"
+    );
+    assert!(capacity_bound(&f), "the capacity bound\n{f}");
+    assert!(forwarding_test(&f), "{f}");
+    assert!(f.contains("perry_array_read_cold_shared"), "{f}");
+    // Without the call's own floor, the in-floor call is the same read.
+    let ir = field_ir(FactsRep::Arr(GROWABLE), false);
+    let f = body(&ir, "inFloor").join("\n");
+    assert!(capacity_bound(&f), "{f}");
+}
+
+#[test]
+fn a_direct_read_of_an_arr_field_takes_the_tier() {
+    let ir = field_ir(FactsRep::Arr(GROWABLE), false);
+    let f = body(&ir, "direct").join("\n");
+    assert!(!f.contains(".guard.prefix"), "no guarded tier\n{f}");
+    assert!(forwarding_test(&f), "{f}");
+    assert!(!capacity_bound(&f), "in the floor by its own key\n{f}");
+}
+
+#[test]
+fn a_boxed_field_keeps_every_read_as_it_was() {
+    let boxed = field_ir(FactsRep::Boxed, true);
+    assert!(!boxed.contains("arep."), "{boxed}");
+    // The call's floor alone changes nothing: the field read is not `Arr`.
+    assert_eq!(boxed, field_ir(FactsRep::Boxed, false));
+}
+
+#[test]
+fn the_array_rep_join_says_what_both_say() {
+    let a = FactsArrRep {
+        elem: FactsElemRep::I32,
+        floor: 128,
+        dense: true,
+        fixed: true,
+        im: false,
+    };
+    let b = FactsArrRep {
+        elem: FactsElemRep::F64,
+        floor: 8,
+        dense: true,
+        fixed: false,
+        im: false,
+    };
+    let j = FactsArrRep::join(a, b);
+    assert_eq!(
+        (j.elem, j.floor, j.dense, j.fixed),
+        (FactsElemRep::F64, 8, true, false)
+    );
+    assert_eq!(FactsArrRep::join(a, b), FactsArrRep::join(b, a));
+    assert_eq!(FactsArrRep::join(a, a), a);
+    let holey = FactsArrRep {
+        dense: false,
+        elem: FactsElemRep::Boxed,
+        ..a
+    };
+    let j = FactsArrRep::join(a, holey);
+    assert_eq!((j.elem, j.dense), (FactsElemRep::Boxed, false));
 }

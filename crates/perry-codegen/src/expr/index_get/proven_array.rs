@@ -1,8 +1,10 @@
 //! Element reads whose receiver wpfacts proves (representation RFC §10.7,
 //! phase P4).
 //!
-//! **The rep-keyed tier** (DESIGN-p4l1 §4.2, PR-C2; `RepRead`). A local,
-//! parameter or module const the facts give `FactsRep::Arr(r)` holds only
+//! **The rep-keyed tier** (DESIGN-p4l1 §4.2, PR-C2 and PR-C3; `RepRead`).
+//! A local, parameter or module const the facts give `FactsRep::Arr(r)`,
+//! and a field read whose every class holds `Arr` in the field
+//! (`wpfacts_access::field_array`, `r` their join), holds only
 //! plain program Arrays: each is a `GC_TYPE_ARRAY` for its whole life, with
 //! no element descriptor and no deleted element (no hard marker), `length`
 //! and `capacity` of at least `r.floor`, no hole below the floor when
@@ -33,9 +35,14 @@
 //! (REVIEW-p4l1 R6). `PERRY_FACTS_ARRAY_TIER=0` turns the tier off: every
 //! read keeps the tier it had.
 //!
+//! A field read call (b1, `lower_call::field_read_call`) whose own index
+//! is in the floor (wpfacts `FieldReadCall::in_floor`) reads here too
+//! (`lower_in_floor`): the method body's read joins every caller's key,
+//! the call has its own.
+//!
 //! **The fixed-storage read** (wpfacts `ModuleBindings::element_reads`,
 //! `FactsElementRead`), for a receiver the tier above does not name (a
-//! field read, a temporary).
+//! temporary, a field the facts do not give `Arr`).
 //!
 //! Every receiver of such a read is a program Array that keeps its birth
 //! length for the whole program: no store, builtin, `defineProperty` or
@@ -76,12 +83,32 @@ pub(super) enum Proven {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RepRead {
     pub(crate) rep: FactsArrRep,
-    /// The key is an integer in `[0, rep.floor)` at every copy of the read.
+    /// The key is an integer in `[0, key_floor)` at every copy of the read.
     pub(crate) in_floor: bool,
+    /// The floor the key is below: `rep.floor`, or a field read call's own
+    /// (every Array that call can read has at least as many elements).
+    pub(crate) key_floor: u32,
     /// The read's value is a proven Number: a plain double.
     pub(crate) number: bool,
-    /// The receiver local, for the check-mode report.
-    pub(crate) local: u32,
+    /// The receiver, for the check-mode report.
+    pub(crate) receiver: Receiver,
+}
+
+/// The receiver expression of a rep-keyed read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Receiver {
+    Local(u32),
+    /// A field read (`FieldProof::array`).
+    Field,
+}
+
+impl Receiver {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Receiver::Local(id) => format!("local {id}"),
+            Receiver::Field => "a field read".to_string(),
+        }
+    }
 }
 
 impl RepRead {
@@ -114,19 +141,7 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
     if !tier_enabled() || typed_feedback_emission_enabled() {
         return None;
     }
-    let Expr::LocalGet(id) = object else {
-        return None;
-    };
-    // A local the codegen keeps in scalar slots holds no array word (R6).
-    if ctx.scalar_replaced_arrays.contains_key(id)
-        || ctx.array_row_aliases.contains_key(id)
-        || ctx.scalar_replaced.contains_key(id)
-    {
-        return None;
-    }
-    let FactsRep::Arr(rep) = crate::codegen::facts_rep::local(ctx, *id)? else {
-        return None;
-    };
+    let (rep, receiver) = receiver_rep(ctx, object)?;
     let in_floor = element_offset != 0
         && ctx
             .wpfacts
@@ -138,9 +153,76 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
     Some(RepRead {
         rep,
         in_floor,
+        key_floor: rep.floor,
         number,
-        local: *id,
+        receiver,
     })
+}
+
+/// THE query for a receiver expression's `Arr` representation
+/// (DESIGN-p4l1 §4.2): a local, parameter or module const
+/// (`BindingFacts::rep`), or a field read (`FieldProof::array`).
+fn receiver_rep(ctx: &FnCtx<'_>, object: &Expr) -> Option<(FactsArrRep, Receiver)> {
+    match object {
+        Expr::LocalGet(id) => {
+            // A local the codegen keeps in scalar slots holds no array
+            // word (R6).
+            if ctx.scalar_replaced_arrays.contains_key(id)
+                || ctx.array_row_aliases.contains_key(id)
+                || ctx.scalar_replaced.contains_key(id)
+            {
+                return None;
+            }
+            let FactsRep::Arr(rep) = crate::codegen::facts_rep::local(ctx, *id)? else {
+                return None;
+            };
+            Some((rep, Receiver::Local(*id)))
+        }
+        Expr::PropertyGet {
+            object: holder,
+            property,
+            ..
+        } => {
+            if !crate::codegen::facts_rep::enabled() || ctx.wpfacts_off {
+                return None;
+            }
+            let rep = crate::expr::wpfacts_access::field_array(ctx, holder, property)?;
+            Some((rep, Receiver::Field))
+        }
+        _ => None,
+    }
+}
+
+/// The read of a field read call whose own index is in the floor
+/// (`lower_call::field_read_call`), when the tier takes it: the receiver
+/// expression's representation, dense, with a floor.
+pub(crate) fn in_floor_rep(ctx: &FnCtx<'_>, object: &Expr) -> Option<FactsArrRep> {
+    if !tier_enabled() || typed_feedback_emission_enabled() || ctx.wpfacts_off {
+        return None;
+    }
+    let (rep, _) = receiver_rep(ctx, object)?;
+    (rep.dense && rep.floor > 0).then_some(rep)
+}
+
+/// Read `arr_box[idx_i32]` for a field read call whose index is an integer
+/// in `[0, key_floor)` (`in_floor_rep` gave `rep`): a present own element,
+/// so the load has no bound and no hole test, and the value is of
+/// `rep.elem`.
+pub(crate) fn lower_in_floor(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    rep: FactsArrRep,
+    key_floor: u32,
+) -> String {
+    let read = RepRead {
+        rep,
+        in_floor: true,
+        key_floor,
+        number: rep.elem != crate::codegen::FactsElemRep::Boxed,
+        receiver: Receiver::Field,
+    };
+    lower_rep(ctx, arr_box, idx_i32, read, false)
 }
 
 /// `e` is an element read the tier loads below a dense floor and whose
@@ -223,7 +305,7 @@ fn lower_rep(
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::ArrayRep,
-        || serde_json::json!({ "local": read.local, "floor": r.floor, "in_floor": read.in_floor }),
+        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "in_floor": read.in_floor }),
     );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {

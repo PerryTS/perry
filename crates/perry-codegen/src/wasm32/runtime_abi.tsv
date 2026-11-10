@@ -388,6 +388,11 @@ js_async_local_storage_run	f64	i64,f64,f64,i64
 js_async_local_storage_static_bind_direct	f64	f64,i64
 js_async_local_storage_static_snapshot_direct	f64	i64
 js_async_local_storage_subclass_init	f64	f64
+js_async_module_configure	void	i64,i64,i64,i64,i64,i64
+js_async_module_entry	void	i64
+js_async_module_import	f64	i64
+js_async_module_require	void	i64
+js_async_module_visit	void	i64,i64,i64
 js_async_resource_async_id	f64	i64
 js_async_resource_bind	i64	i64,f64,f64
 js_async_resource_emit_destroy	f64	i64

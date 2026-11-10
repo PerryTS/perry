@@ -743,10 +743,11 @@ pub(crate) fn realm_parent_constructor(identity: &str) -> Option<&'static str> {
 /// What a method lookup of a named key finds on the [[Prototype]] chain of
 /// an object a realm declaration made (`fresh(P)`, builtin object kind `P`):
 /// the own property of the first declaration on `P`'s declared chain that
-/// has the key, or that no declaration on it does.
+/// has the key (with that declaration, its holder), or that no declaration
+/// on it does.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum RealmFind {
-    Own(&'static RealmOwn),
+    Own(&'static RealmOwn, &'static RealmEntry),
     Absent,
 }
 
@@ -779,7 +780,7 @@ pub(super) fn realm_chain_find(born: &'static perry_hir::realm_manifest::RealmEn
     let mut at = born;
     loop {
         if let Some(p) = at.own.iter().find(|p| realm_key_is(p, name)) {
-            return RealmFind::Own(p);
+            return RealmFind::Own(p, at);
         }
         match at.proto.and_then(realm_entry) {
             Some(next) => at = next,
@@ -1485,7 +1486,7 @@ fn a_realm_born_object_reads_exactly_its_declared_chain() {
         assert_eq!(walked, chain, "{what}");
         for key in &declared {
             assert!(
-                matches!(realm_chain_find(born, key), RealmFind::Own(_)),
+                matches!(realm_chain_find(born, key), RealmFind::Own(..)),
                 "{what}.{key} is found"
             );
         }
@@ -1500,7 +1501,7 @@ fn a_realm_born_object_reads_exactly_its_declared_chain() {
     // The first declaration on the chain that has the key decides:
     // `Object.prototype.hasOwnProperty` under `Response.prototype`.
     let found = |what: &str, key: &str| match realm_chain_find(realm_born(what).unwrap(), key) {
-        RealmFind::Own(p) => p.value,
+        RealmFind::Own(p, _) => p.value,
         RealmFind::Absent => panic!("{what}.{key} absent"),
     };
     assert_eq!(

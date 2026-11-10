@@ -162,6 +162,12 @@ pub struct ArrRep {
     /// a signature slot over its copies) keeps or drops it with the rest,
     /// and no consumer asks a second fact (`const_length`) for it.
     pub fixed: bool,
+    /// Every token is immutable (`const_arrays`): nothing writes it after
+    /// its birth, so each index holds its birth value for the whole
+    /// program. Implies `fixed`. It is about the Arrays, not about a
+    /// binding that may be read before it holds one: consumers ask
+    /// `BindingFacts::immutable_array`.
+    pub im: bool,
 }
 
 /// The encoding of a value's slot: how its word is stored and passed.
@@ -199,6 +205,7 @@ impl ArrRep {
             floor: a.floor.min(b.floor),
             dense: a.dense && b.dense,
             fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
         }
     }
 }
@@ -234,11 +241,12 @@ impl Rep {
             Rep::F64 => "f64".into(),
             Rep::I32 => "i32".into(),
             Rep::Arr(r) => format!(
-                "arr<{},{}{}{}>",
+                "arr<{},{}{}{}{}>",
                 r.elem.name(),
                 r.floor,
                 if r.dense { ",dense" } else { "" },
-                if r.fixed { ",fixed" } else { "" }
+                if r.fixed { ",fixed" } else { "" },
+                if r.im { ",im" } else { "" }
             ),
         }
     }
@@ -279,6 +287,14 @@ pub struct BindingFacts {
     /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
     /// that constant.
     pub const_length: Option<i64>,
+    /// It is a rooted `const` (`const_arrays`) that holds only immutable
+    /// Arrays (`ArrRep::im`): every read of it that yields a value yields
+    /// an Array nothing writes after its birth.
+    pub immutable_array: bool,
+    /// Such a binding whose Arrays are all born from literals of constant
+    /// Numbers with the same elements (`const_arrays::collect`): index `i`
+    /// reads the Number with bits `const_elems[i]`, for the whole program.
+    pub const_elems: Option<Vec<u64>>,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -617,13 +633,20 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
 /// value proves nothing. The rep is the join over the tokens of each one's
 /// own (`tok_arr_rep`). `None` with `Model::array_reps` off.
 pub(crate) fn arr_rep(m: &Model, nodes: &[NodeId]) -> Option<ArrRep> {
+    arr_rep_beside(m, nodes, 0)
+}
+
+/// `arr_rep` of `nodes` with the primitives `ignored` left out of account:
+/// 0 everywhere but under the negative control `arrfield`
+/// (`Model::arr_field_sabotage`).
+pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Option<ArrRep> {
     if !m.array_reps {
         return None;
     }
     let mut out: Option<ArrRep> = None;
     for &n in nodes {
         let node = &m.nodes[n as usize];
-        if node.prim != 0 {
+        if node.prim & !ignored != 0 {
             return None;
         }
         for t in node.pts.to_sorted() {
@@ -704,6 +727,7 @@ fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
         floor,
         dense: hole_free && floor > 0,
         fixed,
+        im: fixed && m.arr_immutable(t),
     }
 }
 

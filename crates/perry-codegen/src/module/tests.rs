@@ -1154,3 +1154,56 @@ fn module_frames_preserve_existing_callable_ordinals() {
     assert_eq!(facts.facts("zzz_callable").metadata.unwrap().1, 0);
     assert_eq!(facts.facts("aaa_module").metadata.unwrap().1, 1);
 }
+
+/// N4: the slow-arm helpers are `cold` under `PERRY_COLD_PATHS` (default on)
+/// and ordinary without it; the older list does not depend on the switch.
+#[test]
+fn cold_arm_helpers_follow_the_cold_path_switch() {
+    use super::{cold_paths_enabled_from_env, is_cold_helper};
+    assert!(cold_paths_enabled_from_env(None));
+    assert!(cold_paths_enabled_from_env(Some("1")));
+    for off in ["0", "off", "false"] {
+        assert!(!cold_paths_enabled_from_env(Some(off)), "{off}");
+    }
+    for name in [
+        "js_gc_loop_safepoint",
+        "perry_array_read_cold_shared",
+        "js_array_note_numeric_write_value",
+    ] {
+        assert!(is_cold_helper(name, true), "{name}");
+        assert!(!is_cold_helper(name, false), "{name} with the switch off");
+    }
+    for on in [true, false] {
+        assert!(is_cold_helper("js_object_get_field_slow", on));
+        // Negative controls: helpers that are also called on ordinary paths.
+        for name in [
+            "js_dynamic_bitand",
+            "js_write_barrier_slot",
+            "js_array_push_f64",
+        ] {
+            assert!(!is_cold_helper(name, on), "{name}");
+        }
+    }
+
+    let mut m = module_under("js_gc_loop_safepoint\tReenters\tno\n");
+    m.declare_function("js_gc_loop_safepoint", VOID, &[]);
+    m.declare_function(
+        "perry_array_read_cold_shared",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
+    let f = m.define_function("main", I32, vec![]);
+    f.create_block("entry").ret(I32, "0");
+    let ir = m.to_ir();
+    let cold = super::cold_paths_enabled();
+    for (decl, attrs) in [
+        ("declare void @js_gc_loop_safepoint()", " nounwind"),
+        (
+            "declare double @perry_array_read_cold_shared(double, double, i64)",
+            "",
+        ),
+    ] {
+        let line = format!("{decl}{attrs}{}\n", if cold { " cold" } else { "" });
+        assert!(ir.contains(&line), "missing {line:?} in:\n{ir}");
+    }
+}

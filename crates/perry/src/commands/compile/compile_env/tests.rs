@@ -323,10 +323,12 @@ fn codegen_env_vars_are_build_cache_inputs() {
 #[test]
 fn array_fact_switches_are_cache_inputs() {
     for name in [
+        "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
         "PERRY_FACTS_ARRAY_REPS",
         "PERRY_FACTS_ARRAY_TIER",
+        "PERRY_FACTS_CONST_ARRAYS",
         "PERRY_FACTS_SABOTAGE",
     ] {
         assert!(
@@ -343,5 +345,15 @@ fn const_number_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CONST_NUMBERS"),
         "PERRY_FACTS_CONST_NUMBERS must key the compile caches"
+    );
+}
+
+/// N4: the cold-path switch changes helper declarations, call-site
+/// attributes and branch weights, so `=0` must never reuse an `=1` object.
+#[test]
+fn cold_path_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_COLD_PATHS"),
+        "PERRY_COLD_PATHS must key the compile caches"
     );
 }

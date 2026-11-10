@@ -17,6 +17,7 @@
 
 mod assemble;
 pub(crate) use assemble::assemble_text;
+mod cold_paths;
 mod coff;
 #[cfg(test)]
 mod dead_statepoint_tests;

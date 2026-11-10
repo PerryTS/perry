@@ -3900,7 +3900,9 @@ pub fn run_with_parse_cache(
         // module's re-export chain. For Eager modules the calls
         // short-circuit on the idempotent guard's first-write
         // check (one load + cmp + cond_br each).
-        let module_init_deps: Vec<String> = if is_entry && !program_has_worker {
+        let program_has_tla = ctx.native_modules.values().any(|m| m.has_top_level_await);
+        let module_graph_has_tla = super::init_order::graph_has_tla(&ctx, path);
+        let module_init_deps: Vec<String> = if is_entry && !program_has_worker && !program_has_tla {
             Vec::new()
         } else {
             let mut deps: Vec<String> = Vec::new();
@@ -3912,7 +3914,7 @@ pub fn run_with_parse_cache(
             let push_dep = |deps: &mut Vec<String>,
                             seen: &mut std::collections::HashSet<String>,
                             prefix: String| {
-                if Some(&prefix) == entry_prefix.as_ref() {
+                if !program_has_tla && Some(&prefix) == entry_prefix.as_ref() {
                     return;
                 }
                 if seen.insert(prefix.clone()) {
@@ -3997,11 +3999,28 @@ pub fn run_with_parse_cache(
             // Eager ordering #6463 fixed: a module statically imported by an
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
+            if !program_has_tla {
             if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
                 deps.retain(|dep| {
                     deferred_module_prefixes.contains(dep)
                         || init_pos.get(dep).map_or(true, |&p| p < self_pos)
                 });
+            }
+            }
+            if program_has_tla {
+                let mut ordered = super::init_order::static_requested_paths(&ctx, path);
+                // The open CommonJS cache exists before any user module runs.
+                // This is the same support edge the synchronous eager driver seeds.
+                if is_entry && !ctx.cjs_closed {
+                    if let Some(support) = &ctx.cjs_support_path {
+                        if ctx.native_modules.contains_key(support) {
+                            ordered.retain(|p| p != support);
+                            ordered.insert(0, support.clone());
+                        }
+                    }
+                }
+                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name)).collect();
             }
             deps
         };
@@ -6266,6 +6285,8 @@ pub fn run_with_parse_cache(
             lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
+            program_has_tla,
+            module_graph_has_tla,
             // Issue #842: signal side-effect-only dynamic-import
             // targets to codegen so it still emits
             // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`

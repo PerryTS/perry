@@ -135,7 +135,11 @@ impl Model {
             }
             Cons::Raise { region } => {
                 if toks.contains(&TOP) {
-                    self.raise_top(region, n, "unknown code may throw in the region (an operation on ⊤)");
+                    self.raise_top(
+                        region,
+                        n,
+                        "unknown code may throw in the region (an operation on ⊤)",
+                    );
                 }
             }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
@@ -457,6 +461,12 @@ impl Model {
                     }
                 }
             }
+            Cons::TopIfTop { dst, reason } => {
+                if toks.contains(&TOP) {
+                    self.add_top(dst, |m| m.reasons[reason as usize].clone());
+                    self.add_prim(dst, prim::ALL);
+                }
+            }
             Cons::DeleteKey { key, reason } => {
                 for &t in toks {
                     if t == TOP {
@@ -564,6 +574,26 @@ impl Model {
                             let k = self.atoms[key as usize].clone();
                             self.note_shared(SharedWrite::Accessor(Shared::Top, k.clone()));
                             self.note_shared(SharedWrite::Removed(Some(k)));
+                        }
+                        // A NAMED key on `Object.prototype` defines that key
+                        // there and no other (node: `Object.defineProperty(
+                        // Object.prototype, "k", d)`): an accessor key of
+                        // every chain through it, as on a class prototype.
+                        // DECISIONS 242(1) (an accessor under any key) is a
+                        // computed key: `Cons::Hard` E5 (`mark_hard`).
+                        TokKind::ObjectProto => {
+                            let k = Some(Key::Named(key));
+                            builtins::note_native_write(self, t, k, "E5 Object.defineProperty");
+                            self.virt_revoke(t, Some(key));
+                            self.reshape(Some(key));
+                            if let Some(s) = self.shared_of(t) {
+                                let name = self.atoms[key as usize].clone();
+                                self.note_shared(SharedWrite::Accessor(s, name));
+                            }
+                            let ks = self.accessor_keys.entry(t).or_default();
+                            if !ks.contains(&key) {
+                                ks.push(key);
+                            }
                         }
                         _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }

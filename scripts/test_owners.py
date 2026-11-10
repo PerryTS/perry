@@ -61,6 +61,7 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "node_http2_constants.rs", ("http2",)),
     (RT + "node_inspector.rs", ("inspector", "inspector-promises")),
     (RT + "module_require*", ("module",)),
+    (RT + "async_module*", ("module",)),
     (RT + "module_hooks.rs", ("module",)),
     (RT + "process/node_module*", ("module",)),
     (RT + "net_validate.rs", ("net",)),
