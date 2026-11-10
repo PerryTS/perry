@@ -130,11 +130,15 @@ fn the_entry_points_return_the_short_pair_value() {
     let dynamic =
         unsafe { crate::value::js_dynamic_string_or_number_add(inline(b"e2"), inline(b"e4")) };
     assert_eq!(dynamic.to_bits(), joined);
-    // A number operand still adds or concatenates per the spec.
+    // A number operand is not a short-pair operand: the general dynamic `+`
+    // still concatenates (its string arm builds a heap string, as before).
     let mixed = unsafe { crate::value::js_dynamic_string_or_number_add(inline(b"a"), 1.0) };
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (data, len, _) = crate::string::str_bytes_ascii_from_jsvalue(mixed, &mut scratch)
+        .expect("string + number concatenates");
     assert_eq!(
-        mixed.to_bits(),
-        JSValue::short_string_unchecked(b"a1").bits()
+        unsafe { std::slice::from_raw_parts(data, len as usize) },
+        b"a1"
     );
     assert_eq!(
         unsafe { crate::value::js_dynamic_string_or_number_add(2.0, 3.0) },
