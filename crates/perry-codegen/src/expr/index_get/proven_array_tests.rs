@@ -442,7 +442,11 @@ fn an_in_floor_field_read_call_is_the_field_load_and_the_slot_load() {
     // Growable storage: exactly the forwarding test stays, with its cold
     // read.
     assert!(forwarding_test(&f), "{f}");
-    assert_eq!(f.matches("arep.live:").count(), 1, "{f}");
+    assert_eq!(
+        f.lines().filter(|l| l.starts_with("arep.live")).count(),
+        1,
+        "{f}"
+    );
     assert!(
         f.lines()
             .any(|l| l.contains("add i64") && l.trim_end().ends_with(", 24")),
