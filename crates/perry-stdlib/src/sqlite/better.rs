@@ -10,6 +10,45 @@ use std::sync::Mutex;
 
 const DATABASE_NOT_OPEN: &str = "The database connection is not open";
 
+// rusqlite trims Rust whitespace before compilation, which can change SQLite
+// tokens and even valid Unicode identifiers. Lease only lexically safe SQL.
+enum StatementLease<'conn> {
+    Cached(rusqlite::CachedStatement<'conn>),
+    Original(rusqlite::Statement<'conn>),
+}
+
+impl<'conn> std::ops::Deref for StatementLease<'conn> {
+    type Target = rusqlite::Statement<'conn>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Cached(statement) => statement,
+            Self::Original(statement) => statement,
+        }
+    }
+}
+
+impl std::ops::DerefMut for StatementLease<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Cached(statement) => statement,
+            Self::Original(statement) => statement,
+        }
+    }
+}
+
+fn lease_statement<'conn>(
+    conn: &'conn Connection,
+    sql: &str,
+) -> rusqlite::Result<StatementLease<'conn>> {
+    let sqlite_trimmed = sql.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\x0c' | '\r'));
+    if sql.trim() == sqlite_trimmed {
+        conn.prepare_cached(sql).map(StatementLease::Cached)
+    } else {
+        conn.prepare(sql).map(StatementLease::Original)
+    }
+}
+
 #[cold]
 fn throw_database_not_open() -> ! {
     throw_plain_type(DATABASE_NOT_OPEN)
@@ -115,17 +154,14 @@ pub unsafe extern "C" fn js_sqlite_prepare(
 
     require_database_open(db_handle);
 
-    // Verify the SQL is valid
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            if conn.prepare(&sql).is_ok() {
-                return register_handle(SqliteStmtHandle {
-                    sql,
-                    db_handle,
-                    raw_mode: AtomicBool::new(false),
-                });
-            }
-        }
+    let valid = with_sqlite_connection(db_handle, |conn| lease_statement(conn, &sql).is_ok())
+        .unwrap_or(false);
+    if valid {
+        return register_handle(SqliteStmtHandle {
+            sql,
+            db_handle,
+            raw_mode: AtomicBool::new(false),
+        });
     }
     -1
 }
@@ -235,40 +271,120 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
 
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
-        if let Some(result) = with_sqlite_connection(stmt.db_handle, |conn| {
+    let Some((sql, db_handle, _)) = statement_snapshot(stmt_handle) else {
+        return std::ptr::null_mut();
+    };
+    let result = with_sqlite_connection(db_handle, |conn| {
+        let param_refs: Vec<&dyn rusqlite::ToSql> =
+            sqlite_params.iter().map(|p| p.as_ref()).collect();
+        let mut prepared = lease_statement(conn, &sql).ok()?;
+        let changes = prepared.execute(param_refs.as_slice()).ok()?;
+        Some((changes, conn.last_insert_rowid()))
+    })
+    .flatten();
+    let Some((changes, last_id)) = result else {
+        return std::ptr::null_mut();
+    };
+    let keys = vec!["changes".to_string(), "lastInsertRowid".to_string()];
+    let (packed_keys, shape_id) = build_packed_keys(&keys);
+    let result =
+        js_object_alloc_with_shape(shape_id, 2, packed_keys.as_ptr(), packed_keys.len() as u32);
+    js_object_set_field(result, 0, JSValue::number(changes as f64));
+    js_object_set_field(result, 1, JSValue::number(last_id as f64));
+    result
+}
+
+fn statement_snapshot(handle: Handle) -> Option<(String, Handle, bool)> {
+    get_handle::<SqliteStmtHandle>(handle).map(|stmt| {
+        (
+            stmt.sql.clone(),
+            stmt.db_handle,
+            stmt.raw_mode.load(Ordering::Relaxed),
+        )
+    })
+}
+
+fn query_owned_rows(
+    sql: &str,
+    db_handle: Handle,
+    sqlite_params: &[Box<dyn rusqlite::ToSql>],
+    first_only: bool,
+) -> Option<(Vec<String>, Vec<Vec<SqliteValue>>)> {
+    unsafe {
+        with_sqlite_connection(db_handle, |conn| {
             let param_refs: Vec<&dyn rusqlite::ToSql> =
                 sqlite_params.iter().map(|p| p.as_ref()).collect();
-
-            if let Ok(changes) = conn.execute(&stmt.sql, param_refs.as_slice()) {
-                let last_id = conn.last_insert_rowid();
-                let keys = vec!["changes".to_string(), "lastInsertRowid".to_string()];
-                let (packed_keys, shape_id) = build_packed_keys(&keys);
-                let result = js_object_alloc_with_shape(
-                    shape_id,
-                    2,
-                    packed_keys.as_ptr(),
-                    packed_keys.len() as u32,
-                );
-                js_object_set_field(result, 0, JSValue::number(changes as f64));
-                js_object_set_field(result, 1, JSValue::number(last_id as f64));
-                return result;
+            let mut prepared = lease_statement(conn, sql).ok()?;
+            let mut names = None;
+            let mut values = Vec::new();
+            {
+                let mut rows = prepared.query(param_refs.as_slice()).ok()?;
+                while let Ok(Some(row)) = rows.next() {
+                    // SQLite can recompile on step after a schema change.
+                    let columns = names.get_or_insert_with(|| {
+                        row.as_ref()
+                            .column_names()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    });
+                    values.push(
+                        (0..columns.len())
+                            .map(|idx| row.get(idx).unwrap_or(SqliteValue::Null))
+                            .collect(),
+                    );
+                    if first_only {
+                        break;
+                    }
+                }
             }
-            std::ptr::null_mut()
-        }) {
-            return result;
-        }
+            // Empty completion also steps and may update the statement metadata.
+            let names = names.unwrap_or_else(|| {
+                prepared
+                    .column_names()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            });
+            Some((names, values))
+        })
+        .flatten()
     }
+}
 
-    std::ptr::null_mut()
+unsafe fn owned_row_to_js(values: &[SqliteValue], shape: Option<&(Vec<u8>, u32)>) -> JSValue {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let values: Vec<_> = values
+        .iter()
+        .map(|value| scope.root_nanbox_u64(sqlite_value_to_jsvalue(value).bits()))
+        .collect();
+    if let Some((keys, shape_id)) = shape {
+        let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+            *shape_id,
+            values.len() as u32,
+            keys.as_ptr(),
+            keys.len() as u32,
+        ));
+        for (idx, value) in values.iter().enumerate() {
+            js_object_set_field(
+                obj.get_raw_mut_ptr(),
+                idx as u32,
+                JSValue::from_bits(value.get_nanbox_f64().to_bits()),
+            );
+        }
+        JSValue::object_ptr(obj.get_raw_mut_ptr::<ObjectHeader>().cast())
+    } else {
+        let mut arr = js_array_alloc(0);
+        for value in values {
+            arr = js_array_push(arr, JSValue::from_bits(value.get_nanbox_f64().to_bits()));
+        }
+        JSValue::object_ptr(arr.cast())
+    }
 }
 
 /// stmt.get(...params) -> Row | undefined
 ///
-/// Get a single row from a query. Returns f64 (NaN-boxed bits) instead
-/// of JSValue to avoid SysV AMD64 ABI mismatch on x86_64 (JSValue's
-/// `#[repr(transparent)] u64` returns in RAX but LLVM reads from XMM0
-/// when the call site declares a `double` return).
+/// Return NaN-boxed bits in the floating-point ABI used by generated callers.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_get(
     stmt_handle: Handle,
@@ -276,60 +392,22 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
 ) -> f64 {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
-
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
-        let raw = stmt.raw_mode.load(Ordering::Relaxed);
-        if let Some(result) = with_sqlite_connection(stmt.db_handle, |conn| {
-            let param_refs: Vec<&dyn rusqlite::ToSql> =
-                sqlite_params.iter().map(|p| p.as_ref()).collect();
-
-            if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                let column_names: Vec<String> = prepared
-                    .column_names()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-
-                let mut rows = prepared.query(param_refs.as_slice());
-                if let Ok(ref mut rows) = rows {
-                    if let Ok(Some(row)) = rows.next() {
-                        if raw {
-                            let row_arr = js_array_alloc(0);
-                            for (idx, _) in column_names.iter().enumerate() {
-                                let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                                js_array_push(row_arr, sqlite_value_to_jsvalue(&value));
-                            }
-                            return f64::from_bits(JSValue::object_ptr(row_arr as *mut u8).bits());
-                        }
-                        let (packed_keys, shape_id) = build_packed_keys(&column_names);
-                        let obj = js_object_alloc_with_shape(
-                            shape_id,
-                            column_names.len() as u32,
-                            packed_keys.as_ptr(),
-                            packed_keys.len() as u32,
-                        );
-
-                        for (idx, _name) in column_names.iter().enumerate() {
-                            let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                            js_object_set_field(obj, idx as u32, sqlite_value_to_jsvalue(&value));
-                        }
-
-                        return f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits());
-                    }
-                }
-            }
-            f64::from_bits(JSValue::undefined().bits())
-        }) {
-            return result;
-        }
-    }
-
-    f64::from_bits(JSValue::undefined().bits())
+    let Some((sql, db_handle, raw)) = statement_snapshot(stmt_handle) else {
+        return f64::from_bits(JSValue::undefined().bits());
+    };
+    let Some((names, rows)) = query_owned_rows(&sql, db_handle, &sqlite_params, true) else {
+        return f64::from_bits(JSValue::undefined().bits());
+    };
+    let shape = (!raw).then(|| build_packed_keys(&names));
+    f64::from_bits(
+        rows.first()
+            .map(|row| owned_row_to_js(row, shape.as_ref()))
+            .unwrap_or(JSValue::undefined())
+            .bits(),
+    )
 }
 
 /// stmt.all(...params) -> Row[]
-///
-/// Get all rows from a query.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_all(
     stmt_handle: Handle,
@@ -337,63 +415,21 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
 ) -> *mut ArrayHeader {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
-    let result_array = js_array_alloc(0);
-
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
-        let raw = stmt.raw_mode.load(Ordering::Relaxed);
-        let _ = with_sqlite_connection(stmt.db_handle, |conn| {
-            let param_refs: Vec<&dyn rusqlite::ToSql> =
-                sqlite_params.iter().map(|p| p.as_ref()).collect();
-
-            if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                let column_names: Vec<String> = prepared
-                    .column_names()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-
-                // Only build the per-row object shape in non-raw
-                // mode. In raw mode each row is its own array of
-                // column values; no per-row object shape needed.
-                let object_shape = if raw {
-                    None
-                } else {
-                    Some(build_packed_keys(&column_names))
-                };
-
-                let mut rows = prepared.query(param_refs.as_slice());
-                if let Ok(ref mut rows) = rows {
-                    while let Ok(Some(row)) = rows.next() {
-                        if raw {
-                            let row_arr = js_array_alloc(0);
-                            for (idx, _) in column_names.iter().enumerate() {
-                                let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                                js_array_push(row_arr, sqlite_value_to_jsvalue(&value));
-                            }
-                            js_array_push(result_array, JSValue::object_ptr(row_arr as *mut u8));
-                            continue;
-                        }
-                        let (packed_keys, shape_id) = object_shape.as_ref().unwrap();
-                        let obj = js_object_alloc_with_shape(
-                            *shape_id,
-                            column_names.len() as u32,
-                            packed_keys.as_ptr(),
-                            packed_keys.len() as u32,
-                        );
-
-                        for (idx, _name) in column_names.iter().enumerate() {
-                            let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                            js_object_set_field(obj, idx as u32, sqlite_value_to_jsvalue(&value));
-                        }
-
-                        js_array_push(result_array, JSValue::object_ptr(obj as *mut u8));
-                    }
-                }
-            }
-        });
+    let snapshot = statement_snapshot(stmt_handle).and_then(|(sql, db_handle, raw)| {
+        query_owned_rows(&sql, db_handle, &sqlite_params, false)
+            .map(|(names, rows)| (names, rows, raw))
+    });
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let result = scope.root_raw_mut_ptr(js_array_alloc(0));
+    if let Some((names, rows, raw)) = snapshot {
+        let shape = (!raw).then(|| build_packed_keys(&names));
+        for row in rows {
+            let value = owned_row_to_js(&row, shape.as_ref());
+            let arr = js_array_push(result.get_raw_mut_ptr(), value);
+            result.set_raw_mut_ptr(arr);
+        }
     }
-
-    result_array
+    result.get_raw_mut_ptr()
 }
 
 /// db.pragma(pragma, value?) -> any
@@ -699,6 +735,10 @@ pub(crate) static KEEP_SQLITE_CLOSE: unsafe extern "C" fn(Handle) -> i32 = js_sq
 #[used(compiler)]
 pub(crate) static KEEP_SQLITE_STMT_COLUMNS: unsafe extern "C" fn(Handle) -> *mut ArrayHeader =
     js_sqlite_stmt_columns;
+
+#[cfg(test)]
+#[path = "better_tests.rs"]
+mod preparation_tests;
 
 #[cfg(test)]
 mod layout_tests {
