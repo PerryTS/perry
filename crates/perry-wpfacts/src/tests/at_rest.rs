@@ -69,10 +69,14 @@ console.log(s, c.frac, c.mixed);
 fn a_number_field_takes_the_representation_of_its_nodes() {
     use crate::bindings::Rep;
     assert_eq!(field_rep(FIELDS, "C", "small"), Rep::I32);
-    // Past int32, a fraction, a possible -0: Numbers, not int32.
+    // Past int32, a fraction: Numbers, not int32.
     assert_eq!(field_rep(FIELDS, "C", "wide"), Rep::F64);
     assert_eq!(field_rep(FIELDS, "C", "frac"), Rep::F64);
-    assert_eq!(field_rep(FIELDS, "C", "zero"), Rep::F64);
+    // A possible -0 that only `| 0` reads: int32 by −0 tolerance (PR D);
+    // read by `Object.is`, the sign is observed and it is a Number.
+    assert_eq!(field_rep(FIELDS, "C", "zero"), Rep::I32);
+    let observed = format!("{FIELDS}\nconsole.log(Object.is(c.zero, -0));\n");
+    assert_eq!(field_rep(&observed, "C", "zero"), Rep::F64);
     // A field that may hold a String is no Number field.
     assert_eq!(field_rep(FIELDS, "C", "mixed"), Rep::Boxed);
 }

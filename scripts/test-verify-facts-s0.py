@@ -138,6 +138,8 @@ def main():
         ("rest-field-zero-negative", "restfield", "field rep"),
         ("rest-elem-negative", "restelem", "array rep"),
         ("rest-raw-negative", "restraw", "array rep"),
+        ("zero-sign-negative", "zerosign", "zero sign"),
+        ("zero-sign-elem-negative", "zerosign", "zero sign"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

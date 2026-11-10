@@ -89,7 +89,8 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // Call arguments: the callee classifies them (`zero_sign`).
+        let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
         if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
             self.call_args_at.push((fx.module, byte_offset, a.clone()));
         }
@@ -119,6 +120,7 @@ impl<'a> Gen<'a> {
                         _ => None,
                     })
                     .collect();
+                self.zs_observe(&a);
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
@@ -240,6 +242,7 @@ impl<'a> Gen<'a> {
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
+                self.str_index_bound(object, property, call);
                 match private {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => self.m.cons(
@@ -313,6 +316,7 @@ impl<'a> Gen<'a> {
                 self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
+                self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {

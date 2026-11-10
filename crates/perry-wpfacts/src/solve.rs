@@ -1919,10 +1919,10 @@ impl Model {
             out = out.join(crate::model::range::chars_to_number(nd.crange));
         }
         if nd.prim & prim::BOOL != 0 {
-            out = out.join(Iv { lo: 0, hi: 1 });
+            out = out.join(Iv::int(0, 1));
         }
         if nd.prim & prim::NULL != 0 {
-            out = out.join(Iv { lo: 0, hi: 0 });
+            out = out.join(Iv::int(0, 0));
         }
         let known = prim::NUM | prim::STR | prim::BOOL | prim::NULL;
         if nd.prim & !known != 0 {

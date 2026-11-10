@@ -25,6 +25,7 @@ mod array_record;
 mod array_reps;
 mod at_rest;
 mod rest_elems;
+mod zero_sign;
 mod const_arrays;
 mod array_search;
 mod binding_write_gap;

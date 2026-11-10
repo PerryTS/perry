@@ -26,6 +26,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // expression boundary refreshes them.
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    crate::verify_facts::zero_sign::witness(ctx, expr);
     // What the expression does to the receiver run in flight.
     let run = crate::expr::layout_read::run_transparency(expr);
     crate::expr::layout_read::run_enter(ctx, &run);

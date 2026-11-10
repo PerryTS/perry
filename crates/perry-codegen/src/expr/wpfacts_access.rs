@@ -119,6 +119,10 @@ pub(crate) struct FieldProof {
     /// some class's field may hold anything but Numbers, and for a guarded
     /// or possibly absent read. PR A consumes it only in check mode.
     pub num_rep: Option<crate::codegen::FactsRep>,
+    /// −0 tolerance (PR D): some class's field may hold a `-0` no use
+    /// observes (`ElisionFacts::zero_tolerant_fields`); the field-rep
+    /// witness admits it.
+    pub num_zero_ok: bool,
 }
 
 impl FieldProof {
@@ -657,6 +661,11 @@ pub(crate) fn prove(
         } else {
             class_set_number(ctx, &recv.class_ids, property)
         },
+        num_zero_ok: recv.class_ids.iter().any(|&c| {
+            ctx.wpfacts
+                .zero_tolerant_fields
+                .contains(&(c, property.to_string()))
+        }),
     };
     crate::verify_facts::field_consumed(&proof, property);
     Some(proof)
@@ -1011,6 +1020,7 @@ pub(crate) fn try_lower_get(
                 r,
                 &val,
                 &format!("{property} of {}", p.binding),
+                p.num_zero_ok,
             );
         }
         // A Number has one encoding in every JS value (the raw double), so

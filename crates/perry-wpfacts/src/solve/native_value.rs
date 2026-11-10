@@ -32,7 +32,7 @@ impl Model {
         if let Some(e) = builtins::declared_member(identity) {
             if self.bind_done.insert((call, t, u32::MAX - 7)) {
                 self.diagnostic_callee(call, t);
-                self.with_b(|m| builtins::run_member(m, e, t, call));
+                self.with_native(call, |m| builtins::run_member(m, e, t, call));
             }
             return true;
         }
@@ -45,7 +45,7 @@ impl Model {
         if let Some(e) = builtins::declared_static(identity) {
             if self.bind_done.insert((call, t, u32::MAX - 7)) {
                 self.diagnostic_callee(call, t);
-                self.with_b(|m| builtins::run_function(m, e, call));
+                self.with_native(call, |m| builtins::run_function(m, e, call));
             }
             return true;
         }
@@ -73,7 +73,9 @@ impl Model {
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
-            self.with_b(|m| builtins::native_prototype_call(m, fam, r, key, call));
+            self.with_native(call, |m| {
+                builtins::native_prototype_call(m, fam, r, key, call)
+            });
         }
         true
     }
@@ -90,7 +92,7 @@ impl Model {
         };
         if self.bind_done.insert((call, t, u32::MAX - 7)) {
             self.diagnostic_callee(call, t);
-            self.with_b(|m| builtins::run_function(m, e, call));
+            self.with_native(call, |m| builtins::run_function(m, e, call));
         }
         true
     }
@@ -119,7 +121,9 @@ impl Model {
             }
             let why = self.reason("ToString(this) of a String.prototype method");
             self.implicit(r, why, Protocol::ToPrimitive);
-            self.with_b(|m| builtins::prim_method(m, prim::STR, Key::Named(key), call));
+            self.with_native(call, |m| {
+                builtins::prim_method(m, prim::STR, Key::Named(key), call)
+            });
         }
         true
     }
@@ -190,7 +194,9 @@ impl Model {
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let own = prim & builtins::native_prims(fam);
         if own != 0 {
-            self.with_b(|m| builtins::prim_method(m, own, Key::Named(key), call));
+            self.with_native(call, |m| {
+                builtins::prim_method(m, own, Key::Named(key), call)
+            });
         }
         let foreign = prim & !own & !(prim::UNDEF | prim::NULL);
         if foreign == 0 {
@@ -205,7 +211,9 @@ impl Model {
             && self.bind_done.insert((call, f, u32::MAX - 6))
         {
             self.diagnostic_callee(call, f);
-            self.with_b(|m| builtins::prim_method(m, prim::STR, Key::Named(key), call));
+            self.with_native(call, |m| {
+                builtins::prim_method(m, prim::STR, Key::Named(key), call)
+            });
         }
     }
 }
