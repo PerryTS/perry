@@ -149,9 +149,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 .copied()
                 .flatten()
                 .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
-            let rep = c.array.map_or("boxed".to_string(), |r| {
-                crate::bindings::Rep::Arr(r).name()
-            });
+            let rep = c
+                .array
+                .map_or("boxed".to_string(), |r| crate::bindings::Rep::Arr(r).name());
             out.push_str(&format!(
                 "# field_read_call module={mi} call={offset} field={} key={key} rep={rep} in_floor={}\n",
                 c.field, c.in_floor as u8

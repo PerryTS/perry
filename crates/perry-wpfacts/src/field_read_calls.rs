@@ -232,10 +232,7 @@ pub(crate) fn collect(
         }
         let mut nodes = Vec::new();
         for e in &g.element_sites {
-            if e.module == mi
-                && e.byte_offset == offset
-                && e.op == crate::derive::ElementOp::Read
-            {
+            if e.module == mi && e.byte_offset == offset && e.op == crate::derive::ElementOp::Read {
                 nodes.push(e.recv);
                 nodes.extend(inst_copies.get(&e.recv).into_iter().flatten().copied());
             }

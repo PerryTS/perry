@@ -900,12 +900,9 @@ fn template_facts(
         } else {
             Vec::new()
         };
-        let rep = if m.array_fields
-            && definite
-            && !is_accessor
-            && escape.is_none()
-            && hard.is_none()
-        {
+        let whole_life =
+            m.array_fields && definite && !is_accessor && escape.is_none() && hard.is_none();
+        let rep = if whole_life {
             // The field nodes of the tokens that have one, as `field_kind`
             // reads them.
             let nodes: Vec<NodeId> = ts

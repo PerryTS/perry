@@ -615,10 +615,7 @@ fn a_call_into_a_holey_or_undefined_holding_field_is_not_in_the_floor() {
         assert!(!c.in_floor, "{c:?}");
     }
     // A `delete` of an element makes the array hard: no rep at all.
-    let deleted = FIELD_BOARD.replace(
-        "c.ep = ",
-        "delete c.board[3];\nc.ep = ",
-    );
+    let deleted = FIELD_BOARD.replace("c.ep = ", "delete c.board[3];\nc.ep = ");
     for (_, c) in b1(&deleted, FactsConfig::default()) {
         assert!(c.array.is_none() && !c.in_floor, "{c:?}");
     }
@@ -629,10 +626,7 @@ fn a_call_into_a_holey_or_undefined_holding_field_is_not_in_the_floor() {
     }
     // A stored `undefined` is a present element: the call stays in the
     // floor, and the elements are Boxed (the `??` stays in codegen).
-    let undef = FIELD_BOARD.replace(
-        "c.ep = ",
-        "(c.board as any)[5] = undefined;\nc.ep = ",
-    );
+    let undef = FIELD_BOARD.replace("c.ep = ", "(c.board as any)[5] = undefined;\nc.ep = ");
     let calls = b1(&undef, FactsConfig::default());
     assert!(calls.iter().any(|(_, c)| c.in_floor));
     for (_, c) in &calls {

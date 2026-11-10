@@ -400,9 +400,7 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
         },
     );
     elision.field_read_calls.insert(outside, read);
-    elision
-        .call_arg_ranges
-        .insert(inside, vec![Some((0, 127))]);
+    elision.call_arg_ranges.insert(inside, vec![Some((0, 127))]);
     elision
         .call_arg_ranges
         .insert(outside, vec![Some((-16, 111))]);
@@ -464,7 +462,10 @@ fn an_in_floor_field_read_call_is_the_field_load_and_the_slot_load() {
 fn a_field_read_call_outside_the_floor_keeps_its_bound_and_its_default() {
     let ir = field_ir(FactsRep::Arr(GROWABLE), true);
     let f = body(&ir, "outside").join("\n");
-    assert!(!f.contains(".guard.prefix"), "the tier, not the guards\n{f}");
+    assert!(
+        !f.contains(".guard.prefix"),
+        "the tier, not the guards\n{f}"
+    );
     assert!(capacity_bound(&f), "the capacity bound\n{f}");
     assert!(forwarding_test(&f), "{f}");
     assert!(f.contains("perry_array_read_cold_shared"), "{f}");
@@ -512,7 +513,11 @@ fn the_array_rep_join_says_what_both_say() {
     );
     assert_eq!(FactsArrRep::join(a, b), FactsArrRep::join(b, a));
     assert_eq!(FactsArrRep::join(a, a), a);
-    let holey = FactsArrRep { dense: false, elem: FactsElemRep::Boxed, ..a };
+    let holey = FactsArrRep {
+        dense: false,
+        elem: FactsElemRep::Boxed,
+        ..a
+    };
     let j = FactsArrRep::join(a, holey);
     assert_eq!((j.elem, j.dense), (FactsElemRep::Boxed, false));
 }

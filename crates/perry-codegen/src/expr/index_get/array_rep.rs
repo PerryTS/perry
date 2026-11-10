@@ -227,9 +227,7 @@ pub(super) fn witness_read(
     branch(ctx, &extent, "arep.verify_key", &miss_l);
     if read.in_floor {
         // The floor the key was proven below (a field read call's own).
-        let below = ctx
-            .block()
-            .icmp_ult(I32, idx, &read.key_floor.to_string());
+        let below = ctx.block().icmp_ult(I32, idx, &read.key_floor.to_string());
         branch(ctx, &below, "arep.verify_stored", &miss_l);
     }
     // The slot, when the store holds it.
@@ -301,14 +299,7 @@ fn branch(ctx: &mut FnCtx<'_>, cond: &str, name: &str, other: &str) {
 }
 
 /// The miss block's report, then `next` is current.
-fn finish(
-    ctx: &mut FnCtx<'_>,
-    miss: usize,
-    next: usize,
-    recv: &str,
-    r: FactsArrRep,
-    what: &str,
-) {
+fn finish(ctx: &mut FnCtx<'_>, miss: usize, next: usize, recv: &str, r: FactsArrRep, what: &str) {
     ctx.current_block = miss;
     let site = crate::verify_facts::site_arg(
         ctx,
