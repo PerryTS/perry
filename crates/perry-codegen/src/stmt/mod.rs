@@ -28,6 +28,9 @@ mod class_field_loop_tests;
 mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
+mod const_array_walk;
+#[cfg(test)]
+mod const_array_walk_tests;
 #[cfg(test)]
 mod contents_stable_ir_tests;
 mod counter_range;

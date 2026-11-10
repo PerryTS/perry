@@ -60,24 +60,28 @@ const SAMPLES: [Rep; 7] = [
         floor: 8,
         dense: true,
         fixed: true,
+        im: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::F64,
         floor: 3,
         dense: false,
         fixed: true,
+        im: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::Boxed,
         floor: 0,
         dense: false,
         fixed: false,
+        im: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::I32,
         floor: 128,
         dense: true,
         fixed: false,
+        im: false,
     }),
 ];
 
@@ -117,6 +121,7 @@ fn two_arrays_join_to_what_both_have() {
             floor: 8,
             dense: true,
             fixed: false,
+            im: false,
         })
     );
     let j = Rep::join(SAMPLES[3], SAMPLES[4]);
@@ -127,6 +132,7 @@ fn two_arrays_join_to_what_both_have() {
             floor: 3,
             dense: false,
             fixed: true,
+            im: false,
         })
     );
 }

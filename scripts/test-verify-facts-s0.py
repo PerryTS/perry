@@ -117,6 +117,7 @@ def main():
         ("array-elem-negative", "arrelem", "array rep"),
         ("array-lazy-negative", "arrlazy", "array rep"),
         ("array-front-negative", "arrfront", "array rep"),
+        ("const-array-negative", "arrconst", "constant array"),
         ("array-field-negative", "arrfield", "array rep"),
         ("array-b1-negative", "arrb1", "array rep"),
         ("range-sum-negative", "exactrule", "array rep"),
