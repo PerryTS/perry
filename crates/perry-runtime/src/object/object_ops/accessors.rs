@@ -123,6 +123,22 @@ pub extern "C" fn js_object_get_own_field_or_undef(
     name_len: usize,
 ) -> f64 {
     const TAG_UNDEF: u64 = 0x7FFC_0000_0000_0001;
+    if super::super::deferred_namespace::is_deferred(obj_value) && !name_ptr.is_null() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(obj_value);
+        let name = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+        return super::super::deferred_namespace::with_key_target(
+            receiver.get_nanbox_f64(),
+            crate::value::js_nanbox_string(name as i64),
+            |target, key| {
+                super::super::js_object_get_field_by_name_f64(
+                    crate::JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader,
+                )
+            },
+        )
+        .unwrap_or(f64::from_bits(TAG_UNDEF));
+    }
     if name_ptr.is_null() {
         return f64::from_bits(TAG_UNDEF);
     }

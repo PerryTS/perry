@@ -214,6 +214,9 @@ pub mod method_call;
 pub mod method_site;
 mod slot_store;
 pub(crate) use slot_store::{store_object_field_slot, store_object_field_slot_layout_deferred};
+pub(crate) mod deferred_namespace;
+#[cfg(test)]
+mod deferred_namespace_tests;
 mod namespace_create;
 pub(crate) mod native_call_method;
 pub(crate) mod native_get;

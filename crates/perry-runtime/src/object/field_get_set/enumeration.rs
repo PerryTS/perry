@@ -132,6 +132,9 @@ pub(super) unsafe fn native_module_enum(
 /// dereferenced as an `ObjectHeader` → SIGSEGV.
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
+    if let Some(result) = super::super::deferred_namespace::enumerable_keys(value) {
+        return result;
+    }
     let jv = JSValue::from_bits(value.to_bits());
     // #2818: ToObject(null/undefined) throws TypeError, matching Node.
     if jv.is_null() || jv.is_undefined() {
@@ -1177,6 +1180,11 @@ pub(crate) use buffers::registered_buffer_own_keys;
 /// Ordinary shapes bulk-copy their bounded key list into a fresh result.
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    if let Some(result) = super::super::deferred_namespace::enumerable_keys(
+        crate::value::js_nanbox_pointer(obj as i64),
+    ) {
+        return result;
+    }
     if let Some(keys) = ordinary_keys::try_keys(obj) {
         return keys;
     }

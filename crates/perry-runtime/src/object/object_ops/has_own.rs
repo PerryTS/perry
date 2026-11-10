@@ -72,6 +72,13 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
+    if let Some(result) = super::super::deferred_namespace::with_key_target(
+        obj_value,
+        key_value,
+        object_has_own_generic,
+    ) {
+        return result;
+    }
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     // The probe's presence mode (`layout_probe::probe_has`), else the

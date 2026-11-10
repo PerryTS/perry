@@ -219,6 +219,11 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
+    if let Some(result) =
+        super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
+    {
+        return result;
+    }
     // The probe's presence mode (`layout_probe::probe_has`), else the
     // complete operation.
     match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
@@ -241,6 +246,11 @@ pub(crate) fn in_operator_generic(obj: f64, key: f64) -> f64 {
 /// This implements the JavaScript 'in' operator: "key" in obj
 #[no_mangle]
 pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
+    if let Some(result) =
+        super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
+    {
+        return result;
+    }
     match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
         1 => return f64::from_bits(JSValue::bool(true).bits()),
         0 => return f64::from_bits(JSValue::bool(false).bits()),
@@ -1132,6 +1142,21 @@ unsafe fn ordinary_has_property(
             || !crate::value::addr_class::is_above_handle_band(cur as usize)
         {
             break;
+        }
+        if key_name != Some("then") {
+            if let Some(result) = super::super::deferred_namespace::with_key_target(
+                crate::value::js_nanbox_pointer(cur as i64),
+                crate::value::js_nanbox_string(key as i64),
+                |target, property_key| {
+                    ordinary_has_property(
+                        JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
+                        crate::value::js_get_string_pointer_unified(property_key)
+                            as *const crate::StringHeader,
+                    )
+                },
+            ) {
+                return result;
+            }
         }
         last_valid = cur;
         // A class object made at run time (`class X extends make(..) {}`, one

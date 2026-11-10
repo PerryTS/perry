@@ -798,7 +798,9 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return f64::from_bits(TAG_TRUE); // non-objects are vacuously frozen
         }
-        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID {
+        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID
+            || (*obj).class_id == super::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID
+        {
             // 10.4.6.5: every export is a writable data property (its live
             // binding's accessor is internal), so a namespace is frozen only
             // when it exports nothing.

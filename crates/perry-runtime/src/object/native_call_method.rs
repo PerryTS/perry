@@ -1404,6 +1404,22 @@ pub(crate) unsafe fn native_call_method_tower(
     let object = || object_handle.get_nanbox_f64();
     let jsval = || JSValue::from_bits(object().to_bits());
 
+    // Calls with no observable arguments can skip the split lookup. They
+    // still perform the deferred namespace's [[Get]], never slot-only native
+    // dispatch. Reuse this tower's receiver/argv roots across module evaluation.
+    if super::deferred_namespace::is_deferred(object()) {
+        let name = method_name.as_bytes().to_vec();
+        let function = super::method_call::spec_get_value(object(), &name);
+        let function = root_scope.root_nanbox_f64(function);
+        let args = refreshed_args();
+        return super::method_call::js_method_call_value(
+            function.get_nanbox_f64(),
+            object(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
+
     // An explicit `Object.setPrototypeOf(instance, proto)` replaces the
     // instance's class prototype. Resolve a method value through ordinary
     // property lookup before any class/native dispatch: that lookup preserves
