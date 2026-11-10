@@ -358,6 +358,7 @@ pub(crate) fn admit(
             .iter()
             .find_map(|c| use_of(m, c, fill_recv, &reads))
         {
+            let why = format!("{why} on {}", m.labels.get(n as usize).copied().unwrap_or("?"));
             refuse(&mut cand, hit, &why);
         }
     }
