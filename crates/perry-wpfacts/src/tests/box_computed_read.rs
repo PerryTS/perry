@@ -130,3 +130,32 @@ fn a_computed_read_keeps_what_unknown_code_or_a_given_prototype_put_there() {
         }
     }
 }
+
+/// A computed read of a `JSON.parse` object may be `Object.prototype` (the
+/// key may be `__proto__`). Defining a NAMED key on it defines that one key
+/// there (node: `Object.defineProperties(o, { k: d })`), never an accessor
+/// under any key (DECISIONS 242(1) is a computed key): a literal that misses
+/// a key under a computed key (`lit[k]`) keeps its own reads (tsc `debug.ts`
+/// `__tsDebuggerDisplay` on a value that may be Object.prototype vs
+/// `Diagnostics.*` reads).
+#[test]
+fn a_named_define_on_a_value_that_may_be_object_prototype_defines_that_key() {
+    let mut bad = Vec::new();
+    for make in ["JSON.parse(\"\" + k)", "Object.fromEntries([[k, 1]])"] {
+        for define in [
+            "Object.defineProperties(o, { cfg: { value() { return 1; } } })",
+            "Object.defineProperties(o, { cfg: { enumerable: false, value: 1 } })",
+            "Object.defineProperty(o, \"cfg\", { value: 1 })",
+        ] {
+            let body = format!(
+                "const j: any = {make};\nconst o: any = j[k];\n{define};\nconst lit: any = {{ witness: 1 }};\nconsole.log(lit[k]);\nconsole.log(lit.witness);"
+            );
+            let (ok, d) = run(SETUP_ARGV, &body);
+            if !ok {
+                bad.push(format!("{make} {define}"));
+                eprintln!("{d}");
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
