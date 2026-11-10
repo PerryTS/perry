@@ -137,10 +137,15 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             effects::run_native(m, e, t, call);
         }
         // Generator protocol (a generator object is its step closure): the
-        // step closure only; any other function value has no such methods
-        // (a computed key on one is a runtime property: unknown).
+        // step closure only. On any other function, bound function or class
+        // value a named `next`/`return`/`throw` is an ordinary [[Get]]: its
+        // own statics (they shadow these members, `builtin_members`), then
+        // `Function.prototype` and `Object.prototype`, which define none of
+        // them unless the program wrote one there (the written-method
+        // arrival, `own_method_inner`); absent, the call throws a TypeError.
+        // A computed key on one is a runtime property: unknown.
         Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step()) => {
-            if name.is_none() || !matches!(m.toks[t as usize], TokKind::Func(..)) {
+            if name.is_none() {
                 unknown_method(m, call, "computed method of a function value");
             }
         }
@@ -1009,6 +1014,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 | "with"
         )
     );
+    if !crate::const_arrays::method_reads_only(name) {
+        m.arr_written(t);
+    }
     if name == Some("push") {
         m.arr_len_append(t);
     } else if !keeps_length {
@@ -1302,7 +1310,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         let callable = match born {
             Some(b) => matches!(
                 members::realm_chain_find(b, name),
-                members::RealmFind::Own(p) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
+                members::RealmFind::Own(p, _) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
             ),
             None => matches!(
                 members::member(members::bobj_family(what), name),

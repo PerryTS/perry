@@ -135,6 +135,42 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                     b.rep.name()
                 ));
             }
+            // Fact IM (`const_arrays`): a rooted `const` of immutable Arrays,
+            // and its constant contents.
+            if b.immutable_array {
+                out.push_str(&format!("# immutable_array module={mi} local={id}\n"));
+            }
+            if let Some(c) = &b.const_elems {
+                let v: Vec<String> = c
+                    .iter()
+                    .map(|b| format!("{}", f64::from_bits(*b)))
+                    .collect();
+                out.push_str(&format!(
+                    "# const_array module={mi} local={id} elems=[{}]\n",
+                    v.join(",")
+                ));
+            }
+        }
+    }
+    // DESIGN-p4l1 §5.6: each field read call (b1), its key's interval at
+    // the call, what the read reads from, and the in-floor verdict.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (offset, c) in &bindings.field_read_calls {
+            let key = bindings
+                .call_arg_ranges
+                .binary_search_by_key(offset, |(o, _)| *o)
+                .ok()
+                .and_then(|at| bindings.call_arg_ranges[at].1.get(c.index_arg as usize))
+                .copied()
+                .flatten()
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let rep = c
+                .array
+                .map_or("boxed".to_string(), |r| crate::bindings::Rep::Arr(r).name());
+            out.push_str(&format!(
+                "# field_read_call module={mi} call={offset} field={} key={key} rep={rep} in_floor={}\n",
+                c.field, c.in_floor as u8
+            ));
         }
     }
     // N6: each module binding the facts give one Number.

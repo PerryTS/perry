@@ -135,7 +135,11 @@ impl Model {
             }
             Cons::Raise { region } => {
                 if toks.contains(&TOP) {
-                    self.raise_top(region, n, "unknown code may throw in the region (an operation on ⊤)");
+                    self.raise_top(
+                        region,
+                        n,
+                        "unknown code may throw in the region (an operation on ⊤)",
+                    );
                 }
             }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
@@ -455,6 +459,12 @@ impl Model {
                     if from != dst {
                         self.edge(from, dst);
                     }
+                }
+            }
+            Cons::TopIfTop { dst, reason } => {
+                if toks.contains(&TOP) {
+                    self.add_top(dst, |m| m.reasons[reason as usize].clone());
+                    self.add_prim(dst, prim::ALL);
                 }
             }
             Cons::DeleteKey { key, reason } => {
