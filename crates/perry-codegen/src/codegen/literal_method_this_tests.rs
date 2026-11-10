@@ -367,6 +367,8 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
         emit_ir_only: true,
         is_entry_module: false,
         module_init_deps: vec!["consumer_ts".into()],
+        program_has_tla: false,
+        module_graph_has_tla: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&hir, opts).unwrap()).unwrap();

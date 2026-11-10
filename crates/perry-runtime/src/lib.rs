@@ -192,6 +192,7 @@ pub mod messaging;
 pub mod mimalloc_os_tag;
 pub mod module_hooks;
 pub mod module_require;
+pub mod async_module;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;

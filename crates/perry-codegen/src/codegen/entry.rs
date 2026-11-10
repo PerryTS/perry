@@ -23,6 +23,7 @@ mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
 mod module_init;
+mod async_module;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
 
@@ -157,7 +158,7 @@ pub(super) fn compile_module_entry(
     // A worker evaluates the program entry as a module on its own thread.
     // Share the ordinary initializer (including its per-thread guard and
     // dependency walk) with main instead of giving the entry a no-op stub.
-    let entry_in_init = is_entry && llmod.program_has_worker;
+    let entry_in_init = is_entry && (llmod.program_has_worker || cross_module.program_has_tla);
     if !is_entry || entry_in_init {
         module_init::compile_module_init(
             llmod,
@@ -419,7 +420,15 @@ pub(super) fn compile_module_entry(
                     // A program with worker entries always has thread-local
                     // init guards (`program_has_worker`), so the guarded
                     // wrapper runs once per thread.
-                    (cn, len, format!("{prefix}__init"))
+                    let init = if cross_module.program_has_tla {
+                        format!("{prefix}__async_entry")
+                    } else {
+                        format!("{prefix}__init")
+                    };
+                    if cross_module.program_has_tla {
+                        llmod.declare_function(&init, VOID, &[]);
+                    }
+                    (cn, len, init)
                 })
                 .collect()
         } else {
@@ -736,7 +745,9 @@ pub(super) fn compile_module_entry(
                 if let Some(const_name) = debug_init_chain.get(index) {
                     blk.call_void("puts", &[(PTR, &format!("@{}", const_name))]);
                 }
-                blk.call_void(&format!("{}__init", prefix), &[]);
+                if !cross_module.program_has_tla {
+                    blk.call_void(&format!("{}__init", prefix), &[]);
+                }
             }
             // SNAP census (`PERRY_SNAP_CENSUS` set while compiling, with
             // `PERRY_GC_INSTRUMENTS=1`): the entry's own body starts here.
@@ -851,6 +862,7 @@ pub(super) fn compile_module_entry(
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1172,8 +1184,15 @@ pub(super) fn compile_module_entry(
             if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
                 ctx.block().call_void("js_snap_entry_module", &[]);
             }
-            ctx.block()
-                .call_void(&format!("{}__init", module_prefix), &[]);
+            if cross_module.program_has_tla {
+                if entry_evaluates_as_esm(hir, cross_module) {
+                    ctx.block().call_void("js_mark_entry_module_esm", &[]);
+                }
+                let record = ctx.block().call(I64, &format!("{}__async_record", module_prefix), &[]);
+                ctx.block().call_void("js_async_module_entry", &[(I64, &record)]);
+            } else {
+                ctx.block().call_void(&format!("{}__init", module_prefix), &[]);
+            }
         } else {
             // Register every module-level global's ADDRESS as a GC root so
             // the mark phase can discover pointer-typed values (Maps, Arrays,
