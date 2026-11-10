@@ -1991,6 +1991,7 @@ mod fresh_proto_chain;
 mod host_browser_effects;
 mod realm_object_proto_member;
 mod host_performance_intl;
+mod host_stream_effects;
 mod host_fs_effects;
 mod native_fs_watch;
 mod host_inspector_effects;
