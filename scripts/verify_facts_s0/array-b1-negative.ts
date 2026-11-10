@@ -11,7 +11,8 @@ class Board {
     return this.board[sq] ?? 0;
   }
   probe(): number {
-    return this.at(this.ep) * 100 + this.at(this.ep - 16) * 10 + this.at(this.ep + 16);
+    const ep = this.ep;
+    return this.at(ep) * 100 + this.at(ep - 16) * 10 + this.at(ep + 16);
   }
 }
 const b = new Board();

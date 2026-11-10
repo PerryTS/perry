@@ -328,8 +328,8 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
 const FIELD_SRC: &str = "export class Board {\n\
   board: number[] = [];\n\
   at(sq: number): number { return this.board[sq] ?? 0; }\n\
-  inFloor(m: number): number { return this.at(m & 127); }\n\
-  outside(m: number): number { return this.at((m & 127) - 16); }\n\
+  inFloor(): number { return this.at(5); }\n\
+  outside(): number { return this.at(200); }\n\
   direct(m: number): number { return this.board[m & 127]; }\n\
 }\n";
 
@@ -390,8 +390,8 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
         field_offset: at("this.board[sq]"),
         in_floor: None,
     };
-    let inside = at("this.at(m & 127)");
-    let outside = at("this.at((m & 127) - 16)");
+    let inside = at("this.at(5)");
+    let outside = at("this.at(200)");
     elision.field_read_calls.insert(
         inside,
         FactsFieldReadCall {
@@ -400,15 +400,13 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
         },
     );
     elision.field_read_calls.insert(outside, read);
-    elision.call_arg_ranges.insert(inside, vec![Some((0, 127))]);
+    elision.call_arg_ranges.insert(inside, vec![Some((5, 5))]);
     elision
         .call_arg_ranges
-        .insert(outside, vec![Some((-16, 111))]);
+        .insert(outside, vec![Some((200, 200))]);
     // The body's own read joins every caller's key; the direct read has
     // its own.
-    elision
-        .element_keys
-        .insert(at("this.board[sq]"), (-16, 127));
+    elision.element_keys.insert(at("this.board[sq]"), (5, 200));
     elision
         .element_keys
         .insert(at("this.board[m & 127]"), (0, 127));
