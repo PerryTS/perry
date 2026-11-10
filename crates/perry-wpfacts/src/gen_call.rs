@@ -202,6 +202,7 @@ impl<'a> Gen<'a> {
                 } else {
                     (byte_offset, byte_end)
                 };
+                let rec = (off != 0).then(|| self.call_sites_at.len());
                 if off != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
@@ -210,6 +211,7 @@ impl<'a> Gen<'a> {
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: None,
+                        call: crate::model::NO_CTX,
                     });
                 }
                 if off != 0 {
@@ -231,6 +233,9 @@ impl<'a> Gen<'a> {
                     .filter(|f| fused_fill && f.recv == o)
                 {
                     f.fill_site = self.m.calls[call as usize].site;
+                }
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
                 }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
@@ -313,6 +318,7 @@ impl<'a> Gen<'a> {
             _ => {
                 let c = self.expr(fx, callee);
                 self.own_test_recv = Some(c);
+                let rec = (byte_offset != 0).then(|| self.call_sites_at.len());
                 if byte_offset != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
@@ -321,6 +327,7 @@ impl<'a> Gen<'a> {
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: Some(c),
+                        call: crate::model::NO_CTX,
                     });
                 }
                 // A call through a value is a site: the bodies the callee
@@ -347,6 +354,9 @@ impl<'a> Gen<'a> {
                 // a callee node that already holds the callee (the program's
                 // `require` from `createRequire`) runs the call at `cons`.
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }

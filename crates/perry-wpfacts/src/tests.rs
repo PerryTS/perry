@@ -155,6 +155,7 @@ mod range_tightening;
 mod reach_accessor;
 mod receiver_slots;
 mod receiver_this;
+mod records;
 mod recv_call_cycle;
 mod runtime_errors;
 mod reflect_construct;

@@ -219,6 +219,11 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(l);
         out.push('\n');
     }
+    // DESIGN-p4l4 §7: the value-record ledger (empty with the switch off).
+    for l in crate::records::ledger_lines(&pf.templates, &pf.record_arrays) {
+        out.push_str(&l);
+        out.push('\n');
+    }
     out.push_str(&format!(
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
