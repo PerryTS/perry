@@ -77,7 +77,8 @@ pub(crate) unsafe fn bag_of(ptr: usize) -> *mut ObjectHeader {
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
-#[inline]
+#[cold]
+#[inline(never)]
 pub(crate) unsafe fn is_declared_static(ptr: usize, key: &[u8]) -> bool {
     crate::object::unborn_declared_statics_of(ptr)
         .iter()

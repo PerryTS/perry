@@ -278,6 +278,12 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             && crate::array::intrinsic_constructor_addr_if_bound(declaration.identity) == 0
         {
             crate::array::note_realm_intrinsic(declaration.identity, 0, closure_ptr as usize);
+            // Its declared statics are own keys its base Function shape does
+            // not list: FunctionDictionary, so no read site proves one absent
+            // (the read reaches the bag and births the family).
+            if !declaration.statics.is_empty() {
+                unsafe { crate::closure::shape::closure_become_dictionary(closure_ptr.cast()) };
+            }
             crate::value::js_nanbox_pointer(closure_ptr as i64)
         } else {
             birth_family(declaration, closure_ptr, &singleton, &mut birth)
@@ -1197,18 +1203,13 @@ fn birth_unborn_family_slow(ptr: usize, word: u32) -> bool {
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
-#[inline]
+#[cold]
+#[inline(never)]
 pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'static str] {
     let word = (*(ptr as *const crate::closure::ClosureHeader)).capture_count;
     if word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK == 0 {
         return &[];
     }
-    unborn_declared_statics_slow(ptr, word)
-}
-
-#[cold]
-#[inline(never)]
-fn unborn_declared_statics_slow(ptr: usize, word: u32) -> &'static [&'static str] {
     unborn_lazy_identity(ptr, word).map_or(&[], |identity| identity.declaration().statics)
 }
 
