@@ -35,6 +35,42 @@ pub(crate) fn identity(ctx: &mut FnCtx<'_>, a: &str, b: &str, what: &str) {
     );
 }
 
+/// The witness of a compiled `===`, `!==`, `==` or `!=` of `left` and
+/// `right` (lowered to `l`, `r`): an identity comparison unless an operand
+/// is a primitive literal (a presence or value test; wpfacts
+/// `gen_expr::primitive_literal`).
+pub(crate) fn compare(
+    ctx: &mut FnCtx<'_>,
+    op: &perry_hir::CompareOp,
+    left: &perry_hir::Expr,
+    right: &perry_hir::Expr,
+    l: &str,
+    r: &str,
+) {
+    use perry_hir::{CompareOp, Expr};
+    let literal = |e: &Expr| {
+        matches!(
+            e,
+            Expr::Undefined
+                | Expr::Null
+                | Expr::Bool(_)
+                | Expr::Number(_)
+                | Expr::Integer(_)
+                | Expr::BigInt(_)
+                | Expr::String(_)
+                | Expr::WtfString(_)
+        )
+    };
+    if matches!(
+        op,
+        CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
+    ) && !literal(left)
+        && !literal(right)
+    {
+        identity(ctx, l, r, "compiled identity compare");
+    }
+}
+
 /// Claim `value`, a fresh instance of class `class_name`, when its template
 /// is an admitted value record.
 pub(crate) fn claim(ctx: &mut FnCtx<'_>, class_name: &str, value: &str) {
