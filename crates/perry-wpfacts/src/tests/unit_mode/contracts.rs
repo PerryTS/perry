@@ -338,8 +338,13 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // more popped kind in rounds 1-2 (was [1962, 2323, 2034, 512]). The
     // changed-holder accessor lookup no longer adds a ⊤-token edge beside
     // its own ⊤ (census attribution): two fewer deliveries in rounds 1-2
-    // (was [1962, 2326, 2037, 512]).
-    assert_eq!(pf.round_work, [1962, 2324, 2035, 512], "{:?}", pf.units);
+    // (was [1962, 2326, 2037, 512]). A member that escaped after a set
+    // listed it is that set's ⊤ (`escaped_beside_top`) and leaves when ⊤
+    // arrives or at the pop: each shrunk set is rebuilt, charged per member
+    // it held. In rounds 1-2 the removed members fed no later delivery
+    // (with the rebuild uncharged the rounds are the old ones exactly), so
+    // the rebuilds are the whole difference (was [1962, 2324, 2035, 512]).
+    assert_eq!(pf.round_work, [1962, 2339, 2044, 512], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

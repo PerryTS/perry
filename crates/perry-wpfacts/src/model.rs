@@ -1324,6 +1324,14 @@ pub struct Model {
     /// allocation) keeps its floor, a wrong claim the element tier's
     /// front-offset witness must catch.
     pub arr_front_sabotage: bool,
+    /// Immutable Arrays and constant contents (`const_arrays`;
+    /// `PERRY_FACTS_CONST_ARRAYS=0` turns them off).
+    pub const_arrays: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
+    /// Array is not recorded (`Model::arr_written`), so a literal that is
+    /// stored into keeps its constant contents, a wrong claim the constant
+    /// array witness must catch.
+    pub arr_const_sabotage: bool,
     /// PR-C3 (DESIGN-p4l1 §3): a field's `Rep::Arr` (`FieldFacts::rep`) and
     /// a field read call's floor (`FieldReadCall::in_floor`);
     /// `PERRY_FACTS_ARRAY_FIELDS=0` turns them off.
@@ -1361,6 +1369,11 @@ pub struct Model {
     pub arr_len: FxHashMap<Tok, NodeId>,
     /// The birth length of an array literal template (`solve::arr_len`).
     pub arr_birth_len: FxHashMap<TmplId, i64>,
+    /// Array tokens written after their birth (`Model::arr_written`).
+    pub arr_stored: crate::pts::FxHashSet<Tok>,
+    /// The elements of an array literal template whose elements may all be
+    /// constant Numbers (`const_arrays::literal_elems`).
+    pub arr_const: FxHashMap<TmplId, Vec<crate::const_arrays::Elem>>,
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,

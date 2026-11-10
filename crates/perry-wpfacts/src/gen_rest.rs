@@ -440,7 +440,6 @@ impl<'a> Gen<'a> {
             | Expr::ProcessAvailableMemory
             | Expr::ProcessConstrainedMemory
             | Expr::ProcessPosixCredential(..)
-            | Expr::ProcessEmitWarning(..)
             | Expr::ProcessTitle
             | Expr::ProcessSetTitle(..)
             | Expr::ProcessStdinSetRawMode(..)
@@ -451,12 +450,6 @@ impl<'a> Gen<'a> {
             | Expr::ProcessStdoutColumns
             | Expr::ProcessStdoutRows
             | Expr::TtyIsAtty(..)
-            | Expr::FsReadFileSync(..)
-            | Expr::FsWriteFileSync(..)
-            | Expr::FsMkdirSync(..)
-            | Expr::FsUnlinkSync(..)
-            | Expr::FsAppendFileSync(..)
-            | Expr::FsRmRecursive(..)
             | Expr::PathJoin(..)
             | Expr::PathDirname(..)
             | Expr::PathBasename(..)
@@ -466,14 +459,12 @@ impl<'a> Gen<'a> {
             | Expr::PathIsAbsolute(..)
             | Expr::PathRelative(..)
             | Expr::PathNormalize(..)
-            | Expr::PathFormat(..)
             | Expr::PathSep
             | Expr::PathDelimiter
             | Expr::PathToNamespacedPath(..)
             | Expr::PathMatchesGlob(..)
             | Expr::PathResolveJoin(..)
             | Expr::PathWin32Join(..)
-            | Expr::PathWin32 { .. }
             | Expr::ObjectIsFrozen(..)
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
@@ -484,11 +475,9 @@ impl<'a> Gen<'a> {
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)
             | Expr::SymbolToString(..)
-            | Expr::FileURLToPath(..)
             | Expr::RegExpExecIndex
             | Expr::JsonIsRawJson(..)
             | Expr::PerformanceNow
-            | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
             | Expr::Btoa(..)
             | Expr::IterResultGetDone
@@ -512,30 +501,50 @@ impl<'a> Gen<'a> {
             | Expr::OsEndianness
             | Expr::OsMachine
             | Expr::OsVersion
-            | Expr::BufferIsBuffer(..)
             | Expr::BufferIsEncoding(..)
-            | Expr::BufferByteLength { .. }
-            | Expr::BufferToString { .. }
-            | Expr::BufferCopy { .. }
-            | Expr::BufferWrite { .. }
-            | Expr::BufferFill { .. }
-            | Expr::BufferEquals { .. }
             | Expr::PodLayoutSizeOf { .. }
             | Expr::PodLayoutAlignOf { .. }
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
             | Expr::StringFromCharCode(..)
-            | Expr::StringFromCharCodeSpread(..)
             | Expr::StringFromCodePoint(..)
-            | Expr::StringRaw { .. }
             | Expr::StringAt { .. }
             | Expr::StringCodePointAt { .. }
-            | Expr::MapSize(..)
             | Expr::ArrayIterationPatched
-            | Expr::ImportMetaUrl(..)
-            | Expr::ProxyRevoke(..) => {
-                // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
+            | Expr::ImportMetaUrl(..) => {
+                // These operations only convert an object operand to a primitive
+                // (the lowering ToString's / ToNumber's it, or the runtime reads
+                // an internal slot): ToPrimitive (`@@toPrimitive`, else
+                // `valueOf` / `toString`) runs on it; no other key is read and
+                // no function found under some key is called back.
+                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::ToPrimitive)
+            }
+            Expr::StringRaw { .. }
+            | Expr::StringFromCharCodeSpread(..)
+            | Expr::PathFormat(..)
+            | Expr::PathWin32 { .. }
+            | Expr::FsReadFileSync(..)
+            | Expr::FsWriteFileSync(..)
+            | Expr::FsMkdirSync(..)
+            | Expr::FsUnlinkSync(..)
+            | Expr::FsAppendFileSync(..)
+            | Expr::FsRmRecursive(..)
+            | Expr::FileURLToPath(..)
+            | Expr::BufferIsBuffer(..)
+            | Expr::BufferByteLength { .. }
+            | Expr::BufferToString { .. }
+            | Expr::BufferCopy { .. }
+            | Expr::BufferWrite { .. }
+            | Expr::BufferFill { .. }
+            | Expr::BufferEquals { .. }
+            | Expr::MapSize(..)
+            | Expr::ProxyRevoke(..)
+            | Expr::WebAssemblyValidate(..)
+            | Expr::ProcessEmitWarning(..) => {
+                // The runtime reads named keys or elements of these operands
+                // (`raw`, a path object's parts, a file URL, an Error, a
+                // spread's elements) or takes a buffer; each is its own model.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
             Expr::FsExistsSync(path) => {

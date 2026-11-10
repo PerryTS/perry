@@ -154,6 +154,7 @@ const BOARD: FactsArrRep = FactsArrRep {
     floor: 128,
     dense: true,
     fixed: true,
+    im: false,
 };
 
 /// The forwarding bit of the header word, as the tier tests it.
@@ -222,6 +223,7 @@ fn a_key_outside_the_floor_is_bounded_by_the_capacity() {
 fn a_growable_array_keeps_its_forwarding_test() {
     let rep = FactsArrRep {
         fixed: false,
+        im: false,
         ..BOARD
     };
     let ir = rep_ir(rep, Some((0, 127)), true);
@@ -254,6 +256,7 @@ fn an_array_without_a_floor_is_bounded_by_its_capacity() {
         floor: 0,
         dense: false,
         fixed: false,
+        im: false,
     };
     let ir = rep_ir(rep, Some((0, 7)), true);
     let f = body(&ir, "__at").join("\n");
@@ -296,6 +299,7 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
                     floor: 4,
                     dense: true,
                     fixed: true,
+                    im: false,
                 }),
             );
             for (at, _) in src.match_indices("d[") {
@@ -339,6 +343,7 @@ const GROWABLE: FactsArrRep = FactsArrRep {
     floor: 128,
     dense: true,
     fixed: false,
+    im: false,
 };
 
 /// IR of `FIELD_SRC` with `this` a `Board` in every method, `board` of
@@ -501,12 +506,14 @@ fn the_array_rep_join_says_what_both_say() {
         floor: 128,
         dense: true,
         fixed: true,
+        im: false,
     };
     let b = FactsArrRep {
         elem: FactsElemRep::F64,
         floor: 8,
         dense: true,
         fixed: false,
+        im: false,
     };
     let j = FactsArrRep::join(a, b);
     assert_eq!(

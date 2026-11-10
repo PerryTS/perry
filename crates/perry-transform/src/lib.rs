@@ -33,6 +33,8 @@ pub mod unroll;
 
 // Re-export main transformation functions
 pub use async_to_generator::transform_async_to_generator;
+mod async_module;
+pub use async_module::lower_async_module_body;
 pub use closure::convert_closures;
 pub use finally_inline::inline_finally_into_returns;
 pub use generator::transform_generators;

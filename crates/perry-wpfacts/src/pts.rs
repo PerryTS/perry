@@ -355,6 +355,30 @@ impl SetTable {
         }
     }
 
+    /// The members of `old` that `keep` holds, interned: `old` itself when
+    /// it holds no other. A set is never changed in place: the filtered set
+    /// is built, and the equal interned set taken when there is one.
+    pub(crate) fn retain(&mut self, old: Pts, keep: impl Fn(u32) -> bool) -> Pts {
+        let mut v = Vec::with_capacity(old.len());
+        old.sorted_into(&mut v);
+        let len = v.len();
+        v.retain(|&t| keep(t));
+        if v.len() == len {
+            return old;
+        }
+        self.release(old);
+        if v.len() <= 1 {
+            return Pts::Small(v);
+        }
+        let hash = v.iter().fold(0u64, |h, &t| h.wrapping_add(mix(t)));
+        if let Some(found) = self.find(hash, v.len(), |o| v.iter().all(|&t| o.contains(t))) {
+            return Pts::Set(found);
+        }
+        let s = Rc::new(SetData::from_sorted(v));
+        self.insert(&s);
+        Pts::Set(s)
+    }
+
     /// The solve ended: the sets stay with their nodes, the index goes.
     pub(crate) fn clear(&mut self) {
         for s in self.first.values().chain(self.more.values().flatten()) {
