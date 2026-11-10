@@ -234,3 +234,15 @@ fn a_record_popped_from_its_array_is_the_array_s_operation() {
     let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(mk(1));\nconst last = xs.pop();\nconsole.log(last === undefined ? 0 : use(last));\n");
     assert!(r.starts_with("R6"), "{r}");
 }
+
+#[test]
+fn a_mixed_argument_of_a_logging_helper_is_admitted() {
+    // Owner ruling 2026-11-10: `show(c ? 5 : u)` materializes at the call.
+    admitted("function show(x: unknown) { console.log(x); }\nconst c = Math.random() > 2;\nconst u = mk(8);\nshow(c ? 5 : u);\nshow(u);\nconsole.log(use(u));\n");
+}
+
+#[test]
+fn a_retaining_helper_is_named_before_what_it_causes() {
+    let r = rejected("const saved: unknown[] = [];\nfunction keep(x: unknown) { saved.push(x); }\nkeep(mk(1));\nkeep(5);\nconsole.log(saved.length, saved[0], saved[1]);\n");
+    assert_eq!(r, "R5RetainingHelper(keep, retain)");
+}
