@@ -1613,3 +1613,167 @@ fn package_aliases_keep_first_request_and_erase_type_only_requests() {
     );
     assert_eq!(std::fs::read(&entry).unwrap(), input);
 }
+
+fn package_aliases_collect_pruning_case(
+    files: &[(&str, &str)],
+    recollect: bool,
+) -> (CompilationContext, tempfile::TempDir) {
+    use clap::Parser;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut inputs = Vec::new();
+    for (name, source) in files {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, source).unwrap();
+        inputs.push((path, source.as_bytes().to_vec()));
+    }
+    let entry = root.join("entry.ts");
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.allow_compile_packages.push("*".into());
+    ctx.package_aliases.insert("from".into(), "to".into());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut class_id = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    let mut sources = super::PreparedSources::default();
+    super::collect_modules_with_sources(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut class_id,
+        false,
+        &progress,
+        None,
+        super::WalkSources::Keep(&mut sources),
+    )
+    .unwrap();
+    if recollect {
+        #[derive(Parser)]
+        struct Args {
+            #[command(flatten)]
+            compile: super::super::CompileArgs,
+        }
+        let args =
+            Args::try_parse_from([std::ffi::OsString::from("perry"), entry.into_os_string()])
+                .unwrap();
+        super::super::bootstrap::rerun_collect_with_class_field_types(
+            &args.compile,
+            &mut ctx,
+            &mut visited,
+            &mut class_id,
+            false,
+            &progress,
+            None,
+            OutputFormat::Text,
+            sources,
+        )
+        .unwrap();
+    }
+    for (path, source) in inputs {
+        assert_eq!(std::fs::read(path).unwrap(), source);
+    }
+    (ctx, dir)
+}
+
+#[test]
+fn package_aliases_keep_transitive_star_exports_and_effectful_forwarding_dependencies() {
+    for forwarded in [false, true] {
+        let outer = if forwarded {
+            "import { helper } from './pure.js'; export { helper }; export * from './inner.js';"
+        } else {
+            "export * from './inner.js';"
+        };
+        let entry = if forwarded {
+            "import { a, helper } from './outer.js'; console.log(a, helper);"
+        } else {
+            "import { a } from './outer.js'; console.log(a);"
+        };
+        let (ctx, dir) = package_aliases_collect_pruning_case(
+            &[
+                ("entry.ts", entry),
+                ("outer.js", outer),
+                ("inner.js", "export * from 'from';"),
+                ("pure.js", "export const helper = 'H';"),
+                (
+                    "node_modules/from/package.json",
+                    r#"{"name":"from","main":"index.js","type":"module"}"#,
+                ),
+                ("node_modules/from/index.js", "export const b = 'wrong';"),
+                (
+                    "node_modules/to/package.json",
+                    r#"{"name":"to","main":"index.js","type":"module"}"#,
+                ),
+                (
+                    "node_modules/to/index.js",
+                    "console.log('target'); export const a = 'A';",
+                ),
+            ],
+            false,
+        );
+        let module =
+            |path: &str| &ctx.native_modules[&dir.path().join(path).canonicalize().unwrap()];
+        assert!(module("outer.js").exports.iter().any(|e| matches!(
+            e, perry_hir::Export::ExportAll { source } if source == "./inner.js"
+        )));
+        assert!(module("inner.js").exports.iter().any(|e| matches!(
+            e, perry_hir::Export::ExportAll { source } if source == "to"
+        )));
+        assert!(module("node_modules/to/index.js")
+            .exports
+            .iter()
+            .any(|e| matches!(
+                e, perry_hir::Export::Named { exported, .. } if exported == "a"
+            )));
+        if forwarded {
+            assert!(module("outer.js")
+                .imports
+                .iter()
+                .any(|i| i.source == "./pure.js"));
+        }
+    }
+}
+
+#[test]
+fn package_aliases_propagate_reexport_demand_through_the_second_walk() {
+    let (ctx, dir) = package_aliases_collect_pruning_case(
+        &[
+            (
+                "entry.ts",
+                "import { a } from './hub.js'; import { b } from 'to'; console.log(a, b);",
+            ),
+            ("hub.js", "export { a } from 'from';"),
+            (
+                "node_modules/to/package.json",
+                r#"{"name":"to","main":"index.js","type":"module"}"#,
+            ),
+            (
+                "node_modules/to/index.js",
+                "export const a = 'A'; export const b = 'B'; export const unused = 'U';",
+            ),
+        ],
+        true,
+    );
+    assert!(!dir.path().join("node_modules/from").exists());
+    let target = &ctx.native_modules[&dir
+        .path()
+        .join("node_modules/to/index.js")
+        .canonicalize()
+        .unwrap()];
+    let exports: HashSet<_> = target
+        .exports
+        .iter()
+        .filter_map(|e| match e {
+            perry_hir::Export::Named { exported, .. } => Some(exported.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(exports.contains("a"));
+    assert!(exports.contains("b"));
+    assert!(
+        !exports.contains("unused"),
+        "the second walk must actually apply pruning"
+    );
+}
