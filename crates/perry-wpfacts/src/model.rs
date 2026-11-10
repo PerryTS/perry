@@ -1324,6 +1324,14 @@ pub struct Model {
     /// allocation) keeps its floor, a wrong claim the element tier's
     /// front-offset witness must catch.
     pub arr_front_sabotage: bool,
+    /// PR-C3 (DESIGN-p4l1 §3): a field's `Rep::Arr` (`FieldFacts::rep`) and
+    /// a field read call's floor (`FieldReadCall::in_floor`);
+    /// `PERRY_FACTS_ARRAY_FIELDS=0` turns them off.
+    pub array_fields: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=arrfield`): a field's
+    /// representation ignores the `null` and `undefined` it also holds, a
+    /// wrong claim the witness at the field read must catch.
+    pub arr_field_sabotage: bool,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
