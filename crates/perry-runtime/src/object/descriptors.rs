@@ -696,7 +696,7 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     // is read): its family's birth gives it the bag.
                     if crate::closure::props::bag_of(ptr).is_null()
                         && (name == "prototype"
-                            || crate::object::unborn_declared_statics_of(ptr).contains(&name))
+                            || crate::closure::props::is_declared_static(ptr, name.as_bytes()))
                     {
                         ptr_handle.across_mut::<u8, _>(|| {
                             crate::object::birth_unborn_family_of(ptr);
