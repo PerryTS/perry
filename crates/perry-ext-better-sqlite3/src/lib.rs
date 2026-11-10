@@ -16,16 +16,56 @@
 mod dispatch_ext;
 
 use perry_ffi::{
-    alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle, get_handle,
+    alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle,
     js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, read_string,
     register_handle, ArrayHeader, ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
     TransientRootScope, TransientRootedNanbox,
 };
-use rusqlite::{types::Value as SqliteValue, Connection};
+use rusqlite::{types::Value as SqliteValue, CachedStatement, Connection, Statement};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 const DATABASE_NOT_OPEN: &str = "The database connection is not open";
+
+enum StatementLease<'conn> {
+    Cached(CachedStatement<'conn>),
+    Uncached(Statement<'conn>),
+}
+
+impl<'conn> Deref for StatementLease<'conn> {
+    type Target = Statement<'conn>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Cached(stmt) => stmt,
+            Self::Uncached(stmt) => stmt,
+        }
+    }
+}
+
+impl DerefMut for StatementLease<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Cached(stmt) => stmt,
+            Self::Uncached(stmt) => stmt,
+        }
+    }
+}
+
+fn prepare_statement<'conn>(
+    conn: &'conn Connection,
+    sql: &str,
+) -> rusqlite::Result<StatementLease<'conn>> {
+    // rusqlite trims before lookup AND compilation. Only SQLite's five ASCII
+    // whitespace characters may be removed without changing its lexer input.
+    let sqlite_trimmed = sql.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\x0c' | '\r'));
+    if sql.trim() == sqlite_trimmed {
+        conn.prepare_cached(sql).map(StatementLease::Cached)
+    } else {
+        conn.prepare(sql).map(StatementLease::Uncached)
+    }
+}
 
 #[cold]
 fn throw_database_not_open() -> ! {
@@ -33,15 +73,27 @@ fn throw_database_not_open() -> ! {
 }
 
 fn require_database_open(db_handle: Handle) {
-    if get_handle::<SqliteDbHandle>(db_handle).is_none() {
+    if perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |_| ()).is_none() {
         throw_database_not_open();
     }
 }
 
+fn statement_snapshot(handle: Handle) -> Option<(String, Handle, bool, bool)> {
+    perry_ffi::with_handle::<SqliteStmtHandle, _, _>(handle, |stmt| {
+        (
+            stmt.sql.clone(),
+            stmt.db_handle,
+            stmt.raw_mode.load(Ordering::Relaxed),
+            stmt.safe_integers.load(Ordering::Relaxed),
+        )
+    })
+}
+
 fn require_statement_database_open(stmt_handle: Handle) {
-    let stmt =
-        get_handle::<SqliteStmtHandle>(stmt_handle).unwrap_or_else(|| throw_database_not_open());
-    require_database_open(stmt.db_handle);
+    let db_handle =
+        perry_ffi::with_handle::<SqliteStmtHandle, _, _>(stmt_handle, |stmt| stmt.db_handle)
+            .unwrap_or_else(|| throw_database_not_open());
+    require_database_open(db_handle);
 }
 
 pub struct SqliteDbHandle {
@@ -204,16 +256,14 @@ pub unsafe extern "C" fn js_sqlite_exec(db_handle: Handle, sql_ptr: *const Strin
         return 0;
     };
     require_database_open(db_handle);
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            return if conn.execute_batch(&sql).is_ok() {
-                1
-            } else {
-                0
-            };
-        }
-    }
-    0
+    perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        db.conn
+            .lock()
+            .ok()
+            .map(|conn| i32::from(conn.execute_batch(&sql).is_ok()))
+    })
+    .flatten()
+    .unwrap_or(0)
 }
 
 /// `db.prepare(sql)` — prepare a statement. Returns a Handle to
@@ -231,19 +281,23 @@ pub unsafe extern "C" fn js_sqlite_prepare(
         return -1;
     };
     require_database_open(db_handle);
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            if conn.prepare(&sql).is_ok() {
-                return register_handle(SqliteStmtHandle {
-                    sql,
-                    db_handle,
-                    raw_mode: AtomicBool::new(false),
-                    safe_integers: AtomicBool::new(false),
-                });
-            }
-        }
+    let valid = perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        db.conn
+            .lock()
+            .ok()
+            .is_some_and(|conn| prepare_statement(&conn, &sql).is_ok())
+    })
+    .unwrap_or(false);
+    if valid {
+        register_handle(SqliteStmtHandle {
+            sql,
+            db_handle,
+            raw_mode: AtomicBool::new(false),
+            safe_integers: AtomicBool::new(false),
+        })
+    } else {
+        -1
     }
-    -1
 }
 
 /// `stmt.raw([toggle])` — toggle raw mode for the statement. Returns
@@ -269,9 +323,9 @@ pub unsafe extern "C" fn js_sqlite_prepare(
 /// arg list and read the toggle here.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_raw(stmt_handle: Handle) -> Handle {
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
+    perry_ffi::with_handle::<SqliteStmtHandle, _, _>(stmt_handle, |stmt| {
         stmt.raw_mode.store(true, Ordering::Relaxed);
-    }
+    });
     stmt_handle
 }
 
@@ -287,9 +341,9 @@ pub unsafe extern "C" fn js_sqlite_stmt_safe_integers(stmt_handle: Handle, toggl
     // argument turns the mode ON, so an absent argument is not "off".
     let toggle = JsValue::from_bits(toggle.to_bits());
     let on = toggle.is_undefined() || toggle.to_bool();
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
+    perry_ffi::with_handle::<SqliteStmtHandle, _, _>(stmt_handle, |stmt| {
         stmt.safe_integers.store(on, Ordering::Relaxed);
-    }
+    });
     stmt_handle
 }
 
@@ -309,40 +363,35 @@ pub unsafe extern "C" fn js_sqlite_stmt_safe_integers(stmt_handle: Handle, toggl
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
     require_statement_database_open(stmt_handle);
-    let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) else {
+    let Some((sql, db_handle, _, _)) = statement_snapshot(stmt_handle) else {
         return js_array_alloc(0);
     };
-    let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) else {
+    let metadata = perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        let conn = db.conn.lock().ok()?;
+        let prepared = conn.prepare(&sql).ok()?;
+        let decl_types: Vec<Option<String>> = prepared
+            .columns()
+            .iter()
+            .map(|c| c.decl_type().map(str::to_string))
+            .collect();
+        let origins: Vec<(String, Option<String>, Option<String>, Option<String>)> = prepared
+            .columns_with_metadata()
+            .iter()
+            .map(|c| {
+                (
+                    c.name().to_string(),
+                    c.database_name().map(str::to_string),
+                    c.table_name().map(str::to_string),
+                    c.origin_name().map(str::to_string),
+                )
+            })
+            .collect();
+        Some((decl_types, origins))
+    })
+    .flatten();
+    let Some((decl_types, origins)) = metadata else {
         return js_array_alloc(0);
     };
-    let Ok(conn) = db.conn.lock() else {
-        return js_array_alloc(0);
-    };
-    // The handle stores only the SQL, so the shape comes from a fresh
-    // prepare — the same way `reader` and `readonly` are answered.
-    let Ok(prepared) = conn.prepare(&stmt.sql) else {
-        return js_array_alloc(0);
-    };
-
-    // `columns()` carries the declared type, `columns_with_metadata()` the
-    // origin names; they are indexed alike, so zip them by position.
-    let decl_types: Vec<Option<String>> = prepared
-        .columns()
-        .iter()
-        .map(|c| c.decl_type().map(str::to_string))
-        .collect();
-    let origins: Vec<(String, Option<String>, Option<String>, Option<String>)> = prepared
-        .columns_with_metadata()
-        .iter()
-        .map(|c| {
-            (
-                c.name().to_string(),
-                c.database_name().map(str::to_string),
-                c.table_name().map(str::to_string),
-                c.origin_name().map(str::to_string),
-            )
-        })
-        .collect();
 
     let shape = build_object_shape(&COLUMN_KEYS);
     let records_scope = TransientRootScope::enter();
@@ -412,15 +461,11 @@ unsafe fn record_from_rooted(
 /// string, a BigInt or a Buffer column allocates).
 fn rooted_row_values(
     scope: &TransientRootScope,
-    row: &rusqlite::Row<'_>,
-    columns: usize,
+    row: &[SqliteValue],
     safe_ints: bool,
 ) -> Vec<TransientRootedNanbox> {
-    (0..columns)
-        .map(|idx| {
-            let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-            scope.root_nanbox(bits(sqlite_value_to_jsvalue_with(&value, safe_ints)))
-        })
+    row.iter()
+        .map(|value| scope.root_nanbox(bits(sqlite_value_to_jsvalue_with(value, safe_ints))))
         .collect()
 }
 
@@ -437,13 +482,12 @@ unsafe fn array_from_rooted(values: &[TransientRootedNanbox]) -> *mut ArrayHeade
 /// One row as better-sqlite3 returns it: an array in raw mode, else a record
 /// keyed by column name.
 unsafe fn row_value(
-    row: &rusqlite::Row<'_>,
-    columns: usize,
+    row: &[SqliteValue],
     raw_or_shape: Option<&(Vec<u8>, u32)>,
     safe_ints: bool,
 ) -> JsValue {
     let scope = TransientRootScope::enter();
-    let values = rooted_row_values(&scope, row, columns, safe_ints);
+    let values = rooted_row_values(&scope, row, safe_ints);
     match raw_or_shape {
         None => JsValue::from_object_ptr(array_from_rooted(&values)),
         Some(shape) => JsValue::from_object_ptr(record_from_rooted(&scope, shape, &values)),
@@ -480,14 +524,9 @@ unsafe fn run_result(changes: f64, last_id: i64) -> *mut ObjectHeader {
 /// returns rows: `run()` steps it to completion, discards the rows and
 /// reports the connection's change count, so `select 1` gives
 /// `{ changes: 0, lastInsertRowid: 0 }` on a fresh connection.
-/// rusqlite's `Connection::execute` refuses a row-returning statement
-/// with `ExecuteReturnedResults` instead, so dispatching on the
-/// statement's column count (0 = no rows possible) keeps both kinds
-/// working and runs the statement exactly once. Before this, every
-/// `run()` on a SELECT returned null, surfacing in JS as `undefined`
-/// with no error — ActiveRecord's sqlite3 adapter calls `run()` on
-/// `SELECT sqlite_version(*)` through its `step()` and read
-/// `.changes` off that `undefined`.
+/// The cached statement is leased only while the connection is locked. Row-returning
+/// statements are drained rather than passed to `Statement::execute`, which rejects
+/// them with `ExecuteReturnedResults`.
 ///
 /// # Safety
 ///
@@ -499,37 +538,66 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
 ) -> *mut ObjectHeader {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
+    let Some((sql, db_handle, _, _)) = statement_snapshot(stmt_handle) else {
+        return std::ptr::null_mut();
+    };
+    let result = perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        let conn = db.conn.lock().ok()?;
+        let params = sqlite_params.iter().map(|p| p.as_ref()).collect::<Vec<_>>();
+        let before = conn.total_changes();
+        let mut prepared = prepare_statement(&conn, &sql).ok()?;
+        if prepared.column_count() == 0 {
+            prepared.execute(params.as_slice()).ok()?;
+        } else {
+            let mut rows = prepared.query(params.as_slice()).ok()?;
+            while matches!(rows.next(), Ok(Some(_))) {}
+        }
+        Some((
+            conn.total_changes().saturating_sub(before),
+            conn.last_insert_rowid(),
+        ))
+    })
+    .flatten();
+    result
+        .map(|(changes, last_id)| run_result(changes as f64, last_id))
+        .unwrap_or(std::ptr::null_mut())
+}
 
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
-        if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
-            if let Ok(conn) = db.conn.lock() {
-                let param_refs: Vec<&dyn rusqlite::ToSql> =
-                    sqlite_params.iter().map(|p| p.as_ref()).collect();
-                // better-sqlite3 reports the rows THIS statement changed, not
-                // the connection's running counter: a CREATE TABLE or a SELECT
-                // run straight after an INSERT still reports 0, where
-                // `sqlite3_changes()` would still hold the INSERT's 1. Diffing
-                // `total_changes` across the statement gives that directly.
-                let before = conn.total_changes();
-                if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                    if prepared.column_count() == 0 {
-                        if prepared.execute(param_refs.as_slice()).is_ok() {
-                            let changed = conn.total_changes().saturating_sub(before);
-                            return run_result(changed as f64, conn.last_insert_rowid());
-                        }
-                    } else if let Ok(mut rows) = prepared.query(param_refs.as_slice()) {
-                        // Step to completion so the statement's side effects
-                        // (e.g. `INSERT ... RETURNING`) all happen.
-                        while matches!(rows.next(), Ok(Some(_))) {}
-                        drop(rows);
-                        let changed = conn.total_changes().saturating_sub(before);
-                        return run_result(changed as f64, conn.last_insert_rowid());
-                    }
-                }
+fn query_owned_rows(
+    stmt_handle: Handle,
+    sqlite_params: &[Box<dyn rusqlite::ToSql>],
+    first_only: bool,
+) -> Option<(Vec<String>, Vec<Vec<SqliteValue>>, bool, bool)> {
+    let (sql, db_handle, raw, safe_ints) = statement_snapshot(stmt_handle)?;
+    perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        let conn = db.conn.lock().ok()?;
+        let mut prepared = prepare_statement(&conn, &sql).ok()?;
+        let param_refs = sqlite_params
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<_>>();
+        let mut rows = prepared.query(param_refs.as_slice()).ok()?;
+        let mut result = Vec::new();
+        while let Ok(Some(row)) = rows.next() {
+            result.push(
+                (0..row.as_ref().column_count())
+                    .map(|idx| row.get(idx).unwrap_or(SqliteValue::Null))
+                    .collect(),
+            );
+            if first_only {
+                break;
             }
         }
-    }
-    std::ptr::null_mut()
+        drop(rows);
+        // SQLite can recompile cached SQL on step, even when it returns no rows.
+        let names = prepared
+            .column_names()
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        Some((names, result, raw, safe_ints))
+    })
+    .flatten()
 }
 
 /// `stmt.get(...params)` — return a single row, or `undefined`.
@@ -549,36 +617,12 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
 ) -> f64 {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
-
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
-        let raw = stmt.raw_mode.load(Ordering::Relaxed);
-        let safe_ints = stmt.safe_integers.load(Ordering::Relaxed);
-        if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
-            if let Ok(conn) = db.conn.lock() {
-                let param_refs: Vec<&dyn rusqlite::ToSql> =
-                    sqlite_params.iter().map(|p| p.as_ref()).collect();
-                if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                    let column_names: Vec<String> = prepared
-                        .column_names()
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    let column_refs: Vec<&str> = column_names.iter().map(String::as_str).collect();
-
-                    let shape = (!raw).then(|| build_object_shape(&column_refs));
-                    let mut rows = prepared.query(param_refs.as_slice());
-                    if let Ok(ref mut rows) = rows {
-                        if let Ok(Some(row)) = rows.next() {
-                            return bits(row_value(
-                                row,
-                                column_names.len(),
-                                shape.as_ref(),
-                                safe_ints,
-                            ));
-                        }
-                    }
-                }
-            }
+    if let Some((names, rows, raw, safe_ints)) = query_owned_rows(stmt_handle, &sqlite_params, true)
+    {
+        if let Some(row) = rows.first() {
+            let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+            let shape = (!raw).then(|| build_object_shape(&refs));
+            return bits(row_value(row, shape.as_ref(), safe_ints));
         }
     }
     f64::from_bits(JsValue::UNDEFINED.bits())
@@ -597,50 +641,15 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
 ) -> *mut ArrayHeader {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
-    // Every row is rooted as it is built; the result array is born last.
-    let rows_scope = TransientRootScope::enter();
-    let mut built: Vec<TransientRootedNanbox> = Vec::new();
-
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
-        let raw = stmt.raw_mode.load(Ordering::Relaxed);
-        let safe_ints = stmt.safe_integers.load(Ordering::Relaxed);
-        if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
-            if let Ok(conn) = db.conn.lock() {
-                let param_refs: Vec<&dyn rusqlite::ToSql> =
-                    sqlite_params.iter().map(|p| p.as_ref()).collect();
-                if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
-                    let column_names: Vec<String> = prepared
-                        .column_names()
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    let column_refs: Vec<&str> = column_names.iter().map(String::as_str).collect();
-                    // Only build the object shape in non-raw mode — raw rows
-                    // skip the per-row object allocation entirely.
-                    let object_shape = if raw {
-                        None
-                    } else {
-                        Some(build_object_shape(&column_refs))
-                    };
-
-                    let mut rows = prepared.query(param_refs.as_slice());
-                    if let Ok(ref mut rows) = rows {
-                        while let Ok(Some(row)) = rows.next() {
-                            // Raw mode: each row is an array of column values
-                            // in declared column order. drizzle's
-                            // `mapResultRow(fields, row, …)` indexes by
-                            // numeric position into this array.
-                            let value = row_value(
-                                row,
-                                column_names.len(),
-                                object_shape.as_ref(),
-                                safe_ints,
-                            );
-                            built.push(rows_scope.root_nanbox(bits(value)));
-                        }
-                    }
-                }
-            }
+    let scope = TransientRootScope::enter();
+    let mut built = Vec::new();
+    if let Some((names, rows, raw, safe_ints)) =
+        query_owned_rows(stmt_handle, &sqlite_params, false)
+    {
+        let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let shape = (!raw).then(|| build_object_shape(&refs));
+        for row in &rows {
+            built.push(scope.root_nanbox(bits(row_value(row, shape.as_ref(), safe_ints))));
         }
     }
     array_from_rooted(&built)
@@ -664,84 +673,62 @@ pub unsafe extern "C" fn js_sqlite_pragma(
     require_database_open(db_handle);
     let value = read_str(value_ptr);
 
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            let sql = if let Some(v) = value {
-                format!("PRAGMA {} = {}", pragma, v)
-            } else {
-                format!("PRAGMA {}", pragma)
-            };
-            if let Ok(mut stmt) = conn.prepare(&sql) {
-                let mut rows = stmt.query([]);
-                if let Ok(ref mut rows) = rows {
-                    if let Ok(Some(row)) = rows.next() {
-                        // PRAGMA results can be string OR integer
-                        // (e.g. `user_version` is int 0). Try string
-                        // first, fall back to int → string. Matches
-                        // node-better-sqlite3's pragma_results
-                        // behavior; perry-stdlib's existing copy
-                        // didn't handle the int case (returned "")
-                        // — fixed in this port.
-                        if let Ok(s) = row.get::<_, String>(0) {
-                            return alloc_string(&s).as_raw();
-                        }
-                        if let Ok(n) = row.get::<_, i64>(0) {
-                            return alloc_string(&n.to_string()).as_raw();
-                        }
-                        if let Ok(n) = row.get::<_, f64>(0) {
-                            return alloc_string(&n.to_string()).as_raw();
-                        }
-                    }
-                }
-            }
-        }
-    }
-    std::ptr::null_mut()
+    let text = perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        let conn = db.conn.lock().ok()?;
+        let sql = match value {
+            Some(v) => format!("PRAGMA {} = {}", pragma, v),
+            None => format!("PRAGMA {}", pragma),
+        };
+        let mut stmt = conn.prepare(&sql).ok()?;
+        let mut rows = stmt.query([]).ok()?;
+        let row = rows.next().ok()??;
+        row.get::<_, String>(0)
+            .ok()
+            .or_else(|| row.get::<_, i64>(0).ok().map(|n| n.to_string()))
+            .or_else(|| row.get::<_, f64>(0).ok().map(|n| n.to_string()))
+    })
+    .flatten();
+    text.map(|s| alloc_string(&s).as_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[no_mangle]
 pub extern "C" fn js_sqlite_begin_transaction(db_handle: Handle) -> i32 {
     require_database_open(db_handle);
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            return if conn.execute("BEGIN TRANSACTION", []).is_ok() {
-                1
-            } else {
-                0
-            };
-        }
-    }
-    0
+    perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        db.conn
+            .lock()
+            .ok()
+            .map(|conn| i32::from(conn.execute("BEGIN TRANSACTION", []).is_ok()))
+    })
+    .flatten()
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub extern "C" fn js_sqlite_commit(db_handle: Handle) -> i32 {
     require_database_open(db_handle);
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            return if conn.execute("COMMIT", []).is_ok() {
-                1
-            } else {
-                0
-            };
-        }
-    }
-    0
+    perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        db.conn
+            .lock()
+            .ok()
+            .map(|conn| i32::from(conn.execute("COMMIT", []).is_ok()))
+    })
+    .flatten()
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub extern "C" fn js_sqlite_rollback(db_handle: Handle) -> i32 {
     require_database_open(db_handle);
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            return if conn.execute("ROLLBACK", []).is_ok() {
-                1
-            } else {
-                0
-            };
-        }
-    }
-    0
+    perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        db.conn
+            .lock()
+            .ok()
+            .map(|conn| i32::from(conn.execute("ROLLBACK", []).is_ok()))
+    })
+    .flatten()
+    .unwrap_or(0)
 }
 
 /// `db.close()` — drop the connection. Drops the handle from
@@ -758,12 +745,14 @@ pub extern "C" fn js_sqlite_close(db_handle: Handle) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_sqlite_in_transaction(db_handle: Handle) -> i32 {
-    if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
-        if let Ok(conn) = db.conn.lock() {
-            return if !conn.is_autocommit() { 1 } else { 0 };
-        }
-    }
-    0
+    perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+        db.conn
+            .lock()
+            .ok()
+            .map(|conn| i32::from(!conn.is_autocommit()))
+    })
+    .flatten()
+    .unwrap_or(0)
 }
 
 /// Returns `1` if `handle` currently resolves to a `SqliteDbHandle` in
@@ -776,7 +765,7 @@ pub extern "C" fn js_sqlite_in_transaction(db_handle: Handle) -> i32 {
 /// session.js — refs #1022).
 #[no_mangle]
 pub extern "C" fn js_sqlite_is_db_handle(handle: Handle) -> i32 {
-    if get_handle::<SqliteDbHandle>(handle).is_some() {
+    if perry_ffi::with_handle::<SqliteDbHandle, _, _>(handle, |_| ()).is_some() {
         1
     } else {
         0
@@ -791,7 +780,7 @@ pub extern "C" fn js_sqlite_is_db_handle(handle: Handle) -> i32 {
 /// handle returned from `client.prepare(...)`. Refs #1022.
 #[no_mangle]
 pub extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
-    if get_handle::<SqliteStmtHandle>(handle).is_some() {
+    if perry_ffi::with_handle::<SqliteStmtHandle, _, _>(handle, |_| ()).is_some() {
         1
     } else {
         0
@@ -799,120 +788,7 @@ pub extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use perry_ffi::{js_array_get, js_array_length, js_object_get_field};
-
-    fn make_in_memory_db() -> Handle {
-        let path = alloc_string(":memory:");
-        unsafe { js_sqlite_open(path.as_raw() as *const _) }
-    }
-
-    #[test]
-    fn open_in_memory_returns_valid_handle() {
-        let h = make_in_memory_db();
-        assert!(h > 0, "open returned {}", h);
-    }
-
-    #[test]
-    fn exec_create_then_insert() {
-        let h = make_in_memory_db();
-        let create = alloc_string("CREATE TABLE t (id INTEGER, name TEXT)");
-        let r = unsafe { js_sqlite_exec(h, create.as_raw() as *const _) };
-        assert_eq!(r, 1);
-        let insert = alloc_string("INSERT INTO t VALUES (1, 'alice')");
-        let r = unsafe { js_sqlite_exec(h, insert.as_raw() as *const _) };
-        assert_eq!(r, 1);
-    }
-
-    #[test]
-    fn pragma_returns_value() {
-        let h = make_in_memory_db();
-        let pragma = alloc_string("user_version");
-        let result_ptr =
-            unsafe { js_sqlite_pragma(h, pragma.as_raw() as *const _, std::ptr::null()) };
-        assert!(!result_ptr.is_null());
-        let s = read_string(unsafe { JsString::from_raw(result_ptr) }).expect("non-null");
-        assert_eq!(s, "0");
-    }
-
-    #[test]
-    fn transactions() {
-        let h = make_in_memory_db();
-        let create = alloc_string("CREATE TABLE t (id INTEGER)");
-        unsafe { js_sqlite_exec(h, create.as_raw() as *const _) };
-        assert_eq!(js_sqlite_begin_transaction(h), 1);
-        assert_eq!(js_sqlite_in_transaction(h), 1);
-        assert_eq!(js_sqlite_commit(h), 1);
-        assert_eq!(js_sqlite_in_transaction(h), 0);
-    }
-
-    /// `all()` (record and raw mode), `get()` and `columns()` build their
-    /// values, records and result arrays under transient roots; the results
-    /// must read back exactly as before.
-    #[test]
-    fn rows_and_columns_read_back_through_their_roots() {
-        perry_ffi::initialize_runtime_fixture();
-        let h = make_in_memory_db();
-        for sql in [
-            "CREATE TABLE people (ident INTEGER, label_text TEXT)",
-            "INSERT INTO people VALUES (1, 'alice-row'), (2, 'bobby-row'), (3, 'carol-row')",
-        ] {
-            let sql = alloc_string(sql);
-            assert_eq!(unsafe { js_sqlite_exec(h, sql.as_raw() as *const _) }, 1);
-        }
-        let sql = alloc_string("SELECT ident, label_text FROM people ORDER BY ident");
-        let stmt = unsafe { js_sqlite_prepare(h, sql.as_raw() as *const _) };
-        let text = |v: JsValue| {
-            read_string(unsafe { JsString::from_raw(v.as_string_ptr()) }).map(str::to_owned)
-        };
-        unsafe {
-            let all = js_sqlite_stmt_all(stmt, std::ptr::null());
-            assert_eq!(js_array_length(all), 3);
-            let row = js_array_get(all, 1).as_pointer::<ObjectHeader>();
-            assert_eq!(
-                text(js_object_get_field(row, 1)).as_deref(),
-                Some("bobby-row")
-            );
-
-            let one = JsValue::from_bits(js_sqlite_stmt_get(stmt, std::ptr::null()).to_bits())
-                .as_pointer::<ObjectHeader>();
-            assert_eq!(js_object_get_field(one, 0).to_number(), 1.0);
-            assert_eq!(
-                text(js_object_get_field(one, 1)).as_deref(),
-                Some("alice-row")
-            );
-
-            let columns = js_sqlite_stmt_columns(stmt);
-            assert_eq!(js_array_length(columns), 2);
-            let label = js_array_get(columns, 1).as_pointer::<ObjectHeader>();
-            // COLUMN_KEYS order: name, column, table, database, type.
-            assert_eq!(
-                text(js_object_get_field(label, 0)).as_deref(),
-                Some("label_text")
-            );
-            assert_eq!(
-                text(js_object_get_field(label, 2)).as_deref(),
-                Some("people")
-            );
-
-            js_sqlite_stmt_raw(stmt);
-            let raw = js_sqlite_stmt_all(stmt, std::ptr::null());
-            assert_eq!(js_array_length(raw), 3);
-            let last = js_array_get(raw, 2).as_pointer::<ArrayHeader>();
-            assert_eq!(js_array_length(last), 2);
-            assert_eq!(text(js_array_get(last, 1)).as_deref(), Some("carol-row"));
-        }
-    }
-
-    #[test]
-    fn close_drops_handle() {
-        let h = make_in_memory_db();
-        assert_eq!(js_sqlite_close(h), 1);
-        // Second close is a no-op (handle already gone).
-        assert_eq!(js_sqlite_close(h), 0);
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod static_record_layout_tests {
