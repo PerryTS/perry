@@ -1981,6 +1981,7 @@ mod builtin_missing_member;
 mod annexb_alias;
 mod shaped_key_proto_methods;
 mod uri_coercion;
+mod primitive_operand_to_primitive;
 
 mod accessor_lookup_values;
 mod buffer_iterator_absent;
