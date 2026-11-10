@@ -1166,8 +1166,6 @@ fn is_string_like(bits: u64) -> bool {
 fn jsvalue_eq(a: f64, b: f64) -> bool {
     let a_bits = a.to_bits();
     let b_bits = b.to_bits();
-    // Value records' check mode (DESIGN-p4l4 B7): a Map key is identity.
-    crate::wpfacts_check::records::route(a_bits, b_bits, "Map key");
 
     // Fast path: identical bit patterns
     if a_bits == b_bits {
