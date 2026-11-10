@@ -157,10 +157,15 @@ fn a_write_through_a_function_value_makes_it_mutable() {
 }
 
 #[test]
-fn a_native_that_only_reads_keeps_it_immutable() {
-    let src = "const K = [1, 2, 3];\nconsole.log(JSON.stringify(K), K);\n";
-    assert!(im(src, "K"));
-    assert_eq!(elems(src, "K"), Some(vec![1.0, 2.0, 3.0]));
+fn a_native_that_receives_it_makes_it_mutable() {
+    // `JSON.stringify` and `console.log` take the Array to native code: its
+    // length is ⊤ there (an escape), so it is no fixed `Arr` and no
+    // immutable Array.
+    for use_ in ["const t = JSON.stringify(K);\nconsole.log(t);", "console.log(K);"] {
+        let src = format!("const K = [1, 2, 3];\n{use_}\n");
+        assert!(!im(&src, "K"), "{use_}");
+        assert_eq!(elems(&src, "K"), None, "{use_}");
+    }
 }
 
 #[test]
