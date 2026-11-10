@@ -1758,6 +1758,12 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = perry_abi::OBJ_FLAG_PLAIN_ORDINARY;
 /// Bit 12 is disjoint from object initialization state (14..15). Array
 /// numeric-hole layout uses bit 12 only after its array kind guard.
 pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
+/// Check mode only (`PERRY_VERIFY_FACTS=1` with value records, DESIGN-p4l4
+/// B7): this OBJECT is an instance of a template the whole-program facts
+/// admit as a value record. Every identity route aborts on it
+/// (`wpfacts_check::records`). Bit 6 of OBJECT, free (see the bit map); a
+/// release program never sets it.
+pub(crate) const OBJ_FLAG_RECORD_CLAIM: u16 = 0x0040;
 /// # `GcHeader::_reserved` bit map by GC kind
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
@@ -1772,7 +1778,7 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 0..2 | FROZEN / SEALED / NO_EXTEND | no proxy-specific writer | integrity flags |
 /// | 3..4 | survival age | survival age | GC_COPY_SURVIVAL_AGE_MASK, all kinds |
 /// | 5 | GC_OBJECT_CALLABLE | GC_OBJECT_CALLABLE | unused |
-/// | 6 | free (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
+/// | 6 | RECORD_CLAIM, check mode only (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
 /// | 7 | NEVER_MOVE | unused | array: RAW_F64_LAYOUT; closure: NON_CONSTRUCTABLE; byte owner: FOREIGN_DATA; byte view: LENGTH_TRACKING |
 /// | 8 | TYPED_ARRAY_PROTO | unused | array: KEY_ATTRS; byte owner: RESIZABLE |
 /// | 9 | PLAIN_ORDINARY | unused | array: ARGUMENTS_OBJECT |

@@ -5281,6 +5281,8 @@ perry_verify_facts_entry	void	i64,i64
 perry_verify_facts_field	i32s	f64,f64,i64,i64,i64,i64,i32s,i32s,i32s,i32s,i64,i64
 perry_verify_facts_init	void	
 perry_verify_facts_miss	i32s	f64,i64,i64
+perry_verify_facts_record_claim	void	f64
+perry_verify_facts_record_identity	i32s	f64,f64,i64,i64
 perry_verify_facts_tick	void	
 perry_watchos_classes_registered	void	
 perry_wpfacts_check_call	ptr	f64,i64,i64

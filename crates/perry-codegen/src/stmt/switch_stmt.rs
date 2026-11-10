@@ -200,6 +200,11 @@ pub(crate) fn lower_switch(
                     continue;
                 }
                 let cv = lower_expr(ctx, test_expr)?;
+                // Value records' check mode (DESIGN-p4l4 L4): a case test is
+                // an identity comparison.
+                if integer_plan.is_none() {
+                    crate::expr::record_witness::identity(ctx, &dv, &cv, "switch case");
+                }
                 // CaseClauseIsSelected is strict equality (`===`). One runtime
                 // helper covers every value-kind correctly: string content
                 // compare (heap + SSO), IEEE numeric compare (NaN never

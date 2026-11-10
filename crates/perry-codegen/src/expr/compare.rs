@@ -1299,6 +1299,22 @@ fn finite_numeric_literal(ctx: &mut FnCtx<'_>, operand: &Expr) -> Result<Option<
     Ok(lower_expr_value(ctx, operand)?.filter(|lowered| matches!(lowered.rep, NativeRep::F64)))
 }
 
+/// A primitive literal: comparing with one is a presence or value test, no
+/// identity (wpfacts `gen_expr::primitive_literal`).
+fn is_literal_operand(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Undefined
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::BigInt(_)
+            | Expr::String(_)
+            | Expr::WtfString(_)
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
@@ -1382,6 +1398,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                 let l = operand_value(ctx, &left_literal);
                 let r = operand_value(ctx, &right_literal);
+                // Value records' check mode (DESIGN-p4l4 L4): an identity
+                // comparison between two non-literal operands.
+                if matches!(
+                    op,
+                    CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
+                ) && left_literal.is_none()
+                    && right_literal.is_none()
+                    && !is_literal_operand(left)
+                    && !is_literal_operand(right)
+                {
+                    crate::expr::record_witness::identity(ctx, &l, &r, "compiled identity compare");
+                }
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values
                 // are unordered under fcmp (NaN), so `a > b` on two bigints
                 // always returns false. Route through js_bigint_cmp which

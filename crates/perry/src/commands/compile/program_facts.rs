@@ -461,6 +461,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // gap tests must then fail).
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
+    // DESIGN-p4l4 VR-2: the admitted value records' classes, for check mode
+    // only (`expr/record_witness.rs`); empty with the switch off.
+    out.record_classes = pf
+        .templates
+        .iter()
+        .filter(|t| t.record.is_ok())
+        .filter_map(|t| t.class_id)
+        .collect();
     out.super_unrelinked = pf.super_unrelinked.clone();
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
@@ -1062,5 +1070,8 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
             fixed: a.fixed,
             im: a.im,
         }),
+        // DESIGN-p4l4 VR-2: codegen lowers records from VR-3; until then a
+        // record is the Boxed word it is today.
+        Rep::Record(_) => FactsRep::Boxed,
     }
 }

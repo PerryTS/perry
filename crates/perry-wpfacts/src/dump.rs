@@ -128,10 +128,17 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             if let Some(o) = &b.indexed_owner {
                 out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
             }
-            // DESIGN-p4l1 §5.6: each binding the facts give `Arr`.
+            // DESIGN-p4l1 §5.6: each binding the facts give `Arr`;
+            // DESIGN-p4l4: each one they give `Record`.
             if matches!(b.rep, crate::bindings::Rep::Arr(_)) {
                 out.push_str(&format!(
                     "# arr_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
+            }
+            if matches!(b.rep, crate::bindings::Rep::Record(_)) {
+                out.push_str(&format!(
+                    "# record_rep module={mi} local={id} rep={}\n",
                     b.rep.name()
                 ));
             }
