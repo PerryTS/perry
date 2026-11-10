@@ -896,7 +896,20 @@ impl<'a, 'g> Scan<'a, 'g> {
     fn site(&self, c: CallId) -> String {
         match self.rec_of.get(&c) {
             Some(r) => format!("{}:{}", self.module_name(r.module), r.offset),
-            None => format!("call#{c}"),
+            // A call no source site records (a summary instance's, or one the
+            // solver or a builtin makes): its receiver or result, for the
+            // ledger reader.
+            None => {
+                let m = &self.g.m;
+                let cs = m.calls.get(c as usize);
+                let recv = self
+                    .mcall_recv
+                    .get(&c)
+                    .map(|&r| format!(" recv={}", node_at(m, r)))
+                    .unwrap_or_default();
+                let ret = cs.map(|cs| node_at(m, cs.ret)).unwrap_or_default();
+                format!("call#{c} ret={ret}{recv}")
+            }
         }
     }
 
@@ -911,12 +924,14 @@ impl<'a, 'g> Scan<'a, 'g> {
     /// The program body call `c` is a typed call of (B3), or why not.
     fn typed_target(&self, c: CallId) -> Result<FnIdx, RecordReject> {
         let m = &self.g.m;
+        let untyped = |why: &str| RecordReject::R5UntypedCall(format!("{} {why}", self.site(c)));
         let Some(r) = self.rec_of.get(&c) else {
-            return Err(RecordReject::R5UntypedCall(self.site(c)));
+            return Err(untyped("no source call"));
         };
         match self.targets.get(&(r.module, r.offset)) {
             Some(&f) if crate::signatures::may_type(self.g, &m.funcs[f as usize]) => Ok(f),
-            _ => Err(RecordReject::R5UntypedCall(self.site(c))),
+            Some(_) => Err(untyped("callee takes no typed signature")),
+            None => Err(untyped("not one body")),
         }
     }
 
