@@ -1647,7 +1647,7 @@ impl<'a> Gen<'a> {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
                 }
                 if self.m.const_arrays {
-                    if let Some(c) = crate::const_arrays::literal_numbers(elems) {
+                    if let Some(c) = crate::const_arrays::literal_elems(mi, elems) {
                         self.m.arr_const.insert(tm, c);
                     }
                 }

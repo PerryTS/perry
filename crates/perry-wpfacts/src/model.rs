@@ -1363,9 +1363,9 @@ pub struct Model {
     pub arr_birth_len: FxHashMap<TmplId, i64>,
     /// Array tokens written after their birth (`Model::arr_written`).
     pub arr_stored: crate::pts::FxHashSet<Tok>,
-    /// The elements of an array literal template whose elements are all
-    /// Number literals, as bit patterns (`const_arrays::literal_numbers`).
-    pub arr_const: FxHashMap<TmplId, Vec<u64>>,
+    /// The elements of an array literal template whose elements may all be
+    /// constant Numbers (`const_arrays::literal_elems`).
+    pub arr_const: FxHashMap<TmplId, Vec<crate::const_arrays::Elem>>,
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,

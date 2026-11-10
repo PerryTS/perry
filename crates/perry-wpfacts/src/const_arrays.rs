@@ -19,29 +19,60 @@
 //! `defineProperty`, `setPrototypeOf` (hard), unknown code (escaped), `pop`,
 //! `length = n`, a generic `reverse`/`copyWithin`.
 //!
-//! A literal `[c0, …, cn-1]` whose elements are all Number literals has
-//! **constant contents** (`Model::arr_const`, by template: each run of the
-//! literal births the same values). A binding all of whose values are
-//! immutable tokens of such literals with the same contents holds, at every
-//! index and for the whole program, exactly those Numbers
-//! (`BindingFacts::const_elems`).
+//! A literal `[c0, …, cn-1]` has **constant contents** when each element is
+//! a Number literal, or a read `N` or `-N` of a module `const` that holds one
+//! Number for the whole program (`const_numbers`, N6: `const N = -16`, then
+//! `[N, -N, 1, -1]`). The elements are recorded by template at generation
+//! (`Model::arr_const`: each run of the literal births the same values) and
+//! resolved against the constant Numbers at export (`collect`). A binding
+//! all of whose values are immutable tokens of such literals with the same
+//! contents holds, at every index and for the whole program, exactly those
+//! Numbers (`BindingFacts::const_elems`).
 //!
 //! `PERRY_FACTS_CONST_ARRAYS=0` (`FactsConfig::no_const_arrays`) records
 //! nothing: no token is immutable, no binding has constant contents.
 
+use crate::bindings::{ModuleBindings, Rep};
+use crate::gen::Gen;
 use crate::model::{Model, NodeId, TmplKind, Tok, TokKind, TOP};
-use perry_hir::Expr;
+use perry_hir::{Expr, UnaryOp};
 
-/// The elements of an array literal as Number bit patterns, when every one
-/// is a Number literal. A `-0` or `NaN` element is its own bits: the birth
-/// stores each literal as that double.
-pub(crate) fn literal_numbers(elems: &[Expr]) -> Option<Vec<u64>> {
+/// One element of an array literal that may be a constant Number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elem {
+    /// A Number literal, as its bit pattern (`-0` and `NaN` are their own
+    /// bits: the birth stores the literal as that double).
+    Bits(u64),
+    /// A read of local `local` of module `module`, negated or not: a
+    /// constant when `const_numbers` gives that binding one Number.
+    Const { module: u32, local: u32, neg: bool },
+}
+
+/// The elements of an array literal of module `module`, when every one may
+/// be a constant Number (`Elem`).
+pub(crate) fn literal_elems(module: u32, elems: &[Expr]) -> Option<Vec<Elem>> {
+    // `-N` after the driver folded a literal `const N` into its reads is
+    // the minus of a literal.
+    let read = |e: &Expr, neg: bool| match e {
+        Expr::LocalGet(local) => Some(Elem::Const {
+            module,
+            local: *local,
+            neg,
+        }),
+        Expr::Number(n) if neg => Some(Elem::Bits((-*n).to_bits())),
+        Expr::Integer(i) if neg => Some(Elem::Bits((-(*i as f64)).to_bits())),
+        _ => None,
+    };
     elems
         .iter()
         .map(|e| match e {
-            Expr::Number(n) => Some(n.to_bits()),
-            Expr::Integer(i) => Some((*i as f64).to_bits()),
-            _ => None,
+            Expr::Number(n) => Some(Elem::Bits(n.to_bits())),
+            Expr::Integer(i) => Some(Elem::Bits((*i as f64).to_bits())),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => read(operand, true),
+            e => read(e, false),
         })
         .collect()
 }
@@ -118,11 +149,16 @@ impl Model {
 }
 
 /// The constant contents of node `n`: every value is an immutable token
-/// (the caller's `ArrRep::im`) of a Number literal, all with the same
-/// elements.
-pub(crate) fn const_elems(m: &Model, n: NodeId) -> Option<Vec<u64>> {
+/// (the caller's `ArrRep::im`) of a literal of constant Numbers, all with
+/// the same elements. `number`: the one Number a module binding holds
+/// (`const_numbers`).
+fn const_elems(
+    m: &Model,
+    n: NodeId,
+    number: &dyn Fn(u32, u32) -> Option<i64>,
+) -> Option<Vec<u64>> {
     let node = &m.nodes[n as usize];
-    let mut out: Option<&Vec<u64>> = None;
+    let mut out: Option<Vec<u64>> = None;
     for t in node.pts.to_sorted() {
         let TokKind::Obj(tm, _) = m.toks[t as usize] else {
             return None;
@@ -130,11 +166,47 @@ pub(crate) fn const_elems(m: &Model, n: NodeId) -> Option<Vec<u64>> {
         if !matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { plain: true, .. }) {
             return None;
         }
-        let c = m.arr_const.get(&tm)?;
-        match out {
-            Some(o) if o != c => return None,
+        let c = m
+            .arr_const
+            .get(&tm)?
+            .iter()
+            .map(|e| match *e {
+                Elem::Bits(b) => Some(b),
+                Elem::Const { module, local, neg } => {
+                    // `-N` of `N = 0` is `-0`, as the unary minus gives.
+                    let v = number(module, local)? as f64;
+                    Some(if neg { -v } else { v }.to_bits())
+                }
+            })
+            .collect::<Option<Vec<u64>>>()?;
+        match &out {
+            Some(o) if *o != c => return None,
             _ => out = Some(c),
         }
     }
-    out.cloned()
+    out
+}
+
+/// Fill `BindingFacts::const_elems` (module docs). Runs after
+/// `const_numbers::collect`, whose constants an element may read.
+pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
+    if g.m.aborted || !g.m.const_arrays {
+        return;
+    }
+    let numbers: Vec<Vec<(u32, i64)>> = bindings.iter().map(|b| b.const_numbers.clone()).collect();
+    let number = |module: u32, local: u32| {
+        let v = numbers.get(module as usize)?;
+        let i = v.binary_search_by_key(&local, |p| p.0).ok()?;
+        Some(v[i].1)
+    };
+    for (mi, mb) in bindings.iter_mut().enumerate().take(g.mods.len()) {
+        for (id, b) in mb.locals.iter_mut() {
+            if !matches!(b.rep, Rep::Arr(r) if r.im) {
+                continue;
+            }
+            if let Some(&n) = g.mods[mi].locals.get(id) {
+                b.const_elems = const_elems(&g.m, n, &number);
+            }
+        }
+    }
 }

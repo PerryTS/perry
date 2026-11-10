@@ -285,9 +285,10 @@ pub struct BindingFacts {
     /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
     /// that constant.
     pub const_length: Option<i64>,
-    /// It holds only immutable Arrays (`ArrRep::im`) born from Number
-    /// literals with the same elements (`const_arrays`): index `i` reads
-    /// the Number with bits `const_elems[i]`, for the whole program.
+    /// It holds only immutable Arrays (`ArrRep::im`) born from literals of
+    /// constant Numbers with the same elements (`const_arrays::collect`):
+    /// index `i` reads the Number with bits `const_elems[i]`, for the whole
+    /// program.
     pub const_elems: Option<Vec<u64>>,
 }
 
@@ -615,9 +616,6 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
         Some(r) => Rep::Arr(r),
         None => rep_of(&out),
     };
-    if matches!(out.rep, Rep::Arr(r) if r.im) {
-        out.const_elems = crate::const_arrays::const_elems(m, n);
-    }
     out
 }
 

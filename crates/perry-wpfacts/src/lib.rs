@@ -924,6 +924,7 @@ fn compute_act<'a>(
     if g.m.const_numbers {
         const_numbers::collect(&g, &mut bindings);
     }
+    const_arrays::collect(&g, &mut bindings);
     element_keys::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(

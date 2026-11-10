@@ -177,6 +177,34 @@ fn only_number_literals_have_contents() {
 }
 
 #[test]
+fn a_constant_number_binding_is_a_constant_element() {
+    let src = "const N = -16;\nconst E = 1 << 4;\nconst Z = 0;\nconst ROOK = [N, -N, 1, -1, E, -E, -Z];\nconsole.log(ROOK.length);\n";
+    let got = elems(src, "ROOK").expect("constant contents");
+    assert_eq!(got[..6], [-16.0, 16.0, 1.0, -1.0, 16.0, -16.0]);
+    assert_eq!(got[6].to_bits(), (-0.0f64).to_bits(), "-Z of Z = 0 is -0");
+}
+
+#[test]
+fn a_binding_that_is_no_constant_number_is_no_constant_element() {
+    for decl in [
+        "let N = 1; N = 2;",
+        "const N = Math.random() < 0.5 ? 1 : 2;",
+        "const N = 'a';",
+        "function g(): number { return 3; }\nconst N = g() + process.argv.length;",
+    ] {
+        let src = format!("{decl}\nconst K = [N, 1];\nconsole.log(K.length, N);\n");
+        assert_eq!(elems(&src, "K"), None, "{decl}");
+        assert!(im(&src, "K"), "{decl}");
+    }
+    let off = FactsConfig {
+        no_const_numbers: true,
+        ..FactsConfig::default()
+    };
+    let src = "const N = 1 << 4;\nconst K = [N, 1];\nconsole.log(K.length);\n";
+    assert_eq!(consts_with(src, off)["K"], (true, None));
+}
+
+#[test]
 fn a_join_of_different_literals_is_immutable_without_contents() {
     let src = "const A = [1, 2];\nconst B = [3, 4, 5];\nfunction pick(c: boolean): number {\n  const d = c ? A : B;\n  return d.length;\n}\nconsole.log(pick(true), pick(false));\n";
     assert!(im(src, "d"));
