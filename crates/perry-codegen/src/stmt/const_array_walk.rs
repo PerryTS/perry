@@ -335,12 +335,6 @@ pub(crate) fn unrolled_body<'a>(
     Some((d.walk.body, n))
 }
 
-/// The negative control `fnbasewalk` (N2): the body of any `if` shaped as a
-/// for-of walk, decided or not.
-pub(crate) fn any_walk_body<'a>(cond: &Expr, then_branch: &'a [Stmt]) -> Option<&'a [Stmt]> {
-    walk(cond, then_branch).map(|w| w.body)
-}
-
 /// Lower `if (cond) then_branch else …` when it is the walk of a for-of
 /// over an immutable Array (module docs). `false`: not such a walk; the
 /// caller lowers the `if`.

@@ -24,11 +24,10 @@
 //! its own base before the reads it serves. A unit that starts before `Sk`
 //! and covers it installs nothing; its reads stay C3's.
 //!
-//! `PERRY_FACTS_FN_BASES=0` turns it off (PR-D's build). Negative controls:
+//! `PERRY_FACTS_FN_BASES=0` turns it off (PR-D's build). Negative control:
 //! `PERRY_FACTS_SABOTAGE=fnbaseadm` admits a suffix whatever ends its
-//! region; `fnbasewalk` takes the body of any walk-shaped `if` as its only
-//! code, decided by N3 or not. `PERRY_ARRAY_BASE_DIAG=1` prints the verdict
-//! per function (`[perry fn base]`).
+//! region. `PERRY_ARRAY_BASE_DIAG=1` prints the verdict per function
+//! (`[perry fn base]`).
 
 use std::collections::BTreeMap;
 
@@ -210,8 +209,7 @@ pub(crate) fn finish(ctx: &mut FnCtx<'_>) {
     ctx.fn_base = Pending::default();
 }
 
-/// The body of `s` when it is a walk N3 unrolls (or, under `fnbasewalk`,
-/// any walk-shaped `if`), with its copy count.
+/// The body of `s` when it is a walk N3 unrolls, with its copy count.
 fn walk_body<'s>(ctx: &FnCtx<'_>, s: &'s Stmt) -> Option<(&'s [Stmt], usize)> {
     let Stmt::If {
         condition,
@@ -221,9 +219,6 @@ fn walk_body<'s>(ctx: &FnCtx<'_>, s: &'s Stmt) -> Option<(&'s [Stmt], usize)> {
     else {
         return None;
     };
-    if emit::sabotaged("fnbasewalk") {
-        return super::const_array_walk::any_walk_body(condition, then_branch).map(|b| (b, 1));
-    }
     super::const_array_walk::unrolled_body(ctx, condition, then_branch)
 }
 
