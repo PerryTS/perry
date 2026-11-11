@@ -314,7 +314,7 @@ mod program_facts_view;
 pub use program_facts_view::{
     ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc,
     FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction,
-    FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
+    FactsRecRep, FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -561,6 +561,10 @@ fn lower_module(
     crate::layout_desc::create_families::clear();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
+    // DESIGN-p4l4 VR-3a: the facts' record bindings are their fields by
+    // value (`value_records`); every lowering below sees the rewritten body.
+    let records_hir = crate::value_records::rewrite(hir, &opts.program_facts.elision);
+    let hir = records_hir.as_ref().map_or(hir, |(m, _)| m);
     // The driver supplies whole-program ownership in opts. Direct callers
     // without callback prefixes also need local launch detection for their
     // string-preparation callback. All decisions remain per compile.

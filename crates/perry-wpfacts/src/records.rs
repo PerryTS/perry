@@ -40,6 +40,13 @@ pub const RECORD_MAX_WORDS: u16 = 16;
 /// until VR-4b: every operation on a record array is `R6Op` before then.
 pub const RECORD_ARRAY_INTRINSICS: &[&str] = &[];
 
+/// A record crosses a program call in a `Record` signature slot (§5.2):
+/// codegen lowers the record `$sig` ABI from VR-3b. Until then a record
+/// argument or result of a typed call rejects (`R5UntypedCall`), except an
+/// argument whose parameter is Boxed (owner ruling §4.4: the record is
+/// materialized at the call), so no record converts inside the program.
+pub const RECORD_SIGNATURES: bool = false;
+
 /// A record lane's representation in SSA (§1.2); in memory every lane is one
 /// valid JSValue word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -387,6 +394,7 @@ fn static_rules(
     g: &Gen,
     tf: &TemplateFacts,
     interp_guard: Option<&str>,
+    ignore_r2: bool,
 ) -> Option<Result<RecordLayout, Rejected>> {
     use RecordReject::*;
     let m = &g.m;
@@ -442,7 +450,7 @@ fn static_rules(
         if !f.definite || !f.data_field {
             return r(R1Layout(format!("{k} is not a definite data field")));
         }
-        if !f.readonly {
+        if !f.readonly && !ignore_r2 {
             return r(R2Write(k.clone()));
         }
         let allowed = prim::NUM | prim::BOOL | prim::UNDEF | prim::NULL;
@@ -506,13 +514,16 @@ pub(crate) fn derive(
         return Vec::new();
     }
     // R0-R3.
+    // S0 negative control `vrwrite` (§10.3): R2 ignored.
+    let ignore_r2 = sabotage == Some("vrwrite");
     let mut verdict: FxHashMap<TmplId, Result<RecordLayout, Rejected>> = FxHashMap::default();
     for tf in templates.iter() {
-        if let Some(v) = static_rules(g, tf, interp_guard) {
+        if let Some(v) = static_rules(g, tf, interp_guard, ignore_r2) {
             verdict.insert(tf.id, v);
         }
     }
     let mut s = Scan::new(g, sites);
+    s.ignore_r2 = ignore_r2;
     // S0 negative controls (DESIGN-p4l4 §10.3): an identity route ignored.
     s.ignored_route = match sabotage {
         Some("vrident" | "vrinline") => Some("==="),
@@ -644,6 +655,8 @@ struct Scan<'a, 'g> {
     /// The identity route a negative control ignores (`vrident`,
     /// `vrinline`: `===`; `vrswitch`: `switch`).
     ignored_route: Option<&'static str>,
+    /// The negative control `vrwrite` ignores R2.
+    ignore_r2: bool,
     /// A method call's receiver node.
     mcall_recv: FxHashMap<CallId, NodeId>,
     /// The `new` calls: their result is the object they birth.
@@ -796,6 +809,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             g,
             captured,
             ignored_route: None,
+            ignore_r2: false,
             elem_atom,
             holders,
             ctor_this,
@@ -1327,7 +1341,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                         why = Some(R5Join(at.clone()));
                     }
                     if why.is_none() {
-                        why = self.call_slots(n, &recs, linked);
+                        why = self.call_slots(n, &recs, linked, &region);
                     }
                     if why.is_none() {
                         let birth = self.ctor_this.get(&n).copied();
@@ -1347,12 +1361,20 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     Use::Allowed => {}
                                     Use::Reject(R4Identity(r))
                                         if self.ignored_route == Some(r.as_str()) => {}
+                                    Use::Reject(R2Write(_)) if self.ignore_r2 => {}
                                     Use::TypedCall(call)
                                         if self.own_array_call(call, &recs, linked) => {}
                                     Use::TypedCall(call) => {
-                                        if let Err(e) = self.typed_target(self.source_any(call, n))
-                                        {
-                                            why = Some(e);
+                                        let src = self.source_any(call, n);
+                                        match self.typed_target(src) {
+                                            Err(e) => why = Some(e),
+                                            Ok(f) => {
+                                                let arg = match c {
+                                                    Cons::ArgInto { i, .. } => Some(*i),
+                                                    _ => None,
+                                                };
+                                                why = self.record_slot(src, f, arg, &region);
+                                            }
                                         }
                                     }
                                     Use::Reject(e) => why = Some(e),
@@ -1446,6 +1468,7 @@ impl<'a, 'g> Scan<'a, 'g> {
         n: NodeId,
         recs: &[TmplId],
         linked: &FxHashMap<TmplId, TmplId>,
+        region: &FxHashMap<NodeId, FnIdx>,
     ) -> Option<RecordReject> {
         use RecordReject::*;
         for &(c, i) in self.arg_of.get(&n).into_iter().flatten() {
@@ -1462,7 +1485,11 @@ impl<'a, 'g> Scan<'a, 'g> {
                 continue;
             }
             match self.typed_target(c) {
-                Ok(_) => {}
+                Ok(f) => {
+                    if let Some(e) = self.record_slot(c, f, Some(i), region) {
+                        return Some(e);
+                    }
+                }
                 Err(_) if self.native_call(c) => {
                     if !self.coerced(n) {
                         return Some(R5Native {
@@ -1483,18 +1510,57 @@ impl<'a, 'g> Scan<'a, 'g> {
             if self.new_calls.contains(&c) {
                 continue;
             }
-            if let Err(e) = self.typed_target(c) {
-                if !self.native_call(c) {
-                    return Some(e);
+            match self.typed_target(c) {
+                Ok(f) => {
+                    if let Some(e) = self.record_slot(c, f, None, region) {
+                        return Some(e);
+                    }
                 }
-                return Some(R5Native {
-                    site: self.site(c),
-                    slot: "result".into(),
-                    why: "a native returns the record".into(),
-                });
+                Err(e) => {
+                    if !self.native_call(c) {
+                        return Some(e);
+                    }
+                    return Some(R5Native {
+                        site: self.site(c),
+                        slot: "result".into(),
+                        why: "a native returns the record".into(),
+                    });
+                }
             }
         }
         None
+    }
+
+    /// `RECORD_SIGNATURES` (VR-3a): a record in a typed call's slot (`arg`:
+    /// argument `i`, `None`: the result) waits for the record `$sig` ABI,
+    /// unless the slot is a Boxed parameter of a helper that receives a
+    /// materialized copy (owner ruling §4.4, `copy_regions`).
+    fn record_slot(
+        &self,
+        c: CallId,
+        f: FnIdx,
+        arg: Option<u32>,
+        region: &FxHashMap<NodeId, FnIdx>,
+    ) -> Option<RecordReject> {
+        if RECORD_SIGNATURES {
+            return None;
+        }
+        let boxed_param = arg.is_some_and(|i| {
+            self.g.m.funcs[f as usize]
+                .params
+                .get(i as usize)
+                .is_some_and(|p| region.contains_key(p))
+        });
+        (!boxed_param).then(|| {
+            RecordReject::R5UntypedCall(format!(
+                "{} {}: the record signature ABI is VR-3b",
+                self.site(c),
+                match arg {
+                    Some(i) => format!("arg({i})"),
+                    None => "result".to_string(),
+                }
+            ))
+        })
     }
 
     /// Call `c` is a method call on record arrays of one of `recs` only
@@ -1670,6 +1736,8 @@ pub fn ledger_lines(templates: &[TemplateFacts], arrays: &[RecordArray]) -> Vec<
         out.push(
             "# records-limits natives are default-deny (only realm declarations with effects describe a slot); \
              X | null rejects; two literal sites of one interface are two templates; \
+             a record in a typed call's argument or result waits for the VR-3b signature ABI \
+             (a Boxed helper parameter receives a copy); \
              record arrays wait for the VR-4b intrinsics"
                 .to_string(),
         );
