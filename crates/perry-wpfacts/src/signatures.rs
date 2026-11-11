@@ -268,6 +268,9 @@ pub(crate) fn collect(
         if sig.is_boxed() {
             sigs.remove(t);
         }
+        if let Some(mb) = bindings.get_mut(t.0 as usize) {
+            mb.record_demoted.push(t.1);
+        }
     }
     let mut typed: Vec<((u32, u32), (u32, u32))> = Vec::new();
     for (key, (t, recs)) in targets {
