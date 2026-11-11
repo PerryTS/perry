@@ -18,8 +18,9 @@
 //! **Key signs** (`collect_signs`, `ModuleBindings::key_signs`). An element
 //! site of any operation (a read, a store, a called element) whose key is an
 //! integer Number inside the int32 range at every copy, and at every site
-//! that shares its offset, with the hull of its interval. Such a key is its
-//! `i32` exactly: the site needs no key normalization (a fraction, NaN, a
+//! that shares its offset, with the hull of its interval. Only the key
+//! node's own interval counts: a key the solve resolves to the name `"3"`
+//! may be that string at run time. Such a key is its `i32` exactly: the site needs no key normalization (a fraction, NaN, a
 //! string or a symbol never reaches it). With `lo >= 0` it is an array
 //! index, so the site needs no sign test and no property-key arm either.
 //! The hull is over reads, stores and calls alike, so a store that shares
@@ -64,7 +65,7 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
         return;
     }
     let read = |op: crate::derive::ElementOp| op == crate::derive::ElementOp::Read;
-    for ((mi, offset), k) in hulls(g, read) {
+    for ((mi, offset), k) in hulls(g, read, true) {
         if let (Some(k), Some(mb)) = (k, bindings.get_mut(mi as usize)) {
             mb.element_keys.push((offset, k));
         }
@@ -81,7 +82,7 @@ pub(crate) fn collect_signs(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     if g.m.aborted || !g.m.key_sign {
         return;
     }
-    for ((mi, offset), k) in hulls(g, |_| true) {
+    for ((mi, offset), k) in hulls(g, |_| true, false) {
         let Some(k) = k.filter(|&k| int32(k)) else {
             continue;
         };
@@ -111,7 +112,7 @@ pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
             _ => e.0 = true,
         }
     }
-    hulls(g, |_| true)
+    hulls(g, |_| true, false)
         .into_iter()
         .filter_map(|((mi, offset), k)| {
             let (lo, hi) = k?;
@@ -127,8 +128,15 @@ pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
         .collect()
 }
 
-/// The key hulls of the sites whose operation `admit` takes.
-fn hulls(g: &Gen<'_>, admit: impl Fn(crate::derive::ElementOp) -> bool) -> Hulls {
+/// The key hulls of the sites whose operation `admit` takes. `named`: a
+/// canonical index literal counts as its index (`copy_key`); otherwise only
+/// the key node's own interval does, so a key that is the string `"3"` at
+/// run time has none.
+fn hulls(
+    g: &Gen<'_>,
+    admit: impl Fn(crate::derive::ElementOp) -> bool,
+    named: bool,
+) -> Hulls {
     // A summarized body's key node has one copy per instance (`Inst::fresh`).
     let mut copies: std::collections::HashMap<NodeId, Vec<NodeId>> = Default::default();
     for inst in 0..g.m.sum.insts.len() as u32 {
@@ -146,8 +154,12 @@ fn hulls(g: &Gen<'_>, admit: impl Fn(crate::derive::ElementOp) -> bool) -> Hulls
         if !admit(site.op) || site.byte_offset == 0 {
             continue;
         }
-        let mut k = copy_key(g, site.key, site.idx);
-        if matches!(site.key, Key::Any(_)) {
+        let mut k = if named {
+            copy_key(g, site.key, site.idx)
+        } else {
+            number_range(&g.m, site.idx)
+        };
+        if !named || matches!(site.key, Key::Any(_)) {
             for &c in copies.get(&site.idx).into_iter().flatten() {
                 k = hull(k, number_range(&g.m, c));
             }

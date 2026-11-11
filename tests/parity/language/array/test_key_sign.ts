@@ -114,6 +114,21 @@ named[zero] = "first";
 named[half] = "h2";
 console.log("edge store", named[0], named["0.5"], named[big], named.length);
 
+// (e2) A string that names an index is a key, not a Number: it reads and
+// writes the element, and a string that names none reads the property.
+const two: any = "2";
+const sk: any = many ? "length" : "1";
+const strs: any[] = ["s0", "s1", "s2"];
+function byKey(xs: any, k: any): any {
+  return xs[k];
+}
+function putKey(xs: any, k: any, v: any): void {
+  xs[k] = v;
+}
+putKey(strs, two, "S2");
+putKey(strs, "1", "S1");
+console.log("string key", byKey(strs, two), byKey(strs, sk), byKey(strs, "0"), byKey(strs, "length"), strs[two], strs[sk]);
+
 // (f) `at` counts a negative index from the end; untouched.
 function atOf(xs: number[], k: number): any {
   return xs.at(k);

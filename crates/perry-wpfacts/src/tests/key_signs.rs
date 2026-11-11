@@ -66,6 +66,13 @@ fn a_key_that_is_no_int32_has_no_sign() {
          console.log(f(\"length\"));"
     );
     assert_eq!(sign_at(&src, "(K as any)[k]", FactsConfig::default()), None);
+    // A string that names an index: the key is no Number at run time.
+    let src = format!(
+        "{TABLE}const k: any = \"3\";\n\
+         export function f(): unknown {{ return (K as any)[k]; }}\n\
+         console.log(f());"
+    );
+    assert_eq!(sign_at(&src, "(K as any)[k]", FactsConfig::default()), None);
     // An integer past the int32 range.
     let src = format!(
         "{TABLE}export function f(i: number): number {{ return K[i >>> 0] ?? 0; }}\n\
