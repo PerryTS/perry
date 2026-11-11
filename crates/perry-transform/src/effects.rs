@@ -141,18 +141,14 @@ fn closed_construction(class: &Class) -> Option<Closed> {
     {
         return None;
     }
-    let has_accessor = |name: &str| {
-        class
-            .getters
-            .iter()
-            .chain(&class.setters)
-            .any(|(n, _)| n == name)
-    };
     for field in &class.fields {
         if field.key_expr.is_some()
             || !field.decorators.is_empty()
-            || has_accessor(&field.name)
-            || field.init.as_ref().is_some_and(|e| !is_value_without_locals(e))
+            || has_accessor(class, &field.name)
+            || field
+                .init
+                .as_ref()
+                .is_some_and(|e| !is_value_without_locals(e))
         {
             return None;
         }
@@ -169,7 +165,7 @@ fn closed_construction(class: &Class) -> Option<Closed> {
             Stmt::Return(None) => {}
             Stmt::Expr(e) => {
                 let (name, value) = own_field_store(e)?;
-                if has_accessor(name) || !is_value(value) {
+                if has_accessor(class, name) || !is_value(value) {
                     return None;
                 }
                 if let Expr::LocalGet(id) = value {
@@ -183,6 +179,15 @@ fn closed_construction(class: &Class) -> Option<Closed> {
         }
     }
     Some(Closed { kept })
+}
+
+/// Does `class` itself declare a getter or setter named `name`?
+pub(crate) fn has_accessor(class: &Class, name: &str) -> bool {
+    class
+        .getters
+        .iter()
+        .chain(&class.setters)
+        .any(|(n, _)| n == name)
 }
 
 /// A field initializer runs outside the constructor's parameters.

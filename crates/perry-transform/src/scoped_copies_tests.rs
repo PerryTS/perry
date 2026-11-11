@@ -138,7 +138,11 @@ fn a_captured_copy_stays() {
         is_generator: false,
         is_strict: true,
     };
-    unchanged(vec![looped(vec![value(2), copy(3, 2), Stmt::Expr(closure)])]);
+    unchanged(vec![looped(vec![
+        value(2),
+        copy(3, 2),
+        Stmt::Expr(closure),
+    ])]);
 }
 
 #[test]
