@@ -158,6 +158,7 @@ mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
 mod key_signs;
+mod literal_strings;
 mod range_tightening;
 mod reach_accessor;
 mod receiver_slots;

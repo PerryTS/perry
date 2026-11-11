@@ -1428,6 +1428,14 @@ pub struct Model {
     /// is claimed non-negative, a wrong claim the witness at the element
     /// site must catch.
     pub key_sign_sabotage: bool,
+    /// A `slice` of an Array bears a plain Array (`builtins::
+    /// site_slice_arr`; `PERRY_FACTS_SLICE_BIRTHS=0` turns it off).
+    pub slice_births: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=slicebirth`): a `slice`
+    /// birth is claimed a plain Array whatever its species constructor (an
+    /// `Object` species makes a Number object), a wrong claim the array rep
+    /// witness must catch.
+    pub slice_birth_sabotage: bool,
     /// The wide keys (`element_keys::collect_wide`;
     /// `PERRY_FACTS_WIDE_KEYS=0` turns them off).
     pub wide_keys: bool,
@@ -1435,6 +1443,13 @@ pub struct Model {
     /// that may be negative is claimed non-negative, a wrong claim the
     /// witness at the element site must catch.
     pub wide_key_sabotage: bool,
+    /// Literal strings (`literal_strings`;
+    /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
+    pub literal_strings: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=litstr`): every binding and
+    /// field that may hold a String is claimed to hold only literals'
+    /// values, a wrong claim the witness at the store or alias must catch.
+    pub literal_strings_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.

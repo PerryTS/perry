@@ -812,7 +812,15 @@ impl Model {
             // grows).
             let saved_range = self.cur_range;
             self.cur_range = (self.cur_src != NO_NODE).then(|| self.rg(self.cur_src));
-            self.add(base[slot as usize], toks, prim);
+            // Its Strings likewise: that node's constants cover them
+            // (`Node::strs` only grows). A seed without an original node (a
+            // birth field's) is any string, as before, and so is every
+            // seed with literal strings off (`literal_strings`).
+            let strs = match self.cur_src {
+                src if src != NO_NODE && self.literal_strings => self.nodes[src as usize].strs,
+                _ => crate::model::STRS_TOP,
+            };
+            self.add_s(base[slot as usize], toks, prim, strs);
             self.cur_range = saved_range;
             if refuted {
                 self.refute_own_test(base[slot as usize]);

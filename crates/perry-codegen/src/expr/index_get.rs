@@ -48,8 +48,10 @@ pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
 pub(super) mod guarded_array;
 pub(crate) mod proven_array;
+pub(crate) mod rep_default;
 #[cfg(test)]
 mod proven_array_tests;
+pub(crate) mod walk_read;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
     packed_f64_loop_index_parts, packed_f64_loop_offset_read,
@@ -422,6 +424,9 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     if let Some(v) = const_array::try_lower(ctx, expr)? {
         return Ok(Some(v));
     }
+    if let Some(v) = walk_read::try_lower(ctx, expr)? {
+        return Ok(Some(v));
+    }
     array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
@@ -648,6 +653,9 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::LocalGet(id) = object.as_ref() else {
         return Ok(None);
     };
+    if let Some(v) = walk_read::try_lower(ctx, expr)? {
+        return Ok(Some(v));
+    }
     array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // #6750 follow-up: an active masked-window fact wins over the guarded
@@ -867,6 +875,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         return super::rest_elems::lower_read(ctx, expr, floor, value);
     }
     if let Some(v) = const_array::try_lower(ctx, expr)? {
+        return Ok(v);
+    }
+    if let Some(v) = walk_read::try_lower(ctx, expr)? {
         return Ok(v);
     }
     array_rep::witness(ctx, expr)?;

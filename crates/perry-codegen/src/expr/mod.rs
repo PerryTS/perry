@@ -3381,6 +3381,7 @@ pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
+pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]
@@ -3421,6 +3422,7 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
+mod index_set_rep;
 mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;

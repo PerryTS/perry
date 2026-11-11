@@ -333,6 +333,10 @@ pub struct BindingFacts {
     /// Numbers with the same elements (`const_arrays::collect`): index `i`
     /// reads the Number with bits `const_elems[i]`, for the whole program.
     pub const_elems: Option<Vec<u64>>,
+    /// It may hold a String, and every String it holds is the value of a
+    /// program string literal (`literal_strings`): born shared, never
+    /// appended to in place.
+    pub literal_strings: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -710,6 +714,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.class_object = class_object_of(m, n);
     out.int_demand = node.int_demand;
     out.zero_tol = node.zs_tol;
+    out.literal_strings = crate::literal_strings::holds(m, &[n]);
     out.rep = match arr_rep(m, &[n]) {
         Some(r) => Rep::Arr(r),
         None => match record_rep(m, n) {
@@ -753,7 +758,8 @@ fn record_rep(m: &Model, n: NodeId) -> Option<RecRep> {
 /// that is not foreign, escaped or hard (each tested here: `const_length`
 /// leans on `mark_hard` making the length ⊤), and whose template no named
 /// or metadata write touched (`owner_metadata_written`, as `ElementRead`
-/// requires). No primitive, no ⊤, no marker of any kind; a node with no
+/// requires), and, for a `slice` birth, whose species constructor is
+/// `%Array%` or none (`derive::exact_array`). No primitive, no ⊤, no marker of any kind; a node with no
 /// value proves nothing. The rep is the join over the tokens of each one's
 /// own (`tok_arr_rep`). `None` with `Model::array_reps` off.
 pub(crate) fn arr_rep(m: &Model, nodes: &[NodeId]) -> Option<ArrRep> {
@@ -796,6 +802,14 @@ pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Optio
                 || m.is_escaped(t)
                 || m.hard.contains_key(&t)
                 || owner_metadata_written(m, tm)
+            {
+                return None;
+            }
+            // A plain `slice` birth (`builtins::site_slice_arr`) is an Array
+            // only while the species constructor is `%Array%` or none.
+            if m.tmpls[tm as usize].species.is_some()
+                && !m.slice_birth_sabotage
+                && !crate::derive::exact_array(m, t)
             {
                 return None;
             }

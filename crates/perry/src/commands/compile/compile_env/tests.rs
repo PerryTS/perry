@@ -325,6 +325,7 @@ fn array_fact_switches_are_cache_inputs() {
     for name in [
         "PERRY_FACTS_ARRAY_BASE",
         "PERRY_FACTS_FN_BASES",
+        "PERRY_FACTS_WALK_INDEXED",
         "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
@@ -384,6 +385,17 @@ fn key_sign_switch_is_a_cache_input() {
     );
 }
 
+/// Literal strings: the switch changes the exported facts and every store
+/// and alias that drops its string demote, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn literal_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_LITERAL_STRINGS"),
+        "PERRY_FACTS_LITERAL_STRINGS must key the compile caches"
+    );
+}
+
 /// Wide keys: the switch changes the exported facts and every element site
 /// that converts a wide key without the normalizer, so `=0` must never reuse
 /// an `=1` object.
@@ -402,6 +414,37 @@ fn number_store_arm_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_NUMBER_STORE_ARM"),
         "PERRY_NUMBER_STORE_ARM must key the compile caches"
+    );
+}
+
+/// The rep-keyed element store: the switch changes every runtime-key store
+/// into an Array the facts give Number elements, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn array_store_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_ARRAY_STORE"),
+        "PERRY_FACTS_ARRAY_STORE must key the compile caches"
+    );
+}
+
+/// Plain `slice` births: the switch changes the exported array reps, so `=0`
+/// must never reuse an `=1` object.
+#[test]
+fn slice_births_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_SLICE_BIRTHS"),
+        "PERRY_FACTS_SLICE_BIRTHS must key the compile caches"
+    );
+}
+
+/// `a[k] ?? <literal>` over an Array of Numbers: the switch changes the
+/// read's lowering, so `=0` must never reuse an `=1` object.
+#[test]
+fn rep_default_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_REP_DEFAULT"),
+        "PERRY_REP_DEFAULT must key the compile caches"
     );
 }
 
