@@ -67,6 +67,17 @@ impl WriteCensus {
     }
 }
 
+/// Every place a LocalId appears inside `stmts` and everything nested in
+/// them, by the same rules as [`count_module_occurrences`].
+pub(crate) fn count_list_occurrences(stmts: &[Stmt]) -> Counts {
+    let mut counter = Counter {
+        counts: Counts::new(),
+        writes_only: false,
+    };
+    count_stmts(stmts, &mut counter);
+    counter.counts
+}
+
 /// `writes_only`: count just `LocalSet` / `Update` targets.
 pub(crate) fn count_module(module: &Module, writes_only: bool) -> Counts {
     let mut counter = Counter {
