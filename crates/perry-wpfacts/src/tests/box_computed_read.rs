@@ -2,8 +2,9 @@
 //! whose `members::box_chain` is `Object`: a `JSON.parse` object, a
 //! property descriptor, an `Object.fromEntries` result) finds its own
 //! values or `Object.prototype`'s members: `constructor` (`Object`), the
-//! methods (`BuiltinNs::ObjectProtoMethod`), `__proto__` (the prototype)
-//! and what a store into ⊤ wrote there; never "any builtin function".
+//! methods (`BuiltinNs::ObjectProtoMethod`) and what a store into ⊤ wrote
+//! there (an unknown string key never names `__proto__`, DECISIONS 217);
+//! never "any builtin function".
 //! (three.js GLTF JSON objects read under unknown keys: skin seed 2.)
 //! A `JSON.parse` value may also be an array, whose computed read finds
 //! `Array.prototype`'s methods by name (`described_holder_computed_read`).
@@ -109,15 +110,26 @@ fn a_json_named_read_stays_proven() {
     assert!(ok, "{d}");
 }
 
-/// `__proto__` under an unknown key is `Object.prototype`: a store through
-/// it is a store onto every ordinary object's chain.
+/// A computed key of unknown string never names `__proto__` (DECISIONS 217):
+/// `j[k]` is no `Object.prototype`, so a store through it writes no member
+/// onto every ordinary object's chain (tsc `utilities.ts` `JSON.parse`
+/// records read under for-in keys: Object.prototype as a value, then
+/// `BuiltinFn(Any)` from its own members, tssrc first escape). The named read
+/// `j.__proto__` still is `Object.prototype` (control).
 #[test]
-fn a_json_computed_read_may_be_object_prototype() {
-    let (ok, d) = run(
-        SETUP_ARGV,
-        "const j: any = Object.fromEntries([[k, 1]]);\nconst p: any = j[k];\np.zz = box;\nconst o: any = {};\next(o.zz);\nconsole.log(box.witness);",
-    );
-    assert!(!ok, "{d}");
+fn a_json_computed_read_is_never_object_prototype() {
+    for make in ["JSON.parse(\"\" + k)", "Object.fromEntries([[k, 1]])"] {
+        let (ok, d) = run(
+            SETUP_ARGV,
+            &format!("const j: any = {make};\nconst p: any = j[k];\np.zz = box;\nconst o: any = {{}};\next(o.zz);\nconsole.log(box.witness);"),
+        );
+        assert!(ok, "{d}");
+        let (ok, d) = run(
+            SETUP_ARGV,
+            &format!("const j: any = {make};\nconst p: any = j.__proto__;\np.zz = box;\nconst o: any = {{}};\next(o.zz);\nconsole.log(box.witness);"),
+        );
+        assert!(!ok, "{d}");
+    }
 }
 
 /// Controls: what may still be any function.
@@ -138,8 +150,8 @@ fn a_computed_read_keeps_what_unknown_code_or_a_given_prototype_put_there() {
     }
 }
 
-/// A computed read of a `JSON.parse` object may be `Object.prototype` (the
-/// key may be `__proto__`). Defining a NAMED key on it defines that one key
+/// A value that may be `Object.prototype` (here once `j[k]`; DECISIONS 217
+/// now keeps it out, the guard stays). Defining a NAMED key on it defines that one key
 /// there (node: `Object.defineProperties(o, { k: d })`), never an accessor
 /// under any key (DECISIONS 242(1) is a computed key): a literal that misses
 /// a key under a computed key (`lit[k]`) keeps its own reads (tsc `debug.ts`
