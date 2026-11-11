@@ -1333,7 +1333,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/check_lean_dependencies.py
-          cargo test --locked -p perry-base64 -p perry-hex -p perry-uuid -p perry-cli-support --all-features
+          cargo test --locked -p perry-base64 -p perry-hex -p perry-uuid --all-features
+          cargo test --locked -p perry --bin perry --features apple-api cli::
           cargo check --locked -p perry-stdlib --no-default-features
           cargo check --locked -p perry --no-default-features --features dev-cli
 

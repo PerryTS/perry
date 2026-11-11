@@ -1,13 +1,13 @@
 //! Apple API token framing only. P-256 signing stays in RustCrypto and is
 //! compiled only for CLI configurations that enable Apple API operations.
-#[cfg(feature = "apple-jwt")]
+#[cfg(feature = "apple-api")]
 pub fn generate(key_id: &str, issuer_id: &str, pem: &str) -> anyhow::Result<String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
     sign(key_id, issuer_id, pem, now)
 }
-#[cfg(feature = "apple-jwt")]
+#[cfg(feature = "apple-api")]
 fn sign(key_id: &str, issuer_id: &str, pem: &str, now: u64) -> anyhow::Result<String> {
     use anyhow::Context;
     use p256::{
@@ -28,7 +28,7 @@ fn sign(key_id: &str, issuer_id: &str, pem: &str, now: u64) -> anyhow::Result<St
     let signature: Signature = key.sign(input.as_bytes());
     Ok(format!("{input}.{}", B64.encode(signature.to_bytes())))
 }
-#[cfg(all(test, feature = "apple-jwt"))]
+#[cfg(all(test, feature = "apple-api"))]
 mod tests {
     use super::*;
     use p256::{
