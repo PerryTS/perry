@@ -373,10 +373,6 @@
       "category": "test-support",
       "decision": "keep"
     },
-    "perry-ui-testkit": {
-      "category": "test-support",
-      "decision": "keep"
-    },
     "perry-ui-tvos": {
       "category": "platform-adapter",
       "decision": "keep"

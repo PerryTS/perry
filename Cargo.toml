@@ -69,7 +69,6 @@ members = [
     "crates/perry-codegen-wear-tiles",
     "crates/perry-codegen-wasm",
     "crates/perry-ui-test",
-    "crates/perry-ui-testkit",
     "crates/perry-doc-tests",
     "crates/perry-updater",
     "crates/perry-update-manifest",
@@ -641,7 +640,6 @@ perry-codegen-arkts = { path = "crates/perry-codegen-arkts" }
 perry-codegen-glance = { path = "crates/perry-codegen-glance" }
 perry-codegen-wear-tiles = { path = "crates/perry-codegen-wear-tiles" }
 perry-codegen-wasm = { path = "crates/perry-codegen-wasm" }
-perry-ui-testkit = { path = "crates/perry-ui-testkit" }
 perry-audio-miniaudio = { path = "crates/perry-audio-miniaudio" }
 perry-updater = { path = "crates/perry-updater" }
 perry-update-manifest = { path = "crates/perry-update-manifest" }
