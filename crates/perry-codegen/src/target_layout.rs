@@ -449,7 +449,7 @@ pub(crate) const fn inline_array_birth_gc_packed(slots: u64) -> u64 {
     const GC_TYPE_ARRAY: u64 = 1;
     const GC_FLAG_ARENA: u64 = 0x02;
     const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-    perry_abi::gc_array_type_pat!()
+    GC_TYPE_ARRAY
         | (GC_FLAG_ARENA << 8)
         | (GC_LAYOUT_POINTER_FREE << 16)
         | (inline_array_birth_total_bytes(slots) << 32)
