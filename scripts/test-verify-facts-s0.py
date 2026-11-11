@@ -160,6 +160,7 @@ def main():
         ("zero-sign-elem-negative", "zerosign", "zero sign"),
         ("birth-image-negative", "birthimage", "birth image"),
         ("string-call-negative", "stringcall", "call kinds"),
+        ("loop-trip-negative", "looptrip", "loop trip bound"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

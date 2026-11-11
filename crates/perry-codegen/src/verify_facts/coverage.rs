@@ -60,6 +60,9 @@ pub(crate) enum Fact {
     /// A call's result kinds (wpfacts `call_kinds`): a string operand.
     CallKinds,
     LiteralString,
+    /// A loop's trip bound from its counter's interval
+    /// (`stmt::loops::bounded_poll`).
+    LoopTrip,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -115,6 +118,7 @@ impl Fact {
             Self::WideKey => "wide key",
             Self::CallKinds => "call kinds",
             Self::LiteralString => "literal string",
+            Self::LoopTrip => "loop trip bound",
         }
     }
 }

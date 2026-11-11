@@ -1,6 +1,7 @@
 //! `Stmt::For`, `Stmt::While`, `Stmt::DoWhile` lowering and supporting helpers.
 
 mod accumulator_scope;
+pub(crate) mod bounded_poll;
 mod i32_counter;
 mod iterator_record;
 mod rest_counter;
@@ -8561,6 +8562,10 @@ pub(crate) fn emit_gc_loop_safepoint(
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
     }
+    // Check mode: the end of a body counts against the loop's trip proof.
+    if controls.is_empty() {
+        bounded_poll::witness(ctx);
+    }
     // #7480 step 4: never inside a call-free-by-construction fast clone.
     //
     // `lower_element_shape_versioned_for`
@@ -8681,6 +8686,8 @@ pub(crate) fn emit_gc_loop_safepoint(
 /// windows are path-based, so a collection point on one arm of a diamond is
 /// still a collection point on every path through it.
 fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
+    // A loop with a trip proof may take this poll back when it is closed.
+    let revocable = bounded_poll::poll_block(ctx);
     let poll_idx = ctx.new_block("gcpoll");
     let done_idx = ctx.new_block("gcpoll.done");
     let poll_label = ctx.block_label(poll_idx);
@@ -8765,6 +8772,9 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
 
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
+    if let Some(check) = revocable {
+        bounded_poll::poll_emitted(ctx, check, done_idx);
+    }
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
