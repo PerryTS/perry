@@ -105,6 +105,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // The birth of an at-rest Array that reserves a capacity (may collect).
     module.declare_function("js_array_rest_reserve", DOUBLE, &[DOUBLE, I32]);
+    // A fill push of an at-rest push-filled birth: the handle, the value,
+    // the final length; returns the head (may collect on the first append).
+    module.declare_function("js_array_rest_push", I64, &[I64, DOUBLE, I32]);
     // The fill birth (`expr::fill_birth`): `new Array(k).fill(v)` in one
     // pass: length, reserved capacity (0: none), the value, I32 words or not.
     module.declare_function("js_array_fill_birth", I64, &[I32, I32, DOUBLE, I32]);

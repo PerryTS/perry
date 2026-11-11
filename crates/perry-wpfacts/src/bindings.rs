@@ -353,14 +353,16 @@ pub struct IndexedOwner {
 /// primitive values on field observation nodes; that is not a program write.
 pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
     let numeric_key = |site: &u32| {
-        m.stores[*site as usize].key_value.is_some_and(|n| {
-            let n = &m.nodes[n as usize];
-            n.prim == crate::model::prim::NUM
-                && n.pts
-                    .to_sorted()
-                    .into_iter()
-                    .all(|v| v != TOP && m.beside_values(v))
-        })
+        // A fill push (`push_fills`) stores an element, nothing else.
+        m.push_fill_sites.contains_key(site)
+            || m.stores[*site as usize].key_value.is_some_and(|n| {
+                let n = &m.nodes[n as usize];
+                n.prim == crate::model::prim::NUM
+                    && n.pts
+                        .to_sorted()
+                        .into_iter()
+                        .all(|v| v != TOP && m.beside_values(v))
+            })
     };
     if m.any_writers
         .get(&tm)
@@ -555,6 +557,14 @@ pub struct ModuleBindings {
     pub rest_writes: Vec<(u32, u32)>,
     pub rest_births: Vec<u32>,
     pub rest_reserves: Vec<(u32, u32)>,
+    /// The fill pushes of the at-rest push-filled births (`push_fills`): the
+    /// byte offset of a push's receiver `this.k`, with the Array's final
+    /// length. Sorted.
+    pub rest_pushes: Vec<(u32, u32)>,
+    /// Every fill push (`push_fills`), at rest or not: the byte offset of
+    /// its receiver `this.k`, a read of the Array while it is being born.
+    /// Sorted.
+    pub fill_push_recvs: Vec<u32>,
     /// The fill births (`fill_births`): the `fill` call offset of a fused
     /// fill `new Array(k).fill(v)` codegen may bear as one birth, with `k`.
     /// Sorted.
