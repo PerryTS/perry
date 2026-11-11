@@ -42,16 +42,18 @@ pub(super) fn emit(llmod: &mut LlModule, prefix: &str, _is_entry: bool, async_de
     let ret = f.block_mut(2).unwrap().label.clone();
     let global = format!("@{cached}");
     let b = f.block_mut(0).unwrap();
-    for dep in async_deps {
-        b.call_void(&format!("{dep}__init"), &[]);
-    }
-    let address = b.ptrtoint(&global, I64);
-    b.call_void("js_gc_register_global_root", &[(I64, &address)]);
+    // Reading the namespace value is not an evaluation: a deferred target's
+    // asynchronous dependencies are gathered when the importing module runs,
+    // not here, so this getter stays free of side effects.
     let current = b.load(DOUBLE, &global);
     let bits = b.bitcast_double_to_i64(&current);
     let absent = b.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
     b.cond_br(&absent, &create, &ret);
     let b = f.block_mut(1).unwrap();
+    // The slot is registered once, when it first holds an object; a repeated
+    // read of an already materialized namespace adds no root.
+    let address = b.ptrtoint(&global, I64);
+    b.call_void("js_gc_register_global_root", &[(I64, &address)]);
     let callback = format!("ptrtoint (ptr @{evaluator} to i64)");
     let value = b.call(DOUBLE, "js_create_deferred_namespace", &[(I64, &callback)]);
     crate::expr::emit_root_nanbox_store_on_block(b, &value, &global);
