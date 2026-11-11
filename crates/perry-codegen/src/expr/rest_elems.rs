@@ -794,7 +794,7 @@ fn witness_word(ctx: &mut FnCtx<'_>, arr: &str, ptr: &str) {
 }
 
 /// Check mode: the stored `val` is an int32 Number that is not `-0`.
-fn witness_value(ctx: &mut FnCtx<'_>, val: &str) {
+pub(crate) fn witness_value(ctx: &mut FnCtx<'_>, val: &str) {
     crate::verify_facts::covered(
         crate::verify_facts::Fact::ArrayRep,
         || serde_json::json!({ "rest": "value" }),
@@ -846,7 +846,7 @@ fn witness_capacity(ctx: &mut FnCtx<'_>, arr: &str, key: &str) {
 }
 
 /// Report a false proof (exit 86) unless `ok`.
-fn miss_unless(ctx: &mut FnCtx<'_>, ok: &str, value: &str, what: &str) {
+pub(crate) fn miss_unless(ctx: &mut FnCtx<'_>, ok: &str, value: &str, what: &str) {
     crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("rest.verify_miss");
     let next = ctx.new_block("rest.verify_ok");
