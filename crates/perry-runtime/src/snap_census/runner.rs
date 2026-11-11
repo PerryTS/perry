@@ -5395,6 +5395,71 @@ fn pending_jobs_field() -> String {
     out.join(",")
 }
 
+/// SNAPK4: the first 64 entries of a queue row's list field, `+N` counting
+/// the rest; `busy` while the store is being changed.
+fn shown_field(entries: Option<Vec<String>>) -> (String, String) {
+    const SHOWN: usize = 64;
+    let Some(entries) = entries else {
+        return ("busy".to_owned(), "busy".to_owned());
+    };
+    let n = entries.len();
+    let mut out: Vec<String> = entries.into_iter().take(SHOWN).collect();
+    if n > SHOWN {
+        out.push(format!("+{}", n - SHOWN));
+    }
+    (n.to_string(), out.join(","))
+}
+
+/// SNAPK4 rows at a candidate cut for the run queues beside TASK_QUEUE, each
+/// read from its own store, one row per non-empty store (SNAP_DESIGN
+/// §2.10.21). The nextTick queue (`tick_queue`, `tick:owner:code`) and the
+/// scheduled resolutions (`scheduled_resolves`, `resolve:owner:0`) are imaged
+/// with the task queue by the same FIFO-prefix rule (`policy=image`). A timer,
+/// immediate or native completion (`timer_queue`,
+/// `kind:owner:code:delay_ms:repeat`) waits on the host clock or host I/O:
+/// a blocker (`policy=STOP`).
+fn k4_queue_rows(st: &mut State) {
+    let init = st.frames.last().map_or(0, |f| f.init);
+    let ticks = crate::builtins::snap_pending_ticks()
+        .map(|t| t.iter().map(|(o, c)| format!("tick:{o}:{c:x}")).collect());
+    if ticks.as_ref().is_none_or(|t: &Vec<String>| !t.is_empty()) {
+        let (n, list) = shown_field(ticks);
+        input_record::event(
+            st,
+            "tick_queue",
+            format!("init={init};pending={n};policy=image;ticks={list}"),
+        );
+    }
+    let resolves = crate::promise::snap_scheduled_resolves()
+        .map(|r| r.iter().map(|(o, c)| format!("resolve:{o}:{c:x}")).collect());
+    if resolves.as_ref().is_none_or(|r: &Vec<String>| !r.is_empty()) {
+        let (n, list) = shown_field(resolves);
+        input_record::event(
+            st,
+            "scheduled_resolves",
+            format!("init={init};pending={n};policy=image;resolves={list}"),
+        );
+    }
+    let timers = crate::timer::snap_pending_timers().map(|t| {
+        t.iter()
+            .map(|e| {
+                format!(
+                    "{}:{}:{:x}:{}:{}",
+                    e.kind, e.owner, e.code, e.delay_ms, e.repeat as u8
+                )
+            })
+            .collect()
+    });
+    if timers.as_ref().is_none_or(|t: &Vec<String>| !t.is_empty()) {
+        let (n, list) = shown_field(timers);
+        input_record::event(
+            st,
+            "timer_queue",
+            format!("init={init};pending={n};policy=STOP;timers={list}"),
+        );
+    }
+}
+
 /// SNAPK2b checks at a candidate cut, `init_enter` of the init just pushed
 /// (DESIGN27 §1.1, §1.2). Open frames: every open ancestor resumes at its
 /// flag test (R1: static dependency or eager entry import, before the
@@ -5449,5 +5514,6 @@ fn k2b_enter_rows(st: &mut State) {
                 );
             }
         }
+        k4_queue_rows(st);
     }
 }

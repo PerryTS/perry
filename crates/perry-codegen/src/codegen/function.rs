@@ -1706,6 +1706,8 @@ pub(super) fn compile_function(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: crate::expr::int32_shadow::plan(&f.body),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -1732,6 +1734,9 @@ pub(super) fn compile_function(
         Some(&f.body),
         super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
     );
+    for p in &f.params {
+        crate::expr::int32_shadow::materialize(&mut ctx, p.id)?;
+    }
     if reads_this && !f.is_strict {
         let slot = ctx.this_stack[0].clone();
         crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);

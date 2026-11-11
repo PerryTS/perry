@@ -194,6 +194,7 @@
 
 - [Memory Model](internals/memory-model.md)
 - [Module evaluation](internals/module-evaluation.md)
+- [JSON PropertyList reads](internals/json-property-list.md)
 - [Retained function source](internals/retained-function-source.md)
 - [RegExp program ownership and caching](internals/regexp-program-cache.md)
 - [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)

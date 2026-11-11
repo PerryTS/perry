@@ -143,6 +143,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_INLINE_NEW",
     "PERRY_INLINE_NONBIGINT_BITWISE",
     "PERRY_INT32_OPERANDS",
+    "PERRY_INT32_SHADOWS",
     "PERRY_INT_VALUED_LOCALS",
     "PERRY_IOS_SYSROOT",
     "PERRY_JSCVT",
@@ -306,6 +307,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ("PERRY_SOURCE_NEED_REPORT", "Compiler-only retained-source census; bypasses object caches and does not change emitted code."),
     ("PERRY_RETAIN_ALL_SOURCE", "Diagnostic: keeps retained source the compiler would drop; each module's HIR hash (its object-cache key) reflects the text, and whole-binary caching is bypassed."),
     ("PERRY_ENUM_IMAGE_CENSUS", "Prints enum-image census diagnostics only; no lowering decision depends on this report."),
+    ("PERRY_LIFE_CENSUS", "Compiler-only lifetime census file; forces the uncached path (as PERRY_NO_CACHE=1) and does not change emitted code."),
     ("PERRY_FALLBACK_DIAG", "Opt-in sidecar labels; all caches are bypassed while enabled. Off leaves emitted code and cache identity unchanged."),
     ("PERRY_LOWERING_JOBS", "Changes callable scheduling only; deterministic merging preserves emitted objects."),
     (

@@ -1008,6 +1008,8 @@ pub(super) fn compile_method(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: crate::expr::int32_shadow::plan(method_body),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: match sig {
             Some(tm) => super::signature_entry::param_range_facts(method, &tm.plan),
             None => Vec::new(),
@@ -1078,6 +1080,9 @@ pub(super) fn compile_method(
         Some(method_body),
         super::arguments::ArgumentsCallee::Undefined,
     );
+    for p in &method.params {
+        crate::expr::int32_shadow::materialize(&mut ctx, p.id)?;
+    }
 
     // Constructors emitted as standalone cross-module LLVM functions (named
     // `<prefix>__<class>_constructor`) must bake the field initializers into

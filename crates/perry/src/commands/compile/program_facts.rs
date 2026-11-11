@@ -692,6 +692,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     },
                 );
             }
+            // A Number or `undefined` and nothing else (the negative control
+            // `undefnum` claims it for anything that may be a Number).
+            if b.prims & prim::NUM != 0
+                && (!b.other && b.class_ids.is_empty() && b.prims & !(prim::NUM | prim::UNDEF) == 0
+                    || std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("undefnum"))
+            {
+                out.undef_number_inputs.insert(*id);
+            }
             if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
                 out.number_inputs.insert(*id);
                 // A Number binding whose interval proof lies in the int32

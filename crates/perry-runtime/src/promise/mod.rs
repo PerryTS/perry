@@ -43,6 +43,8 @@ mod rejection_loop_tests;
 mod resolving_function_kind_tests;
 #[cfg(all(test, perry_gc_instruments))]
 mod snap_pending_job_tests;
+#[cfg(all(test, perry_gc_instruments))]
+mod snap_pending_queue_tests;
 pub mod scanners;
 mod settled_step;
 pub use settled_step::js_async_step_resume_now;
@@ -761,19 +763,36 @@ pub(crate) fn snap_pending_job_list() -> Option<Vec<SnapPendingJob>> {
     })
 }
 
+/// SNAPK3c/K4 census: a callback's code address (`JsFunctionInfo::code`), 0
+/// for no callback.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_closure_code(callback: ClosurePtr) -> usize {
+    if callback.is_null() {
+        return 0;
+    }
+    let info = unsafe { (*callback).info };
+    if info.is_null() {
+        0
+    } else {
+        unsafe { (*info).code as usize }
+    }
+}
+
+/// SNAPK4 census: the scheduled resolutions in queue order, one
+/// `(owner, code)` per entry: the init that queued it and 0 (a resolution runs
+/// no callback; it settles its promise). None while the queue is borrowed.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_scheduled_resolves() -> Option<Vec<(u32, usize)>> {
+    combinators::SCHEDULED_RESOLVES.with(|q| {
+        q.try_borrow()
+            .ok()
+            .map(|q| q.iter().map(|r| (r.2, 0)).collect())
+    })
+}
+
 #[cfg(perry_gc_instruments)]
 fn snap_pending_job(task: &Task) -> SnapPendingJob {
-    fn code(callback: ClosurePtr) -> usize {
-        if callback.is_null() {
-            return 0;
-        }
-        let info = unsafe { (*callback).info };
-        if info.is_null() {
-            0
-        } else {
-            unsafe { (*info).code as usize }
-        }
-    }
+    let code = snap_closure_code;
     let (kind, callback, owner) = match task {
         Task::Promise(promise, _, is_fulfilled, context) => {
             let callback = if promise.is_null() {
