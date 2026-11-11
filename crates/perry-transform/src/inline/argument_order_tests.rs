@@ -62,11 +62,16 @@ fn bump_call() -> Expr {
 
 /// The census of a module in which `bump` writes `M` when `written`.
 fn census(written: bool) -> WriteCensus {
+    census_storing(written.then_some(Expr::Integer(2)))
+}
+
+/// The census of a module in which `bump` stores `stored` into `M`. `M` only
+/// ever holds a primitive unless `stored` is a read of some other local.
+fn census_storing(stored: Option<Expr>) -> WriteCensus {
     let mut module = Module::new("test");
-    let body = if written {
-        vec![Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::Integer(2))))]
-    } else {
-        vec![Stmt::Expr(Expr::LocalGet(M))]
+    let body = match stored {
+        Some(value) => vec![Stmt::Expr(Expr::LocalSet(M, Box::new(value)))],
+        None => vec![Stmt::Expr(Expr::LocalGet(M))],
     };
     module.functions.push(function(BUMP, Vec::new(), body));
     module.init.push(Stmt::Let {
@@ -256,8 +261,13 @@ fn on_board() -> Function {
     function(ON_BOARD, vec![param(A)], vec![Stmt::Return(Some(body))])
 }
 
-/// Inline `callee(args)` (FuncId `G`) through the expression path.
+/// Inline `callee(args)` through the expression path, in a module where `M`
+/// is written and may hold an object.
 fn inline_simple(callee: Function, args: Vec<Expr>) -> (Vec<Stmt>, Expr) {
+    inline_simple_in(callee, args, &census_storing(Some(Expr::LocalGet(99))))
+}
+
+fn inline_simple_in(callee: Function, args: Vec<Expr>, census: &WriteCensus) -> (Vec<Stmt>, Expr) {
     let id = callee.id;
     try_inline_simple_call(
         &call(Expr::FuncRef(id), args),
@@ -266,7 +276,7 @@ fn inline_simple(callee: Function, args: Vec<Expr>) -> (Vec<Stmt>, Expr) {
         &HashMap::new(),
         &ExactReceiverFacts::new(),
         &mut 1000,
-        &census(true),
+        census,
         None,
         &HashMap::new(),
         false,
@@ -295,7 +305,52 @@ fn a_local_minted_after_the_census_is_substituted_into_such_a_body() {
     );
 }
 
-/// `while (onBoard(m)) { m = m + 1 }`: a loop condition has no place for a
+/// `inRange(a) { return a >= 0 && a < 128 && (a & 0x88) === 0 }`: `>=` would
+/// convert an object before the second read.
+fn in_range() -> Function {
+    let cmp = |op: CompareOp, right: i64| Expr::Compare {
+        op,
+        left: Box::new(Expr::LocalGet(A)),
+        right: Box::new(Expr::Integer(right)),
+    };
+    let and = |left: Expr, right: Expr| Expr::Logical {
+        op: perry_hir::LogicalOp::And,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let Stmt::Return(Some(masked)) = on_board().body.remove(0) else {
+        unreachable!()
+    };
+    let body = and(and(cmp(CompareOp::Ge, 0), cmp(CompareOp::Lt, 128)), masked);
+    function(ON_BOARD, vec![param(A)], vec![Stmt::Return(Some(body))])
+}
+
+/// A local that only ever holds primitives converts without running code,
+/// so reads after an operator over it are still in time.
+#[test]
+fn reads_after_an_operator_over_a_primitive_local_are_substituted() {
+    // `m = 1` at its `let`, `m = 2` in `bump`: only primitives.
+    let (setup, result) = inline_simple_in(in_range(), vec![Expr::LocalGet(M)], &census(true));
+    assert!(setup.is_empty(), "{setup:?}");
+    assert!(reads_m(&result), "{result:?}");
+    // `m = m + 1` is primitive whatever `m` held.
+    let sum = binary(BinaryOp::Add, Expr::LocalGet(M), Expr::Integer(1));
+    let (setup, _) = inline_simple_in(
+        in_range(),
+        vec![Expr::LocalGet(M)],
+        &census_storing(Some(sum)),
+    );
+    assert!(setup.is_empty(), "{setup:?}");
+    // Control: `m = other` may store an object.
+    let (setup, result) = inline_simple(in_range(), vec![Expr::LocalGet(M)]);
+    assert_bound_first(&setup, &Expr::LocalGet(M));
+    assert!(!reads_m(&result), "{result:?}");
+    // Control: a local the census never saw declared (a parameter).
+    let (setup, _) = inline_simple_in(in_range(), vec![Expr::LocalGet(77)], &census(true));
+    assert_bound_first(&setup, &Expr::LocalGet(77));
+}
+
+/// `while (inRange(m)) { m = m + 1 }`: a loop condition has no place for a
 /// `let`, so the call is inlined only when the argument is substituted.
 #[test]
 fn a_loop_condition_over_a_written_local_is_inlined() {
@@ -308,7 +363,7 @@ fn a_loop_condition_over_a_written_local_is_inlined() {
     }];
     inline_calls_in_stmts(
         &mut stmts,
-        &HashMap::from([(ON_BOARD, on_board())]),
+        &HashMap::from([(ON_BOARD, in_range())]),
         &HashMap::new(),
         &HashMap::new(),
         &mut HashMap::new(),
@@ -401,7 +456,12 @@ fn a_read_inside_a_closure_is_not_scanned_as_early() {
         is_strict: false,
     };
     let body = vec![Stmt::Return(Some(closure))];
-    assert!(!crate::arg_read_order::reads_precede_effects(&body, A, M));
+    assert!(!crate::arg_read_order::reads_precede_effects(
+        &body,
+        A,
+        M,
+        Default::default()
+    ));
 }
 
 /// `add2(m, m++)`: the later argument writes the earlier one.
@@ -463,13 +523,15 @@ fn a_read_in_a_loop_that_runs_code_is_late() {
     assert!(!crate::arg_read_order::reads_precede_effects(
         &looped(getter),
         A,
-        M
+        M,
+        Default::default()
     ));
     // Twin: a loop that runs nothing.
     assert!(crate::arg_read_order::reads_precede_effects(
         &looped(Expr::Integer(0)),
         A,
-        M
+        M,
+        Default::default()
     ));
 }
 
