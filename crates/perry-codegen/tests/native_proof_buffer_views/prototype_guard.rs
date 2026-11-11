@@ -32,7 +32,7 @@ fn buffer_read_fold_tests_the_buffer_prototype_bit() {
         ],
     );
     assert!(
-        ir.contains("llvm.bswap.i32") && ir.contains("bytes.numeric.load"),
+        ir.contains("call i32 @llvm.bswap.i32(") && ir.contains("bytes.numeric.load"),
         "the read still folds:\n{ir}"
     );
     assert!(ir.contains(WRITTEN), "the fold tests the shadow bit:\n{ir}");
@@ -58,7 +58,7 @@ fn a_reader_named_write_elsewhere_does_not_deopt_the_fold() {
         ],
     );
     assert!(
-        ir.contains("llvm.bswap.i32") && ir.contains(WRITTEN),
+        ir.contains("call i32 @llvm.bswap.i32(") && ir.contains(WRITTEN),
         "the read on `buf` folds under the guard:\n{ir}"
     );
 }
@@ -77,7 +77,77 @@ fn an_own_reader_on_the_receiver_never_folds() {
         ],
     );
     assert!(
-        !ir.contains("llvm.bswap.i32") && !ir.contains("bytes.numeric.load"),
+        !ir.contains("call i32 @llvm.bswap.i32(") && !ir.contains("bytes.numeric.load"),
         "an own property shadows the prototype reader:\n{ir}"
+    );
+}
+
+/// The callee read's offset of the reader site under test.
+const SITE: u32 = 41;
+
+/// `const buf = Buffer.alloc(8); buf.readInt32BE(0)` with the callee read at
+/// `SITE`, compiled with `proven` as the module's NativeMember sites. The
+/// same HIR both ways: the only input that differs is the proof.
+fn reader_site_ir(name: &str, proven: &[u32]) -> String {
+    let elision = perry_codegen::ElisionFacts {
+        native_member_calls: proven.iter().copied().collect(),
+        ..Default::default()
+    };
+    let opts = CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..Default::default()
+        },
+        ..empty_opts()
+    };
+    compile_ir_with_opts(
+        name,
+        vec![
+            buffer_let(1, "buf", int(8)),
+            Stmt::Expr(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: SITE,
+                    object: Box::new(local(1)),
+                    property: "readInt32BE".to_string(),
+                }),
+                args: vec![int(0)],
+                type_args: Vec::new(),
+                byte_offset: SITE,
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+        opts,
+    )
+}
+
+#[test]
+fn a_proven_reader_site_is_the_native_load_alone() {
+    // wpfacts NativeMember: no write may reach Buffer.prototype's reader.
+    let ir = reader_site_ir("buffer_read_proven_site.ts", &[SITE]);
+    assert!(
+        ir.contains("call i32 @llvm.bswap.i32("),
+        "the proven read folds:\n{ir}"
+    );
+    assert!(!ir.contains(WRITTEN), "a proven site tests no bit:\n{ir}");
+    assert_eq!(
+        ir.matches("call double @js_native_call_method(").count(),
+        0,
+        "a proven site has no dispatch arm:\n{ir}"
+    );
+}
+
+#[test]
+fn an_unproven_reader_site_tests_the_bit_and_keeps_the_dispatch_arm() {
+    let ir = reader_site_ir("buffer_read_unproven_site.ts", &[]);
+    assert!(
+        ir.contains("call i32 @llvm.bswap.i32(") && ir.contains(WRITTEN),
+        "the unproven read folds under the guard:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call double @js_native_call_method(").count(),
+        1,
+        "a written Buffer.prototype takes ONE ordinary dispatch call:\n{ir}"
     );
 }

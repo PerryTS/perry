@@ -751,14 +751,22 @@ pub(crate) enum NativeFamily {
     /// solve's RegExp call model describes (`regexp_described`): the one
     /// predicate both read.
     RegExp,
+    /// Buffers. Only the methods the realm declares OWN on
+    /// `Buffer.prototype` (`buffer_own_method`: the numeric readers,
+    /// `equals`): the runtime's Buffer name dispatch runs them while that
+    /// prototype's own shadow bit is clear, which a write onto it sets.
+    Buffer,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
 /// the program writes anything (`members`): a function for a call (`call`),
 /// a function or a data member for a read? `constructor` and `__proto__`
 /// are no member here (their value is no builtin function or primitive).
-pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> bool {
+pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: bool) -> bool {
     let mem = match fam {
+        // A method call only: a read of the member is the runtime's bound
+        // closure, no value the description names.
+        NativeFamily::Buffer => return call && buffer_own_method(m, name),
         NativeFamily::Str => members::intrinsic_member(Family::Str, name),
         NativeFamily::Array => members::intrinsic_member(Family::Array, name),
         NativeFamily::Collection(what) => members::collection_member(what, name),
@@ -769,6 +777,16 @@ pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> boo
         Some(Mem::Prim(_)) => !call,
         _ => false,
     }
+}
+
+/// A method the realm declares an OWN data member of `Buffer.prototype`
+/// (its native, no accessor). A method past it is %TypedArray%'s, which
+/// another prototype's writes decide: no Buffer NativeMember.
+fn buffer_own_method(m: &Model, name: &str) -> bool {
+    m.declarations
+        .named("Buffer.prototype", m)
+        .and_then(|h| m.declarations.property(h, name, m))
+        .is_some_and(|p| p.native.is_some() && p.get.is_none() && p.set.is_none())
 }
 
 /// `Object.prototype`'s intrinsic description (`members`) lacks `name`
@@ -960,6 +978,9 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         // predicate for a RegExp object).
         NativeFamily::RegExp => members::image_locked_prototype("RegExp")
             .is_some_and(|holder| image_member(m, holder, name)),
+        // `Buffer.prototype` is a host prototype the program may write: its
+        // writes are obligation 4's (`derive::builtin_protos_unwritten`).
+        NativeFamily::Buffer => false,
     }
 }
 

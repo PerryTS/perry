@@ -379,13 +379,10 @@ impl<'a> Gen<'a> {
                 // Typed arrays / buffers hold numbers; an array argument is
                 // read, a buffer/view argument is shared (B1, flow only).
                 let ks = kids(e);
-                // The host's file contents are a Buffer: its own methods
-                // are `Buffer.prototype`'s, the rest its typed array chain.
-                let what = match e {
-                    Expr::FsReadFileBinary(..) => "Buffer",
-                    _ => "TypedArray",
-                };
-                let (t, n) = self.bobj(mi, what);
+                // Each is a Buffer (the host's file contents too): its own
+                // methods are `Buffer.prototype`'s, the rest its typed
+                // array chain's.
+                let (t, n) = self.bobj(mi, "Buffer");
                 let owner = self.begin_indexed_owner(mi, t, e);
                 for k in ks {
                     let v = self.expr(fx, k);

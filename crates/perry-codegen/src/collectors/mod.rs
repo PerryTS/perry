@@ -159,7 +159,7 @@ pub(crate) use refs::{
 };
 pub(crate) use safepoint_sites::{count_body_nodes, count_safepoint_sites};
 pub(crate) use scalar_method_dispatch::{
-    collect_module_dispatch_facts, for_each_expr_in_stmts, mark_unstable_scalar_method_receivers,
+    collect_module_dispatch_facts, collect_module_dispatch_facts_with, for_each_expr_in_stmts, mark_unstable_scalar_method_receivers,
     ModuleDispatchFacts,
 };
 pub(crate) use scalar_methods::simple_scalar_method_summary;

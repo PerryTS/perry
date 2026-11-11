@@ -248,14 +248,16 @@ fn emit_dispatch_call(ctx: &mut FnCtx<'_>, boxed: &str, method: &str, index: &st
 }
 
 /// Buffer parameters use the same owner/view guard and retained starts as
-/// indexed typed parameters. Named-method shadows and a written
-/// Buffer.prototype go through normal dispatch.
+/// indexed typed parameters. Named-method shadows and, at a site the facts
+/// do not prove (`proven`), a written Buffer.prototype go through normal
+/// dispatch.
 fn emit_guarded_param_read(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     method: &str,
     index: &Expr,
     spec: &BufferNumericReadSpec,
+    proven: bool,
 ) -> Result<LoweredValue> {
     let boxed = crate::expr::lower_expr(ctx, object)?;
     let index = crate::expr::lower_expr_as_i32(ctx, index)?;
@@ -300,12 +302,17 @@ fn emit_guarded_param_read(
     let last = ctx.block().sub(I32, &access.len, &width);
     let in_bounds = ctx.block().icmp_ule(I32, &index, &last);
     let in_bounds = ctx.block().and(I1, &enough, &in_bounds);
-    let admitted = ctx.block().and(I1, &no_shadow, &in_bounds);
-    let written = crate::builtin_proto::emit_prototype_written(ctx, BuiltinProto::Buffer);
-    let unwritten = ctx.block().xor(I1, &written, "true");
-    let admitted = ctx.block().and(I1, &admitted, &unwritten);
+    let mut admitted = ctx.block().and(I1, &no_shadow, &in_bounds);
+    if !proven {
+        let written = crate::builtin_proto::emit_prototype_written(ctx, BuiltinProto::Buffer);
+        let unwritten = ctx.block().xor(I1, &written, "true");
+        admitted = ctx.block().and(I1, &admitted, &unwritten);
+    }
     ctx.block().cond_br(&admitted, &load_l, &slow_l);
     ctx.current_block = load;
+    if proven {
+        crate::builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::Buffer]);
+    }
     let offset = ctx.block().zext(I32, &index, I64);
     let addr = ctx.block().add(I64, &access.data, &offset);
     let ptr = ctx.block().inttoptr(I64, &addr);
@@ -328,12 +335,19 @@ fn emit_guarded_param_read(
     Ok(LoweredValue::js_value(result))
 }
 
+/// `recv.readX(offset)` on a Buffer the operand proof admits. A site the
+/// whole-program facts prove (`native_member_proven`: no write may reach
+/// `Buffer.prototype`'s reader) is the native load and nothing else; any
+/// other site tests Buffer.prototype's own shadow bit, and a set bit takes
+/// the ordinary dispatch call (which may run program code).
 pub(super) fn try_emit_buffer_read_intrinsic(
     ctx: &mut FnCtx<'_>,
+    callee: &Expr,
     object: &Expr,
     method: &str,
     args: &[Expr],
 ) -> Result<Option<LoweredValue>> {
+    let proven = crate::builtin_proto::native_member_proven(ctx, callee);
     let spec = match classify_buffer_numeric_read(method) {
         Some(s) => s,
         None => return Ok(None),
@@ -348,7 +362,8 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         if ctx.receiver_descriptors.byte_view_param(*id).is_some()
             && crate::expr::numeric_index_has_integer_array_index_proof(ctx, &args[0])
         {
-            return emit_guarded_param_read(ctx, object, method, &args[0], &spec).map(Some);
+            return emit_guarded_param_read(ctx, object, method, &args[0], &spec, proven)
+                .map(Some);
         }
     }
     let access_spec = BufferAccessSpec::buffer_numeric_read(
@@ -361,6 +376,10 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     else {
         return Ok(None);
     };
+    if proven {
+        crate::builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::Buffer]);
+        return Ok(Some(emit_local_view_read(ctx, proof, access_spec, &spec, method)));
+    }
     // The proof evaluated the index; the receiver is a local read. Both
     // arms below use these values, so nothing is evaluated twice.
     let boxed = crate::expr::lower_expr(ctx, object)?;
@@ -377,6 +396,31 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&done_l);
     ctx.current_block = direct;
+    let result = emit_local_view_read(ctx, proof, access_spec, &spec, method);
+    let direct_value = crate::expr::materialize_js_value(
+        ctx,
+        result,
+        crate::native_value::MaterializationReason::FunctionAbi,
+    );
+    let direct_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    let merged = ctx.block().phi(
+        DOUBLE,
+        &[(&direct_value, &direct_end), (&generic_value, &generic_end)],
+    );
+    Ok(Some(LoweredValue::js_value(merged)))
+}
+
+/// The folded read of a proven local Buffer view: the access pointer, the
+/// numeric load and its records; the native result.
+fn emit_local_view_read(
+    ctx: &mut FnCtx<'_>,
+    proof: crate::native_value::BufferAccessProof,
+    access_spec: BufferAccessSpec,
+    spec: &BufferNumericReadSpec,
+    method: &str,
+) -> LoweredValue {
     let emission = crate::expr::emit_buffer_access_pointer(
         ctx,
         &proof,
@@ -385,7 +429,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     );
     let result = emit_numeric_load(
         ctx.block(),
-        &spec,
+        spec,
         &emission.elem_ptr,
         &emission.alias_metadata,
     );
@@ -445,19 +489,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         ],
     );
     attach_buffer_view_facts(ctx, &proof.view);
-    let direct_value = crate::expr::materialize_js_value(
-        ctx,
-        result,
-        crate::native_value::MaterializationReason::FunctionAbi,
-    );
-    let direct_end = ctx.block().label.clone();
-    ctx.block().br(&done_l);
-    ctx.current_block = done;
-    let merged = ctx.block().phi(
-        DOUBLE,
-        &[(&direct_value, &direct_end), (&generic_value, &generic_end)],
-    );
-    Ok(Some(LoweredValue::js_value(merged)))
+    result
 }
 
 fn target_endian() -> BufferEndian {

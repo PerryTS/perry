@@ -134,7 +134,11 @@ pub(crate) fn distrust_views_the_stmt_may_expose(ctx: &mut FnCtx<'_>, stmt: &per
             ctx.receiver_descriptors
                 .buffer_view(*id)
                 .is_some_and(|view| view.pointer_state.is_stable() && view.native_owned.is_none())
-                && crate::collectors::sealed_buffers::stmt_may_expose(stmt, *id)
+                && crate::collectors::sealed_buffers::stmt_may_expose(
+                    stmt,
+                    *id,
+                    &ctx.wpfacts.native_member_calls,
+                )
         })
         .collect();
     for id in exposed {
@@ -168,7 +172,13 @@ pub(crate) fn late_exposure_limit(ctx: &FnCtx<'_>, stmts: &[perry_hir::Stmt], i:
         .find(|j| {
             trusted
                 .iter()
-                .any(|id| crate::collectors::sealed_buffers::stmt_may_expose(&stmts[*j], *id))
+                .any(|id| {
+                crate::collectors::sealed_buffers::stmt_may_expose(
+                    &stmts[*j],
+                    *id,
+                    &ctx.wpfacts.native_member_calls,
+                )
+            })
         })
         .unwrap_or(stmts.len())
 }

@@ -229,10 +229,30 @@ pub(crate) fn console_intrinsic_proven(
     if GUARDED_CALLEE.with(|g| g.get()) == callee as *const perry_hir::Expr as usize {
         return true;
     }
-    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
-        return false;
-    };
-    *byte_offset != 0 && !ctx.wpfacts_off && ctx.wpfacts.native_member_calls.contains(byte_offset)
+    native_member_proven(ctx, callee)
+}
+
+/// Do the whole-program facts prove that the method call with callee
+/// `callee` (`PropertyGet`) reads its intrinsic member? The solver's
+/// NativeMember verdict (`ElisionFacts::native_member_calls`, keyed by the
+/// callee read's offset): no write may reach the member, so the call runs
+/// the builtin body and no other code.
+pub(crate) fn native_member_proven(
+    ctx: &crate::expr::FnCtx<'_>,
+    callee: &perry_hir::Expr,
+) -> bool {
+    !ctx.wpfacts_off && native_member_site_proven(&ctx.wpfacts.native_member_calls, callee)
+}
+
+/// [`native_member_proven`] over a module's proven set, for the module
+/// collectors that run before any function context exists. An empty set
+/// proves nothing.
+pub(crate) fn native_member_site_proven(
+    native_member_calls: &std::collections::BTreeSet<u32>,
+    callee: &perry_hir::Expr,
+) -> bool {
+    matches!(callee, perry_hir::Expr::PropertyGet { byte_offset, .. }
+        if *byte_offset != 0 && native_member_calls.contains(byte_offset))
 }
 
 /// `console.<member>(args...)` as the real call: read `globalThis.console`

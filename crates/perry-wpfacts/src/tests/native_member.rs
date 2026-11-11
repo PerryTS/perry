@@ -526,3 +526,32 @@ fn a_sealed_regexp_prototype_write_keeps_the_native_member() {
         }
     }
 }
+
+/// A Buffer method `Buffer.prototype` owns (`readInt32BE`, `readUInt8`) is
+/// a NativeMember until a write may reach it: onto `Buffer.prototype` by
+/// name, under any key, through the prototype read off a buffer, an own
+/// property of the receiver, or unknown code.
+#[test]
+fn a_buffer_reader_is_a_native_member_until_buffer_prototype_is_written() {
+    for key in ["readInt32BE", "readUInt8"] {
+        for write in [
+            format!("(Buffer.prototype as any).{key} = function () {{ return 7; }};"),
+            format!("Object.assign(Buffer.prototype, {{ {key}() {{ return 7; }} }});"),
+            "(Buffer.prototype as any)[process.argv[2]] = () => 7;".to_string(),
+            "(Object.getPrototypeOf(Buffer.alloc(1)) as any)[process.argv[2]] = () => 7;"
+                .to_string(),
+            format!("(b as any).{key} = () => 7;"),
+            "(b as any)[process.argv[2]] = () => 7;".to_string(),
+            "eval(process.argv[2]);".to_string(),
+            "new Function(process.argv[2])();".to_string(),
+        ] {
+            control_and_negative(
+                "const b = Buffer.alloc(8);",
+                &write,
+                &format!("b.{key}(0)"),
+                key,
+                true,
+            );
+        }
+    }
+}
