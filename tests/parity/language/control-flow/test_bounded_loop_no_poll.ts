@@ -9,6 +9,7 @@
 class Grid {
   board: number[] = new Array(128).fill(0);
   log: number[] = [];
+  pairs: number[] = [];
   hits = 0;
 
   constructor() {
@@ -90,14 +91,15 @@ class Grid {
     return s;
   }
 
-  // Control: an allocation in the body.
+  // Control: an allocation in the body (an Array that outlives the
+  // iteration; a literal that never leaves the loop is no allocation).
   withAlloc(): number {
     let s = 0;
     for (let f = 0; f < 64; f++) {
-      const pair = [this.at(f & 7), f];
-      s += (pair[0] ?? 0) + (pair[1] ?? 0);
+      this.pairs = [this.at(f & 7), f, s];
+      s += this.pairs.length;
     }
-    return s;
+    return s + (this.pairs[1] ?? 0);
   }
 
   // Control: no counter (the trip count depends on the data).
@@ -140,12 +142,28 @@ class Grid {
     return s;
   }
 
-  // Control: each loop is bounded and call-free, the nest is past the
-  // budget: the outer loop keeps its poll.
-  wide(): number {
+  // Three bounded, call-free loops: 7 x 8 back edges per round, `rounds` of
+  // them. 1000 rounds are within the budget of 65 536 (`within`); 1100 are
+  // past it, and the outer loop keeps its poll (`wide`, a control).
+  within(): number {
     let s = 0;
     for (let i = 0; i < 1000; i++) {
-      for (let j = 0; j < 1000; j++) s += this.at(((i + j) & 7) * 16 + (j & 7));
+      for (let r = (i & 3) + 1; r >= 0 && r < 8; r += 1) {
+        for (let f = Math.max(0, (i & 7) - 1); f <= Math.min(7, (i & 7) + 1); f++) {
+          if (this.at(r * 16 + f) === 1) s++;
+        }
+      }
+    }
+    return s;
+  }
+  wide(): number {
+    let s = 0;
+    for (let i = 0; i < 1100; i++) {
+      for (let r = (i & 3) + 1; r >= 0 && r < 8; r += 1) {
+        for (let f = Math.max(0, (i & 7) - 1); f <= Math.min(7, (i & 7) + 1); f++) {
+          if (this.at(r * 16 + f) === 1) s++;
+        }
+      }
     }
     return s;
   }
@@ -189,5 +207,6 @@ console.log("collatz", g.collatz(27 * RUN), g.collatz(97));
 console.log("reset", g.reset());
 console.log("long", g.long());
 console.log("open", g.open(90000 * RUN));
+console.log("within", g.within());
 console.log("wide", g.wide());
 console.log("churn", g.churn(60000 * RUN));
