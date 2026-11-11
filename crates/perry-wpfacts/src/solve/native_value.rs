@@ -203,6 +203,12 @@ impl Model {
         for &r in toks {
             self.call_tok(call, f, Some(r));
         }
+        if let TokKind::Builtin(BuiltinNs::ObjectProtoMethod) = self.toks[f as usize] {
+            if prim != 0 {
+                self.with_b(|m| builtins::object_proto_method_prims(m, prim, call));
+            }
+            return;
+        }
         let TokKind::BuiltinFn(Native::Member { .. }) = self.toks[f as usize] else {
             return;
         };
