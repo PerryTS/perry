@@ -541,6 +541,8 @@ fn generate<'a>(
     g.m.key_sign = element_keys::sign_enabled();
     g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
     g.m.wide_keys = element_keys::wide_enabled();
+    g.m.slice_births = builtins::slice_births_enabled();
+    g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
     g.m.exact_rules = !cfg.no_exact_rules;

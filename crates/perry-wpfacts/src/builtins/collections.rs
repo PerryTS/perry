@@ -1122,7 +1122,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             // `flat` keep the general birth.
             let dense =
                 matches!(name, Some("slice" | "toReversed" | "with" | "toSpliced")) && m.is_arr(t);
-            let out = if dense {
+            // `slice` of an Array bears a plain Array (`site_slice_arr`).
+            let plain_copy = name == Some("slice") && m.slice_births && dense;
+            let out = if plain_copy {
+                site_slice_arr(m, call)
+            } else if dense {
                 site_dense_arr(m, call)
             } else {
                 site_tmpl(m, call, "Array")
