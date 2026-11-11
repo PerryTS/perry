@@ -62,6 +62,22 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    if !key.is_null() {
+        let receiver = crate::value::js_nanbox_pointer(obj as i64);
+        let property_key = crate::value::js_nanbox_string(key as i64);
+        if let Some(result) = super::super::deferred_namespace::with_key_target(
+            receiver,
+            property_key,
+            |target, key| {
+                get_field_by_name_past_data_probe(
+                    JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader,
+                )
+            },
+        ) {
+            return result;
+        }
+    }
     let receiver_bits = obj as u64;
     let receiver = JSValue::from_bits(receiver_bits);
     if receiver.is_bool() || receiver.is_bigint() {
@@ -516,6 +532,9 @@ pub(crate) fn get_field_by_name_after_site_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    if super::super::deferred_namespace::is_deferred(crate::value::js_nanbox_pointer(obj as i64)) {
+        return js_object_get_field_by_name(obj, key);
+    }
     if let Some(value) = unsafe { super::super::native_get::try_settled_get_by_name(obj, key) } {
         return value;
     }
