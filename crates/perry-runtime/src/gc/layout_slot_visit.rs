@@ -216,7 +216,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS:
         // uninitialised padding into the address and hide the edge.
         let descriptor = if matches!(
             (*header).obj_type,
-            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | crate::gc_array_type_pat!()
         ) {
             pointer_slot(slot.cast())
         } else {

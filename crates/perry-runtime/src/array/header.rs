@@ -42,7 +42,7 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
     unsafe {
         let gc_header =
             (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!((*gc_header).obj_type) {
             (*gc_header)._reserved
         } else {
             0
@@ -65,7 +65,7 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
 pub(crate) unsafe fn array_object_flags_resolved(arr: *const ArrayHeader) -> u16 {
     debug_assert!(!arr.is_null());
     let gc_header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    debug_assert_eq!((*gc_header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert!(crate::gc_type_is_array!((*gc_header).obj_type));
     (*gc_header)._reserved
 }
 
@@ -225,7 +225,7 @@ pub(crate) fn array_receiver_gc_tag(arr: *const ArrayHeader) -> (u8, u16) {
 /// already read, for a receiver `clean_arr_ptr` already resolved.
 #[inline]
 pub(crate) fn array_object_flags_from_tag(tag: (u8, u16)) -> u16 {
-    if tag.0 == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(tag.0) {
         tag.1
     } else {
         0
@@ -248,7 +248,7 @@ unsafe fn mark_template_array_frozen(arr: *mut ArrayHeader) {
         return;
     }
     let gc_header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!((*gc_header).obj_type) {
         (*gc_header)._reserved |=
             crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
     }
@@ -512,7 +512,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // is header-aligned; the header word precedes every arena block.
             let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
-            if obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(obj_type)
                 && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && gc_flags & crate::gc::GC_FLAG_ARENA != 0
             {
@@ -591,7 +591,7 @@ fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
         // A declared TypeScript type is a hint, never a layout fact. Reject
         // every tracked non-array at this shared funnel before treating its
         // payload as an ArrayHeader (#7574).
-        if obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(obj_type) {
             return std::ptr::null();
         }
     } else if !crate::shared_sab::is_shared_sab(addr) {
@@ -623,7 +623,7 @@ fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
             // Remaining capacity must fit the tracked allocation. A consumed
             // queue prefix accounts for any whole-slot difference from the
             // allocation's physical capacity.
-            let sparse_array_shape = tracked_obj_type == Some(crate::gc::GC_TYPE_ARRAY)
+            let sparse_array_shape = tracked_obj_type == Some(crate::gc_array_type_pat!())
                 && hdr.length > hdr.capacity
                 && tracked_header.is_some_and(|gc_header| {
                     checked_array_allocation_size(hdr.capacity as usize).is_some_and(|minimum| {
@@ -659,13 +659,13 @@ pub(crate) unsafe fn clean_headed_arr_ptr(
     header: &crate::gc::GcHeader,
 ) -> *const ArrayHeader {
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY
+        crate::gc_array_type_pat!()
             if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && (*arr).length <= (*arr).capacity =>
         {
             arr
         }
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_resolve(arr),
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_resolve(arr),
         // The resolver rejects every tracked non-array; the header is that
         // proof already.
         _ => std::ptr::null(),
@@ -813,7 +813,7 @@ pub(crate) fn array_ptr_as_proxy(arr: *const ArrayHeader) -> Option<f64> {
 pub(crate) fn receiver_may_be_registered_exotic(arr: *const ArrayHeader) -> bool {
     unsafe {
         match array_gc_header(arr) {
-            Some(header) => (*header).obj_type != crate::gc::GC_TYPE_ARRAY,
+            Some(header) => crate::gc_type_is_not_array!((*header).obj_type),
             None => true,
         }
     }
@@ -884,7 +884,7 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
         // compare), keeping the hot `[1,2,3].map(...)` path cheap. Everything
         // else — generic array-like objects, typed arrays, buffers — resolves
         // its registry membership once here.
-        if obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(obj_type) {
             let is_typed_array =
                 crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some();
             let is_buffer = crate::buffer::is_registered_buffer(raw_addr);
@@ -1012,7 +1012,7 @@ pub(super) unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut cra
         return None;
     }
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return None;
     }
     Some(header)
@@ -1688,7 +1688,7 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
     let raw_bits = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
     let probed = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
         .filter(|header| {
-            header.obj_type == crate::gc::GC_TYPE_ARRAY
+            crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         })
         .map(|header| header._reserved & raw_bits != 0);

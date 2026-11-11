@@ -384,7 +384,7 @@ pub unsafe extern "C" fn perry_array_element_kind(arr: *const ArrayHeader) -> i3
     let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) else {
         return 1;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return 1;
     }
     i32::from(super::array_has_element_descriptors_resolved(arr))

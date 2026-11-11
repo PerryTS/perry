@@ -581,7 +581,6 @@ fn emit_receiver_kind_branch(
             const POINTER_TAG_TOP16: &str = "32765"; // 0x7FFD
             const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
             const HEAP_LIMIT: &str = "140737488355328"; // 2^47
-            const GC_TYPE_ARRAY_I8: &str = "1";
             const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
             let header_idx = ctx.new_block("kindguard.array_header");
             let header_label = ctx.block_label(header_idx);
@@ -601,7 +600,7 @@ fn emit_receiver_kind_branch(
             let type_addr = blk.sub(I64, &handle, "8");
             let type_ptr = blk.inttoptr(I64, &type_addr);
             let gc_type = blk.load(I8, &type_ptr);
-            let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY_I8);
+            let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
             let flags_addr = blk.sub(I64, &handle, "7");
             let flags_ptr = blk.inttoptr(I64, &flags_addr);
             let flags = blk.load(I8, &flags_ptr);

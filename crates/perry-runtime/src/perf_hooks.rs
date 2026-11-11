@@ -669,7 +669,7 @@ fn is_array_value(v: JSValue) -> bool {
     }
     unsafe {
         let header = &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-        header.obj_type == crate::gc::GC_TYPE_ARRAY
+        crate::gc_type_is_array!(header.obj_type)
     }
 }
 

@@ -681,7 +681,7 @@ pub extern "C" fn js_object_set_field_by_name(
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && string_key_eq(key, b"length") {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Assignment (`arr.length = v`) is a strict `Set` with
                 // `Throw = true`: throw on a frozen array's non-writable length.
                 crate::array::js_array_set_length_strict(

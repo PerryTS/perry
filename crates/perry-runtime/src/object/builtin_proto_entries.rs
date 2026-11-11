@@ -580,7 +580,7 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
         Some(h)
             if matches!(
                 h.obj_type,
-                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
             ) =>
         {
             (h._reserved & ARRAY_NOT_DEFAULT == 0 && !array_has_named_layout(addr, h))
@@ -623,7 +623,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
         && header._reserved & ARRAY_NOT_DEFAULT == 0
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader))
@@ -636,7 +636,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
 /// head it forwards to.
 #[inline]
 unsafe fn array_has_named_layout(addr: usize, h: &crate::gc::GcHeader) -> bool {
-    if h.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(h.obj_type) {
         return false;
     }
     let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);

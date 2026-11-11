@@ -87,7 +87,7 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
                 let gc_header = (arr_ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                     as *const perry_runtime::gc::GcHeader;
                 let obj_type = (*gc_header).obj_type;
-                if obj_type == perry_runtime::gc::GC_TYPE_ARRAY
+                if perry_runtime::gc_type_is_array!(obj_type)
                     || obj_type == perry_runtime::gc::GC_TYPE_LAZY_ARRAY
                 {
                     let len = perry_runtime::array::js_array_length(arr_ptr);

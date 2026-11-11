@@ -1109,8 +1109,7 @@ pub(crate) unsafe fn keys_contain_array_index(keys_view: crate::object::ObjectKe
         if aligned {
             let keys_gc =
                 (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY && (*keys).length <= (*keys).capacity
-            {
+            if crate::gc_type_is_array!((*keys_gc).obj_type) && (*keys).length <= (*keys).capacity {
                 // The receiver's own count, a prefix of the array.
                 let len = ((*keys).length as usize).min(keys_view.count() as usize);
                 let elements =
@@ -1300,7 +1299,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Issue #233: a grown array installs a forwarding pointer at the
                 // old location; a binding written before the grow still holds it.
                 // Resolve the chain so we read the live header (without this,
@@ -1760,7 +1759,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {

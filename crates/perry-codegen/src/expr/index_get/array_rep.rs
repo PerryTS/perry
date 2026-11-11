@@ -40,7 +40,6 @@ use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// `perry_abi::GC_TYPE_ARRAY` in the header word's low byte.
 const TYPE_MASK_I32: &str = "255";
-const GC_TYPE_ARRAY_I32: &str = "1";
 /// `perry_abi::GC_FLAG_FORWARDED` in the header word's second byte.
 const FORWARDED_I32: &str = "32768";
 
@@ -111,7 +110,7 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
     let ty = ctx.block().and(I32, &word, TYPE_MASK_I32);
-    let array = ctx.block().icmp_eq(I32, &ty, GC_TYPE_ARRAY_I32);
+    let array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I32, &ty);
     branch(ctx, &array, "arr_rep.forwarding", &miss_l);
     // Fixed: never forwarded. Otherwise a forwarded header ends the test.
     let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
@@ -164,7 +163,7 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
     // A hole holds no element; any other slot is of `r.elem`.
     let present = ctx.block().xor(I1, &hole, "true");
     branch(ctx, &present, "arr_rep.elem_kind", &next_l);
-    elem_test(ctx, &raw, r.elem, &next_l, &miss_l);
+    elem_test(ctx, &raw, r, r.elem, &next_l, &miss_l);
     finish(ctx, miss, next, recv, r, what);
 }
 
@@ -195,7 +194,7 @@ pub(super) fn witness_read(
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
     let ty = ctx.block().and(I32, &word, TYPE_MASK_I32);
-    let array = ctx.block().icmp_eq(I32, &ty, GC_TYPE_ARRAY_I32);
+    let array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I32, &ty);
     branch(ctx, &array, "arep.verify_forwarding", &miss_l);
     let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
     let live = ctx.block().icmp_eq(I32, &fwd_bit, "0");
@@ -258,13 +257,25 @@ pub(super) fn witness_read(
     } else {
         r.elem
     };
-    elem_test(ctx, &raw, elem, &next_l, &miss_l);
+    elem_test(ctx, &raw, r, elem, &next_l, &miss_l);
     finish(ctx, miss, next, recv, r, &read.receiver.label());
 }
 
-/// The element kind test of a present slot `raw`: none for Boxed, a plain
-/// Number for F64, an int32 Number (never `-0`) for I32.
-fn elem_test(ctx: &mut FnCtx<'_>, raw: &str, elem: FactsElemRep, next_l: &str, miss_l: &str) {
+/// The element kind test of a present slot `raw`: an I32 word for an
+/// at-rest Array (`r.at_rest`, `expr::rest_elems`), else none for Boxed, a
+/// plain Number for F64, an int32 Number (never `-0`) for I32.
+fn elem_test(
+    ctx: &mut FnCtx<'_>,
+    raw: &str,
+    r: FactsArrRep,
+    elem: FactsElemRep,
+    next_l: &str,
+    miss_l: &str,
+) {
+    if r.at_rest {
+        crate::expr::rest_elems::witness_raw(ctx, raw, next_l, miss_l);
+        return;
+    }
     match elem {
         FactsElemRep::Boxed => ctx.block().br(next_l),
         FactsElemRep::F64 => {

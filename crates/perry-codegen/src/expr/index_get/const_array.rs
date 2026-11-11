@@ -77,7 +77,7 @@ fn witness(ctx: &mut FnCtx<'_>, recv: &str, id: u32, i: i64, bits: u64) {
     let handle = ctx.block().and(I64, &word, POINTER_MASK_I64);
     let header = emit_array_guard_word(ctx.block(), &handle);
     let ty = ctx.block().and(I32, &header, "255");
-    let array = ctx.block().icmp_eq(I32, &ty, "1");
+    let array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I32, &ty);
     branch(ctx, &array, "const_arr.verify_length", &miss_l);
     let ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &ptr);

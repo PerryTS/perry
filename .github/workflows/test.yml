@@ -1027,6 +1027,18 @@ jobs:
           python3 scripts/check_gc_header_constants.py --self-test
           python3 scripts/check_gc_header_constants.py
 
+      # Value records VR-4a: every array-type test names the one predicate in
+      # perry-abi/src/array_type.rs (`gc_type_is_array!` and friends), so the
+      # record-array GC type VR-4b adds has one place to be told apart from an
+      # ordinary array. Column (e) of the object-header lint fails on a new raw
+      # `GC_TYPE_ARRAY` compare, match arm, `Some(..)`, assert or kind-helper
+      # argument; columns (a)-(d) stay in count mode. Build-free.
+      - name: Array-type predicate lint
+        if: ${{ !cancelled() }}
+        run: |
+          bash scripts/check_object_header_access.sh --self-test
+          bash scripts/check_object_header_access.sh .
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was

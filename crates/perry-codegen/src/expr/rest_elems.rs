@@ -32,6 +32,21 @@
 //! rest`): its synthesized read is lowered with `FnCtx::rest_b1` naming the
 //! body read's own verdict, as that read's offset is the body module's.
 //!
+//! **B2 (`PERRY_REST_TIERS=0` turns it off; B's lowering above).** The
+//! storage kind is also part of the receiver's representation
+//! (`FactsArrRep::at_rest`, wpfacts `ArrRep::at_rest`), so the rep-keyed
+//! tiers that address `h + 24 + 8i` take an at-rest Array too and read its
+//! word through [`decode`], this module's one decoding of the word:
+//! - a direct read whose receiver the facts name (`proven_array::rep_read`)
+//!   and whose key is an int32 takes the rep-keyed tier: in its floor (wpfacts
+//!   `element_keys`) the load has no test at all, else one unsigned bound
+//!   and the hole test;
+//! - any other direct read or store with an int32 key tests `k <u floor`
+//!   (one compare, no double round trip);
+//! - a b1 field read call whose body read is at rest takes C3's in-floor
+//!   load and the held bases of PR-D / N2 (`index_get::field_base`) as a
+//!   double Array does.
+//!
 //! Check mode (`PERRY_VERIFY_FACTS=1`): every at-rest load first tests that
 //! the slot's high half is `INT32_TAG`, and every store that its value is an
 //! int32 Number that is not `-0`; a miss reports the false proof and exits
@@ -48,6 +63,147 @@ use crate::types::{DOUBLE, I1, I32, I64};
 /// `INT32_TAG` (`0x7FFE_0000_0000_0000`) and its high half.
 const INT32_TAG_I64: &str = "9222809086901354496";
 const INT32_TAG_HI_I32: &str = "2147352576";
+
+/// `PERRY_REST_TIERS=0` (`off`, `false`) keeps B's lowering: at-rest reads
+/// take no rep-keyed tier, no held base and no int32 key (module docs).
+pub(crate) fn tiers_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_REST_TIERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// THE decoding of an at-rest slot word `raw` (an i64 that is no hole) for
+/// `want`: its low half is the i32; any consumer but an int one takes its
+/// canonical double. Every tier that loads an at-rest word calls this.
+pub(crate) fn decode(ctx: &mut FnCtx<'_>, raw: &str, want: Want) -> String {
+    let v = ctx.block().trunc(I64, raw, I32);
+    match want {
+        Want::I32 => v,
+        Want::Value | Want::Number => ctx.block().sitofp(I32, &v, DOUBLE),
+    }
+}
+
+/// The cold read of an at-rest Array (the accessor, then the generic
+/// `Get`): element `idx` (an i32) of the boxed `arr`, coerced when
+/// `numeric`.
+pub(crate) fn cold_read(ctx: &mut FnCtx<'_>, arr: &str, idx: &str, numeric: bool) -> String {
+    let key = ctx.block().sitofp(I32, idx, DOUBLE);
+    let got = ctx.block().call(
+        DOUBLE,
+        "js_array_rest_get",
+        &[(DOUBLE, arr), (DOUBLE, &key)],
+    );
+    if numeric {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &got)])
+    } else {
+        got
+    }
+}
+
+/// Check mode: the slot word `raw` is an I32 word (`INT32_TAG` high half);
+/// on a miss, jump to `miss_l`, else go on in a new block.
+pub(crate) fn witness_raw(ctx: &mut FnCtx<'_>, raw: &str, next_l: &str, miss_l: &str) {
+    let hi = ctx.block().lshr(I64, raw, "32");
+    let hi = ctx.block().trunc(I64, &hi, I32);
+    let ok = ctx.block().icmp_eq(I32, &hi, INT32_TAG_HI_I32);
+    ctx.block().cond_br(&ok, next_l, miss_l);
+}
+
+/// The probe `PERRY_REST_DIAG=1`: one line per at-rest site lowered, with
+/// the form it took (`rep` / `rep_floor`: the rep-keyed tier, without or
+/// with its floor; `held`: a PR-D / N2 base; `c3`: a b1 call's in-floor
+/// load; `i32`: one unsigned test; `f64`: B's double key).
+pub(crate) fn probe(ctx: &FnCtx<'_>, op: &str, form: &str, offset: u32) {
+    if std::env::var("PERRY_REST_DIAG").as_deref() == Ok("1") {
+        eprintln!(
+            "[perry rest] fn={} {op} @{offset} form={form}",
+            ctx.func.name
+        );
+    }
+}
+
+/// The at-rest read `e` is a present slot by the facts: its key's interval
+/// (wpfacts `element_keys`, this module's own site) is in the site's floor,
+/// or a counter entry check proved its counter key in the floor
+/// ([`counter_in_floor`]). Its value is then an int32 Number, never
+/// `undefined` (`facts_canonical::of`, the `??` removal).
+pub(crate) fn number_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Expr::IndexGet {
+        object,
+        index,
+        element_offset,
+        ..
+    } = e
+    else {
+        return false;
+    };
+    if !tiers_enabled() || ctx.wpfacts_off {
+        return false;
+    }
+    let Some(floor) = read_floor(ctx, e) else {
+        return false;
+    };
+    let foreign = matches!(ctx.rest_b1, Some((o, _)) if o == *element_offset);
+    let keyed = !foreign
+        && ctx
+            .wpfacts
+            .element_keys
+            .get(element_offset)
+            .is_some_and(|&(lo, hi)| lo >= 0 && hi < i64::from(floor));
+    keyed || counter_in_floor(ctx, object, index)
+}
+
+/// The receiver `object` is an at-rest local and `index` the counter (or
+/// `counter | 0`) of an enclosing loop copy whose entry check proved every
+/// counter value in that local's floor (`FnCtx::rest_counter`).
+pub(crate) fn counter_in_floor(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
+    let Expr::LocalGet(local) = object else {
+        return false;
+    };
+    let Some(counter) = counter_of(index) else {
+        return false;
+    };
+    ctx.rest_counter
+        .iter()
+        .any(|&(c, l, _)| c == counter && l == *local)
+}
+
+/// `index` is a local `i`, or `i | 0`: that local.
+pub(crate) fn counter_of(index: &Expr) -> Option<u32> {
+    match index {
+        Expr::LocalGet(id) => Some(*id),
+        Expr::Binary {
+            op: perry_hir::BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => counter_of(left),
+        _ => None,
+    }
+}
+
+/// The floor a counter entry check may test for the at-rest local `id`: the
+/// local's representation is an at-rest, dense `Arr` with a floor
+/// (`proven_array::rep_read`).
+pub(crate) fn local_floor(ctx: &FnCtx<'_>, id: u32) -> Option<u32> {
+    if !tiers_enabled() || ctx.wpfacts_off {
+        return None;
+    }
+    let object = Expr::LocalGet(id);
+    let read = super::index_get::proven_array::rep_read(ctx, &object, 0)?;
+    (read.rep.at_rest && read.rep.dense && read.rep.floor > 0).then_some(read.rep.floor)
+}
+
+/// `index` is an int32 at every evaluation: its i32 lowering is exact.
+fn int32_key(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+    super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)
+        || super::int_range_expr(ctx, index)
+            .is_some_and(|r| r.min >= i64::from(i32::MIN) && r.max <= i64::from(i32::MAX))
+}
 
 /// The floor of an at-rest element read `e`.
 pub(crate) fn read_floor(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
@@ -137,17 +293,78 @@ pub(crate) enum Want {
     I32,
 }
 
-/// Lower the at-rest read `object[index]` (floor `floor`) for `want`.
-pub(crate) fn lower_read(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    index: &Expr,
-    floor: u32,
-    want: Want,
-) -> Result<String> {
+/// Lower the at-rest read `e` (`object[index]`, floor `floor`) for `want`.
+pub(crate) fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, floor: u32, want: Want) -> Result<String> {
+    let Expr::IndexGet {
+        object,
+        index,
+        element_offset,
+        ..
+    } = e
+    else {
+        unreachable!("an at-rest read is an IndexGet")
+    };
+    let (object, index) = (object.as_ref(), index.as_ref());
+    if tiers_enabled() && !ctx.wpfacts_off && int32_key(ctx, index) {
+        // A b1 call's synthesized read carries the body module's offset: the
+        // key facts here are this module's, so only the call's own verdicts
+        // (`lower_call::field_read_call`) bound its key.
+        let foreign = matches!(ctx.rest_b1, Some((o, _)) if o == *element_offset);
+        let counted = counter_in_floor(ctx, object, index);
+        let rep = super::index_get::proven_array::rep_read(ctx, object, *element_offset)
+            .filter(|r| r.rep.at_rest)
+            .map(|r| super::index_get::proven_array::RepRead {
+                in_floor: (r.in_floor && !foreign) || counted,
+                ..r
+            });
+        let form = match rep {
+            Some(_) if counted => "counter",
+            Some(r) if r.in_floor => "rep_floor",
+            Some(_) => "rep",
+            None => "i32",
+        };
+        probe(ctx, "read", form, *element_offset);
+        return crate::rooting::with_operands_rooted_across(
+            ctx,
+            &[object],
+            &[index],
+            |ctx| super::lower_expr_as_i32(ctx, index),
+            |ctx, v, idx| {
+                Ok(match rep {
+                    Some(read) => {
+                        let numeric = want != Want::Value;
+                        let value = super::index_get::proven_array::lower_rest(
+                            ctx, &v[0], &idx, read, numeric,
+                        );
+                        match want {
+                            Want::I32 if read.total(numeric) => {
+                                ctx.block().fptosi(DOUBLE, &value, I32)
+                            }
+                            Want::I32 => ctx.toint32_wrap(&value),
+                            _ => value,
+                        }
+                    }
+                    None => read_at_i32(ctx, &v[0], &idx, floor, want),
+                })
+            },
+        );
+    }
+    probe(ctx, "read", "f64", *element_offset);
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, v| {
         Ok(read_at(ctx, &v[0], &v[1], floor, want))
     })
+}
+
+/// [`read_at`] for an int32 key `idx`: `idx <u floor` is the whole test.
+fn read_at_i32(ctx: &mut FnCtx<'_>, arr: &str, idx: &str, floor: u32, want: Want) -> String {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "rest": "read_i32", "floor": floor }),
+    );
+    crate::facts_consumed::used();
+    let hit = ctx.block().icmp_ult(I32, idx, &floor.to_string());
+    let key = ctx.block().sitofp(I32, idx, DOUBLE);
+    read_slot(ctx, arr, &hit, idx, &key, want)
 }
 
 /// The key `key` (a double) is an integer in `[0, floor)`, and that i32.
@@ -190,6 +407,18 @@ pub(crate) fn read_at(ctx: &mut FnCtx<'_>, arr: &str, key: &str, floor: u32, wan
     );
     crate::facts_consumed::used();
     let (hit, idx) = index_in(ctx, key, floor);
+    read_slot(ctx, arr, &hit, &idx, key, want)
+}
+
+/// The slot `idx` of `arr` when `hit`, else the cold read of `key`.
+fn read_slot(
+    ctx: &mut FnCtx<'_>,
+    arr: &str,
+    hit: &str,
+    idx: &str,
+    key: &str,
+    want: Want,
+) -> String {
     let load = ctx.new_block("rest.load");
     let cold = ctx.new_block("rest.cold");
     let merge = ctx.new_block("rest.merge");
@@ -198,10 +427,10 @@ pub(crate) fn read_at(ctx: &mut FnCtx<'_>, arr: &str, key: &str, floor: u32, wan
         ctx.block_label(cold),
         ctx.block_label(merge),
     );
-    ctx.block().cond_br(&hit, &load_l, &cold_l);
+    ctx.block().cond_br(hit, &load_l, &cold_l);
 
     ctx.current_block = load;
-    let ptr = slot(ctx, arr, &idx);
+    let ptr = slot(ctx, arr, idx);
     if crate::verify_facts::enabled() {
         witness_word(ctx, arr, &ptr);
     }
@@ -253,6 +482,32 @@ pub(crate) fn lower_write(
         || serde_json::json!({ "rest": "write", "floor": floor }),
     );
     crate::facts_consumed::used();
+    if tiers_enabled() && !ctx.wpfacts_off && int32_key(ctx, index) {
+        let counted = counter_in_floor(ctx, object, index);
+        probe(ctx, "write", if counted { "counter" } else { "i32" }, 0);
+        return crate::rooting::with_operands_rooted_across(
+            ctx,
+            &[object],
+            &[index, value],
+            |ctx| {
+                let idx = super::lower_expr_as_i32(ctx, index)?;
+                let val = super::lower_expr(ctx, value)?;
+                Ok((idx, val))
+            },
+            |ctx, v, (idx, val)| {
+                // A counter key a loop entry check proved in the floor needs
+                // no test.
+                let hit = if counted {
+                    "true".to_string()
+                } else {
+                    ctx.block().icmp_ult(I32, &idx, &floor.to_string())
+                };
+                let key = ctx.block().sitofp(I32, &idx, DOUBLE);
+                Ok(store_slot(ctx, &v[0], &hit, &idx, &key, &val))
+            },
+        );
+    }
+    probe(ctx, "write", "f64", 0);
     crate::rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, v| {
         Ok(store_at(ctx, &v[0], &v[1], &v[2], floor))
     })
@@ -261,6 +516,19 @@ pub(crate) fn lower_write(
 /// Store `val` as element `key` of the at-rest Array `arr` (module docs).
 fn store_at(ctx: &mut FnCtx<'_>, arr: &str, key: &str, val: &str, floor: u32) -> String {
     let (hit, idx) = index_in(ctx, key, floor);
+    store_slot(ctx, arr, &hit, &idx, key, val)
+}
+
+/// Store `val` in slot `idx` of `arr` when `hit`, else the cold store of
+/// `key`.
+fn store_slot(
+    ctx: &mut FnCtx<'_>,
+    arr: &str,
+    hit: &str,
+    idx: &str,
+    key: &str,
+    val: &str,
+) -> String {
     let store = ctx.new_block("rest.store");
     let cold = ctx.new_block("rest.store_cold");
     let merge = ctx.new_block("rest.stored");
@@ -269,7 +537,7 @@ fn store_at(ctx: &mut FnCtx<'_>, arr: &str, key: &str, val: &str, floor: u32) ->
         ctx.block_label(cold),
         ctx.block_label(merge),
     );
-    ctx.block().cond_br(&hit, &store_l, &cold_l);
+    ctx.block().cond_br(hit, &store_l, &cold_l);
 
     ctx.current_block = store;
     if crate::verify_facts::enabled() {
@@ -282,7 +550,7 @@ fn store_at(ctx: &mut FnCtx<'_>, arr: &str, key: &str, val: &str, floor: u32) ->
         let wide = ctx.block().zext(I32, &v, I64);
         ctx.block().or(I64, &wide, INT32_TAG_I64)
     };
-    let ptr = slot(ctx, arr, &idx);
+    let ptr = slot(ctx, arr, idx);
     // GC_STORE_AUDIT(POINTER_FREE): an I32 word is in the 0x7FFE band, which no collector takes for a pointer.
     ctx.block().store(I64, &word, &ptr);
     ctx.block().br(&merge_l);

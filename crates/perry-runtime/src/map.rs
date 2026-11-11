@@ -1715,7 +1715,7 @@ enum ProbeArray {
 #[inline(always)]
 fn probe_array_state(key_bits: u64) -> ProbeArray {
     match crate::value::addr_class::pointer_value_header(key_bits) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => {
             if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
                 ProbeArray::Forwarded
             } else {
@@ -1786,7 +1786,8 @@ unsafe fn find_array_alias(map: *const MapHeader, key_bits: u64, probe_forwarded
         let Some(h) = crate::value::addr_class::try_read_gc_header(stored) else {
             continue;
         };
-        if h.obj_type != crate::gc::GC_TYPE_ARRAY || h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        if crate::gc_type_is_not_array!(h.obj_type)
+            || h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         {
             continue;
         }
@@ -2286,7 +2287,7 @@ unsafe fn heal_forwarded_array_value(
     // check, exactly as codegen's inline array guards read it. Only the
     // forwarding bit is decided here; the full resolver validates the target.
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
     {
         return value;

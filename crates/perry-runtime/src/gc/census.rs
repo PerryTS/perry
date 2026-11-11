@@ -462,7 +462,7 @@ impl Census {
             t @ crate::gc_object_type_pat!() => {
                 self.visit_object(user as *const crate::object::ObjectHeader, size, flags, t)
             }
-            GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 self.visit_array(user as *const crate::array::ArrayHeader, size, flags)
             }
             GC_TYPE_STRING => self.visit_string(user as *const crate::StringHeader, size, flags),

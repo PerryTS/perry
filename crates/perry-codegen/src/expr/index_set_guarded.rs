@@ -292,7 +292,7 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
             blk.inttoptr(I64, &addr)
         };
         let gc_type = blk.load(I8, &gc_type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         let gc_flags_ptr = {
             let addr = blk.sub(I64, &arr_handle, "7");
             blk.inttoptr(I64, &addr)

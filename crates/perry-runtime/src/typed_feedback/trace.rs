@@ -17,7 +17,7 @@ fn observation_source_name(source: ObservationSource) -> &'static str {
 fn heap_type_name(heap_type: u16) -> &'static str {
     match heap_type as u8 {
         0 => "unknown",
-        crate::gc::GC_TYPE_ARRAY => "array",
+        crate::gc_array_type_pat!() => "array",
         crate::gc_object_type_pat!() => "object",
         crate::gc::GC_TYPE_STRING => "string",
         crate::gc::GC_TYPE_CLOSURE => "closure",
@@ -94,7 +94,7 @@ fn observation_has_array_facts(obs: &Observation) -> bool {
     matches!(obs.source, ObservationSource::Array)
         || matches!(
             obs.heap_type as u8,
-            crate::gc::GC_TYPE_ARRAY
+            crate::gc_array_type_pat!()
                 | crate::gc::GC_TYPE_LAZY_ARRAY
                 | crate::gc::GC_TYPE_BUFFER
                 | crate::gc::GC_TYPE_TYPED_ARRAY

@@ -56,6 +56,8 @@ pub(crate) fn of(ctx: &FnCtx<'_>, e: &Expr) -> Option<Num> {
         return None;
     }
     match e {
+        // I32 at rest B2: a present at-rest slot holds an int32 Number.
+        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => Some(Num::Number),
         Expr::IndexGet { element_offset, .. } => element(ctx, *element_offset),
         // `x ?? d`: `d` replaces exactly the `undefined` (and `null`, which a
         // Number-or-undefined value never is).

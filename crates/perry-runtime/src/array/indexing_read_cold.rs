@@ -203,7 +203,7 @@ unsafe fn plain_index_get(receiver: f64, key: f64) -> Option<f64> {
     let mut arr = (bits & crate::value::POINTER_MASK) as *const ArrayHeader;
     let mut header =
         (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return None;
     }
     let mut steps = 0;
@@ -221,7 +221,7 @@ unsafe fn plain_index_get(receiver: f64, key: f64) -> Option<f64> {
         }
         arr = target as *const ArrayHeader;
         header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header).obj_type) {
             return None;
         }
         steps += 1;

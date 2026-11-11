@@ -117,9 +117,13 @@ impl RepRead {
         self.rep.dense && self.in_floor
     }
 
-    /// The read cannot miss: no test, no cold arm.
+    /// The read cannot miss: no test, no cold arm. A present at-rest slot
+    /// holds an int32 Number (`expr::rest_elems`).
     pub(crate) fn total(self, numeric: bool) -> bool {
-        self.rep.fixed && self.in_floor && self.rep.dense && (!numeric || self.number)
+        self.rep.fixed
+            && self.in_floor
+            && self.rep.dense
+            && (!numeric || self.number || self.rep.at_rest)
     }
 }
 
@@ -237,6 +241,12 @@ pub(crate) fn number_in_floor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     else {
         return false;
     };
+    if crate::expr::rest_elems::tiers_enabled()
+        && crate::expr::rest_elems::read_floor(ctx, e).is_some()
+    {
+        // An at-rest read (I32 at rest B2): its own facts decide.
+        return crate::expr::rest_elems::number_read(ctx, e);
+    }
     !ctx.wpfacts_off
         && rep_read(ctx, object, *element_offset)
             .is_some_and(|read| read.in_floor && read.rep.dense && read.number)
@@ -319,7 +329,23 @@ pub(super) fn lower_bounded(
     }
 }
 
-/// The rep-keyed read (module docs).
+/// The rep-keyed read of an at-rest Array (`expr::rest_elems`, B2): `read`
+/// is `rep_read`'s for that receiver, `read.rep.at_rest`.
+pub(crate) fn lower_rest(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    read: RepRead,
+    numeric: bool,
+) -> String {
+    debug_assert!(read.rep.at_rest);
+    lower_rep(ctx, arr_box, idx_i32, read, numeric, None)
+}
+
+/// The rep-keyed read (module docs). An at-rest receiver
+/// (`FactsArrRep::at_rest`) holds I32 words: a slot that is no hole is an
+/// int32 Number, decoded by `rest_elems::decode`, and the cold read is the
+/// accessor's.
 fn lower_rep(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -358,8 +384,17 @@ fn lower_rep(
         step(ctx, &live, "arep.live");
     }
     let mut capacity = None;
+    // An at-rest Array is dense below its floor and holds an I32 word in
+    // every slot there: outside the key's proven floor, `idx <u floor` is the
+    // whole test (no capacity load, no hole test), and any other key is the
+    // accessor's cold read.
+    let rest_bound = r.at_rest && r.dense && r.floor > 0 && !read.in_floor;
+    if rest_bound {
+        let inside = ctx.block().icmp_ult(I32, idx_i32, &r.floor.to_string());
+        step(ctx, &inside, "arep.inside");
+    }
     // In the floor `capacity >= floor > idx`: the slot exists.
-    if !read.in_floor {
+    if !read.in_floor && !rest_bound {
         let ptr = ctx.block().inttoptr(I64, &handle);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
         let cap = ctx.block().load(I32, &cap_ptr);
@@ -384,14 +419,23 @@ fn lower_rep(
     };
     let slot = blk.inttoptr(I64, &addr);
     let raw = blk.load(I64, &slot);
-    let value = blk.bitcast_i64_to_double(&raw);
-    if numeric && !(read.present() && read.number) {
-        let plain = crate::codegen::emit_plain_number_bits_test(blk, &raw);
-        step(ctx, &plain, "arep.number");
-    } else if !numeric && !read.present() {
-        let own = blk.icmp_ne(I64, &raw, TAG_HOLE_I64);
-        step(ctx, &own, "arep.own");
-    }
+    let value = if r.at_rest {
+        if !read.present() && !rest_bound {
+            let own = ctx.block().icmp_ne(I64, &raw, TAG_HOLE_I64);
+            step(ctx, &own, "arep.own");
+        }
+        crate::expr::rest_elems::decode(ctx, &raw, crate::expr::rest_elems::Want::Value)
+    } else {
+        let value = blk.bitcast_i64_to_double(&raw);
+        if numeric && !(read.present() && read.number) {
+            let plain = crate::codegen::emit_plain_number_bits_test(blk, &raw);
+            step(ctx, &plain, "arep.number");
+        } else if !numeric && !read.present() {
+            let own = blk.icmp_ne(I64, &raw, TAG_HOLE_I64);
+            step(ctx, &own, "arep.own");
+        }
+        value
+    };
     let Some(cold_idx) = cold_idx else {
         return value;
     };
@@ -402,17 +446,57 @@ fn lower_rep(
 
     ctx.current_block = cold_idx;
     super::guarded_array::emit_negative_exit(ctx, idx_i32, negative_exit);
-    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
-    // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
-    let cold = super::guarded_array::emit_read_cold(
-        ctx, arr_box, "2", &idx_box, "0", numeric, numeric, None,
-    );
+    let cold = if r.at_rest {
+        rest_cold(ctx, arr_box, idx_i32, numeric)
+    } else {
+        let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+        // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
+        super::guarded_array::emit_read_cold(
+            ctx, arr_box, "2", &idx_box, "0", numeric, numeric, None,
+        )
+    };
     let cold_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(&value, &load_end), (&cold, &cold_end)])
+}
+
+/// The cold read of an at-rest Array (I32 at rest B2): a key at or past its
+/// fixed length names no own slot, so it is the shared cold read a double
+/// Array's miss takes (it can meet no element word); a key below the length
+/// is an element, read through the accessor (`rest_elems::cold_read`).
+fn rest_cold(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, numeric: bool) -> String {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(arr_box);
+    let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+    let ptr = blk.inttoptr(I64, &handle);
+    let length = blk.load(I32, &ptr);
+    let element = blk.icmp_ult(I32, idx_i32, &length);
+    let acc = ctx.new_block("arep.rest_elem");
+    let miss = ctx.new_block("arep.rest_miss");
+    let done = ctx.new_block("arep.rest_done");
+    let (acc_l, miss_l, done_l) = (
+        ctx.block_label(acc),
+        ctx.block_label(miss),
+        ctx.block_label(done),
+    );
+    ctx.block().cond_br(&element, &acc_l, &miss_l);
+    ctx.current_block = acc;
+    let got = crate::expr::rest_elems::cold_read(ctx, arr_box, idx_i32, numeric);
+    let acc_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = miss;
+    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let absent = super::guarded_array::emit_read_cold(
+        ctx, arr_box, "2", &idx_box, "0", numeric, numeric, None,
+    );
+    let miss_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    ctx.block()
+        .phi(DOUBLE, &[(&got, &acc_end), (&absent, &miss_end)])
 }
 
 /// The fixed-storage read (module docs).

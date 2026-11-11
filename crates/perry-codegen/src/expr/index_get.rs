@@ -417,7 +417,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     };
     if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
         let number = super::rest_elems::Want::Number;
-        return super::rest_elems::lower_read(ctx, object, index, floor, number).map(Some);
+        return super::rest_elems::lower_read(ctx, expr, floor, number).map(Some);
     }
     if let Some(v) = const_array::try_lower(ctx, expr)? {
         return Ok(Some(v));
@@ -637,7 +637,7 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     };
     if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
         let number = super::rest_elems::Want::Number;
-        return super::rest_elems::lower_read(ctx, object, index, floor, number).map(Some);
+        return super::rest_elems::lower_read(ctx, expr, floor, number).map(Some);
     }
     // Receiver must be a plain local of erased static type. Restricting to
     // `LocalGet` (not arbitrary expressions) guarantees none of `lower`'s
@@ -787,7 +787,7 @@ fn lower_bounded_array_index_get_checked(
     let gc_type_addr = blk.sub(I64, &arr_handle, "8");
     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
     let gc_type = blk.load(I8, &gc_type_ptr);
-    let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
+    let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I8, &gc_type);
     let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);
@@ -861,11 +861,9 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
-    if let (Some(floor), Expr::IndexGet { object, index, .. }) =
-        (super::rest_elems::read_floor(ctx, expr), expr)
-    {
+    if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
         let value = super::rest_elems::Want::Value;
-        return super::rest_elems::lower_read(ctx, object, index, floor, value);
+        return super::rest_elems::lower_read(ctx, expr, floor, value);
     }
     if let Some(v) = const_array::try_lower(ctx, expr)? {
         return Ok(v);

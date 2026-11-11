@@ -170,7 +170,7 @@ unsafe fn explicit_prototype_symbol_lookup(
             Some(bits) => bits,
             None => {
                 let (_, kind) = heap_ptr_and_type_from_value_bits(owner as u64)?;
-                if kind != crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_not_array!(kind) {
                     return None;
                 }
                 // Resolving an intrinsic can allocate; keep the current

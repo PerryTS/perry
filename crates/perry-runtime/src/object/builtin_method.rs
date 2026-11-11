@@ -74,7 +74,7 @@ unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
 unsafe fn array_recv(v: f64) -> Option<f64> {
     let bits = v.to_bits();
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     let mut live = (bits & POINTER_MASK) as usize;
@@ -82,7 +82,7 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
         live = forwarded_head(live)?;
         // `clean_arr_ptr` resolved `live` to the array the alias forwards to.
         header = crate::value::addr_class::honest_header(live);
-        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -1933,7 +1933,9 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
         // One header read picks the family; an ordinary object takes the
         // probe's lookup at once.
         let admitted = match (*h).obj_type {
-            crate::gc::GC_TYPE_ARRAY => families & FAMILY_ARRAY != 0 && array_recv(recv).is_some(),
+            crate::gc_array_type_pat!() => {
+                families & FAMILY_ARRAY != 0 && array_recv(recv).is_some()
+            }
             crate::gc::GC_TYPE_MAP => families & FAMILY_MAP != 0 && map_ok(recv),
             crate::gc::GC_TYPE_SET => families & FAMILY_SET != 0 && set_ok(recv),
             // The Map and Set families' entries name only methods a WeakMap

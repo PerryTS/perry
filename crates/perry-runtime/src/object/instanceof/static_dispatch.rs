@@ -794,7 +794,7 @@ fn native_instanceof(
         // byte below it.
         let is_array = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             .is_some_and(|header| {
-                header.obj_type == crate::gc::GC_TYPE_ARRAY
+                crate::gc_type_is_array!(header.obj_type)
                     || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             });
         return if is_array { true_val } else { false_val };
