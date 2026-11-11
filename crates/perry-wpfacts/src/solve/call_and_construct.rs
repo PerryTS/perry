@@ -237,6 +237,11 @@ impl Model {
         } else if t == TOP {
             self.reason("passed to a call of an unknown function value")
         } else {
+            crate::builtins::anyfall(
+                "opaque callee",
+                &self.tok_name(t),
+                &format!("call {call} this {:?}", self.calls[call as usize].this),
+            );
             self.reason("passed to an opaque builtin function value")
         };
         let na = self.calls[call as usize].args.len();
