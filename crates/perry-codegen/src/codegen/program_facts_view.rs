@@ -503,6 +503,15 @@ pub struct ElisionFacts {
     pub rest_writes: std::collections::BTreeMap<u32, u32>,
     pub rest_births: std::collections::BTreeSet<u32>,
     pub rest_reserves: std::collections::BTreeMap<u32, u32>,
+    /// The fill pushes of at-rest push-filled births (wpfacts
+    /// `ModuleBindings::rest_pushes`; `expr::rest_elems::push_len`): the
+    /// byte offset of a push's receiver `this.k`, with the Array's final
+    /// length.
+    pub rest_pushes: std::collections::BTreeMap<u32, u32>,
+    /// The receiver `this.k` of every fill push (wpfacts
+    /// `ModuleBindings::fill_push_recvs`), by its byte offset: a read of the
+    /// Array while it is being born.
+    pub fill_push_recvs: std::collections::BTreeSet<u32>,
     /// The fill births (wpfacts `ModuleBindings::fill_births`;
     /// `expr::fill_birth`): the `fill` call offset of a fused fill `new
     /// Array(k).fill(v)` that is one birth, with its length `k`.

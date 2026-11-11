@@ -55,6 +55,13 @@
 //!   load and the held bases of PR-D / N2 (`index_get::field_base`) as a
 //!   double Array does.
 //!
+//! - **Fill push** (`push_len`, `lower_push`): `this.k.push(v)` of a
+//!   push-filled birth (wpfacts `push_fills`: `k = []` filled in the
+//!   constructor before anything else can see the Array; `rest_pushes`) is
+//!   one `js_array_rest_push`. Its first append gives the Array its final
+//!   capacity and the I32 layout (the returned head is written back to the
+//!   field), every append stores the encoded word at `length`.
+//!
 //! Check mode (`PERRY_VERIFY_FACTS=1`): every at-rest load first tests that
 //! the slot's high half is `INT32_TAG`, and every store that its value is an
 //! int32 Number that is not `-0`; a miss reports the false proof and exits
@@ -302,6 +309,50 @@ pub(crate) fn encode_birth(ctx: &mut FnCtx<'_>, arr: &str, reserve: Option<u32>)
             .block()
             .call(DOUBLE, "js_array_rest_encode", &[(DOUBLE, arr)]),
     }
+}
+
+/// The final length of the push-filled Array that the push on `recv`
+/// appends to, when the facts name it a fill push: `recv` is `this.k`, keyed
+/// by its member offset (wpfacts `ModuleBindings::rest_pushes`). Every Array
+/// the receiver may hold is then born empty by `k`'s initializer and filled
+/// by such pushes, `len` in all, before anything else can see it.
+/// `PERRY_REST_PUSH_FILL=0` (the facts' switch) exports none.
+pub(crate) fn push_len(ctx: &FnCtx<'_>, recv: &Expr) -> Option<u32> {
+    let Expr::PropertyGet {
+        object,
+        byte_offset,
+        ..
+    } = recv
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expr::This) || *byte_offset == 0 {
+        return None;
+    }
+    ctx.wpfacts.rest_pushes.get(byte_offset).copied()
+}
+
+/// Lower a fill push (`push_len`): append the int32 Number `val` to the
+/// Array at `handle` as an I32 word. The first append of a fill gives the
+/// Array its `len` slots and the I32 layout, so the result is the head the
+/// caller's write-back stores in the field (`js_array_rest_push`).
+pub(crate) fn lower_push(ctx: &mut FnCtx<'_>, handle: &str, val: &str, len: u32) -> String {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "rest": "push", "len": len }),
+    );
+    crate::facts_consumed::used();
+    if std::env::var("PERRY_REST_DIAG").as_deref() == Ok("1") {
+        eprintln!("[perry rest] fn={} push len={len}", ctx.func.name);
+    }
+    if crate::verify_facts::enabled() {
+        witness_value(ctx, val);
+    }
+    ctx.block().call(
+        I64,
+        "js_array_rest_push",
+        &[(I64, handle), (DOUBLE, val), (I32, &len.to_string())],
+    )
 }
 
 /// An expression of `stmts` / `exprs` (closures aside) is an at-rest site.

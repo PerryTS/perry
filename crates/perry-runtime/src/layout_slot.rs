@@ -289,6 +289,58 @@ pub extern "C" fn js_array_rest_reserve(arr: f64, cap: u32) -> f64 {
     js_array_rest_encode(crate::value::js_nanbox_pointer(head as i64))
 }
 
+/// A fill push of a push-filled birth (wpfacts `push_fills`): the Array is
+/// born empty by a field initializer and filled by `this.k.push(v)` in the
+/// constructor before anything else can see it, `len` appends in all. The
+/// first append is where the birth takes its storage kind (the literal has
+/// no key codegen and the facts share): `len` slots, reserved as
+/// [`js_array_rest_reserve`] does (the replaced head has no holder but the
+/// field, which codegen re-points at the returned head), and the I32
+/// layout. Every append then stores its word at `length`; the capacity is
+/// already `len`, so the storage never moves again. Returns the head.
+///
+/// A value that is no int32 Number, an append at or past `len`, and an
+/// Array that is neither empty nor I32 layout are false proofs; the generic
+/// store or append follows.
+#[no_mangle]
+pub extern "C" fn js_array_rest_push(
+    arr: *mut ArrayHeader,
+    value: f64,
+    len: u32,
+) -> *mut ArrayHeader {
+    let first = crate::array::clean_arr_ptr_mut(arr);
+    if first.is_null() || unsafe { gc_header(first) }.is_none() {
+        return crate::array::js_array_push_f64(arr, value);
+    }
+    unsafe {
+        let mut a = first;
+        if !is_i32_layout(a) {
+            if elem_len(a) != 0 {
+                false_proof(value.to_bits());
+                return crate::array::js_array_push_f64(arr, value);
+            }
+            a = handle(js_array_rest_reserve(
+                crate::value::js_nanbox_pointer(a as i64),
+                len,
+            ));
+        }
+        let n = elem_len(a);
+        if !(n < len && n < (*a).capacity && extend(a, n, value.to_bits())) {
+            false_proof(value.to_bits());
+            js_array_rest_set(
+                crate::value::js_nanbox_pointer(a as i64),
+                f64::from(n),
+                value,
+            );
+        }
+        if a == first {
+            arr
+        } else {
+            a
+        }
+    }
+}
+
 /// The head of `a` with at least `cap` slots (`array::reserve_capacity`).
 ///
 /// # Safety
