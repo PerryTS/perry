@@ -97,7 +97,8 @@ pub(crate) fn store_into_copy(ctx: &mut FnCtx<'_>, object: &perry_hir::Expr) -> 
     }
     let copy = super::lower_expr(ctx, object)?;
     crate::verify_facts::covered(Fact::RecordMutation, || serde_json::json!({ "class": cid }));
-    let site = crate::verify_facts::site_arg(ctx, "store into a record copy", Fact::RecordMutation, &[]);
+    let site =
+        crate::verify_facts::site_arg(ctx, "store into a record copy", Fact::RecordMutation, &[]);
     let _ = crate::verify_facts::check(
         ctx,
         I32,

@@ -134,13 +134,18 @@ fn an_optional_binding_tracks_presence() {
 
 #[test]
 fn an_assignment_writes_the_fields() {
-    let src = "function f(n: number): number { let u = { a: 1, b: 2 }; let s = 0; for (let i = 0; i < n; i++) { u = { a: u.b, b: u.a + i }; s += u.a; } return s; }\nconsole.log(f(4));\n";
-    let (_, out, c, id) = rewritten(src, &[("u", false)]);
+    // One literal site, assigned in a loop that reads the binding.
+    let src = "function f(n: number): number { let u: { a: number; b: number } | undefined = undefined; let s = 0; for (let i = 0; i < n; i++) { u = { a: u ? u.b : 1, b: u ? u.a + i : 2 }; s += u.a; } return s; }\nconsole.log(f(4));\n";
+    let (_, out, c, id) = rewritten(src, &[("u", true)]);
     assert_eq!(counts(&out, Some(id)).1, 0);
-    // `{ a: u.b, b: u.a + i }` reads `u`: its values are taken before the
-    // fields are written, with no copy.
+    // Every value is taken before a field is written: no copy, no birth,
+    // and the statement's discarded value takes none either.
     assert_eq!((c.unpacked, c.materialized), (0, 0), "{c:?}");
     assert_eq!(counts(&out, None).0, 0);
+    // Negative control: the assignment's value used (`(u = …).a`) is a copy.
+    let src = "function f(n: number): number { let u: { a: number; b: number } | undefined = undefined; let s = 0; for (let i = 0; i < n; i++) { s += (u = { a: i, b: 2 }).a; } return s; }\nconsole.log(f(4));\n";
+    let (_, _, c, _) = rewritten(src, &[("u", true)]);
+    assert_eq!(c.materialized, 1, "{c:?}");
 }
 
 /// The module compiles with and without the rewrite (an IR smoke test of

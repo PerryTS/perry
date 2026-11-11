@@ -173,7 +173,9 @@ fn a_retaining_native_rejects() {
 
 #[test]
 fn a_record_array_waits_for_the_intrinsics() {
-    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\nconsole.log(xs.length);\n");
+    let r = rejected(
+        "const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\nconsole.log(xs.length);\n",
+    );
     assert_eq!(r, "R6Op(push)");
     let pf = facts_with(&format!("{U}const xs: {{ a: number; b: boolean }}[] = [];\nxs.push(u);\nconsole.log(xs.length);\n"), on());
     assert!(
@@ -185,7 +187,9 @@ fn a_record_array_waits_for_the_intrinsics() {
 
 #[test]
 fn json_without_a_function_replacer_is_a_boundary() {
-    admitted("console.log(JSON.stringify(u), JSON.stringify(u, null, 2), JSON.stringify(u, [\"a\"]));\n");
+    admitted(
+        "console.log(JSON.stringify(u), JSON.stringify(u, null, 2), JSON.stringify(u, [\"a\"]));\n",
+    );
     assert_eq!(
         rejected("console.log(JSON.stringify(u, (k, v) => v));\n"),
         "R5Protocol(JsonReplacer)"

@@ -306,7 +306,8 @@ impl Refs {
                     Stmt::PreallocateBoxes(ids)
                     | Stmt::PreallocateTdzBoxes(ids)
                     | Stmt::ReleaseBoxes(ids) => {
-                        r.bad.extend(ids.iter().filter(|id| cands.contains_key(*id)));
+                        r.bad
+                            .extend(ids.iter().filter(|id| cands.contains_key(*id)));
                     }
                     _ => {}
                 }
@@ -478,7 +479,7 @@ impl Rewriter<'_> {
                     self.expr(e);
                 }
             }
-            Stmt::Expr(e) => self.expr(e),
+            Stmt::Expr(e) => self.discarded(e),
             Stmt::Return(Some(e)) | Stmt::Throw(e) => self.expr(e),
             Stmt::Return(None) => {}
             Stmt::If {
@@ -513,7 +514,7 @@ impl Rewriter<'_> {
                     self.cond(c);
                 }
                 if let Some(u) = update {
-                    self.expr(u);
+                    self.discarded(u);
                 }
                 self.stmts(body);
             }
@@ -573,7 +574,14 @@ impl Rewriter<'_> {
                 if props.len() == shape.keys.len()
                     && props.iter().zip(&shape.keys).all(|((k, _), x)| k == x) =>
             {
-                Some(props.iter().cloned().enumerate().map(|(i, (_, v))| (i, v)).collect())
+                Some(
+                    props
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(i, (_, v))| (i, v))
+                        .collect(),
+                )
             }
             _ => None,
         }
@@ -803,7 +811,11 @@ impl Rewriter<'_> {
         let rec = self.recs[&u].clone();
         let shape = &self.shapes[&rec.tmpl];
         let field = |k: &str| {
-            let i = shape.keys.iter().position(|x| x == k).expect("a layout key");
+            let i = shape
+                .keys
+                .iter()
+                .position(|x| x == k)
+                .expect("a layout key");
             Expr::LocalGet(rec.fields[i])
         };
         let born = match &shape.birth {
@@ -815,7 +827,9 @@ impl Rewriter<'_> {
                 cap_args_appended: 0,
                 byte_end: 0,
             },
-            Birth::Object => Expr::Object(shape.keys.iter().map(|k| (k.clone(), field(k))).collect()),
+            Birth::Object => {
+                Expr::Object(shape.keys.iter().map(|k| (k.clone(), field(k))).collect())
+            }
         };
         if rec.track {
             Expr::Conditional {
@@ -837,6 +851,26 @@ impl Rewriter<'_> {
             return;
         }
         self.expr(e);
+    }
+
+    /// An expression whose value is discarded: an assignment to a record
+    /// binding writes its fields and takes no copy.
+    fn discarded(&mut self, e: &mut Expr) {
+        match e {
+            Expr::LocalSet(u, v) if self.recs.contains_key(u) => {
+                let u = *u;
+                self.reach(u);
+                let v = std::mem::replace(v.as_mut(), undefined());
+                let list = self.assign(u, v);
+                *e = seq(list, undefined());
+            }
+            Expr::Sequence(list) => {
+                for x in list.iter_mut() {
+                    self.discarded(x);
+                }
+            }
+            _ => self.expr(e),
+        }
     }
 
     fn expr(&mut self, e: &mut Expr) {
@@ -862,7 +896,11 @@ impl Rewriter<'_> {
             } if self.rec_of(object).is_some() => {
                 let u = self.rec_of(object).unwrap();
                 let rec = self.recs[&u].clone();
-                match self.shapes[&rec.tmpl].keys.iter().position(|k| k == property) {
+                match self.shapes[&rec.tmpl]
+                    .keys
+                    .iter()
+                    .position(|k| k == property)
+                {
                     Some(i) => {
                         self.reach(u);
                         self.census.field_reads += 1;
