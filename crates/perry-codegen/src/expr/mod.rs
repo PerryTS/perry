@@ -4371,6 +4371,24 @@ fn lower_compare_value(
         );
         return Ok(Some(lowered));
     }
+    // An integer product, sum or difference the intervals bound is compared
+    // as integers (`int_product`).
+    if let Some(bit) = int_product::try_lower_compare(ctx, op, left, right)? {
+        let lowered = LoweredValue::i1(bit);
+        ctx.record_lowered_value(
+            "Compare",
+            None,
+            "ordinary_expr_value.int_product_i1",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![format!("op={op:?}")],
+        );
+        return Ok(Some(lowered));
+    }
     // #5497 Lever E: Boolean relational operands already held as native i1 do
     // not need to be NaN-boxed and sent through the full Abstract Relational
     // Comparison helper. For a Boolean paired with another proven Boolean or

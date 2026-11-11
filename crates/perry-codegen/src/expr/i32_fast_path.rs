@@ -1408,6 +1408,11 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             return Ok(lowered);
         }
     }
+    // An integer tree the intervals keep inside int32 (`Math.abs` of a small
+    // int, a product of bounded ints) is computed in i32.
+    if let Some(value) = super::int_product::try_lower_i32(ctx, e)? {
+        return Ok(i32_lowered(value));
+    }
     if let Some(lowered) = crate::expr::lower_expr_value(ctx, e)? {
         let value = match lowered.rep {
             NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => Some(lowered.value),

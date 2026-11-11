@@ -179,7 +179,45 @@ function zeros(): string {
 }
 out.push("zeros " + zeros());
 
+// `Math.abs` of a bounded int: the integer absolute value, for a test and
+// for an int32 consumer (an I32 local, a bitwise operand, an index).
+const NAMES = ["none", "pawn", "knight", "bishop", "rook", "queen", "king"];
+function absolutes(): string {
+  let kings = 0, sum = 0, odd = 0, far = 0;
+  let names = "";
+  for (let i = 0; i < 128 * RUN; i++) {
+    const p = board[i] ?? 0;
+    const type = Math.abs(p);
+    if (type === 6) kings++;
+    if (Math.abs(p) * 2 > 7) sum += type;
+    if ((Math.abs(p - 3) & 1) === 1) odd++;
+    if (Math.abs(p * 100 - 250) >= 350) far++;
+    if (i < 6) names += NAMES[Math.abs(p)] + " ";
+  }
+  return [kings, sum, odd, far].join(",") + " " + names;
+}
+out.push("absolutes " + absolutes());
+
 // ================= negative controls =================
+
+// The absolute value of -2^31 leaves int32; of `-0`, NaN and a string it is
+// what doubles give.
+function absEdges(a: number, b: any): string {
+  const x = a | 0;
+  const r: (boolean | number | string)[] = [];
+  r.push(Math.abs(x) === 2147483648);
+  r.push(Math.abs(x) > 0);
+  r.push(Math.abs(x) | 0);
+  r.push(Math.abs(x) * 2 > 4294967295);
+  r.push(Math.abs(x - 1) === 2147483649);
+  r.push(1 / Math.abs(x * 0));
+  r.push(Math.abs(b) > 2);
+  r.push(Math.abs(b) * 2 === 6);
+  r.push(Object.is(Math.abs(b * 0), 0));
+  return r.join(",");
+}
+out.push("abs-edges " + absEdges(-2147483648, -3) + " | " + absEdges(-5, NaN) + " | " + absEdges(7, "-3") + " | " + absEdges(0, -0) + " | " + absEdges(-1, -2.5));
+
 
 // The sign of a zero product IS observed by a value use.
 function zeroSign(a: number, b: number): string {
