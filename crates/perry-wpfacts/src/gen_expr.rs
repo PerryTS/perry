@@ -1257,6 +1257,7 @@ impl<'a> Gen<'a> {
                         self.mark_fn_phase(fx, e, target, site);
                         self.mark_rooted(e, site);
                         self.m.stores[site as usize].key_value = Some(k);
+                        self.in_bounds_site(fx, e, o, key, site);
                         match key {
                             Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
                             // The key's values decide: an index or any key.

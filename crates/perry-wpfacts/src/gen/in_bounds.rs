@@ -403,7 +403,8 @@ impl<'a> Gen<'a> {
     }
 
     /// After the store `e` (`object[index] = v` into `recv` under `key`) is
-    /// generated at `site`: the site is in bounds when the text proves it
+    /// generated at `site` (a PutValue has two, its target's and its
+    /// receiver's): the site is in bounds when the text proves it
     /// (`in_bounds_store`). The solve reads the verdict
     /// (`Model::inbounds_sites`).
     pub(crate) fn in_bounds_site(
@@ -414,14 +415,26 @@ impl<'a> Gen<'a> {
         key: Key,
         site: SiteId,
     ) {
-        let Expr::IndexSet {
-            object,
-            index,
-            element_offset,
-            ..
-        } = e
-        else {
-            return;
+        // `a[k] = v` is a PutValue whose receiver is its target.
+        let (object, index, element_offset) = match e {
+            Expr::IndexSet {
+                object,
+                index,
+                element_offset,
+                ..
+            } => (object, index, element_offset),
+            Expr::PutValueSet {
+                target,
+                key,
+                receiver,
+                element_offset,
+                ..
+            } if matches!((target.as_ref(), receiver.as_ref()),
+                (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b) =>
+            {
+                (target, key, element_offset)
+            }
+            _ => return,
         };
         if matches!(key, Key::Any(_)) && self.in_bounds_store(fx, object, index) {
             self.m.inbounds_sites.insert(site);
