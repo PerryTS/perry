@@ -560,27 +560,33 @@ pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<JSValue> 
     crate::typedarray_hook_slots::buffer_written_member(addr, name)
 }
 
-/// [`buffer_written_member`] called with the Buffer `buf_f64` as `this`: the
-/// name dispatch's arm. The same bit, then one call into the typed-array group.
-#[inline(always)]
-fn buffer_written_member_call(addr: usize, name: &str, buf_f64: f64, args: &[f64]) -> Option<f64> {
-    if crate::object::builtin_proto::prototype_unwritten(
-        crate::object::builtin_proto::BuiltinProto::Buffer,
-    ) {
-        return None;
-    }
-    crate::typedarray_hook_slots::buffer_written_member_call(addr, name, buf_f64, args)
-}
-
-/// The body behind [`buffer_written_member_call`], linked through the
-/// typed-array hook group.
-pub(crate) fn buffer_written_member_call_lookup(
+/// The name dispatch once the program has written `Buffer.prototype`, linked
+/// through the typed-array hook group (`dispatch_buffer_method` reaches it
+/// behind the shadow bit). A Buffer's own property and a non-Buffer receiver
+/// are [`dispatch_builtin_buffer_method`]'s, as is a name whose lookup still
+/// finds the builtin member; any other own member of `Buffer.prototype` is
+/// what `[[Get]](buf, name)` finds, called with the Buffer as `this`.
+///
+/// # Safety
+/// As [`dispatch_buffer_method`].
+pub(crate) unsafe fn dispatch_written_buffer_lookup(
     addr: usize,
-    name: &str,
-    buf_f64: f64,
-    args: &[f64],
-) -> Option<f64> {
-    buffer_written_member_lookup(addr, name).map(|member| call_buffer_member(member, buf_f64, args))
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if !crate::buffer::buffer_has_own_prop(addr, method_name) {
+        if let Some(member) = buffer_written_member_lookup(addr, method_name) {
+            let buf_f64 = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+            let args = if !args_ptr.is_null() && args_len > 0 {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            } else {
+                &[]
+            };
+            return call_buffer_member(member, buf_f64, args);
+        }
+    }
+    dispatch_builtin_buffer_method(addr, method_name, args_ptr, args_len)
 }
 
 /// The lookup behind [`buffer_written_member`], linked through the typed-array
@@ -635,7 +641,41 @@ fn call_buffer_member(member: JSValue, buf_f64: f64, args: &[f64]) -> f64 {
     }
 }
 
+/// The name dispatch of a method call on the Buffer (or view) at `addr`.
+/// BUFEQ: once the program has written `Buffer.prototype` (its own shadow bit,
+/// clear through the stand-in until it is built), a Buffer's own member of
+/// that prototype is what `[[Get]](buf, name)` finds: the dispatch is then the
+/// typed-array group's [`dispatch_written_buffer_lookup`]. One bit test
+/// selects it or the builtin dispatch, which stays its own body.
+///
+/// # Safety
+/// `addr` is a live Buffer or buffer view; `args_ptr` names `args_len` values
+/// (or is null).
+#[inline(never)]
 pub unsafe fn dispatch_buffer_method(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // One test selects the body; both run with this call's own arguments.
+    let dispatch: BufferDispatch = if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        dispatch_builtin_buffer_method
+    } else {
+        crate::typedarray_hook_slots::written_buffer_dispatch()
+    };
+    dispatch(addr, method_name, args_ptr, args_len)
+}
+
+/// The signature of [`dispatch_buffer_method`] and of the bodies it selects.
+pub(crate) type BufferDispatch = unsafe fn(usize, &str, *const f64, usize) -> f64;
+
+/// The builtin name dispatch: the receiver's own property, the `#BUFNS` view
+/// members, then the Buffer and typed-array method bodies by name.
+#[inline(never)]
+pub(crate) unsafe fn dispatch_builtin_buffer_method(
     addr: usize,
     method_name: &str,
     args_ptr: *const f64,
@@ -709,11 +749,6 @@ pub unsafe fn dispatch_buffer_method(
             Ok(value) => value,
             Err(error) => crate::exception::rethrow_caught(error),
         };
-    }
-    // BUFEQ: a Buffer's own member of `Buffer.prototype` is what
-    // `[[Get]](buf, name)` finds once the program has written that prototype.
-    if let Some(result) = buffer_written_member_call(addr, method_name, buf_f64, args) {
-        return result;
     }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {

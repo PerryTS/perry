@@ -202,6 +202,8 @@ pub(crate) fn note_array_custom_proto() {
 /// `obj` is a live `ObjectHeader` (a GC_TYPE_OBJECT), or null.
 #[inline(never)]
 pub(crate) unsafe fn seal_object(obj: *mut ObjectHeader, family: BuiltinProto) {
+    // A host family is sealed as a runtime prototype (`seal_built_host_intrinsic`).
+    debug_assert!(family.realm_intrinsic());
     seal_object_family(obj, family as usize);
 }
 
@@ -243,13 +245,21 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
-    super::own_override::as_builtin_definition(|| unsafe { seal_and_publish(family, proto) });
+    super::own_override::as_builtin_definition(|| unsafe {
+        trace_seal(family, (*proto).parent_class_id);
+        seal_object(proto, family);
+        crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
+    });
 }
 
-/// [`seal_built_intrinsic`] for a host family (`Buffer`), whose prototype is
-/// completed by a member install reached only through its feature group
-/// (`typedarray_hook_slots::buffer_prototype_members`). Its own definition
-/// scope keeps the always-linked object intrinsic's seal a single-caller body.
+/// Seal a host family's prototype (`Buffer.prototype`) when the member install
+/// reached only through its feature group completes it
+/// (`typedarray_hook_slots::buffer_prototype_members`), and publish it in the
+/// family's agent slot. Its meta family is [`RUNTIME_FAMILY`]: it is a
+/// prototype the runtime builds, outside DEC 250's lock, and a write marks
+/// only that prototype, its own shadow bit, which is the family's
+/// [`prototype_unwritten`]. So the sealed meta family field holds a realm
+/// family only below [`BuiltinProto::REALM_INTRINSICS`].
 #[inline(never)]
 pub(crate) fn seal_built_host_intrinsic(family: BuiltinProto, proto: *mut ObjectHeader) {
     debug_assert!(!family.realm_intrinsic());
@@ -257,47 +267,42 @@ pub(crate) fn seal_built_host_intrinsic(family: BuiltinProto, proto: *mut Object
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
-    super::own_override::as_builtin_definition(|| unsafe { seal_and_publish(family, proto) });
-}
-
-/// Seal `proto` as `family` and publish it in this agent's intrinsic slot.
-///
-/// # Safety
-/// `proto` is a live, complete `ObjectHeader`; the caller is a builtin
-/// definition with collection suppressed.
-#[inline(always)]
-unsafe fn seal_and_publish(family: BuiltinProto, proto: *mut ObjectHeader) {
-    trace_seal(family, (*proto).parent_class_id);
-    seal_object(proto, family);
-    crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
+    super::own_override::as_builtin_definition(|| unsafe {
+        trace_seal(family, (*proto).parent_class_id);
+        seal_object_family(proto, RUNTIME_FAMILY);
+        crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
+    });
 }
 
 /// The meta family field of a sealed RUNTIME prototype (one the runtime
 /// builds, such as `%URL.prototype%` or a timer prototype; not a
-/// [`BuiltinProto`]). A write marks only that prototype.
-pub(crate) const RUNTIME_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+/// [`BuiltinProto`]; also the host family `Buffer`'s prototype,
+/// `seal_built_host_intrinsic`). A write marks only that prototype. It follows
+/// the locked families below, so DEC 250's lock set past the global is one
+/// contiguous range (`ITERATOR_FAMILY..=REGEXP_STRING_ITERATOR_FAMILY`).
+pub(crate) const RUNTIME_FAMILY: usize = REGEXP_STRING_ITERATOR_FAMILY + 1;
 /// The meta family field of `%IteratorPrototype%` and of
 /// `%ArrayIteratorPrototype%`: built-in prototypes that are not a
 /// [`BuiltinProto`] family, sealed by `iterator_prototypes` (DEC 250 (i)).
-pub(crate) const ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 1;
-pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
+pub(crate) const ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+pub(crate) const ARRAY_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 2;
 /// The meta family field of `%GeneratorPrototype%` and of
 /// `%AsyncGeneratorPrototype%` (DEC 250 as narrowed 2026-11-03): their image
 /// members (`next`, `return`, `throw`, `@@toStringTag`; not `constructor`)
 /// are locked, adds stay open. Sealed by `seal_generator_prototype` when
 /// `build_generator_tower` completes them.
-pub(crate) const GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 3;
-pub(crate) const ASYNC_GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 4;
+pub(crate) const GENERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 3;
+pub(crate) const ASYNC_GENERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 4;
 /// The meta family fields of `%MapIteratorPrototype%`,
 /// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` and
 /// `%RegExpStringIteratorPrototype%` (DEC 250 as narrowed 2026-11-03, like
 /// the generator prototypes): their image members (`next`,
 /// `@@toStringTag`) are locked, adds stay open. Sealed by
 /// `seal_iterator_prototypes` with the shared and array ones.
-pub(crate) const MAP_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 5;
-pub(crate) const SET_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 6;
-pub(crate) const STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 7;
-pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 8;
+pub(crate) const MAP_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 5;
+pub(crate) const SET_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 6;
+pub(crate) const STRING_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 7;
+pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 8;
 const _: () = assert!(
     REGEXP_STRING_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
@@ -650,7 +655,9 @@ unsafe fn note_sealed_write(
             throw_locked(family, &violation);
         }
     }
-    if family < FAMILIES {
+    // The realm families; a host family (`Buffer`) is sealed as a runtime
+    // prototype (`seal_built_host_intrinsic`).
+    if family < BuiltinProto::REALM_INTRINSICS {
         // A runtime definition that ADDS a key to an add-locked prototype
         // after its seal changes what an absent-key answer (a pristine-guarded
         // miss, the lock's "never gains a key") already said: it withdraws

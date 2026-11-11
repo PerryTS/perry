@@ -222,10 +222,10 @@ pub(crate) fn install_buffer_prototype_members(proto: *mut ObjectHeader) {
             "offset",
             crate::fn_info!(#[realm("Buffer.prototype.offset.<get>", constructible = true)] export crate::object::native_module::callable_exports::buffer_prototype_offset_getter_thunk, 0; with_declared(0)),
         );
-        // Complete: seal it as family `Buffer` and publish it, so the
+        // Complete: seal it and publish it as family `Buffer`, so the
         // program's first write of it sets its shadow bit, which the name
         // dispatch and the named Get on a Buffer read
-        // (`buffer_dispatch::buffer_written_member`).
+        // (`buffer_dispatch::dispatch_buffer_method`, `buffer_written_member`).
         crate::object::builtin_proto::seal_built_host_intrinsic(
             crate::object::builtin_proto::BuiltinProto::Buffer,
             proto,
