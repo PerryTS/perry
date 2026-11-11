@@ -39,7 +39,7 @@ pub(crate) use effects::{
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
-pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
+pub(crate) use collections::{WK_ASYNC_ITERATOR, WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
 pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;

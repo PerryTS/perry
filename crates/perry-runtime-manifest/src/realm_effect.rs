@@ -58,6 +58,10 @@ pub enum RealmProtocol {
     Iterate,
     IterNext,
     IterResult,
+    /// Async iteration (`@@asyncIterator`, then the iterator's awaited
+    /// `next()` / `return()` results, their `done` and `value` read as
+    /// byte chunks): undici's `ReadableStreamFrom`.
+    AsyncIterate,
     Json,
     HasInstance,
     OwnKeys,

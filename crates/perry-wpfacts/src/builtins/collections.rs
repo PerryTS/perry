@@ -565,6 +565,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
 /// `@@__perry_wk_iterator`), see `Gen::key_of`.
 pub(crate) const WK_PREFIX: &str = "@@__perry_wk_";
 pub(crate) const WK_ITERATOR: &str = "@@__perry_wk_iterator";
+pub(crate) const WK_ASYNC_ITERATOR: &str = "@@__perry_wk_asyncIterator";
 
 /// The values a builtin iterator yields, held in its `#elems` field: an
 /// all-keys read (`iterate`) sees them, a named read (`it.next`) does not.

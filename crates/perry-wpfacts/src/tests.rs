@@ -119,6 +119,7 @@ mod function_call_value;
 mod static_call_value;
 mod fetch_headers;
 mod json_protocol;
+mod response_body;
 mod memo_context;
 mod named_accessors;
 mod named_method_on_class_value;

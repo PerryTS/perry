@@ -1553,8 +1553,9 @@ impl Model {
             return;
         }
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
-        // Protocol results go back to the runtime only (touched below).
-        self.nodes[ret as usize].sink = true;
+        // Protocol results go back to the runtime only (touched below);
+        // an awaited one is adopted first (below).
+        self.nodes[ret as usize].sink = !proto.awaits_result();
         self.nodes[ret as usize].frame = home;
         // Protocol arguments are primitives (hints, keys), except
         // `@@hasInstance`'s, the `instanceof` left-hand sides. The
@@ -1595,8 +1596,17 @@ impl Model {
         // protocol runs on them (an iterator's `next`, a result's `value`,
         // what `toJSON` returns) is a touch of its own.
         if let Some(next) = proto.of_result() {
+            let settled = if proto.awaits_result() {
+                let dst = self.node_l("implicit-settled");
+                self.nodes[dst as usize].sink = true;
+                self.nodes[dst as usize].frame = home;
+                crate::builtins::adopt(self, call, ret, dst);
+                dst
+            } else {
+                ret
+            };
             self.cons(
-                ret,
+                settled,
                 Cons::Implicit {
                     reason,
                     proto: next,

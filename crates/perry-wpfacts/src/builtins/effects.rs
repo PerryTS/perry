@@ -429,6 +429,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
         RealmProtocol::Iterate => Protocol::Iterate,
         RealmProtocol::IterNext => Protocol::IterNext,
         RealmProtocol::IterResult => Protocol::IterResult,
+        RealmProtocol::AsyncIterate => Protocol::AsyncIterate,
         RealmProtocol::Json => Protocol::Json,
         RealmProtocol::HasInstance => Protocol::HasInstance,
         RealmProtocol::OwnKeys => Protocol::OwnKeys,
