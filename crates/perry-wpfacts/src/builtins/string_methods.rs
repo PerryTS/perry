@@ -272,12 +272,12 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             return true;
         }
         // 22.1.3.36: no operand is read; a String Iterator over the code
-        // points (strings). Its own intrinsic prototype is not described:
-        // the any-iterator kind.
+        // points (strings), whose [[Prototype]] is
+        // `%StringIteratorPrototype%` (CreateIteratorFromClosure).
         n if n == collections::WK_ITERATOR => {
             let cps = m.node_l("string-iterator-values");
             m.add_prim(cps, prim::STR);
-            let it = collections::iter_over(m, call, members::ANY_ITERATOR, cps);
+            let it = collections::iter_over(m, call, members::STRING_ITERATOR, cps);
             ret_tok(m, call, it);
             return true;
         }

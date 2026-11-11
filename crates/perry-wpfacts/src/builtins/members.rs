@@ -578,12 +578,16 @@ pub(crate) const ANY_ITERATOR: &str = "Iterator";
 pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
 pub(crate) const MAP_ITERATOR: &str = "MapIterator";
 pub(crate) const SET_ITERATOR: &str = "SetIterator";
+/// `%StringIteratorPrototype%` (22.1.5.1), what `String.prototype[@@iterator]`
+/// (22.1.3.36) gives its iterator.
+pub(crate) const STRING_ITERATOR: &str = "StringIterator";
 
 /// The intrinsic prototype of builtin object kind `what` whose image members
 /// the runtime locks while it takes adds: `%MapIteratorPrototype%`,
-/// `%SetIteratorPrototype%` (`builtin_proto.rs` `MAP_ITERATOR_FAMILY`,
-/// `SET_ITERATOR_FAMILY`), `RegExp.prototype` and `Date.prototype`
-/// (`seal_realm` seals every `BuiltinProto`). Its realm-table name and its
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` (`builtin_proto.rs`
+/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`, `STRING_ITERATOR_FAMILY`),
+/// `RegExp.prototype` and `Date.prototype` (`seal_realm` seals every
+/// `BuiltinProto`). Its realm-table name and its
 /// lock holder (`perry_abi::lock`), for `builtins::locked_chain_read` and
 /// `builtins::native_locked`: a read of an image member there is final, an
 /// absent key is not.
@@ -592,6 +596,7 @@ pub(crate) fn image_locked_prototype(what: &str) -> Option<(&'static str, LockHo
     match what {
         MAP_ITERATOR => Some(("%MapIteratorPrototype%", LockHolder::MapIterator)),
         SET_ITERATOR => Some(("%SetIteratorPrototype%", LockHolder::SetIterator)),
+        STRING_ITERATOR => Some(("%StringIteratorPrototype%", LockHolder::StringIterator)),
         "RegExp" => Some(("RegExp.prototype", LockHolder::Proto(P::RegExp))),
         "Date" => Some(("Date.prototype", LockHolder::Proto(P::Date))),
         _ => None,
@@ -611,7 +616,9 @@ pub(super) fn collection_iterator(what: &str) -> &'static str {
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR | STRING_ITERATOR => {
+            Family::Iterator
+        }
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {

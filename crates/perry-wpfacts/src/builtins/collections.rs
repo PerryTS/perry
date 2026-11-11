@@ -592,7 +592,8 @@ fn iter_elems(m: &mut Model, it: Tok) -> NodeId {
 /// iterator's intrinsic prototype: `members::ARRAY_ITERATOR`
 /// (`%ArrayIteratorPrototype%`, what the realm declares Array, its
 /// prototype's methods and `%TypedArray%.prototype` birth),
-/// `members::MAP_ITERATOR`, `members::SET_ITERATOR`, or
+/// `members::MAP_ITERATOR`, `members::SET_ITERATOR`,
+/// `members::STRING_ITERATOR`, or
 /// `members::ANY_ITERATOR` where the model does not know which (an iterator
 /// helper, a folded `.values()` whose receiver may be any iterable).
 pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values: NodeId) -> Tok {
