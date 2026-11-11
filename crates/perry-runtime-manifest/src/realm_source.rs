@@ -28,6 +28,8 @@ mod hash;
 mod imports;
 #[path = "realm_info.rs"]
 mod info;
+#[path = "realm_keys.rs"]
+mod keys;
 #[path = "realm_layout_birth.rs"]
 mod layout_birth;
 #[path = "realm_module_namespace.rs"]
@@ -1070,6 +1072,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         }
     }
     let mut all = Vec::new();
+    let mut runtime_keys = BTreeSet::new();
     let mut throw_declarations = Vec::new();
     let mut exports = crate::realm_exports::InfoExports::default();
     let mut export_sources = Vec::new();
@@ -1086,6 +1089,23 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     for (file, source) in &sources {
         println!("cargo:rerun-if-changed={}", file.display());
         let relative = file.strip_prefix(crates).unwrap();
+        let shipped = relative.components().next().is_some_and(|part| {
+            matches!(
+                part.as_os_str().to_str(),
+                Some("perry-runtime" | "perry-stdlib")
+            )
+        }) && !relative
+            .components()
+            .any(|part| part.as_os_str() == "tests")
+            && !file
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("tests")
+            && file.file_name().unwrap() != "test.rs";
+        if shipped {
+            runtime_keys.extend(keys::spelled(source)?);
+        }
         let package_root = crates.join(relative.components().next().unwrap().as_os_str());
         let cargo =
             std::fs::read_to_string(package_root.join("Cargo.toml")).map_err(|e| e.to_string())?;
@@ -1122,6 +1142,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     native::resolve_receivers(&mut all, &native_receivers)?;
     derive::finish(&mut all)?;
     exports.link(&mut all)?;
+    keys::attach(&mut all, &runtime_keys);
     all.sort_by(|a, b| {
         a.get("name")
             .and_then(Value::string)

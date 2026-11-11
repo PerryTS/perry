@@ -36,7 +36,7 @@ pub(crate) fn create_json_namespace() -> *mut ObjectHeader {
 const REFLECT_MEMBERS: &[Member] = &[
     Member::method(
         "defineProperty",
-        crate::fn_info!(#[realm(Reflect.defineProperty)] export crate::object::global_this::bigint_promise::reflect_define_property_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.defineProperty, arguments = keyed)] export crate::object::global_this::bigint_promise::reflect_define_property_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
         3,
     ),
     Member::method(
@@ -56,12 +56,12 @@ const REFLECT_MEMBERS: &[Member] = &[
     ),
     Member::method(
         "get",
-        crate::fn_info!(#[realm(Reflect.get)] export crate::object::global_this::bigint_promise::reflect_get_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.get, arguments = keyed)] export crate::object::global_this::bigint_promise::reflect_get_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "getOwnPropertyDescriptor",
-        crate::fn_info!(#[realm(Reflect.getOwnPropertyDescriptor)] export crate::object::global_this::bigint_promise::reflect_get_own_property_descriptor_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.getOwnPropertyDescriptor, arguments = keyed)] export crate::object::global_this::bigint_promise::reflect_get_own_property_descriptor_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(

@@ -2,102 +2,19 @@
 //! top boundaries explicit: an unfamiliar operation does not select the full realm.
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::realm_reach_index::RealmIndex;
+use crate::realm_reach_index::{member_of_primitive, RealmIndex, PRIMITIVE_KINDS};
 use swc_common::{Globals, Mark, SyntaxContext, GLOBALS};
 use swc_ecma_ast as ast;
 use swc_ecma_visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RealmTop {
-    DynamicCode,
-    GlobalObjectValue,
-    With,
-    DynamicModule,
-    GlobalAnyMember,
-}
+#[path = "realm_reach_partition.rs"]
+mod partition;
+pub use partition::{KeylessRead, RealmReach, RealmTop};
 
-impl RealmTop {
-    pub fn reason(&self) -> &'static str {
-        match self {
-            Self::DynamicCode => "DynamicCodeReach.globals",
-            Self::GlobalObjectValue => "global object used as a value",
-            Self::With => "with",
-            Self::DynamicModule => "non-constant require/import",
-            Self::GlobalAnyMember => "PatchedBuiltins global ANY_MEMBER",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RealmReach {
-    pub names: BTreeSet<String>,
-    pub top: BTreeSet<RealmTop>,
-}
-
-impl RealmReach {
-    pub fn is_full(&self) -> bool {
-        !self.top.is_empty()
-    }
-
-    pub fn merge(&mut self, other: &Self) {
-        self.names.extend(other.names.iter().cloned());
-        self.top.extend(other.top.iter().cloned());
-    }
-
-    /// Apply the exact program-level signals, including patches discovered in
-    /// modules other than the one currently being scanned.
-    pub fn program_signals(&mut self, patched: &crate::PatchedBuiltins) {
-        if patched.dynamic_code_reach.globals {
-            self.top.insert(RealmTop::DynamicCode);
-        }
-        if patched
-            .iter()
-            .any(|(owner, key)| is_global(owner) && key == crate::patched_builtins::ANY_MEMBER)
-        {
-            self.top.insert(RealmTop::GlobalAnyMember);
-        }
-    }
-
-    /// Test-only (the realm-diff gate's `PERRY_REALM_REACH_NAMES` input):
-    /// R becomes exactly `names`, with every top reason dropped, so a program
-    /// that reflects over `globalThis` (the realm dumper) can be built with a
-    /// partial image. A top program's own names are not kept: a scan closes a
-    /// top R to the whole catalog, so they are no longer distinguishable.
-    /// [`close`](Self::close) then applies the birth relation as usual.
-    pub fn restrict_to(&mut self, names: impl IntoIterator<Item = String>) {
-        self.top.clear();
-        self.names = names.into_iter().collect();
-    }
-
-    pub fn close(&mut self, entries: &RealmIndex) {
-        if self.is_full() {
-            self.names
-                .extend(entries.rows().map(|e| e.name().to_string()));
-            return;
-        }
-        // Every program has the global cell, born on the layout its declaration
-        // names (object/global_this/fetch_globals.rs): that `%Layout:` birth is
-        // in every R. Its member births stay conditional (RealmPlan keeps only
-        // the reached members), so `%Global%` itself is not a root.
-        if let Some(global) = entries.last("%Global%") {
-            self.names.extend(
-                global
-                    .births()
-                    .filter(|birth| birth.starts_with("%Layout:"))
-                    .map(|birth| birth.to_string()),
-            );
-        }
-        let mut pending: Vec<_> = self.names.iter().cloned().collect();
-        while let Some(name) = pending.pop() {
-            if let Some(entry) = entries.last(name.as_str()) {
-                for birth in entry.births() {
-                    if self.names.insert(birth.to_string()) {
-                        pending.push(birth.to_string());
-                    }
-                }
-            }
-        }
-    }
+pub fn primitive_prototype_member(name: &str) -> bool {
+    PRIMITIVE_KINDS
+        .iter()
+        .any(|kind| member_of_primitive(name, kind, None))
 }
 
 pub fn is_global(name: &str) -> bool {
@@ -129,7 +46,7 @@ pub fn scan(module: &ast::Module, entries: &RealmIndex) -> RealmReach {
         "SuppressedError",
     ] {
         if entries.has(name) {
-            out.names.insert(name.into());
+            out.own(name);
         }
     }
     scan_resolved(module, entries, &mut out);
@@ -230,6 +147,8 @@ fn scan_resolved(module: &ast::Module, entries: &RealmIndex, out: &mut RealmReac
             constants: &constants.0,
             loaders: &loaders,
             called_makers: BTreeSet::new(),
+            write: false,
+            direct_callee: None,
         });
     });
 }
@@ -277,7 +196,7 @@ pub fn scan_lowered(module: &crate::Module, entries: &RealmIndex, out: &mut Real
         if matches!(receiver, Expr::GlobalThisExpr) {
             static_receivers.insert(receiver as *const Expr as usize);
             if entries.has(key) {
-                out.names.insert(key.into());
+                out.own(key);
             }
         }
     };
@@ -508,6 +427,8 @@ struct Scan<'a> {
     constants: &'a BTreeMap<ast::Id, String>,
     loaders: &'a Loaders<'a>,
     called_makers: BTreeSet<swc_common::Span>,
+    write: bool,
+    direct_callee: Option<swc_common::Span>,
 }
 
 impl Scan<'_> {
@@ -517,7 +438,7 @@ impl Scan<'_> {
 
     fn add(&mut self, name: &str) {
         if self.entries.has(name) {
-            self.out.names.insert(name.into());
+            self.out.own(name);
         }
     }
 
@@ -539,7 +460,19 @@ impl Scan<'_> {
     fn native_module(&mut self, name: &str) {
         let name = name.strip_prefix("node:").unwrap_or(name);
         for entry in self.entries.module_rows(name) {
-            self.out.names.insert(entry.name().into());
+            self.out.own(entry.name());
+        }
+    }
+
+    fn module_member(&mut self, module: &str, key: Option<&str>) {
+        let module = module.strip_prefix("node:").unwrap_or(module);
+        let holders: Vec<_> = self
+            .entries
+            .module_rows(module)
+            .map(|row| row.name())
+            .collect();
+        for holder in holders {
+            self.own_property(holder, key, false);
         }
     }
 
@@ -567,6 +500,9 @@ impl Scan<'_> {
         callee: Option<&ast::Expr>,
         args: &[ast::ExprOrSpread],
     ) {
+        if let Some(callee) = callee {
+            self.reflected_call(callee, args);
+        }
         let module_call = match callee {
             None => true,
             Some(callee) => {
@@ -605,7 +541,17 @@ impl Scan<'_> {
         }
         match callee {
             Some(callee) if self.loader_or_maker(callee) => self.loader_parts(callee),
-            Some(callee) => callee.visit_with(self),
+            Some(callee) => {
+                let previous = self.direct_callee;
+                self.keyed_call(callee, args);
+                self.direct_callee = if args.iter().all(|a| a.spread.is_none()) {
+                    member_view(callee).map(|m| m.span)
+                } else {
+                    None
+                };
+                callee.visit_with(self);
+                self.direct_callee = previous;
+            }
             None => {}
         }
         for arg in args {
@@ -637,8 +583,11 @@ impl Scan<'_> {
     }
 
     fn primitive_prototypes(&mut self) {
-        for name in ["String", "Number", "Boolean", "BigInt", "Symbol"] {
+        for name in PRIMITIVE_KINDS {
             self.add(name);
+        }
+        for name in self.entries.prototype_members(&PRIMITIVE_KINDS, None) {
+            self.out.own(name);
         }
     }
 
@@ -661,7 +610,251 @@ impl Scan<'_> {
 }
 
 impl Scan<'_> {
+    fn key(&self, prop: &ast::MemberProp) -> Option<String> {
+        match prop {
+            ast::MemberProp::Ident(i) => Some(i.sym.to_string()),
+            ast::MemberProp::Computed(c) => self.static_key(&c.expr),
+            _ => None,
+        }
+    }
+
+    fn holder(&self, expr: &ast::Expr) -> Option<String> {
+        match crate::patched_builtins::peel(expr) {
+            ast::Expr::Ident(i) if self.free(i) && self.entries.has(&i.sym) => {
+                Some(i.sym.to_string())
+            }
+            ast::Expr::Member(m) => {
+                let holder = self.holder(&m.obj)?;
+                let key = self.key(&m.prop)?;
+                // An accessor's callable is not the value its getter returns.
+                let (_, property) = self.property(&holder, &key, true)?;
+                match property.value {
+                    crate::realm_manifest::RealmOwnValue::Reference(value) => Some(value.into()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn property(
+        &self,
+        holder: &str,
+        key: &str,
+        chain: bool,
+    ) -> Option<(String, crate::realm_manifest::RealmOwn)> {
+        let mut holder = holder.to_owned();
+        let mut seen = BTreeSet::new();
+        while seen.insert(holder.clone()) {
+            let row = self.entries.first(&holder)?;
+            if let Some(property) = row.entry().own.iter().find(|p| !p.symbol && p.key == key) {
+                return Some((holder, *property));
+            }
+            if !chain {
+                break;
+            }
+            holder = row.prototype()?.to_owned();
+        }
+        None
+    }
+
+    fn own_property(&mut self, holder: &str, key: Option<&str>, chain: bool) {
+        if let Some(key) = key {
+            if let Some((_, property)) = self.property(holder, key, chain) {
+                use crate::realm_manifest::RealmOwnValue;
+                match property.value {
+                    RealmOwnValue::Reference(value) => self.out.own(value),
+                    RealmOwnValue::Accessor { get, set } => {
+                        for value in [get, set].into_iter().flatten() {
+                            self.out.own(value);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            let mut next = Some(holder.to_owned());
+            let mut seen = BTreeSet::new();
+            while let Some(holder) = next {
+                if !seen.insert(holder.clone()) {
+                    break;
+                }
+                self.own_all(&holder);
+                next = if chain {
+                    self.entries
+                        .first(&holder)
+                        .and_then(|r| r.prototype())
+                        .map(str::to_owned)
+                } else {
+                    None
+                };
+            }
+        }
+    }
+
+    fn keyed_member(&self, member: &ast::MemberExpr) -> bool {
+        if let Some(name) = self.holder(&ast::Expr::Member(member.clone())) {
+            return self.entries.named(&name).any(|r| r.argument_mode("keyed"));
+        }
+        let Some(key) = self.key(&member.prop) else {
+            return false;
+        };
+        // An unnamed receiver can be Object or Object.prototype. Other
+        // namespaces must be named, so ordinary Map.get is not Reflect.get.
+        self.holder(&member.obj).is_none()
+            && [format!("Object.{key}"), format!("Object.prototype.{key}")]
+                .iter()
+                .any(|name| self.entries.named(name).any(|r| r.argument_mode("keyed")))
+    }
+
+    fn keyed_call(
+        &mut self,
+        callee: &ast::Expr,
+        args: &[ast::ExprOrSpread],
+    ) -> Option<swc_common::Span> {
+        let member = member_view(callee)?;
+        if !self.keyed_member(member) || args.iter().any(|a| a.spread.is_some()) {
+            return None;
+        }
+        let name = self.key(&member.prop)?;
+        let (target, key, chain) = match name.as_str() {
+            "defineProperty" | "getOwnPropertyDescriptor" => {
+                (&args.first()?.expr, args.get(1).map(|a| &*a.expr), false)
+            }
+            "defineProperties" | "getOwnPropertyDescriptors" => (&args.first()?.expr, None, false),
+            "get" => (&args.first()?.expr, args.get(1).map(|a| &*a.expr), true),
+            "__lookupGetter__" | "__lookupSetter__" => {
+                (&member.obj, args.first().map(|a| &*a.expr), true)
+            }
+            _ => return None,
+        };
+        let key = key.and_then(|key| self.static_key(key));
+        if let Some(holder) = self.holder(target) {
+            self.own_property(&holder, key.as_deref(), chain);
+            if chain {
+                self.out.chain_keys.insert(key);
+            }
+        } else if chain {
+            if let Some(key) = key {
+                for value in self.entries.prototype_members(&PRIMITIVE_KINDS, Some(&key)) {
+                    self.out.own(value);
+                }
+                self.out.receiver_keys.insert(key);
+            } else {
+                self.out.any_receiver_key = true;
+                self.primitive_prototypes();
+            }
+        } else if !matches!(
+            crate::patched_builtins::peel(target),
+            ast::Expr::Lit(_) | ast::Expr::Object(_) | ast::Expr::Array(_)
+        ) {
+            if let Some(key) = &key {
+                self.out.receiver_keys.insert(key.clone());
+            }
+            self.out.own_keys.insert(key);
+        }
+        Some(member.span)
+    }
+
+    fn own_all(&mut self, holder: &str) {
+        let mut pending = vec![holder.to_owned()];
+        let mut seen = BTreeSet::new();
+        let mut keyed = false;
+        while let Some(name) = pending.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let Some(row) = self.entries.first(&name) else {
+                continue;
+            };
+            keyed |= row.argument_mode("keyed");
+            if row.argument_mode("formatted") {
+                self.out.keyless_read = Some(KeylessRead::All);
+            }
+            for (_, _, value) in row.members() {
+                self.out.own(value);
+                pending.push(value.to_owned());
+            }
+        }
+        if keyed {
+            self.out.own_keys.insert(None);
+            self.out.any_receiver_key = true;
+            self.primitive_prototypes();
+        }
+    }
+
+    fn reflect(&mut self, target: &ast::Expr, read: KeylessRead) {
+        if let Some(holder) = self.holder(target) {
+            self.own_all(&holder);
+        } else if !matches!(
+            crate::patched_builtins::peel(target),
+            ast::Expr::Lit(_) | ast::Expr::Object(_) | ast::Expr::Array(_)
+        ) {
+            self.out.keyless_read = self.out.keyless_read.max(Some(read));
+        }
+    }
+
+    fn reflected_call(&mut self, callee: &ast::Expr, args: &[ast::ExprOrSpread]) {
+        let name = self.holder(callee);
+        if name.as_deref().is_some_and(|name| {
+            self.entries
+                .named(name)
+                .any(|row| row.argument_mode("formatted"))
+        }) {
+            for arg in args {
+                self.reflect(&arg.expr, KeylessRead::All);
+            }
+        }
+        match name.as_deref() {
+            Some("Object.assign") => {
+                for arg in args.iter().skip(1) {
+                    self.reflect(&arg.expr, KeylessRead::Enumerable);
+                }
+            }
+            Some("Object.keys" | "Object.values" | "Object.entries" | "JSON.stringify") => {
+                if let Some(arg) = args.first() {
+                    self.reflect(&arg.expr, KeylessRead::Enumerable);
+                }
+            }
+            Some(
+                "Reflect.ownKeys"
+                | "Object.getOwnPropertyNames"
+                | "Object.getOwnPropertySymbols"
+                | "Object.getOwnPropertyDescriptors",
+            ) => {
+                if let Some(arg) = args.first() {
+                    self.reflect(&arg.expr, KeylessRead::All);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Scan<'_> {
     fn member(&mut self, member: &ast::MemberExpr, read: bool) {
+        let write = std::mem::take(&mut self.write);
+        if matches!(member.prop, ast::MemberProp::PrivateName(_)) {
+            member.obj.visit_with(self);
+            return;
+        }
+        if self.direct_callee != Some(member.span)
+            && self
+                .holder(&ast::Expr::Member(member.clone()))
+                .is_some_and(|name| {
+                    self.entries
+                        .named(&name)
+                        .any(|r| r.argument_mode("formatted"))
+                })
+        {
+            self.out.keyless_read = Some(KeylessRead::All);
+        }
+        if self.keyed_member(member) && self.direct_callee != Some(member.span) {
+            // The callable escapes; its future target and key are unknown.
+            self.out.own_keys.insert(None);
+            self.out.any_receiver_key = true;
+            self.primitive_prototypes();
+        }
         if self.global(&member.obj) {
             let key = match &member.prop {
                 ast::MemberProp::Ident(i) => Some(i.sym.to_string()),
@@ -693,13 +886,58 @@ impl Scan<'_> {
             self.primitive_prototypes();
             self.loader_parts(&member.obj);
         } else {
-            if !matches!(
-                crate::patched_builtins::peel(&member.obj),
-                ast::Expr::Lit(_) | ast::Expr::Array(_) | ast::Expr::Object(_) | ast::Expr::New(_)
-            ) {
-                self.primitive_prototypes();
+            let key = self.key(&member.prop);
+            if let Some(holder) = self.holder(&member.obj) {
+                self.own_property(&holder, key.as_deref(), true);
+                self.out.chain_keys.insert(key.clone());
+                self.add(&holder);
+                // Scan nested named receivers by key, without escaping them.
+                if let Some(nested) = member_view(&member.obj) {
+                    self.member(nested, true);
+                }
+                if let ast::MemberProp::Computed(c) = &member.prop {
+                    c.expr.visit_with(self);
+                }
+            } else {
+                match key {
+                    Some(key) if write => {
+                        self.out.setter_keys.insert(key);
+                    }
+                    None if write => self.out.any_setter_key = true,
+                    Some(key) => {
+                        self.out.receiver_keys.insert(key);
+                    }
+                    None => self.out.any_receiver_key = true,
+                }
+                let kinds: &[&str] = match crate::patched_builtins::peel(&member.obj) {
+                    ast::Expr::Lit(ast::Lit::Str(_)) => &["String"],
+                    ast::Expr::Lit(ast::Lit::Num(_)) => &["Number"],
+                    ast::Expr::Lit(ast::Lit::Bool(_)) => &["Boolean"],
+                    ast::Expr::Lit(ast::Lit::BigInt(_)) => &["BigInt"],
+                    ast::Expr::Lit(_) | ast::Expr::Array(_) | ast::Expr::Object(_) => &[],
+                    _ => &PRIMITIVE_KINDS,
+                };
+                for name in self
+                    .entries
+                    .prototype_members(kinds, self.key(&member.prop).as_deref())
+                {
+                    if !write || name.ends_with(".<set>") {
+                        self.out.own(name);
+                    }
+                }
+                if !matches!(
+                    crate::patched_builtins::peel(&member.obj),
+                    ast::Expr::Lit(_)
+                        | ast::Expr::Array(_)
+                        | ast::Expr::Object(_)
+                        | ast::Expr::New(_)
+                ) {
+                    for kind in PRIMITIVE_KINDS {
+                        self.add(kind);
+                    }
+                }
+                member.visit_children_with(self);
             }
-            member.visit_children_with(self);
         }
     }
 }
@@ -719,6 +957,7 @@ impl Visit for Scan<'_> {
                     self.out.top.insert(RealmTop::GlobalObjectValue);
                 } else {
                     self.add(&i.sym);
+                    self.own_all(&i.sym);
                 }
             }
         }
@@ -727,6 +966,18 @@ impl Visit for Scan<'_> {
 
     fn visit_member_expr(&mut self, member: &ast::MemberExpr) {
         self.member(member, true);
+    }
+
+    fn visit_assign_expr(&mut self, assign: &ast::AssignExpr) {
+        self.write = assign.op == ast::AssignOp::Assign;
+        assign.left.visit_with(self);
+        self.write = false;
+        assign.right.visit_with(self);
+    }
+
+    fn visit_for_in_stmt(&mut self, stmt: &ast::ForInStmt) {
+        self.reflect(&stmt.right, KeylessRead::Enumerable);
+        stmt.visit_children_with(self);
     }
 
     fn visit_simple_assign_target(&mut self, target: &ast::SimpleAssignTarget) {
@@ -774,7 +1025,25 @@ impl Visit for Scan<'_> {
 
     fn visit_import_decl(&mut self, import: &ast::ImportDecl) {
         if !import.type_only {
-            self.native_module(&import.src.value.to_string_lossy());
+            let source = import.src.value.to_string_lossy();
+            self.native_module(&source);
+            for specifier in &import.specifiers {
+                let key = match specifier {
+                    ast::ImportSpecifier::Named(named) if !named.is_type_only => {
+                        match &named.imported {
+                            Some(ast::ModuleExportName::Ident(i)) => Some(i.sym.to_string()),
+                            Some(ast::ModuleExportName::Str(s)) => {
+                                Some(s.value.to_string_lossy().into_owned())
+                            }
+                            None => Some(named.local.sym.to_string()),
+                        }
+                    }
+                    ast::ImportSpecifier::Default(_) => Some("default".into()),
+                    ast::ImportSpecifier::Namespace(_) => None,
+                    _ => continue,
+                };
+                self.module_member(&source, key.as_deref());
+            }
         }
         import.visit_children_with(self);
     }
@@ -782,7 +1051,23 @@ impl Visit for Scan<'_> {
     fn visit_named_export(&mut self, export: &ast::NamedExport) {
         if !export.type_only {
             if let Some(source) = &export.src {
-                self.native_module(&source.value.to_string_lossy());
+                let source = source.value.to_string_lossy();
+                self.native_module(&source);
+                for specifier in &export.specifiers {
+                    let key = match specifier {
+                        ast::ExportSpecifier::Named(named) if !named.is_type_only => {
+                            match &named.orig {
+                                ast::ModuleExportName::Ident(i) => Some(i.sym.to_string()),
+                                ast::ModuleExportName::Str(s) => {
+                                    Some(s.value.to_string_lossy().into_owned())
+                                }
+                            }
+                        }
+                        ast::ExportSpecifier::Namespace(_) => None,
+                        _ => continue,
+                    };
+                    self.module_member(&source, key.as_deref());
+                }
             } else if export.specifiers.iter().any(|s| {
                 matches!(s, ast::ExportSpecifier::Named(ast::ExportNamedSpecifier {
                     orig: ast::ModuleExportName::Ident(i), ..
@@ -797,7 +1082,9 @@ impl Visit for Scan<'_> {
 
     fn visit_export_all(&mut self, export: &ast::ExportAll) {
         if !export.type_only {
-            self.native_module(&export.src.value.to_string_lossy());
+            let source = export.src.value.to_string_lossy();
+            self.native_module(&source);
+            self.module_member(&source, None);
         }
     }
 
@@ -885,6 +1172,11 @@ impl Visit for Scan<'_> {
         stmt.visit_children_with(self);
     }
 
+    fn visit_spread_element(&mut self, spread: &ast::SpreadElement) {
+        self.reflect(&spread.expr, KeylessRead::Enumerable);
+        spread.visit_children_with(self);
+    }
+
     fn visit_expr_or_spread(&mut self, expr: &ast::ExprOrSpread) {
         if expr.spread.is_some() {
             self.iterables(&expr.expr);
@@ -923,6 +1215,30 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_object_pat(&mut self, pat: &ast::ObjectPat) {
+        for prop in &pat.props {
+            match prop {
+                ast::ObjectPatProp::KeyValue(kv) => {
+                    let key = match &kv.key {
+                        ast::PropName::Ident(i) => Some(i.sym.to_string()),
+                        ast::PropName::Str(s) => Some(s.value.to_string_lossy().into_owned()),
+                        ast::PropName::Computed(c) => self.static_key(&c.expr),
+                        _ => None,
+                    };
+                    match key {
+                        Some(key) => {
+                            self.out.receiver_keys.insert(key);
+                        }
+                        None => self.out.any_receiver_key = true,
+                    }
+                }
+                ast::ObjectPatProp::Assign(p) => {
+                    self.out.receiver_keys.insert(p.key.sym.to_string());
+                }
+                ast::ObjectPatProp::Rest(_) => {
+                    self.out.keyless_read = self.out.keyless_read.max(Some(KeylessRead::Enumerable))
+                }
+            }
+        }
         self.primitive_prototypes();
         pat.visit_children_with(self);
     }
@@ -952,3 +1268,7 @@ impl Visit for Scan<'_> {
 #[cfg(test)]
 #[path = "realm_reach_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "realm_reach_partition_tests.rs"]
+mod partition_tests;

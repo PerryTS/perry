@@ -48,6 +48,7 @@ pub(super) struct Facts {
     pub capture_number: Option<String>,
     pub capture_bindings: Option<Vec<String>>,
     pub births: Vec<String>,
+    pub arguments: Option<String>,
     pub provider: bool,
     pub bare_closure: bool,
     pub allocated_closure: bool,
@@ -124,6 +125,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         capture_number: None,
         capture_bindings: None,
         births: Vec::new(),
+        arguments: None,
         provider: false,
         bare_closure: false,
         allocated_closure: false,
@@ -339,6 +341,9 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                     facts.attrs = Some(attrs);
                 }
             }
+            "arguments" if clause.len() == 3 && matches!(clause[2].text, "keyed" | "formatted") => {
+                facts.arguments = Some(format!("{}_arguments", clause[2].text));
+            }
             "value" => facts.value = Some(constant(&clause[2..])?),
             "throws" => facts.throws = Some(super::throws::operands(&clause[2..])?),
             "effects" => facts.effects = Some(super::effects::parse(&clause[2..])?),
@@ -475,7 +480,27 @@ fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
     Ok(sealed)
 }
 
+fn with_arguments(mut declaration: Value, arguments: Option<String>) -> Value {
+    if let Some(arguments) = arguments {
+        let Value::Object(map) = &mut declaration else {
+            unreachable!()
+        };
+        map.insert("flags".into(), Value::Array(vec![string(arguments)]));
+    }
+    declaration
+}
+
 pub(super) fn logical(
+    mut facts: Facts,
+    source: &str,
+    native_abi: &super::native::Abi,
+) -> Result<Value, String> {
+    let arguments = facts.arguments.take();
+    logical_birth(facts, source, native_abi)
+        .map(|declaration| with_arguments(declaration, arguments))
+}
+
+fn logical_birth(
     mut facts: Facts,
     source: &str,
     native_abi: &super::native::Abi,
@@ -659,6 +684,7 @@ pub(super) fn callable(
     source_symbol: String,
     source: &str,
 ) -> Result<Value, String> {
+    let arguments = facts.arguments.take();
     let effects = facts.effects.take();
     let throws = facts.throws.take();
     if facts.ansi_colors
@@ -1017,13 +1043,39 @@ pub(super) fn callable(
             string("crate::object::js_new_function_construct"),
         );
     }
-    super::birth::extend_callable(Value::Object(declaration), members)
+    super::birth::extend_callable(
+        with_arguments(Value::Object(declaration), arguments),
+        members,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::tokens;
     use super::*;
+    #[test]
+    fn argument_modes_are_source_owned_facts() {
+        for mode in ["keyed", "formatted"] {
+            let source = format!("Example.member, arguments = {mode}");
+            let facts = parse(&tokens(&source).unwrap()).unwrap();
+            assert_eq!(
+                facts.arguments.as_deref(),
+                Some(format!("{mode}_arguments").as_str())
+            );
+        }
+        assert!(parse(&tokens("Example.member, arguments = magic").unwrap()).is_err());
+    }
+    #[test]
+    fn native_bound_methods_keep_their_argument_mode() {
+        let facts = parse(&tokens(r#"console.log, provider = bound_method, receiver = "%NativeNamespace:console%", arguments = formatted"#).unwrap()).unwrap();
+        let abi = super::super::native::runtime_abi().unwrap();
+        let row = logical(facts, "", &abi).unwrap();
+        assert_eq!(
+            row.get("flags").and_then(Value::array).unwrap(),
+            &[string("formatted_arguments")]
+        );
+    }
+
     #[test]
     fn integrity_is_only_frozen() {
         assert!(parse(&tokens("Example, integrity = sealed").unwrap()).is_err());

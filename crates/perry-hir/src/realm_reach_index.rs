@@ -47,6 +47,31 @@ impl<'a> Row<'a> {
                 .iter()
                 .any(|b| b.starts_with("%Layout:"))
     }
+    pub fn argument_mode(self, mode: &str) -> bool {
+        self.0
+            .facts
+            .get("flags")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .any(|flag| {
+                flag.as_str()
+                    .is_some_and(|value| value.strip_suffix("_arguments") == Some(mode))
+            })
+    }
+    pub fn runtime_spelled_key(self, key: &str) -> bool {
+        self.0
+            .facts
+            .get("flags")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .any(|flag| {
+                flag.as_str()
+                    .and_then(|v| v.strip_prefix("runtime_key:"))
+                    .is_some_and(|v| v == key)
+            })
+    }
     pub fn name(self) -> &'static str {
         self.0.entry.name
     }
@@ -122,7 +147,10 @@ impl RealmIndex {
                 .into_iter()
                 .flatten()
             {
-                if value.get("kind").and_then(|v| v.as_str()) == Some("reference") {
+                if matches!(
+                    value.get("kind").and_then(|v| v.as_str()),
+                    Some("reference" | "raw_reference")
+                ) {
                     if let Some(v) = value.get("value").and_then(|v| v.as_str()) {
                         structure.insert(v.into());
                     }

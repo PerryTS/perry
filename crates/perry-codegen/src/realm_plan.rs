@@ -328,6 +328,36 @@ mod tests {
     }
 
     #[test]
+    fn reflection_fixture_scans_own_the_values_node_reads() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        for (source, names) in [
+            ("const B: any = Buffer; console.log(typeof B.alloc, typeof B.prototype.readUInt8);", &["Buffer.alloc", "Buffer.prototype.readUInt8"][..]),
+            ("console.log(Object.getOwnPropertyNames(Buffer.prototype).length, Object.keys(Error).length);", &["Buffer.prototype.readUInt8", "Error.captureStackTrace"][..]),
+            ("for (const k in Promise) console.log(k); console.log(JSON.stringify(Object.getOwnPropertyDescriptors(Set)));", &["Promise.resolve", "Set.prototype.add"][..]),
+            ("\"x\".constructor.fromCharCode(65);", &["String.fromCharCode"][..]),
+        ] {
+            let module = perry_parser::parse_typescript(source, "realm.ts").unwrap();
+            let reach = perry_hir::realm_reach::scan(&module, &index);
+            assert!(!reach.is_full(), "fixture unexpectedly selected top: {source}");
+            let mut reclosed = reach.clone();
+            reclosed.close(&index);
+            assert_eq!(reclosed, reach, "reclose changed {source}");
+            for name in names {
+                assert!(reach.whole.contains(*name), "{source}: {name}: {reach:?}");
+            }
+        }
+        let formatted = reach("function show(value) { console.log(value); }");
+        assert_eq!(
+            formatted.keyless_read,
+            Some(perry_hir::realm_reach::KeylessRead::All)
+        );
+        assert!(index
+            .first("%ArrayIteratorPrototype%")
+            .unwrap()
+            .runtime_spelled_key("next"));
+    }
+
+    #[test]
     fn hello_has_only_reached_cells_and_the_filtered_global() {
         let reach = reach("console.log('hi');");
         assert!(!reach.is_full());
