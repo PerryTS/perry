@@ -70,10 +70,11 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         ("arg" | "rest" | "returned", Some(_)) => {
             (tagged(name, index(name, inner)?), Vec::new())
         }
-        ("elems", Some(inner)) => {
+        (step @ ("elems" | "iterated" | "values"), Some(inner)) => {
             let Value::Object(mut base) = slot(inner)? else { unreachable!() };
             let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
-            steps.push(Value::String("elems".into()));
+            let tag = if step == "values" { "own_values" } else { step };
+            steps.push(Value::String(tag.into()));
             (base.remove("root").unwrap(), steps)
         }
         (step @ ("field" | "islot"), Some(inner)) => {
@@ -96,7 +97,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), field(slot, key), islot(slot, name))",
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), iterated(slot), values(slot), field(slot, key), islot(slot, name))",
                 info::text(ts)
             ))
         }

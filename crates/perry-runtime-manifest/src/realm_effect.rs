@@ -35,6 +35,16 @@ pub enum RealmSlotRoot {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmSlotStep {
     Elems,
+    /// The values iterating the slot yields (`iterated(s)`): GetIterator,
+    /// then each IteratorStepValue (ECMA-262 7.4.3, 7.4.10), as a WebIDL
+    /// `sequence<T>` conversion reads them; the iteration protocol calls
+    /// are this step's.
+    Iterated,
+    /// The values of the slot's own enumerable properties (`values(s)`):
+    /// EnumerableOwnProperties (ECMA-262 7.3.23), as a WebIDL
+    /// `record<K, V>` conversion reads them; an inherited member is never
+    /// among them.
+    OwnValues,
     Field(Cow<'static, str>),
     Internal(Cow<'static, str>),
 }
@@ -429,6 +439,8 @@ pub mod emit {
         };
         let steps = list(&s.steps, |step| match step {
             RealmSlotStep::Elems => format!("{p}RealmSlotStep::Elems"),
+            RealmSlotStep::Iterated => format!("{p}RealmSlotStep::Iterated"),
+            RealmSlotStep::OwnValues => format!("{p}RealmSlotStep::OwnValues"),
             RealmSlotStep::Field(k) => {
                 format!("{p}RealmSlotStep::Field(::std::borrow::Cow::Borrowed({k:?}))")
             }

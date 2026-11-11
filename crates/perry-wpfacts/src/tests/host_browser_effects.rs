@@ -250,3 +250,29 @@ fn q1_undeclared_accessor_reads_its_result_not_a_function() {
         pf.dump_text()
     );
 }
+
+/// B4 (skin: `Headers coerces its elems(arg(0))` read every key of the init
+/// through its chain, so Object.prototype's and String.prototype's methods
+/// were coerced): Fetch "fill a Headers object" converts a HeadersInit as
+/// WebIDL `sequence<sequence<ByteString>>` (iterate the outer, iterate each
+/// pair, ToString each item) or `record<ByteString, ByteString>` (own
+/// enumerable keys, ToString each value). The record's inherited method
+/// and the pair item objects stay unescaped; only their `toString` runs.
+#[test]
+fn b4_headers_init_reads_pairs_and_own_values_only() {
+    let pf = facts(
+        r#"
+        class V { s = "v"; toString() { return this.s; } }
+        class R { a = new V(); m() { return this.a; } }
+        const r = new R();
+        const pairs = [["x-a", new V()]];
+        const h1 = new Headers(r as any);
+        const h2 = new Headers(pairs as any);
+        console.log(h1.get("a"), h2.get("x-a"), r.m().s);
+        export const keep = 1;
+    "#,
+    );
+    show(&pf, &["s", "a", "get"], &["R", "V"]);
+    assert!(!esc(&pf, "R"), "{}", pf.dump_text());
+    assert!(!esc(&pf, "V"), "{}", pf.dump_text());
+}

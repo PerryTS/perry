@@ -282,7 +282,7 @@ pub(super) fn declared_setter(proto: &str, key: &str) -> Option<&'static RealmEn
                     && dst
                         .steps
                         .iter()
-                        .all(|st| !matches!(st, RealmSlotStep::Elems))
+                        .all(|st| matches!(st, RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)))
             }
             RealmEffect::Returns(RealmOperand::Prim(_)) => true,
             _ => false,
@@ -521,6 +521,21 @@ impl Run {
                 self.walk(m, n, rest)
             }
             (r, []) => self.root(m, r),
+            // The values iterating a slot yields, or its own enumerable
+            // properties' values: taken from the slot the step is in.
+            (r, [inner @ .., st @ (RealmSlotStep::Iterated | RealmSlotStep::OwnValues)]) => {
+                let of = RealmSlot {
+                    root: r,
+                    steps: Cow::Owned(inner.to_vec()),
+                };
+                let Some(n) = self.node(m, &of) else {
+                    return Vals::default();
+                };
+                Vals {
+                    nodes: vec![self.value_step(m, n, st)],
+                    spread: vec![],
+                }
+            }
             // The receiver's elements: its element node.
             (RealmSlotRoot::This, [RealmSlotStep::Elems]) => Vals {
                 nodes: vec![m.field_any(
@@ -563,6 +578,9 @@ impl Run {
                         nodes: vec![],
                         spread: vec![n],
                     },
+                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+                        unreachable!("a value step is taken above")
+                    }
                     st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
                         let key = step_key(m, st);
                         let dst = m.node_l("native-get");
@@ -626,6 +644,10 @@ impl Run {
                     nodes: vec![],
                     spread: vec![base],
                 },
+                RealmSlotStep::Iterated | RealmSlotStep::OwnValues => Vals {
+                    nodes: vec![self.value_step(m, base, st)],
+                    spread: vec![],
+                },
                 st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
                     let key = step_key(m, st);
                     let dst = m.node_l("native-get");
@@ -638,6 +660,22 @@ impl Run {
             };
         }
         cur
+    }
+
+    /// The values step `st` takes from node `n`: what iterating it yields
+    /// (`collections::iterate`: the array-like elements and the protocol's
+    /// `next().value`), or the values of its own enumerable properties
+    /// (`Cons::OwnValues`: no inherited member).
+    fn value_step(&mut self, m: &mut Model, n: NodeId, st: &RealmSlotStep) -> NodeId {
+        match st {
+            RealmSlotStep::Iterated => super::collections::iterate(m, self.call, n),
+            RealmSlotStep::OwnValues => {
+                let dst = m.node_l("native-own-values");
+                m.cons(n, Cons::OwnValues { dst });
+                dst
+            }
+            _ => unreachable!("value_step takes a value step"),
+        }
     }
 
     /// The slot's values as one node (`None`: the slot holds nothing, an
@@ -936,7 +974,9 @@ fn step_key(m: &mut Model, st: &RealmSlotStep) -> Key {
     match st {
         RealmSlotStep::Field(k) => Key::Named(m.atom(k)),
         RealmSlotStep::Internal(k) => Key::Named(internal_atom(m, k)),
-        RealmSlotStep::Elems => unreachable!("an elements step has no key"),
+        RealmSlotStep::Elems | RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+            unreachable!("an elements or value step has no key")
+        }
     }
 }
 
@@ -1151,6 +1191,8 @@ fn slot_text(s: &RealmSlot) -> String {
     for st in s.steps.iter() {
         out = match st {
             RealmSlotStep::Elems => format!("elems({out})"),
+            RealmSlotStep::Iterated => format!("iterated({out})"),
+            RealmSlotStep::OwnValues => format!("values({out})"),
             RealmSlotStep::Field(k) => format!("field({out}, {k})"),
             RealmSlotStep::Internal(k) => format!("islot({out}, {k})"),
         };
