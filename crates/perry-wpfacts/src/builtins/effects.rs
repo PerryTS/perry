@@ -913,7 +913,7 @@ impl Run {
 /// The arguments spread argument `s` supplies: its elements (an element
 /// read, as a program callee's parameters read it), never a member a
 /// computed key could name (an array's `indexOf`, its `@@iterator`).
-fn spread_elems(m: &mut Model, s: NodeId) -> NodeId {
+pub(crate) fn spread_elems(m: &mut Model, s: NodeId) -> NodeId {
     let n = m.node_l("native-spread-elems");
     let key = m.elem_key();
     m.cons(s, Cons::Load { key, dst: n });

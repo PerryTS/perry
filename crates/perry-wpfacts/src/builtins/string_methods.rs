@@ -153,9 +153,23 @@ fn read_match(m: &mut Model, rec: NodeId) {
 /// A string method of a primitive receiver, by its algorithm. `false`: no
 /// rule (the method keeps the generic summary).
 pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
-    let c = m.calls[call as usize].clone();
+    let mut c = m.calls[call as usize].clone();
+    // A spread argument (13.3.8.1 ArgumentListEvaluation): each element
+    // its iterator yields is one more argument. The count is unknown, so
+    // every parameter position may receive any direct argument or any
+    // element, and each position's rule below applies to all of them. No
+    // rule here reads past the second position by index (`localeCompare`'s
+    // further ones are `skip(1)`), so two positions of the union are all.
     if !c.spread.is_empty() {
-        return false;
+        let u = m.node_l("string-method-spread-args");
+        for &a in &c.args {
+            m.edge(a, u);
+        }
+        for s in c.spread.clone() {
+            let e = super::effects::spread_elems(m, s);
+            m.edge(e, u);
+        }
+        c.args = vec![u, u];
     }
     let arg0 = c.args.first().copied();
     let s = str_node(m);
