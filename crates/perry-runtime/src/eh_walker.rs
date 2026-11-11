@@ -769,6 +769,10 @@ pub(crate) struct Walker {
     sites: std::collections::HashMap<u64, Site, crate::fast_hash::AHashState>,
     /// `image_generation()` when `images` was enumerated.
     generation: ImageGeneration,
+    /// Text range of the image that holds this code. It is never unloaded
+    /// while the walker can run (the walker would go with it), so a pc inside
+    /// it needs no loader-generation check; `(0, 0)` when no image covers it.
+    own_text: (u64, u64),
 }
 
 static WALKER: OnceLock<Option<Mutex<Walker>>> = OnceLock::new();
@@ -853,6 +857,15 @@ pub(crate) fn with_walker_locked<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Lock the walker for a frame walk. The walk reads frames only through
+/// [`Walker::site`], which checks the loader generation before it reads a
+/// call site outside the walker's own image; frames inside it (compiled code
+/// and the runtime, in a Perry executable) cannot belong to an unloaded
+/// object, so a throw through them reads no loader state.
+fn locked_walker_for_walk() -> Option<std::sync::MutexGuard<'static, Walker>> {
+    walker()?.lock().ok()
+}
+
 impl Walker {
     fn build() -> Option<Walker> {
         // Read before enumerating: an object that arrives mid-build leaves
@@ -901,7 +914,13 @@ impl Walker {
         if images.is_empty() {
             return None;
         }
+        let own = Walker::build as usize as u64;
+        let own_text = images
+            .iter()
+            .find(|i| own >= i.image.text_addr && own < i.image.text_end)
+            .map_or((0, 0), |i| (i.image.text_addr, i.image.text_end));
         Some(Walker {
+            own_text,
             images,
             sites: std::collections::HashMap::default(),
             generation,
@@ -918,6 +937,7 @@ impl Walker {
             None => {
                 self.images.clear();
                 self.sites.clear();
+                self.own_text = (0, 0);
                 self.generation = image_generation();
             }
         }
@@ -932,7 +952,13 @@ impl Walker {
     }
 
     /// Decode (or fetch cached) everything known about call site `site`.
+    /// A site outside the walker's own image may belong to an object loaded
+    /// or unloaded since the index was built: the index is made current
+    /// first, so neither a stale site nor an unloaded range is read.
     fn site(&mut self, site: u64) -> &Site {
+        if !(site >= self.own_text.0 && site < self.own_text.1) {
+            self.refresh();
+        }
         let images = &self.images;
         self.sites.entry(site).or_insert_with(|| {
             match images
@@ -1189,7 +1215,7 @@ fn step_with(row: &StepRow, regs: &WalkRegs, stack_low: u64) -> Option<WalkRegs>
 #[inline(never)]
 pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
     let mut regs = capture_here();
-    let mut guard = locked_walker()?;
+    let mut guard = locked_walker_for_walk()?;
     let stack_low = regs.regs[SP];
     let mut pcs = Vec::with_capacity(max.min(64));
     while pcs.len() < max {
@@ -1436,7 +1462,7 @@ struct Landing {
 /// holding it would strand the guard and deadlock every later throw.
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 fn find_handler(start: WalkRegs) -> Option<Landing> {
-    let mut guard = locked_walker()?;
+    let mut guard = locked_walker_for_walk()?;
     let handoff = crate::exception::worker_base_handoff_pending();
     let stack_low = start.regs[SP];
     let mut regs = start;
@@ -1961,6 +1987,18 @@ mod tests {
             opened.expect("one of the candidate system libraries must be loadable and indexable");
 
         let before = image_generation();
+        // A walk reads loader state only at a site outside the walker's own
+        // image: a site of its own code leaves the index as it was, a site of
+        // the opened object makes it current before it is read.
+        {
+            let mut guard = locked_walker_for_walk().expect("walker");
+            let stale = guard.generation;
+            let _ = guard.site(Walker::build as usize as u64);
+            assert_eq!(guard.generation, stale, "a site in the walker's own image read the loader state");
+            let _ = guard.site(addr);
+            assert_eq!(guard.generation, before, "a site of the opened object did not refresh the index");
+            assert!(guard.image_for(addr).is_some(), "opened object {addr:#x} not indexed by the walk");
+        }
         let (generation, indexed) = {
             let guard = locked_walker().expect("walker");
             (guard.generation, guard.image_for(addr).is_some())
@@ -1974,6 +2012,12 @@ mod tests {
         assert_eq!(unsafe { libc::dlclose(handle) }, 0);
         let after = image_generation();
         assert_ne!(after, before, "dlclose did not change the loader counters");
+        {
+            let mut guard = locked_walker_for_walk().expect("walker");
+            let _ = guard.site(addr);
+            assert_eq!(guard.generation, after, "a site in the closed range did not refresh the index");
+            assert!(guard.image_for(addr).is_none(), "closed range {addr:#x} still indexed by the walk");
+        }
         let (generation, indexed) = {
             let guard = locked_walker().expect("walker");
             (guard.generation, guard.image_for(addr).is_some())
