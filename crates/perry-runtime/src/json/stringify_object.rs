@@ -564,6 +564,25 @@ unsafe fn stringify_object_walk(
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0
             || (crate::object::object_has_descriptors(ptr as usize));
+    // An ordinary object keeps every attribute in its keys' entries, and its
+    // shape summary is the OR of them: without a non-enumerable or accessor
+    // entry no own key can be skipped or read through a getter, so the
+    // by-bytes descriptor lookups below are not asked. The summary is re-read
+    // per key: user code (a getter, a member's `toJSON`) can reshape `obj`.
+    let attrs_in_keys = filter_non_enum
+        && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            crate::object::key_attrs::attrs_live_in_keys(obj as usize)
+        });
+    let key_attr_summary = || -> u8 {
+        if attrs_in_keys {
+            obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                crate::object::key_attrs::object_summary(obj)
+            })
+        } else {
+            crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
+                | crate::object::key_attrs::SUMMARY_ACCESSOR
+        }
+    };
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
@@ -594,9 +613,10 @@ unsafe fn stringify_object_walk(
         {
             continue;
         }
+        let attr_summary = if filter_non_enum { key_attr_summary() } else { 0 };
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
-        if filter_non_enum
+        if attr_summary & crate::object::key_attrs::SUMMARY_NON_ENUMERABLE != 0
             && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
                 json_key_non_enumerable(obj, f64::from_bits(key_bits))
             })
@@ -610,7 +630,7 @@ unsafe fn stringify_object_walk(
         // (`Object.defineProperty(o, k, { get })`). Gated on the descriptor flag.
         // The getter is USER CODE: every pointer below is re-derived from the
         // rooted handle after it returns.
-        if filter_non_enum {
+        if attr_summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0 {
             *global_proof = false;
             let getter_value = obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
                 crate::object::json_object_getter_value(obj, f64::from_bits(key_bits))

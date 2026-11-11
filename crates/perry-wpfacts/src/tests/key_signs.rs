@@ -76,7 +76,7 @@ fn a_key_that_is_no_int32_has_no_sign() {
     // An integer past the int32 range.
     let src = format!(
         "{TABLE}export function f(i: number): number {{ return K[i >>> 0] ?? 0; }}\n\
-         console.log(f(3));"
+         console.log(f(3) + f(-1));"
     );
     assert_eq!(sign_at(&src, "K[i >>> 0]", FactsConfig::default()), None);
     // A Number with no interval inside int32.
