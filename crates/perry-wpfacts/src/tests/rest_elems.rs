@@ -110,3 +110,43 @@ console.log(a[3] | 0);
 "#;
     assert!(arr_lines(src).is_empty(), "{:#?}", arr_lines(src));
 }
+
+/// I32 at rest B2: a class field's `Arr` representation carries the storage
+/// kind of the Arrays it holds (`rest_elems::mark_fields`), which the
+/// derive could not know before the admission.
+#[test]
+fn a_field_holding_an_at_rest_array_has_an_at_rest_rep() {
+    let field = |extra: &str| {
+        let src = format!(
+            r#"
+class Grid {{
+  cells: number[] = new Array(16).fill(0);
+  at(i: number): number {{ return this.cells[i & 15] | 0; }}
+  put(i: number, v: number): void {{ this.cells[i & 15] = v & 255; }}
+}}
+const g = new Grid();
+let s = 0;
+for (let i = 0; i < 64; i++) {{ g.put(i, i * 5); s = (s + g.at(i + 1)) | 0; }}
+{extra}
+console.log(s);
+"#
+        );
+        let pf = facts(&src);
+        let f = tmpl(&pf, "Grid")
+            .fields
+            .iter()
+            .find(|f| f.key == "cells")
+            .expect("cells")
+            .rep;
+        match f {
+            crate::Rep::Arr(r) => (r.at_rest, arr_line(&src)),
+            other => panic!("cells is {other:?}"),
+        }
+    };
+    let (rest, line) = field("");
+    assert!(rest && line.ends_with(" at_rest=1"), "{line}");
+    // Negative control: a generic reader keeps the Array double, and the
+    // field's representation says so.
+    let (rest, line) = field("console.log(JSON.stringify(g.cells));");
+    assert!(!rest && line.contains(" at_rest=0 "), "{line}");
+}

@@ -336,6 +336,7 @@ pub(super) fn compile_module_init(
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
         rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
