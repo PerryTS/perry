@@ -152,6 +152,38 @@ impl<'a> Gen<'a> {
         self.store(fx, recv, ek, v, what.to_string(), None, false);
     }
 
+    /// The fill push `e` (`push_fills`) of fill `fill`: the element store
+    /// of `v` into what `recv` holds, at a site marked as that fill's.
+    pub(super) fn fill_push(&mut self, fx: &Fx, e: &Expr, recv: NodeId, v: NodeId, fill: u32) {
+        let ek = self.m.elem_key();
+        let site = self.store_site(fx.module, fx.f, "push".to_string(), None, false);
+        self.m.push_fill_sites.insert(site, fill);
+        self.m.cons(
+            recv,
+            Cons::Store {
+                key: ek,
+                src: v,
+                site,
+            },
+        );
+        let offset = match e {
+            Expr::NativeMethodCall {
+                object: Some(object),
+                ..
+            } => match object.as_ref() {
+                Expr::PropertyGet { byte_offset, .. } => *byte_offset,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        self.m.push_fill_pushes.push(crate::push_fills::FillPush {
+            module: fx.module,
+            offset,
+            recv,
+            fill,
+        });
+    }
+
     /// An operation without a rule of its own runs code on `n` once ⊤ is
     /// there (DESIGN SEEDE section 8): ⊤ into the current throw region.
     pub(crate) fn raise_on(&mut self, n: NodeId) {

@@ -214,3 +214,174 @@ console.log(s, a.length);
         "{line}"
     );
 }
+
+/// A class whose `tab` field is born `[]` and filled by pushes in the
+/// constructor: `ctor` is the constructor body, `extra` class members, and
+/// `after` module code.
+fn pushed(init: &str, ctor: &str, extra: &str, after: &str) -> String {
+    format!(
+        r#"
+class T {{
+  private tab: number[] = {init};
+  private h = 0;
+  constructor() {{
+    let seed = 0x6d2b79f5;
+    {ctor}
+  }}
+  mix(k: number): void {{ this.h ^= this.tab[k & 15] ?? 0; }}
+  get(): number {{ return this.h; }}
+  {extra}
+}}
+const t = new T();
+for (let i = 0; i < 100; i++) t.mix(i);
+{after}
+console.log(t.get());
+"#
+    )
+}
+
+const FILL: &str =
+    "for (let i = 0; i < 4 * 4; i++) { seed ^= seed << 13; seed ^= seed >>> 17; this.tab.push(seed); }";
+
+/// Push-filled births (`push_fills`): an Array born empty by a field
+/// initializer and filled by a counted loop of pushes in the constructor is
+/// at rest, with its final length as its floor, and its fill pushes are
+/// exported with that length.
+#[test]
+fn a_push_filled_field_array_is_at_rest_with_its_final_length() {
+    for init in ["[]", "new Array()"] {
+        let src = pushed(init, FILL, "", "");
+        let line = arr_line(&src);
+        assert!(line.ends_with(" at_rest=1 push_fill=16"), "{init}: {line}");
+        let pf = facts(&src);
+        let mb = pf.bindings_for("t.ts").expect("module bindings");
+        let at = |text: &str| src.find(text).expect("site in source") as u32 + 1;
+        assert_eq!(mb.rest_pushes, vec![(at("this.tab.push(seed)"), 16)]);
+        assert_eq!(mb.rest_reads, vec![(at("this.tab[k & 15]"), 16)]);
+        assert!(mb.rest_births.is_empty(), "{:?}", mb.rest_births);
+    }
+    // Straight-line pushes and two loops add up.
+    let src = pushed(
+        "[]",
+        "this.tab.push(1); for (let i = 2; i <= 9; i++) { this.tab.push(i); } \
+         for (let j = 0; j < 7; j++) { this.tab.push(seed + j | 0); }",
+        "",
+        "",
+    );
+    let line = arr_line(&src);
+    assert!(line.ends_with(" at_rest=1 push_fill=16"), "{line}");
+}
+
+/// Negative controls of the fill phase: every one keeps the Array an
+/// ordinary one (no fill, so no `# rest arr` line, or a refusal).
+#[test]
+fn a_fill_that_is_not_proven_keeps_the_array_ordinary() {
+    let none = |ctor: &str, extra: &str, after: &str, what: &str| {
+        let ls = arr_lines(&pushed("[]", ctor, extra, after));
+        assert!(
+            ls.iter().all(|l| !l.contains(" at_rest=1")),
+            "{what}: {ls:#?}"
+        );
+        let pf = facts(&pushed("[]", ctor, extra, after));
+        let mb = pf.bindings_for("t.ts").expect("module bindings");
+        assert!(mb.rest_pushes.is_empty(), "{what}: {:?}", mb.rest_pushes);
+    };
+    // A push after the fill (a method appends).
+    none(
+        FILL,
+        "add(v: number): void { this.tab.push(v | 0); }",
+        "t.add(3);",
+        "late push",
+    );
+    // A value that is no int32.
+    none(
+        "for (let i = 0; i < 16; i++) { this.tab.push(i / 3); }",
+        "",
+        "",
+        "not int32",
+    );
+    // A generic reader.
+    for (extra, after) in [
+        (
+            "dump(): string { return JSON.stringify(this.tab); }",
+            "console.log(t.dump());",
+        ),
+        (
+            "keys(): string[] { return Object.keys(this.tab); }",
+            "console.log(t.keys().length);",
+        ),
+        ("show(): void { console.log(this.tab); }", "t.show();"),
+    ] {
+        none(FILL, extra, after, extra);
+    }
+    // A trip count that is no constant.
+    none(
+        "const n = seed & 15; for (let i = 0; i < n; i++) { this.tab.push(i); }",
+        "",
+        "",
+        "unbounded loop",
+    );
+    // A conditional push, a `break`, and a counter the body writes.
+    none(
+        "for (let i = 0; i < 16; i++) { if (i !== 5) this.tab.push(i); }",
+        "",
+        "",
+        "conditional push",
+    );
+    none(
+        "for (let i = 0; i < 16; i++) { if (seed === i) break; this.tab.push(i); }",
+        "",
+        "",
+        "break",
+    );
+    none(
+        "for (let i = 0; i < 16; i++) { this.tab.push(i); i += seed & 1; }",
+        "",
+        "",
+        "written counter",
+    );
+    // A read inside the fill, and a leak of `this` before it.
+    none(
+        "for (let i = 0; i < 16; i++) { this.tab.push(i); seed ^= this.tab.length; }",
+        "",
+        "",
+        "read in the fill",
+    );
+    none(
+        &format!("this.get(); {FILL}"),
+        "",
+        "",
+        "method call before the fill",
+    );
+    none(
+        &format!("if (seed === 1) return; {FILL}"),
+        "",
+        "",
+        "early return",
+    );
+}
+
+/// The length and the floor of a push-filled Array hold for a double Array
+/// too (no at-rest admission): its length is the final one.
+#[test]
+fn a_push_filled_double_array_has_its_final_length() {
+    let src = pushed(
+        "[]",
+        "for (let i = 0; i < 16; i++) { this.tab.push(i / 3); }",
+        "",
+        "",
+    );
+    let pf = facts(&src);
+    let f = tmpl(&pf, "T")
+        .fields
+        .iter()
+        .find(|f| f.key == "tab")
+        .expect("tab")
+        .rep;
+    match f {
+        crate::Rep::Arr(r) => {
+            assert!(!r.at_rest && r.fixed && r.dense && r.floor == 16, "{r:?}")
+        }
+        other => panic!("tab is {other:?}"),
+    }
+}

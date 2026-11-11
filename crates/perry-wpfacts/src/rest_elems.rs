@@ -12,7 +12,11 @@
 //! template is at rest when:
 //! - it is a fused fill birth `new Array(k).fill(v)` (`Model::rest_fills`):
 //!   the one birth whose element words codegen encodes, right after the
-//!   native fill returns (`codegen expr::rest_elems`);
+//!   native fill returns (`codegen expr::rest_elems`); or a push-filled
+//!   birth (`push_fills`: `k = []` filled by `this.k.push(v)` in the
+//!   constructor before anything else can see it), whose fill pushes store
+//!   the words encoded, and every fill push site of it holds only Arrays of
+//!   that fill (else `mixed push`);
 //! - every token is a plain program Array (`bindings::arr_rep`'s refusals:
 //!   no marker, not foreign, escaped or hard, no metadata write, not in a
 //!   unit's cell), with an I32 element rep, a fixed length or a reserved
@@ -254,7 +258,9 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
                 || reads.contains(&dst)
         }
         Cons::IdxLoad { dst, .. } | Cons::IdxOwnLoad { dst, .. } => reads.contains(&dst),
-        Cons::Store { site, .. } => index_store(m, site) || m.rest_elem_sabotage,
+        Cons::Store { site, .. } => {
+            index_store(m, site) || m.push_fill_sites.contains_key(&site) || m.rest_elem_sabotage
+        }
         Cons::MCall { call, .. } => fill_recv || fused_fill(m, call) || m.rest_elem_sabotage,
         Cons::Identity { .. }
         | Cons::Raise { .. }
@@ -351,7 +357,12 @@ pub(crate) fn admit(
     let m = &g.m;
     let mut refused: FxHashMap<TmplId, String> = FxHashMap::default();
     let mut cand: FxHashSet<TmplId> = FxHashSet::default();
-    if !m.rest_elems || !m.array_reps || m.aborted || m.unit_mode || m.rest_fills.is_empty() {
+    if !m.rest_elems
+        || !m.array_reps
+        || m.aborted
+        || m.unit_mode
+        || (m.rest_fills.is_empty() && m.push_fill_tmpls.is_empty())
+    {
         return (cand, refused);
     }
     // The plain `new Array` template of each fill's site (`builtins::
@@ -362,6 +373,8 @@ pub(crate) fn admit(
         .filter_map(|f| m.site_tmpls.get(&(f.site, "Array", true)))
         .filter_map(|&t| m.tmpl_of(t))
         .collect();
+    // The push-filled births (`push_fills`).
+    births.extend(m.push_fill_tmpls.keys().copied());
     births.sort_unstable();
     births.dedup();
     for tm in births {
@@ -467,11 +480,42 @@ pub(crate) fn admit(
             refuse(&mut cand, hit, "mixed site");
             changed = true;
         }
+        // A fill push stores encoded words: its receiver holds only Arrays
+        // of its own fill, all at rest.
+        for p in &m.push_fill_pushes {
+            let recvs = push_recvs(p, &copies);
+            let hit: Vec<TmplId> = recvs
+                .iter()
+                .flat_map(|&r| held(m, r, &cand, &mut buf))
+                .collect();
+            if hit.is_empty() {
+                continue;
+            }
+            if p.offset != 0
+                && recvs
+                    .iter()
+                    .all(|&r| crate::push_fills::only_fill(m, r, &cand, p.fill))
+            {
+                continue;
+            }
+            refuse(&mut cand, hit, "mixed push");
+            changed = true;
+        }
         if !changed {
             break;
         }
     }
     (cand, refused)
+}
+
+/// The receiver of fill push `p`, with its copies.
+fn push_recvs(
+    p: &crate::push_fills::FillPush,
+    copies: &FxHashMap<NodeId, Vec<NodeId>>,
+) -> Vec<NodeId> {
+    let mut recvs = vec![p.recv];
+    recvs.extend(copies.get(&p.recv).into_iter().flatten().copied());
+    recvs
 }
 
 /// The least floor of what `recvs` hold, when every one holds only Arrays
@@ -544,8 +588,8 @@ pub(crate) fn mark_fields(m: &Model, templates: &mut [crate::derive::TemplateFac
     }
 }
 
-/// Fill `ModuleBindings::rest_reads`, `rest_writes`, `rest_births` and
-/// `rest_reserves` (module docs).
+/// Fill `ModuleBindings::rest_reads`, `rest_writes`, `rest_births`,
+/// `rest_reserves` and `rest_pushes` (module docs).
 pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     let m = &g.m;
     if m.rest_tmpls.is_empty() {
@@ -586,7 +630,28 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
             }
         }
     }
+    // The fill pushes of at-rest fills (`push_fills`), with the final length.
+    let mut buf = Vec::new();
+    for p in &m.push_fill_pushes {
+        let recvs = push_recvs(p, &copies);
+        let holds = recvs
+            .iter()
+            .any(|&r| !held(m, r, &m.rest_tmpls, &mut buf).is_empty());
+        let only = recvs
+            .iter()
+            .all(|&r| crate::push_fills::only_fill(m, r, &m.rest_tmpls, p.fill));
+        if let (true, true, Some(&len), Some(mb)) = (
+            holds && p.offset != 0,
+            only,
+            m.push_fill_lens.get(p.fill as usize),
+            bindings.get_mut(p.module as usize),
+        ) {
+            mb.rest_pushes.push((p.offset, len));
+        }
+    }
     for mb in bindings.iter_mut() {
+        mb.rest_pushes.sort_unstable();
+        mb.rest_pushes.dedup();
         mb.rest_reads.sort_unstable();
         mb.rest_reads.dedup();
         mb.rest_writes.sort_unstable();
@@ -598,17 +663,22 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     }
 }
 
-/// The probe (`PERRY_FACTS_DUMP`): one `# rest arr` line per fused fill
-/// template, at rest (with the capacity its births reserve, if any) or with
-/// the reason it is not.
+/// The probe (`PERRY_FACTS_DUMP`): one `# rest arr` line per fused fill or
+/// push-filled template, at rest (with the capacity its births reserve, or
+/// the length its fill pushes give it, if any) or with the reason it is not.
 pub(crate) fn probe(m: &Model) -> Vec<String> {
     let mut out = Vec::new();
     for (tm, tpl) in m.tmpls.iter().enumerate() {
         let tm = tm as TmplId;
         let what = tpl.display.replace(' ', "_");
         if m.rest_tmpls.contains(&tm) {
-            match reserve(m, tm) {
-                Ok(Some(cap)) => out.push(format!("# rest arr {what} at_rest=1 cap={cap}")),
+            let fill = m
+                .push_fill_tmpls
+                .get(&tm)
+                .and_then(|&f| m.push_fill_lens.get(f as usize));
+            match (reserve(m, tm), fill) {
+                (Ok(Some(cap)), _) => out.push(format!("# rest arr {what} at_rest=1 cap={cap}")),
+                (_, Some(len)) => out.push(format!("# rest arr {what} at_rest=1 push_fill={len}")),
                 _ => out.push(format!("# rest arr {what} at_rest=1")),
             }
         } else if let Some(refusal) = m.rest_refused.get(&tm) {

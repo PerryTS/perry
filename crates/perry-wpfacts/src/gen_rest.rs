@@ -160,8 +160,18 @@ impl<'a> Gen<'a> {
                     // holder stores the same array.
                     match o {
                         Some(o) => {
+                            // A fill push (`push_fills`): its site is marked
+                            // before the store exists (the solve is online).
+                            let fill = self
+                                .push_fill
+                                .pushes
+                                .get(&(e as *const Expr as usize))
+                                .copied();
                             for v in a {
-                                self.elem_store(fx, o, v, "push");
+                                match fill {
+                                    Some(fill) => self.fill_push(fx, e, o, v, fill),
+                                    None => self.elem_store(fx, o, v, "push"),
+                                }
                             }
                         }
                         None => {
