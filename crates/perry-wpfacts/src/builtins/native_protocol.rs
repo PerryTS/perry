@@ -643,6 +643,27 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
                     let name = m.atoms[a as usize].clone();
+                    if m.explain && !m.shared_replay && name.starts_with(super::WK_PREFIX) {
+                        let ws: Vec<String> = m
+                            .native_writes
+                            .iter()
+                            .filter(|((_, k), _)| k.is_none() || *k == Some(a))
+                            .map(|((w, k), r)| {
+                                format!(
+                                    "{}/{:?}: {}",
+                                    m.tok_name(*w),
+                                    k.map(|x| m.atoms[x as usize].clone()),
+                                    m.reasons[r.reason as usize]
+                                )
+                            })
+                            .collect();
+                        eprintln!(
+                            "perry: wpfacts explain: replay call {native}.{name} by {:?} in_top {} handed {} writes {ws:?}",
+                            native_written_by(m, np, a),
+                            m.global_in_top,
+                            handed_to_unknown(m, np)
+                        );
+                    }
                     let prev = m.cur_this.replace(origin);
                     unknown_method(m, call, &format!("argument of native {native}.{name}"));
                     m.cur_this = prev;

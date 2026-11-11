@@ -227,6 +227,13 @@ impl Model {
                 .shared_of(t)
                 .filter(|_| !builtins::global_object(self, t))
             {
+                if self.explain && !self.shared_out.contains(&SharedWrite::Handed(s.clone())) {
+                    eprintln!(
+                        "perry: wpfacts explain: handed {} by {}",
+                        self.tok_name(t),
+                        self.reasons[reason as usize]
+                    );
+                }
                 self.note_shared(SharedWrite::Handed(s));
             }
         }
