@@ -43,6 +43,24 @@ fn layout(ctx: &FnCtx<'_>, method: &str, e: Option<&Expr>) -> Result<(u32, usize
     Ok((tmpl, l.keys.len(), l.class_id.unwrap_or(0)))
 }
 
+/// Check mode: the facts say `a` holds only record arrays (R6); the witness
+/// reports anything else as a false proof (rc 86, `Fact::RecordArray`).
+/// Release code relies on the runtime's own check of the head.
+fn witness(ctx: &mut FnCtx<'_>, a: &str, what: &str) {
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    use crate::verify_facts::Fact;
+    crate::verify_facts::covered(Fact::RecordArray, || serde_json::json!({ "what": what }));
+    let site = crate::verify_facts::site_arg(ctx, what, Fact::RecordArray, &[]);
+    let len = site.len.clone().expect("a check-mode site");
+    let _ = ctx.block().call(
+        I32,
+        "perry_verify_facts_record_array",
+        &[(DOUBLE, a), (I64, &site.pointer), (I64, &len)],
+    );
+}
+
 /// `new`, `push` or `length` in a value position: its value.
 pub(crate) fn try_lower_value(
     ctx: &mut FnCtx<'_>,
@@ -64,6 +82,7 @@ pub(crate) fn try_lower_value(
                 bail!("ICE: value record array: length takes the array");
             };
             let a = lower_expr(ctx, a)?;
+            witness(ctx, &a, "record array length");
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_record_array_length",
@@ -100,6 +119,7 @@ pub(crate) fn try_lower_value(
                 blk.store(DOUBLE, &v, &slot);
             }
             let a = roots.reread(ctx, idx)?;
+            witness(ctx, &a, "record array push");
             let v = ctx
                 .block()
                 .call(DOUBLE, "js_record_array_push", &[(DOUBLE, &a), (PTR, &buf)]);
@@ -134,6 +154,7 @@ pub(crate) fn try_lower_source(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<Opti
     let present = match (method.as_str(), args.as_slice()) {
         (RA_POP, [a, _]) => {
             let a = lower_expr(ctx, a)?;
+            witness(ctx, &a, "record array pop");
             ctx.block()
                 .call(DOUBLE, "js_record_array_pop", &[(DOUBLE, &a), (PTR, &buf)])
         }
@@ -144,6 +165,7 @@ pub(crate) fn try_lower_source(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<Opti
             let idx = roots.lower(ctx, a, collects)?;
             let i = lower_expr(ctx, i)?;
             let a = roots.reread(ctx, idx)?;
+            witness(ctx, &a, "record array element read");
             let v = ctx.block().call(
                 DOUBLE,
                 "js_record_array_get",

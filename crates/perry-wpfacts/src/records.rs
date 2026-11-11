@@ -43,7 +43,6 @@ pub const RECORD_MAX_WORDS: u16 = 16;
 pub const RECORD_ARRAY_INTRINSICS: &[&str] =
     &["push", "pop", "#elem", "length", "[index]", "iterate"];
 
-
 /// VR-4b: where an array literal is born, when it is the whole value of its
 /// holder (`Model::arr_birth_holder`). Codegen births a record array at
 /// exactly these, for an empty literal: `let x = []` / `x = []` (the local),
@@ -391,7 +390,9 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::IndexHole => Use::Reject(R6Store("hole".into())),
         // `push`'s own store of its argument (`Gen::elem_store`).
         Cons::Store { site, .. }
-            if m.stores.get(*site as usize).is_some_and(|s| s.desc == "push") =>
+            if m.stores
+                .get(*site as usize)
+                .is_some_and(|s| s.desc == "push") =>
         {
             op("push".into())
         }
@@ -1080,6 +1081,10 @@ impl<'a, 'g> Scan<'a, 'g> {
                 }
                 // The boxed program's iterator over a for-of source.
                 TokKind::Obj(tm, _) if self.relay_tmpls.contains(&tm) => {}
+                // S0 `vrarrjoin`: another Array beside a record array.
+                TokKind::Obj(tm, _)
+                    if m.record_array_join_sabotage
+                        && matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. }) => {}
                 _ => other = true,
             }
         }
@@ -1167,6 +1172,10 @@ impl<'a, 'g> Scan<'a, 'g> {
                     let empty = m.tmpl_toks(a).iter().flat_map(|&t| self.elems(t)).all(|e| {
                         m.nodes[e as usize].pts.is_empty() && m.nodes[e as usize].prim == 0
                     });
+                    // S0 `vrarrjoin`: the other Array stays what it is.
+                    if !empty && m.record_array_join_sabotage {
+                        continue;
+                    }
                     linked.insert(a, r);
                     grew = true;
                     if !empty {
@@ -1496,11 +1505,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                     continue;
                 }
                 let relay = self.relays.contains(&n);
-                let glue = if relay {
-                    prim::UNDEF
-                } else {
-                    0
-                };
+                let glue = if relay { prim::UNDEF } else { 0 };
                 if other || !recs.is_empty() || tms.len() > 1 || node.prim & !glue != 0 {
                     why = Some(R6Join(at.clone()));
                 } else if self.regions.contains(&n) || region.contains_key(&n) {
@@ -1969,6 +1974,13 @@ fn record_array_of(m: &Model, nodes: &[NodeId]) -> Option<TmplId> {
             let TokKind::Obj(tm, _) = m.toks[t as usize] else {
                 return None;
             };
+            // S0 `vrarrjoin`: another Array beside a record array.
+            if m.record_array_join_sabotage
+                && !m.record_arrays.contains_key(&tm)
+                && matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
+            {
+                continue;
+            }
             let r = *m.record_arrays.get(&tm)?;
             if of.is_some_and(|o| o != r) {
                 return None;
@@ -2016,13 +2028,21 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [crate::bindings::ModuleBinding
         let Some(h) = m.arr_birth_holder.get(a) else {
             continue;
         };
-        let (mi, put): (u32, Box<dyn FnOnce(&mut crate::bindings::ModuleBindings)>) = match h.clone() {
-            ArrBirth::Local(mi, id) => (mi, Box::new(move |mb| mb.record_array_birth_locals.push((id, r)))),
-            ArrBirth::Store(mi, at) => (mi, Box::new(move |mb| mb.record_array_birth_stores.push((at, r)))),
-            ArrBirth::Field(mi, c, k) => {
-                (mi, Box::new(move |mb| mb.record_array_birth_fields.push((c, k, r))))
-            }
-        };
+        let (mi, put): (u32, Box<dyn FnOnce(&mut crate::bindings::ModuleBindings)>) =
+            match h.clone() {
+                ArrBirth::Local(mi, id) => (
+                    mi,
+                    Box::new(move |mb| mb.record_array_birth_locals.push((id, r))),
+                ),
+                ArrBirth::Store(mi, at) => (
+                    mi,
+                    Box::new(move |mb| mb.record_array_birth_stores.push((at, r))),
+                ),
+                ArrBirth::Field(mi, c, k) => (
+                    mi,
+                    Box::new(move |mb| mb.record_array_birth_fields.push((c, k, r))),
+                ),
+            };
         if let Some(mb) = bindings.get_mut(mi as usize) {
             put(mb);
         }

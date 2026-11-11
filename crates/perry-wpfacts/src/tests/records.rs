@@ -256,7 +256,10 @@ fn a_record_array_is_admitted_for_its_intrinsics() {
     assert!(text.contains(" ADMITTED"), "{text}");
     // The binding and its birth are what codegen lowers as a record array.
     assert!(text.contains("# record_array module=0 local="), "{text}");
-    assert!(text.contains("# record_array module=0 birth-local="), "{text}");
+    assert!(
+        text.contains("# record_array module=0 birth-local="),
+        "{text}"
+    );
     // Off: nothing is exported.
     let pf = facts_with(
         &format!("{U}{XS}console.log(xs.length);\n"),
@@ -453,7 +456,12 @@ fn a_chess_like_undo_stack_is_a_record_array() {
     let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("# record")).collect();
     let has = |needle: &str| lines.iter().any(|l| l.contains(needle));
     assert!(has("ADMITTED fields=a:f64,b:f64"), "{lines:#?}");
-    assert!(!lines.iter().any(|l| l.starts_with("# record-array") && l.contains("REJECTED")), "{lines:#?}");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("# record-array") && l.contains("REJECTED")),
+        "{lines:#?}"
+    );
     for needle in [
         "birth-field=",
         "birth-store=",
@@ -462,7 +470,9 @@ fn a_chess_like_undo_stack_is_a_record_array() {
         " local=",
     ] {
         assert!(
-            lines.iter().any(|l| l.starts_with("# record_array") && l.contains(needle)),
+            lines
+                .iter()
+                .any(|l| l.starts_with("# record_array") && l.contains(needle)),
             "{needle}: {lines:#?}"
         );
     }

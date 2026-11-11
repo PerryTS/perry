@@ -583,9 +583,7 @@ fn record_array_locals(
         perry_hir::tdz_check::for_each_module_stmt_list(hir, &mut |list| {
             for s in list {
                 if let Stmt::Let {
-                    id,
-                    init: Some(e),
-                    ..
+                    id, init: Some(e), ..
                 } = s
                 {
                     if let Some(t) = of(e, &out) {
@@ -667,9 +665,10 @@ impl Rewriter<'_> {
             // VR-4b: a field initializer that births a record array.
             for field in c.fields.iter_mut() {
                 let key = (c.id, field.name.clone());
-                if let (Some(tmpl), Some(e)) =
-                    (self.facts.record_array_birth_fields.get(&key), &mut field.init)
-                {
+                if let (Some(tmpl), Some(e)) = (
+                    self.facts.record_array_birth_fields.get(&key),
+                    &mut field.init,
+                ) {
                     if is_empty_array(e) {
                         *e = self.ra_new(*tmpl);
                     }
@@ -1104,7 +1103,9 @@ impl Rewriter<'_> {
                 if self.ra_locals.contains_key(id) {
                     *ty = Type::Any;
                 }
-                if let (Some(tmpl), Some(e)) = (self.facts.record_array_birth_locals.get(id), &mut *init) {
+                if let (Some(tmpl), Some(e)) =
+                    (self.facts.record_array_birth_locals.get(id), &mut *init)
+                {
                     if is_empty_array(e) {
                         *e = self.ra_new(*tmpl);
                     }
@@ -1689,10 +1690,9 @@ impl Rewriter<'_> {
                 object,
                 args,
                 ..
-            } if module != RT || !is_intrinsic(method) => {
-                (object.as_deref().is_some_and(on) || args.iter().any(on))
-                    .then(|| format!("the native `{module}.{method}`"))
-            }
+            } if module != RT || !is_intrinsic(method) => (object.as_deref().is_some_and(on)
+                || args.iter().any(on))
+            .then(|| format!("the native `{module}.{method}`")),
             Expr::ArrayPop(id)
             | Expr::ArrayShift(id)
             | Expr::ArrayPush { array_id: id, .. }

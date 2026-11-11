@@ -67,6 +67,14 @@ pub(crate) fn false_proof() -> ! {
 
 /// Decode `arr`: a `POINTER_TAG` value whose GC header says record array.
 /// Anything else is a compiler bug ([`false_proof`]).
+/// `arr` is a record array's head (check mode's witness asks).
+pub(crate) fn is_record_array(arr: f64) -> bool {
+    matches!(
+        crate::value::addr_class::pointer_value_header(arr.to_bits()),
+        Some(header) if header.obj_type == GC_TYPE_RECORD_ARRAY
+    )
+}
+
 #[inline(always)]
 fn header_of(arr: f64) -> *mut RecordArrayHeader {
     let bits = arr.to_bits();

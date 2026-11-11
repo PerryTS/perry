@@ -505,8 +505,13 @@ fn let_ids(m: &Module, prefix: &str) -> Vec<u32> {
 fn array_facts(m: &Module) -> ElisionFacts {
     let mut f = facts(m, &[("u", true), ("last", true)]);
     for id in let_ids(m, "v") {
-        f.record_locals
-            .insert(id, FactsRecRep { tmpl: 0, opt: false });
+        f.record_locals.insert(
+            id,
+            FactsRecRep {
+                tmpl: 0,
+                opt: false,
+            },
+        );
     }
     let f = with_signature(m, f, "mk", &[None], Some(false));
     let mut f = with_signature(m, f, "un", &[Some(false)], None);
@@ -540,9 +545,7 @@ fn a_record_array_is_touched_only_by_its_intrinsics() {
     perry_hir::tdz_check::for_each_module_expr(&out, &mut |e| match e {
         Expr::Array(..) | Expr::ArrayPop(_) | Expr::GetIterator(_) => left.push(format!("{e:?}")),
         Expr::ArrayPush { array_id, .. } if *array_id == undos => left.push(format!("{e:?}")),
-        Expr::IndexGet { object, .. } | Expr::PropertyGet { object, .. }
-            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == undos) =>
-        {
+        Expr::IndexGet { object, .. } | Expr::PropertyGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == undos) => {
             left.push(format!("{e:?}"))
         }
         _ => {}
