@@ -858,6 +858,25 @@ pub enum Protocol {
     /// IteratorComplete / IteratorValue: reads `done` and `value`, calls
     /// nothing.
     IterResult,
+    /// Async iteration of a value (the async twin of `Iterate`; undici's
+    /// `ReadableStreamFrom`, what a `Response` body that is no stream,
+    /// buffer, Blob, FormData or URLSearchParams runs):
+    /// `@@asyncIterator`; it returns an async iterator.
+    AsyncIterate,
+    /// The async iterator's `next()` and `return()`; what each returns is
+    /// awaited (its `then` called with the runtime's resolvers, a promise's
+    /// settled value adopted, `builtins::adopt`) and the settled value is
+    /// an iterator result of byte chunks.
+    AsyncIterNext,
+    /// An awaited async iterator result: reads `done` and `value`; each is
+    /// a byte chunk `Buffer.from` reads (`BufferFrom`).
+    AsyncIterResult,
+    /// Node's `Buffer.from(object)` (lib/buffer.js `from` / `fromObject` /
+    /// `fromArrayLike`): `valueOf()` (what it returns is read the same way)
+    /// and `@@toPrimitive("string")` with the value as `this`; `length`,
+    /// `buffer`, `type`, `data` and the elements are read, each element
+    /// ToNumber'd (here: every own value ToPrimitive'd, a superset).
+    BufferFrom,
     /// SerializeJSONProperty (25.5.2.2): `toJSON`; what it returns and every
     /// value read off the object are serialized in turn.
     Json,
@@ -907,6 +926,9 @@ impl Protocol {
             Protocol::ToPrimitive => &[WK_TO_PRIMITIVE, "valueOf", "toString"],
             Protocol::Iterate => &[crate::builtins::WK_ITERATOR],
             Protocol::IterNext => &["next", "return", "throw"],
+            Protocol::AsyncIterate => &[crate::builtins::WK_ASYNC_ITERATOR],
+            Protocol::AsyncIterNext => &["next", "return"],
+            Protocol::BufferFrom => &["valueOf", WK_TO_PRIMITIVE],
             Protocol::Json => &["toJSON"],
             Protocol::HasInstance => &[WK_HAS_INSTANCE],
             Protocol::Inspect => &[
@@ -917,7 +939,10 @@ impl Protocol {
                 "toJSON",
             ],
             Protocol::ShallowInspect => &[INSPECT_CUSTOM_METHOD],
-            Protocol::IterResult | Protocol::OwnKeys | Protocol::Clone => &[],
+            Protocol::IterResult
+            | Protocol::AsyncIterResult
+            | Protocol::OwnKeys
+            | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
     }
@@ -925,7 +950,7 @@ impl Protocol {
     /// The keys whose values are read (and touched again for JSON).
     pub fn reads(self) -> &'static [&'static str] {
         match self {
-            Protocol::IterResult => &["done", "value"],
+            Protocol::IterResult | Protocol::AsyncIterResult => &["done", "value"],
             Protocol::ShallowInspect => &[
                 WK_TO_STRING_TAG,
                 "stack",
@@ -960,6 +985,8 @@ impl Protocol {
             Protocol::Json => &[Protocol::Json],
             Protocol::Inspect => &[Protocol::Inspect],
             Protocol::Clone => &[Protocol::Clone],
+            Protocol::AsyncIterResult => &[Protocol::BufferFrom],
+            Protocol::BufferFrom => &[Protocol::ToPrimitive],
             Protocol::ShallowInspect => &[Protocol::ShallowInspect, Protocol::ToPrimitive],
             _ => &[],
         }
@@ -968,7 +995,10 @@ impl Protocol {
     /// Every value read off the object is touched again by the same
     /// protocol (JSON serializes it, the formatter shows it).
     pub fn reads_all(self) -> bool {
-        matches!(self, Protocol::Json | Protocol::Inspect | Protocol::Clone)
+        matches!(
+            self,
+            Protocol::Json | Protocol::Inspect | Protocol::Clone | Protocol::BufferFrom
+        )
     }
 
     /// The use bit of a touch by this protocol (`MARK_TOUCH*`).
@@ -984,6 +1014,10 @@ impl Protocol {
             | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
+            | Protocol::AsyncIterate
+            | Protocol::AsyncIterNext
+            | Protocol::AsyncIterResult
+            | Protocol::BufferFrom
             | Protocol::Any => MARK_TOUCH,
         }
     }
@@ -1007,16 +1041,26 @@ impl Protocol {
         match self {
             Protocol::Iterate => Some(Protocol::IterNext),
             Protocol::IterNext => Some(Protocol::IterResult),
+            Protocol::AsyncIterate => Some(Protocol::AsyncIterNext),
+            Protocol::AsyncIterNext => Some(Protocol::AsyncIterResult),
+            Protocol::BufferFrom => Some(Protocol::BufferFrom),
             Protocol::Json => Some(Protocol::Json),
             Protocol::Inspect => Some(Protocol::Inspect),
             Protocol::ShallowInspect => Some(Protocol::ShallowInspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
             | Protocol::IterResult
+            | Protocol::AsyncIterResult
             | Protocol::HasInstance
             | Protocol::OwnKeys
             | Protocol::Clone => None,
         }
+    }
+
+    /// What the called methods return is awaited before `of_result` runs
+    /// on it (`builtins::adopt`).
+    pub fn awaits_result(self) -> bool {
+        matches!(self, Protocol::AsyncIterNext)
     }
 
     pub fn name(self) -> &'static str {
@@ -1025,6 +1069,10 @@ impl Protocol {
             Protocol::Iterate => "iterate",
             Protocol::IterNext => "iternext",
             Protocol::IterResult => "iterresult",
+            Protocol::AsyncIterate => "asynciterate",
+            Protocol::AsyncIterNext => "asynciternext",
+            Protocol::AsyncIterResult => "asynciterresult",
+            Protocol::BufferFrom => "bufferfrom",
             Protocol::Json => "json",
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",

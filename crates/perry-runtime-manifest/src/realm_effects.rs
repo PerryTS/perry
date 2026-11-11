@@ -24,7 +24,7 @@
 //! `path(slot)`: what node does to a PathLike argument (getValidatedPath:
 //! `toPathIfFileURL`, then the type check), as the reads and coercions it
 //! stands for (`path_effects`).
-//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys | ShallowInspect
+//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | AsyncIterate | Json | HasInstance | OwnKeys | ShallowInspect
 //! kind     := undefined | null | bool | num | str | bigint | symbol
 //! ```
 use super::info;
@@ -319,6 +319,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
                 "Iterate" => "iterate",
                 "IterNext" => "iter_next",
                 "IterResult" => "iter_result",
+                "AsyncIterate" => "async_iterate",
                 "Json" => "json",
                 "HasInstance" => "has_instance",
                 "OwnKeys" => "own_keys",
@@ -326,7 +327,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
                 "Any" => return Err("coerce(.., Any) is not declarable: name the protocol".into()),
                 p => {
                     return Err(format!(
-                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys, ShallowInspect)"
+                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, AsyncIterate, Json, HasInstance, OwnKeys, ShallowInspect)"
                     ))
                 }
             };

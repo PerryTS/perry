@@ -39,7 +39,7 @@ pub(crate) use effects::{
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
-pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
+pub(crate) use collections::{WK_ASYNC_ITERATOR, WK_ITERATOR, WK_PREFIX};
 /// The template kind of an array iterator (`%ArrayIteratorPrototype%`).
 pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
@@ -957,6 +957,16 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     m.tok(TokKind::BuiltinFn(Native::Any))
 }
 
+/// `PERRY_WPF_ANYFALL=1`: one stderr line per place a builtin member or
+/// builtin function value falls back to the opaque builtin function value or
+/// to `Protocol::Any` on its arguments, naming the family and member.
+pub(crate) fn anyfall(why: &str, fam: &dyn std::fmt::Debug, name: &dyn std::fmt::Debug) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("PERRY_WPF_ANYFALL").is_some()) {
+        eprintln!("perry: wpfacts anyfall: {why} | {fam:?} | {name:?}");
+    }
+}
+
 /// Resolve the member's object reference before interning its token. The
 /// receiver family locates the holder, but is never part of value identity.
 /// The realm prototype a builtin object of family `fam` (`what`) reads its
@@ -970,6 +980,12 @@ fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<us
         }
         // The prototype of an object a declaration made.
         Some(w) if w.ends_with(".prototype") => m.declarations.named(w, m),
+        // An ordinary object its creator gave `Object.prototype`'s chain
+        // (`box_chain`: a `JSON.parse` object, 25.5.1 / 10.1.13
+        // OrdinaryObjectCreate): its members are `Object.prototype`'s.
+        Some(w) if members::box_chain(w) == members::BoxChain::Object => {
+            m.declarations.family(Family::Object, m)
+        }
         Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
         None => m.declarations.family(fam, m),
     }
@@ -1127,8 +1143,20 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
     if fam == Family::Object {
         return r != TOP;
     }
+    // Every `Array.prototype` method is intentionally generic (ECMA-262
+    // 23.1.3: `ToObject(this)`, then LengthOfArrayLike and Get/HasProperty of
+    // its indices; the result of `map`/`filter`/`slice`/... of a non-Array is
+    // ArraySpeciesCreate's ArrayCreate): a function, a bound or class
+    // object, a builtin object or prototype, a module namespace object run it
+    // as an array-like (`array_method_on`), as an object literal does.
     if fam == Family::Array && what.is_none() {
-        return matches!(m.toks[r as usize], TokKind::Obj(..));
+        return r != TOP;
+    }
+    // `Error.prototype.toString` is generic over an object `this`
+    // (ECMA-262 20.5.3.4: steps 1-2 only require an Object; `name` and
+    // `message` through [[Get]]): it runs on any object (`error_to_string`).
+    if fam == Family::Error && what.is_none() {
+        return r != TOP;
     }
     match &m.toks[r as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
@@ -1187,9 +1215,34 @@ pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Ato
             let name = m.atoms[key as usize].clone();
             array_method_on(m, r, &name, call);
         }
+        Family::Error if m.atoms[key as usize] == "toString" => error_to_string(m, r, call),
         _ => own_method_inner(m, r, Key::Named(key), call),
     }
     m.cur_this = prev;
+}
+
+/// ECMA-262 20.5.3.4 `Error.prototype.toString` on object `r`:
+/// `Get(O, "name")` and `Get(O, "message")` (a getter there runs with
+/// `this` = `r`), each ToString'd unless undefined (ToPrimitive, hint
+/// string: the value's own `@@toPrimitive`/`toString`/`valueOf` run); the
+/// result is a string. Nothing else is called, nothing is kept.
+pub(crate) fn error_to_string(m: &mut Model, r: Tok, call: CallId) {
+    let reason = m.reason("ToString of an Error.prototype.toString operand");
+    let recv = m.node_l("error-tostring-recv");
+    for k in ["name", "message"] {
+        let key = Key::Named(m.atom(k));
+        let dst = m.node_l("error-tostring-read");
+        m.cons(recv, Cons::Load { key, dst });
+        m.cons(
+            dst,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    m.add_tok(recv, r);
+    ret_prim(m, call, prim::STR);
 }
 
 /// The primitive kinds whose chain is family `fam`'s (`prim_families`).
@@ -1245,6 +1298,7 @@ pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
             return;
         }
     }
+    anyfall("undescribed intrinsic prototype member", &"intrinsic", &key);
     undescribed_member(m, dst);
 }
 
@@ -1321,6 +1375,31 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::Module(_)
         | BuiltinNs::Other => false,
     }
+}
+
+/// Does the realm give the builtin function value `identity` no enumerable
+/// own property, so that a copy of its own enumerable properties
+/// (`{...[].map}`, `Object.assign(t, Array.prototype.map)`) reads only what
+/// the program put on it (`Model::own_props_modelled`)? A function the
+/// specification gives a realm namespace or prototype is a built-in function
+/// object (ECMA-262 10.3.4 CreateBuiltinFunction): its own `length` and
+/// `name` are defined non-enumerable (10.2.9 SetFunctionName, 10.2.10
+/// SetFunctionLength), as is a constructor's `prototype`. Its owner decides:
+/// a function of a host object (`fs.realpath` owns an enumerable `native`)
+/// keeps its own properties out of the model.
+pub(crate) fn realm_function_own_props_unenumerable(identity: &str) -> bool {
+    let owner = identity.split(['.', '[']).next().unwrap_or("");
+    ns_by_name(owner).is_some_and(realm_own_props_unenumerable)
+}
+
+/// Does the realm create a builtin object of kind `what` with no enumerable
+/// own property, so that a copy of its own enumerable properties reads only
+/// what the program stored on it (its fields, `Model::load_from`)? A RegExp
+/// object owns only `lastIndex`, defined `[[Enumerable]]: false` (ECMA-262
+/// 22.2.3.1 RegExpAlloc); a Promise owns none (27.2.3.1, 27.2.4.7: internal
+/// slots only).
+pub(crate) fn realm_object_own_props_unenumerable(what: &str) -> bool {
+    matches!(what, "RegExp" | "Promise")
 }
 
 /// A builtin object whose template is a container the model fills
@@ -1787,6 +1866,25 @@ pub(crate) fn native_own_load(
 /// of whether this solver has a specialized constructor call model.
 pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
     m.native_coordinates(t).is_some_and(|c| c.constructible)
+}
+
+/// Does builtin namespace object `t` hold `a` as an own property
+/// (ECMA-262 10.1.8.1 OrdinaryGet: a lookup ends at it, its prototype is
+/// not read)? A static the realm declares on the object itself
+/// (`native_property`, data or accessor) or the namespace's own static
+/// table (`Promise.all`, 27.2.4.1), not its chain's member. A store that
+/// may replace or delete it is the namespace's own written key
+/// (`native_written` of `t`), which `ns_load` replays. The global object
+/// is not one: its own keys are the program's globals (`global_value_written`).
+pub(crate) fn namespace_owns(m: &Model, t: Tok, a: Atom) -> bool {
+    let TokKind::Builtin(ns) = m.toks[t as usize] else {
+        return false;
+    };
+    if m.unit_mode || global_object(m, t) {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    m.native_property(t, name).is_some() || members::ns_own_member(ns, name)
 }
 
 /// Read the function reference from this receiver's declared property shape.

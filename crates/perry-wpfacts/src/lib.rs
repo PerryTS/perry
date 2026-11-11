@@ -106,6 +106,10 @@ pub struct FactsConfig {
     /// local's `null`/`undefined` (`gen::narrow` guards;
     /// `PERRY_FACTS_GUARD_PRESENCE=0`).
     pub no_guard_presence: bool,
+    /// Rule R off (`PERRY_FACTS_FORIN_PATH=0`): a for-in body read `P[k]`
+    /// that re-reads the loop subject path `P` (`gen::for_in::SubjPath`)
+    /// is a plain computed read again.
+    pub no_forin_path: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -496,6 +500,7 @@ fn generate<'a>(
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
+    g.forin_path = !cfg.no_forin_path;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());

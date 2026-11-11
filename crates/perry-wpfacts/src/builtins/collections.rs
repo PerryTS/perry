@@ -581,6 +581,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
 /// `@@__perry_wk_iterator`), see `Gen::key_of`.
 pub(crate) const WK_PREFIX: &str = "@@__perry_wk_";
 pub(crate) const WK_ITERATOR: &str = "@@__perry_wk_iterator";
+pub(crate) const WK_ASYNC_ITERATOR: &str = "@@__perry_wk_asyncIterator";
 
 /// The values a builtin iterator yields, held in its `#elems` field: an
 /// all-keys read (`iterate`) sees them, a named read (`it.next`) does not.
@@ -1460,7 +1461,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             }
             ret_tok(m, call, out);
         }
-        ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
+        ("Error", Some("toString")) => super::error_to_string(m, t, call),
         // ECMA-262 21.4.4: getters inspect [[DateValue]], never the
         // operands. The known Date token and intrinsic_miss in own_method
         // guard this rule; a written method also takes the opaque path.
@@ -1631,11 +1632,19 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
+        // A member `RegExp.prototype` does not own is its chain's
+        // (`Object.prototype.toLocaleString` uses no argument) or absent
+        // (the call throws before any argument is used).
+        ("RegExp", Some(n)) if members::regexp_inherited(n).is_some() => {
+            let p = members::regexp_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of RegExp.{n}"))
+        }
         (
             "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin"
             | "BoxedPrimitive" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
+            anyfall("builtin method argument", &what, &n);
             implicit_args(m, call, "builtin method argument", Protocol::Any);
             if what == "Date" && n == "toJSON" {
                 // 21.4.4.37: ToPrimitive(this), then Invoke(this, "toISOString").
@@ -1660,6 +1669,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             effects::run_native(m, e, t, call);
         }
         ("Buffer", _) => {
+            anyfall("buffer method argument", &what, &name);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
@@ -1687,6 +1697,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(n))
             if !super::loads::buffer_member_absent(m, Some(what), n) =>
         {
+            anyfall("buffer method argument", &what, &n);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");

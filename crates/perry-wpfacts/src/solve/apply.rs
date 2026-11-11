@@ -1456,7 +1456,14 @@ impl Model {
             }
             Cons::StoreKeyed { o, src, site } => {
                 if let Some(k) = self.keyed_once(n, src, 1) {
-                    let key = k.map_or(Key::any(), Key::Named);
+                    // The key of a for-in run is a String: EnumerateObjectProperties
+                    // never returns a Symbol key (ECMA-262 14.7.5.9, 14.7.5.10).
+                    // An unknown one stores under the any-String shape, which
+                    // never names a symbol-keyed property (`key_may_name_str`).
+                    let key = match k {
+                        Some(a) => Key::Named(a),
+                        None => Key::Any(self.any_string_shape()),
+                    };
                     self.cons(o, Cons::Store { key, src, site });
                 }
             }

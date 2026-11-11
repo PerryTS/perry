@@ -74,7 +74,7 @@ pub(super) fn family_load(
         return;
     }
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
-        if buffer_member_absent(m, what, &name) {
+        if buffer_member_absent(m, what, &name) || regexp_member_absent(what, &name) {
             m.add_prim(dst, prim::UNDEF);
         } else if let Some(e) = declared_accessor(m, fam, what, &name) {
             // An accessor whose getter the runtime declares (`RegExp
@@ -84,6 +84,7 @@ pub(super) fn family_load(
         } else if realm_accessor(m, fam, what, &name) {
             undeclared_getter_result(m, dst);
         } else {
+            anyfall("undescribed member", &(fam, what), &name);
             undescribed_member(m, dst);
         }
         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
@@ -111,6 +112,13 @@ pub(super) fn family_member(
     dst: NodeId,
 ) {
     let name = m.atoms[a as usize].clone();
+    // A box's chain is the one its creator gave it (`box_chain`): an
+    // ordinary object (a `JSON.parse` object, a descriptor) finds
+    // `Object.prototype`'s members, never `Array.prototype`'s (`join`).
+    let fam = match (fam, what.map(members::box_chain)) {
+        (Family::Box, Some(members::BoxChain::Object)) => Family::Object,
+        _ => fam,
+    };
     match members::member(fam, &name) {
         // An accessor of the realm (a getter the model lists as a method):
         // the getter's result, never the getter or a method.
@@ -123,7 +131,10 @@ pub(super) fn family_member(
                     }
                     m.tok(TokKind::BuiltinFn(n))
                 }
-                None => builtin_fn(m, "described member"),
+                None => {
+                    anyfall("described member", &(fam, what), &name);
+                    builtin_fn(m, "described member")
+                }
             };
             m.add_tok(dst, bf);
         }
@@ -153,6 +164,18 @@ pub(super) fn family_member(
 /// or `SharedArrayBuffer` (its own prototype, then `Object.prototype`)? The
 /// realm declares those prototypes' string keys exactly and none of them an
 /// `@@iterator`; another symbol key is left undescribed.
+/// Whether a RegExp object's chain lacks key `name`: `RegExp.prototype`
+/// does not own it (`regexp_inherited`; a well-known symbol counts as own)
+/// and no prototype of its realm chain to `null` declares it. ECMA-262
+/// 10.1.8.1 OrdinaryGet: a key on no object of the chain reads `undefined`
+/// (own data fields are the object's field storage, `load_from`; a key a
+/// store wrote onto the chain is `intrinsic_miss`'s).
+fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
+    what == Some("RegExp")
+        && members::regexp_inherited(name)
+            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+}
+
 pub(super) fn buffer_member_absent(m: &Model, what: Option<&str>, name: &str) -> bool {
     let Some(w @ ("DataView" | "ArrayBuffer" | "SharedArrayBuffer")) = what else {
         return false;
@@ -280,6 +303,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         }
     }
     let Some(mem) = members::ns_member(ns, &name) else {
+        anyfall("undescribed namespace member", &ns, &name);
         undescribed_member(m, dst);
         if native_written(m, t, a) {
             return opaque_member(m, dst);
@@ -356,7 +380,10 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
             for fam in members::prim_families(prim) {
                 let bf = match member_native(m, fam, None, &name) {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),
-                    None => builtin_fn(m, "primitive member"),
+                    None => {
+                        anyfall("primitive member", &fam, &name);
+                        builtin_fn(m, "primitive member")
+                    }
                 };
                 m.add_tok(dst, bf);
             }
@@ -734,7 +761,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     .flatten()
                 {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),
-                    None => builtin_fn(m, "function call/apply/bind/toString"),
+                    None => {
+                        anyfall("function call/apply/bind/toString", &"Function", &name);
+                        builtin_fn(m, "function call/apply/bind/toString")
+                    }
                 };
                 m.add_tok(dst, bf);
                 // Final on a `Function.prototype`-only chain (DEC 250).
@@ -995,7 +1025,10 @@ fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
     }
     let f = match member_native(m, Family::Object, None, &name) {
         Some(n) => m.tok(TokKind::BuiltinFn(n)),
-        None => builtin_fn(m, "described member"),
+        None => {
+            anyfall("described member", &"Object", &name);
+            builtin_fn(m, "described member")
+        }
     };
     m.add_tok(dst, f);
 }

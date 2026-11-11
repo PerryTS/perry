@@ -83,6 +83,21 @@ impl Model {
                 }
                 return true;
             }
+            (None, ThisArg::Undef)
+                if what.is_none()
+                    && matches!(
+                        fam,
+                        Family::Object
+                            | Family::Array
+                            | Family::Str
+                            | Family::Num
+                            | Family::Bool
+                            | Family::Sym
+                            | Family::BigInt
+                    ) =>
+            {
+                return self.method_undefined_this(call, t, fam, name);
+            }
             (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity),
         };
         if !builtins::native_receiver(self, fam, what, r) {
@@ -97,6 +112,30 @@ impl Model {
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
             self.with_b(|m| builtins::native_prototype_call(m, fam, r, key, call));
+        }
+        true
+    }
+
+    /// A method of `Object.prototype`, `Array.prototype` or a primitive's
+    /// prototype called with `this` undefined (a value read off an object
+    /// and called bare): `Object.prototype.toString` returns
+    /// `"[object Undefined]"` (ECMA-262 20.1.3.6 step 1); every other one
+    /// starts with `ToObject(this)` (`valueOf` 20.1.3.7, the Annex B methods
+    /// B.2.2, each `Array.prototype` method 23.1.3), `Invoke(this,
+    /// "toString")` (`toLocaleString` 20.1.3.5, `GetV`'s ToObject),
+    /// `RequireObjectCoercible(this)` or `thisStringValue` (22.1.3) or
+    /// `thisNumberValue` / `thisBooleanValue` / `thisSymbolValue` /
+    /// `thisBigIntValue` (21.1.3, 20.3.3, 20.4.3, 21.2.3): a TypeError before
+    /// any argument is used. No argument reaches other code. (The three
+    /// receiver-independent `Object.prototype` methods are `ObjectProtoOwn`;
+    /// a method whose effects the runtime declares ran as `declared_member`.)
+    fn method_undefined_this(&mut self, call: CallId, t: Tok, fam: Family, name: &str) -> bool {
+        if self.bind_done.insert((call, t, u32::MAX - 8)) {
+            self.diagnostic_callee(call, t);
+            if fam == Family::Object && name == "toString" {
+                let ret = self.calls[call as usize].ret;
+                self.add_prim(ret, prim::STR);
+            }
         }
         true
     }

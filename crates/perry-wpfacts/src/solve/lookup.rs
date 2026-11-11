@@ -684,6 +684,18 @@ impl Model {
             }
             return;
         }
+        // ECMA-262 10.1.8.1 OrdinaryGet: an own property ends the lookup.
+        // A namespace object's own static (`Promise.all`) never reads its
+        // chain: what a store wrote onto `Function.prototype` or
+        // `Object.prototype` under that key, a data value or an accessor,
+        // is not its value. A store or definition that may replace or
+        // delete the static is the namespace's own written key (`tok_load`
+        // reads the opaque member, or replays the read).
+        if let Key::Named(a) = key {
+            if builtins::namespace_owns(self, t, a) {
+                return;
+            }
+        }
         // The prototype chain's values, shared by every receiver of `t`.
         let cv = self.cv_of(t, key, !shadow);
         if defined {
@@ -1113,9 +1125,12 @@ impl Model {
     /// ENUM2: a value whose properties are its program-written fields as a
     /// for-in sees them (its built-in own properties, a function's `name`,
     /// `length`, `prototype`, an array's `length`, are not enumerable): a
-    /// program object, array, function, class object or class prototype.
-    /// Not a marker, not a builtin-made object (`BObj`), not a generator's
-    /// step closure (it stands for the generator object).
+    /// program object, array, function, class object or class prototype,
+    /// or a `JSON.parse` object (ECMA-262 25.5.1 ParseJSON /
+    /// InternalizeJSONProperty: an ordinary object whose own properties are
+    /// all CreateDataProperty-made, so enumerable; its arrays are `Arr`).
+    /// Not a marker, not another builtin-made object (`BObj`), not a
+    /// generator's step closure (it stands for the generator object).
     pub(crate) fn enum_obj(&self, t: Tok) -> bool {
         if t == TOP || self.is_marker(t) {
             return false;
@@ -1128,6 +1143,7 @@ impl Model {
                     | TmplKind::FnInst { .. }
                     | TmplKind::ObjCreate { .. }
                     | TmplKind::Arr { .. }
+                    | TmplKind::BObj { what: "json", .. }
             ),
             TokKind::Proto(_) | TokKind::ClassObj(_) => true,
             TokKind::Func(f, _) => !self.funcs[*f as usize].gen_step(),

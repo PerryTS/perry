@@ -1161,6 +1161,7 @@ impl<'a> Gen<'a> {
         match s {
             Stmt::Let {
                 id,
+                name,
                 init,
                 ty,
                 mutable,
@@ -1191,6 +1192,11 @@ impl<'a> Gen<'a> {
                 }
                 if let Some(perry_hir::Expr::LocalGet(src)) = init {
                     self.local_copies.insert((fx.module, *id), *src);
+                }
+                if self.forin_path && name.starts_with("__forin_obj_") {
+                    if let Some(p) = init.as_ref().and_then(super::for_in::subj_path) {
+                        self.for_in_paths.insert((fx.module, *id), p);
+                    }
                 }
             }
             Stmt::Expr(e) => {
@@ -1278,6 +1284,7 @@ impl<'a> Gen<'a> {
                     self.narrow_in_update(false);
                 }
                 let scope = self.enum_scope(fx.module, body);
+                let scoped = scope.is_some();
                 if let Some(s) = scope {
                     self.for_in_reads.push(s);
                 }
@@ -1285,7 +1292,7 @@ impl<'a> Gen<'a> {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
                 }
-                if scope.is_some() {
+                if scoped {
                     self.for_in_reads.pop();
                 }
                 if narrowed {

@@ -429,6 +429,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
         RealmProtocol::Iterate => Protocol::Iterate,
         RealmProtocol::IterNext => Protocol::IterNext,
         RealmProtocol::IterResult => Protocol::IterResult,
+        RealmProtocol::AsyncIterate => Protocol::AsyncIterate,
         RealmProtocol::Json => Protocol::Json,
         RealmProtocol::HasInstance => Protocol::HasInstance,
         RealmProtocol::OwnKeys => Protocol::OwnKeys,
@@ -748,6 +749,13 @@ impl Run {
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
             Cow::Borrowed("Date.prototype") => "Date",
+            // An object of prototype %ArrayBuffer.prototype% the realm makes
+            // (`Body.arrayBuffer()`) is the one AllocateArrayBuffer makes
+            // (25.1.3.1): the ArrayBuffer of `new ArrayBuffer(n)`
+            // (constructors.rs), with its modelled members (`slice`,
+            // 25.1.6.7). Likewise a shared one (25.2.2.1).
+            Cow::Borrowed("ArrayBuffer.prototype") => "ArrayBuffer",
+            Cow::Borrowed("SharedArrayBuffer.prototype") => "SharedArrayBuffer",
             Cow::Borrowed(p) => p,
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",

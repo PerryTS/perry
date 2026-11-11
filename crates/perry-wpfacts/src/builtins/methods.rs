@@ -199,6 +199,19 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         Some(Mem::Fn) if name.strip_prefix(collections::WK_PREFIX) == Some("toPrimitive") => {
             ret_prim(m, call, prim::SYMBOL)
         }
+        // `String.prototype[@@iterator]` (ECMA-262 22.1.3.36):
+        // RequireObjectCoercible(this), ToString(this), then a String
+        // Iterator over its code points (22.1.5.1 CreateIteratorFromClosure);
+        // it reads no argument. No other primitive kind has `@@iterator` on
+        // its chain: the call throws a TypeError there (`x is not a
+        // function`), the arguments evaluated and never read.
+        Some(Mem::Fn) if name == WK_ITERATOR => {
+            if prim & prim::STR != 0 {
+                let s = string_methods::str_node(m);
+                let it = collections::iter_over(m, call, members::ANY_ITERATOR, s);
+                ret_tok(m, call, it);
+            }
+        }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
         // `constructor` called as a method: String (22.1.1.1), Number
