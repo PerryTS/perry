@@ -195,6 +195,38 @@ fn read_match(m: &mut Model, rec: NodeId) {
 
 /// A string method of a primitive receiver, by its algorithm. `false`: no
 /// rule (the method keeps the generic summary).
+/// The operand of each argument position a positional member reads (at
+/// most three: replace, split, localeCompare). Without a spread they are
+/// the arguments. With one, an argument may be shifted to a later position
+/// by the spreads before it, and a spread element (its element key: the
+/// iteration of `...xs`, CreateListFromArrayLike of `apply`) may land in
+/// any position: position `i` reads the arguments up to `i` and every
+/// spread element, and each position runs its own operand model.
+fn positions(m: &mut Model, c: &CallSite) -> Vec<NodeId> {
+    if c.spread.is_empty() {
+        return c.args.clone();
+    }
+    let elems: Vec<NodeId> = c
+        .spread
+        .iter()
+        .map(|&sp| {
+            let e = m.node_l("spread-operand");
+            let key = m.elem_key();
+            m.cons(sp, Cons::Load { key, dst: e });
+            e
+        })
+        .collect();
+    (0..3)
+        .map(|i| {
+            let n = m.node_l("positional-operand");
+            for &a in c.args.iter().take(i + 1).chain(&elems) {
+                m.edge(a, n);
+            }
+            n
+        })
+        .collect()
+}
+
 pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
     let c = m.calls[call as usize].clone();
     // The members that read no operand, or only coerce every operand: the
@@ -251,10 +283,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         }
         _ => {}
     }
-    if !c.spread.is_empty() {
-        return false;
-    }
-    let arg0 = c.args.first().copied();
+    let ops = positions(m, &c);
+    let arg0 = ops.first().copied();
     let s = str_node(m);
     match name {
         // 22.1.3.19 / .20: GetMethod(searchValue, @@replace) called with
@@ -262,8 +292,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         // replaceValue called with (match, position, string). replaceAll
         // first tests IsRegExp(searchValue) and reads its `flags`.
         "replace" | "replaceAll" => {
-            let (Some(p), Some(rv)) = (arg0, c.args.get(1).copied()) else {
-                for &a in &c.args {
+            let (Some(p), Some(rv)) = (arg0, ops.get(1).copied()) else {
+                for &a in &ops {
                     to_prim(m, a, "String.prototype.replace operand");
                 }
                 ret_prim(m, call, prim::STR);
@@ -285,7 +315,7 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         "split" => {
             if let Some(p) = arg0 {
                 to_prim(m, p, "split separator ToString");
-                let lim = c.args.get(1).copied().unwrap_or(s);
+                let lim = ops.get(1).copied().unwrap_or(s);
                 to_prim(m, lim, "split limit ToUint32");
                 let r = sym_call(m, call, p, "split", vec![s, lim]);
                 m.edge(r, c.ret);
@@ -324,7 +354,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             if let Some(p) = arg0 {
                 read_only(m, p, &format!("{WK}match"));
             }
-            for &a in &c.args {
+            // searchString and position; later arguments are not read.
+            for &a in ops.iter().take(2) {
                 to_prim(m, a, "string search operand");
             }
             ret_prim(m, call, prim::BOOL);
@@ -342,10 +373,10 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                     to_prim(m, t, "localeCompare operand");
                 }
             }
-            if let Some(&l) = c.args.get(compare as usize) {
+            if let Some(&l) = ops.get(compare as usize) {
                 intl_locales(m, l);
             }
-            if let (true, Some(&o)) = (compare, c.args.get(2)) {
+            if let (true, Some(&o)) = (compare, ops.get(2)) {
                 intl_options(
                     m,
                     o,

@@ -194,6 +194,11 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
             annexb_lookup(m, None, call, name == "__lookupSetter__");
         }
+        // 20.4.3.5 Symbol.prototype[@@toPrimitive](hint): thisSymbolValue;
+        // the hint is not read.
+        Some(Mem::Fn) if name.strip_prefix(collections::WK_PREFIX) == Some("toPrimitive") => {
+            ret_prim(m, call, prim::SYMBOL)
+        }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
         // `constructor` called as a method: String (22.1.1.1), Number
@@ -250,6 +255,9 @@ pub(super) fn prim_method_generic(m: &mut Model, call: CallId) {
     ret_tok(m, call, pb);
 }
 
+/// The primitive kinds a wrapper object may box.
+const WRAPPED: u16 = prim::STR | prim::NUM | prim::BOOL | prim::SYMBOL | prim::BIGINT;
+
 /// `name` called on `t`, a builtin object of family `fam`, where the model
 /// describes no such method: a member of the family's own intrinsic
 /// prototype runs as an unknown method (`why`: the arguments and the
@@ -266,7 +274,16 @@ pub(super) fn undescribed_method(
     why: &str,
 ) {
     match members::own(fam, name) {
-        Some(Mem::Fn) if fam == Family::Wrapper => prim_method_generic(m, call),
+        // A wrapper object (`Object(p)`, `new String(s)`, ...) of a primitive
+        // kind the token does not name: the member is that primitive's
+        // prototype member, run on the wrapper (thisStringValue,
+        // thisNumberValue, ... or ToString(this)): its operands and result
+        // are the primitive member's model (`prim_method`, the written-key
+        // check included).
+        Some(Mem::Fn) if fam == Family::Wrapper => {
+            let a = m.atom(name);
+            prim_method(m, WRAPPED, Key::Named(a), call)
+        }
         Some(Mem::Fn) => unknown_method(m, call, why),
         Some(_) => {}
         None if members::member(Family::Object, name).is_some() => {}

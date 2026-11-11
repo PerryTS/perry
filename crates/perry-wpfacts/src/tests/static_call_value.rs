@@ -366,3 +366,78 @@ console.log("abc".padStart(...arr), "abc".sup(...arr), o.pa + 1);
 "#;
     assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
 }
+
+// PEELS7: the paths the real tssrc solve took into the generic arm
+// (PERRY_WPF_PRIMGEN histogram): members of a wrapper object (`Object(p)`),
+// positional string members called with a spread, and
+// `Symbol.prototype[@@toPrimitive]`. Each member runs its own model; an
+// array of functions given to one hands them to no one.
+#[test]
+fn an_array_of_functions_given_to_wrapper_methods_keeps_them() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+const w: any = Object("abc");
+const n: any = Object(1.5);
+console.log(w.slice(arr), w.charCodeAt(...arr), w.lastIndexOf(arr, arr), w.toString(arr), w.valueOf(arr));
+console.log(n.toLocaleString(arr, arr), n.toFixed(...arr), o.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+#[test]
+fn an_array_of_functions_spread_into_positional_string_methods_keeps_them() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+const s = "abc";
+console.log(s.replace(...arr), s.replaceAll(s, ...arr), s.split(...arr), s.match(...arr), s.search(...arr));
+console.log(s.localeCompare(s, ...arr), s.toLocaleUpperCase(...arr), s.includes(...arr), s.endsWith(s, ...arr), o.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+#[test]
+fn an_array_of_functions_given_to_symbol_to_primitive_keeps_them() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+const y: any = Object(Symbol("k"));
+console.log(String(y[Symbol.toPrimitive](arr)), String(y[Symbol.toPrimitive](...arr)), o.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+// Controls: the image members of String.prototype are final (DEC 250), so a
+// method the program adds there (a new key) is what keeps the generic
+// behaviour: it receives the spread's elements, on a primitive and on a
+// wrapper.
+#[test]
+fn a_method_added_to_string_prototype_called_with_a_spread_receives_its_elements() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+(String.prototype as any).zz = (globalThis as any)[process.argv[2]];
+try { ("abc" as any).zz(...arr); } catch (e) {}
+console.log(o.pa + 1);
+"#;
+    assert!(pa_escape(src).is_some(), "{}", whole(src).dump_text());
+}
+
+#[test]
+fn a_method_added_to_string_prototype_called_on_a_wrapper_receives_its_arguments() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+(String.prototype as any).zz = (globalThis as any)[process.argv[2]];
+const w: any = Object("abc");
+try { w.zz(arr); } catch (e) {}
+console.log(o.pa + 1);
+"#;
+    assert!(pa_escape(src).is_some(), "{}", whole(src).dump_text());
+}
