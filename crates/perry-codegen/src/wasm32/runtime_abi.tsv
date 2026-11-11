@@ -254,9 +254,6 @@ js_array_rest_encode	f64	f64
 js_array_rest_get	f64	f64,f64
 js_array_rest_reserve	f64	f64,i32u
 js_array_rest_set	void	f64,f64,f64
-js_object_rest_get	f64	f64,f64
-js_object_rest_set	f64	f64,f64,f64,i32s
-js_object_rest_lanes	f64	f64,i32s
 js_array_reverse	ptr	ptr
 js_array_reverse_value	f64	f64
 js_array_set	void	ptr,i32u,i64
@@ -2819,6 +2816,9 @@ js_object_property_is_enumerable	f64	f64,f64
 js_object_record_get_by_bytes	i64	ptr,ptr,usize
 js_object_record_set_by_bytes	i32s	ptr,ptr,usize,i64
 js_object_rest	ptr	ptr,ptr
+js_object_rest_get	f64	f64,f64
+js_object_rest_lanes	f64	f64,i32s
+js_object_rest_set	f64	f64,f64,f64,i32s
 js_object_seal	f64	f64
 js_object_set_field	void	ptr,i32u,i64
 js_object_set_field_by_index	void	ptr,ptr,i32u,f64
@@ -4208,6 +4208,7 @@ js_throw_error_with_code	void	ptr,usize,ptr,usize,i32s
 js_throw_eval_syntax_error	f64	f64
 js_throw_illegal_constructor_type_error	f64	
 js_throw_json_constructor_type_error	f64	
+js_throw_local	void	f64
 js_throw_math_constructor_type_error	f64	
 js_throw_not_a_constructor	f64	
 js_throw_reference_error_super_delete	f64	
