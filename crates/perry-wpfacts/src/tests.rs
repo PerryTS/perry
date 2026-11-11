@@ -24,6 +24,7 @@ mod array_numeric;
 mod array_record;
 mod array_reps;
 mod at_rest;
+mod fill_births;
 mod rest_elems;
 mod rest_fields;
 mod zero_sign;

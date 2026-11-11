@@ -409,6 +409,153 @@ pub(crate) fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, floor: u32, want: Want) 
     })
 }
 
+/// `PERRY_REST_DEFAULT=0` (`off`, `false`): `a[k] ?? d` over an at-rest
+/// Array keeps its double (main's lowering).
+pub(crate) fn default_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_REST_DEFAULT").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// The int32 a default expression is, when it is an int32 literal (never
+/// `-0`).
+fn int32_default(e: &Expr) -> Option<i32> {
+    match e {
+        Expr::Integer(n) => i32::try_from(*n).ok(),
+        Expr::Number(n)
+            if n.fract() == 0.0
+                && (*n != 0.0 || !n.is_sign_negative())
+                && *n >= f64::from(i32::MIN)
+                && *n <= f64::from(i32::MAX) =>
+        {
+            Some(*n as i32)
+        }
+        _ => None,
+    }
+}
+
+/// `left ?? right` where `left` is an at-rest element read with an int32
+/// key and `right` an int32 literal, as the **i32** of its value; `None`
+/// for any other expression (and for a read the rep-keyed tier proves in
+/// its floor, which is never `undefined`). A field read call a loop's held
+/// base serves is taken by `lower_call::field_read_call` before this.
+///
+/// Every Array the read can reach is at rest: a plain program Array with no
+/// named property, whose every slot is an I32 word or a hole. So the read
+/// yields an int32 Number or `undefined`, and the whole expression is an
+/// int32: the slot's word when the key is below the floor (`idx <u floor`,
+/// the whole test), else the accessor's value with `undefined` replaced by
+/// the literal. No double is made on the hit path, and a consumer's
+/// `sitofp` of the result folds into its own compare or truncation.
+///
+/// Check mode: the slot is an I32 word (`witness_word`), and the cold value
+/// is `undefined` or an exact int32 double.
+pub(crate) fn try_lower_default_i32(
+    ctx: &mut FnCtx<'_>,
+    left: &Expr,
+    right: &Expr,
+) -> Result<Option<String>> {
+    if !default_enabled() || !tiers_enabled() || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+        return Ok(None);
+    }
+    let Some(default) = int32_default(right) else {
+        return Ok(None);
+    };
+    let Some(floor) = read_floor(ctx, left) else {
+        return Ok(None);
+    };
+    let Expr::IndexGet {
+        object,
+        index,
+        element_offset,
+        ..
+    } = left
+    else {
+        return Ok(None);
+    };
+    let (object, index) = (object.as_ref(), index.as_ref());
+    if !int32_key(ctx, index) || floor == 0 {
+        return Ok(None);
+    }
+    let foreign = matches!(ctx.rest_b1, Some((o, _)) if o == *element_offset);
+    let in_floor = counter_in_floor(ctx, object, index)
+        || super::index_get::proven_array::rep_read(ctx, object, *element_offset)
+            .is_some_and(|r| r.rep.at_rest && r.in_floor && !foreign);
+    if in_floor {
+        return Ok(None);
+    }
+    probe(ctx, "read", "default", *element_offset);
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "rest": "read_default", "floor": floor }),
+    );
+    crate::facts_consumed::used();
+    let value = crate::rooting::with_operands_rooted_across(
+        ctx,
+        &[object],
+        &[index],
+        |ctx| super::lower_expr_as_i32(ctx, index),
+        |ctx, v, idx| {
+            let arr = &v[0];
+            let load = ctx.new_block("rest.default.load");
+            let cold = ctx.new_block("rest.default.cold");
+            let merge = ctx.new_block("rest.default.merge");
+            let (load_l, cold_l, merge_l) = (
+                ctx.block_label(load),
+                ctx.block_label(cold),
+                ctx.block_label(merge),
+            );
+            let hit = ctx.block().icmp_ult(I32, &idx, &floor.to_string());
+            ctx.block().cond_br(&hit, &load_l, &cold_l);
+
+            ctx.current_block = load;
+            let ptr = slot(ctx, arr, &idx);
+            if crate::verify_facts::enabled() {
+                witness_word(ctx, arr, &ptr);
+            }
+            let fast = ctx.block().load(I32, &ptr);
+            let load_end = ctx.block().label.clone();
+            ctx.block().br(&merge_l);
+
+            ctx.current_block = cold;
+            let got = cold_read(ctx, arr, &idx, false);
+            let bits = ctx.block().bitcast_double_to_i64(&got);
+            let undef = ctx
+                .block()
+                .icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+            if crate::verify_facts::enabled() {
+                let exact =
+                    crate::codegen::emit_typed_i32_plain_guard_and_raw(ctx.block(), &got, &bits).0;
+                let ok = ctx.block().or(I1, &undef, &exact);
+                miss_unless(
+                    ctx,
+                    &ok,
+                    &got,
+                    "rest elem: a cold read is neither undefined nor an int32",
+                );
+            }
+            // `undefined` is a NaN word: keep the conversion defined.
+            let safe = ctx.block().select(I1, &undef, DOUBLE, "0.0", &got);
+            let n = ctx.block().toint32_fast(&safe);
+            let slow = ctx
+                .block()
+                .select(I1, &undef, I32, &default.to_string(), &n);
+            let cold_end = ctx.block().label.clone();
+            ctx.block().br(&merge_l);
+
+            ctx.current_block = merge;
+            Ok(ctx
+                .block()
+                .phi(I32, &[(&fast, &load_end), (&slow, &cold_end)]))
+        },
+    )?;
+    Ok(Some(value))
+}
+
 /// [`read_at`] for an int32 key `idx`: `idx <u floor` is the whole test.
 fn read_at_i32(ctx: &mut FnCtx<'_>, arr: &str, idx: &str, floor: u32, want: Want) -> String {
     crate::verify_facts::consumed(
@@ -647,7 +794,7 @@ fn witness_word(ctx: &mut FnCtx<'_>, arr: &str, ptr: &str) {
 }
 
 /// Check mode: the stored `val` is an int32 Number that is not `-0`.
-fn witness_value(ctx: &mut FnCtx<'_>, val: &str) {
+pub(crate) fn witness_value(ctx: &mut FnCtx<'_>, val: &str) {
     crate::verify_facts::covered(
         crate::verify_facts::Fact::ArrayRep,
         || serde_json::json!({ "rest": "value" }),
@@ -699,7 +846,7 @@ fn witness_capacity(ctx: &mut FnCtx<'_>, arr: &str, key: &str) {
 }
 
 /// Report a false proof (exit 86) unless `ok`.
-fn miss_unless(ctx: &mut FnCtx<'_>, ok: &str, value: &str, what: &str) {
+pub(crate) fn miss_unless(ctx: &mut FnCtx<'_>, ok: &str, value: &str, what: &str) {
     crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("rest.verify_miss");
     let next = ctx.new_block("rest.verify_ok");

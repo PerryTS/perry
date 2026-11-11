@@ -423,6 +423,16 @@ fn int32_operand_switches_are_cache_inputs() {
     }
 }
 
+/// The at-rest default read's switch decides how `a[k] ?? <int32>` is
+/// lowered, so `=0` must never reuse an `=1` object.
+#[test]
+fn rest_default_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_REST_DEFAULT"),
+        "PERRY_REST_DEFAULT must key the compile caches"
+    );
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]

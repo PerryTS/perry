@@ -21,6 +21,8 @@ pub(crate) use element_kind::{
     ek_prefix_after_splice, ek_set_prefix,
 };
 mod element_shape;
+mod fill_birth;
+pub use fill_birth::js_array_fill_birth;
 mod fill_extend;
 mod flat_clone;
 mod forwarding;

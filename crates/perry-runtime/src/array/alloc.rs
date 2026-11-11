@@ -98,7 +98,7 @@ unsafe fn initialize_fresh_array_layout(arr: *mut ArrayHeader, raw_f64: bool, al
 
 /// Publish the birth layout word of a fresh array.
 #[inline(always)]
-unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
+pub(super) unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
     use crate::gc::{
         GC_ARRAY_ELEMENT_SHAPE, GC_ARRAY_RAW_F64_HOLES, GC_ARRAY_RAW_F64_LAYOUT,
         GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_STATE_MASK,
