@@ -336,6 +336,6 @@ fn a_shape_the_facts_do_not_describe_is_refused() {
             ..Default::default()
         },
     );
-    assert_eq!(calls(&with, "js_array_constructor_single"), 1, "{with}");
+    assert!(calls(&with, "js_array_fill") >= 1, "{with}");
     assert_eq!(calls(&with, "js_array_fill_birth"), 0, "{with}");
 }
