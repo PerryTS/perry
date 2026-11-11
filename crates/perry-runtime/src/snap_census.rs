@@ -642,6 +642,152 @@ pub extern "C" fn js_snap_env_site(kind: i32) {
     let _ = kind;
 }
 
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+/// SNAP25 funnels: the runtime routine a native read is issued by. A census
+/// row (and, through an lseek marker, the syscall companion) names the
+/// innermost funnel open on its thread; the class follows from the funnel.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum Funnel {
+    ExecPath = 1,
+    StackMaps = 2,
+    StackBounds = 3,
+    Parse = 4,
+    Parallelism = 5,
+    Gc = 6,
+    ExecArgv = 7,
+    StyleBit = 8,
+    /// The exception/stack walker holds its lock (`eh_walker::locked_walker`):
+    /// a native read here is the walker's own (its allocator's clock), and a
+    /// stack capture would take the lock this thread already holds.
+    Unwind = 9,
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use runner::FunnelScope;
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[inline(always)]
+pub(crate) fn funnel_enter(f: Funnel) -> runner::FunnelScope {
+    runner::FunnelScope::enter(f as u8)
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+/// SNAPK2a: a host value (`process.argv`, `process.execPath`) is
+/// materialized inside this scope (DESIGN27 §1.3).
+pub(crate) struct HostValueScope(bool);
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+impl HostValueScope {
+    #[inline(always)]
+    pub(crate) fn enter(what: u8) -> Self {
+        Self(runner::on() && runner::host_value_enter(what))
+    }
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+impl Drop for HostValueScope {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.0 {
+            runner::host_value_exit();
+        }
+    }
+}
+
+/// Open a SNAPK2a host-value scope (1 argv, 2 execPath) for the rest of the
+/// enclosing block, in the instrumented Linux cohort only.
+#[macro_export]
+macro_rules! snap_host_value {
+    ($what:expr) => {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        let _snap_host_value = $crate::snap_census::HostValueScope::enter($what);
+    };
+}
+
+/// Open a SNAP25 funnel for the rest of the enclosing block, in the
+/// instrumented Linux cohort only; nothing in any other build.
+#[macro_export]
+macro_rules! snap_funnel {
+    ($f:ident) => {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        let _snap_funnel = $crate::snap_census::funnel_enter($crate::snap_census::Funnel::$f);
+    };
+}
+
+/// SNAPK2b `compare_literal` site (`expr/snap_compare_site.rs`, instrumented
+/// compiles only): an equality compare `op` (0 `===`, 1 `!==`, 2 `==`,
+/// 3 `!=`) of `left` and `right`; `literal` bit 0/1: that side is a string
+/// literal.
+#[cfg(perry_gc_instruments)]
+#[no_mangle]
+pub extern "C" fn js_snap_compare_literal(op: i32, left: f64, right: f64, literal: i32) {
+    crate::effect!(pure);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::compare_literal(op, left.to_bits(), right.to_bits(), literal);
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (op, left, right, literal);
+}
+
+/// Codegen calls this right before a `process.argv` read, in instrumented
+/// compiles only (`expr/snap_argv_site.rs`): `kind` 1 = the read is
+/// `process.argv.length`, 2 = `process.argv[index]` with a constant index,
+/// 0 = any other use (the whole array escapes). Kept for the next
+/// `js_process_argv_value` on this thread.
+#[cfg(perry_gc_instruments)]
+#[no_mangle]
+pub extern "C" fn js_snap_argv_site(kind: i32, index: i64) {
+    crate::effect!(pure);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::argv_site(kind, index);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (kind, index);
+}
+
+/// SNAP25: one `process.argv` read at its finest grain (`argv.read` row).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn argv_read(value: f64) {
+    if runner::on() {
+        runner::argv_read(value);
+    }
+}
+
+/// SNAP25: a JS-reachable clock read (timer creation, `process.uptime`,
+/// `console.time`, GC stats): a clock-class census input.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn clock_input(operation: &str, value: u64) {
+    if runner::c25() {
+        record_input_value(operation, &value);
+    }
+}
+
+/// SNAPK2b: the `stdout_style_bit` funnel computed `bit` (`tty`: forced or
+/// fd 1 a tty; `depth`: getColorDepth).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn style_bit(bit: bool, tty: bool, depth: u8) {
+    runner::style_bit(bit, tty, depth);
+}
+
+/// SNAP25: every captured Error pc must lie in the executable text of an
+/// EXEC (non-PIE) image (`stack.pc_check` row).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn pc_check(pcs: &[usize], js_text: (usize, usize)) {
+    if runner::c25() && runner::inputs_on() && runner::on_main_thread() {
+        let (exec, lo, hi) = runner::exe_text();
+        let out = pcs.iter().filter(|&&pc| pc < lo || pc >= hi).count();
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event(
+            "stack.pc_check",
+            format!("exec={};out={out};n={};text={lo:x}-{hi:x}", exec as u8, pcs.len()),
+        );
+        runner::runtime_pcs(pcs, js_text);
+    }
+}
+
 /// Codegen calls this around a literal CommonJS require edge's init-guard
 /// call, in instrumented compiles only (`cjsRequireEdge`): `on` 1 before, 0
 /// after. The evaluation the guard starts was reached by `require` (a static
@@ -681,3 +827,59 @@ pub(crate) fn init_guard(addr: usize, guard: usize) {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     let _ = (addr, guard);
 }
+
+// Values and calls are retained only by the Linux instrumented census.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub use runner::input_record::Value as InputValue;
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub fn input_call<T: InputValue>(operation: &str, arguments: &str, call: impl FnOnce() -> T) -> T {
+    if !runner::inputs_on() || !runner::on_main_thread() {
+        return call();
+    }
+    let before_errno = unsafe { *libc::__errno_location() };
+    let token = {
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event(operation, arguments.to_owned())
+    };
+    unsafe {
+        *libc::__errno_location() = before_errno;
+    }
+    runner::input_scope(1);
+    let result = call();
+    let saved_errno = unsafe { *libc::__errno_location() };
+    runner::input_scope(-1);
+    {
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event("result", format!("{token}:{}", result.input_value()));
+    }
+    unsafe {
+        *libc::__errno_location() = saved_errno;
+    }
+    result
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub fn runner_on_for_inputs() -> bool {
+    runner::inputs_on() && runner::on_main_thread()
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
+    if runner::inputs_on() && runner::on_main_thread() {
+        let _scope = runner::input_record::Scope::enter();
+        runner::input_event(operation, value.input_value());
+    }
+}
+
+/// Expand a stdlib observation only in the runtime's instruments cohort.
+/// The empty production expansion needs no new stdlib build-script dependency.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[macro_export]
+macro_rules! census_inputs { ($($code:tt)*) => {{ $($code)* }}; }
+#[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+#[macro_export]
+macro_rules! census_inputs { ($($code:tt)*) => {}; }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn record_scope() -> impl Drop { runner::input_record::Scope::enter() }

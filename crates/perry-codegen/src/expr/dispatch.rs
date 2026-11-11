@@ -30,7 +30,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // What the expression does to the receiver run in flight.
     let run = crate::expr::layout_read::run_transparency(expr);
     crate::expr::layout_read::run_enter(ctx, &run);
-    let value = lower_expr_inner(ctx, expr)?;
+    // SNAP census frame: `expr` is the current node for the extent of its
+    // own lowering, restored on every return (`expr/snap_env_site.rs`).
+    let snap_frame = super::snap_env_site::enter(ctx, expr);
+    let value = lower_expr_inner(ctx, expr);
+    ctx.snap_lowering = snap_frame;
+    let value = value?;
     crate::expr::layout_read::run_exit(ctx, &run);
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(
@@ -51,9 +56,6 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // one. Handlers that care receive it as an argument, because they consult
     // it after lowering their operands — by which point the field is gone.
     let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
-    // SNAP census (instrumented compiles only): an env read whose value this
-    // expression stores is a store site (`expr/snap_env_site.rs`).
-    super::snap_env_site::note_store_parent(ctx, expr);
     // #9856: under `--debug-symbols`, record this expression's source line
     // for the DWARF line table (`crate::debug_info`). No-op otherwise.
     crate::debug_info::mark_expr_location(ctx, expr);

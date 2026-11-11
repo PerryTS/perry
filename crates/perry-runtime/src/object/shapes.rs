@@ -2471,7 +2471,11 @@ fn shape_descriptor_mint_fresh(
     // complete descriptor.
     // SAFETY: no slab reference is held; `slab()` above went out of scope.
     let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
-        .map_err(|_| ShapeDescriptorError::IdExhausted)?
+        .map_err(|_error| {
+            #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+            snap22::snapshot("publish_error", _error as u64 + 1);
+            ShapeDescriptorError::IdExhausted
+        })?
         .word
         .0;
     // `id` was just handed out by `alloc_shape_id`, which never reuses a
@@ -2745,6 +2749,8 @@ pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHe
 #[optimize(size)]
 #[inline(never)]
 fn shape_id_exhausted_abort() -> ! {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    snap22::snapshot("abort", 0);
     eprintln!("Perry ShapeId space exhausted; refusing to publish an untracked object shape");
     std::process::abort()
 }
@@ -7424,3 +7430,7 @@ pub(crate) fn recompute_record_handle_carriers() {
         }
     }
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[path = "shapes_snap22.rs"]
+pub(crate) mod snap22;
