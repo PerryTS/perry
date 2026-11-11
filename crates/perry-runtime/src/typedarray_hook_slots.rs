@@ -559,7 +559,7 @@ pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<crate::va
 }
 pub(crate) fn install() {
     crate::perry_install_once!({
-        BUFFER_WRITTEN_MEMBER.set(crate::object::buffer_dispatch::buffer_written_member_lookup);
+        BUFFER_WRITTEN_MEMBER.set(crate::object::buffer_written_member_lookup);
         BUFFER_PROTOTYPE_MEMBERS
             .set(crate::object::native_module::callable_exports::install_buffer_prototype_members);
         COERCE_FOR_KIND.set(crate::typedarray::bigint::coerce_for_kind);

@@ -642,27 +642,6 @@ const BUFFER_STATIC_METHODS: &[&str] = &[
 /// list from that one copied 36 names Node never puts here (plus two bare
 /// string literals, `"function"` and `"undefined"`, that had drifted in from
 /// nearby prose/JS-idiom comments and were never real method names at all).
-pub(crate) fn is_buffer_prototype_member(name: &str) -> bool {
-    BUFFER_PROTOTYPE_METHODS.contains(&name)
-}
-
-/// Is `value` a builtin method member of `Buffer.prototype` that shares
-/// [`buffer_prototype_method_thunk`]? That thunk has no behaviour of its own:
-/// the member's body is the receiver's name dispatch
-/// (`buffer_dispatch::dispatch_buffer_method`). Decided by the closure's body.
-pub(crate) fn is_buffer_prototype_method_thunk(value: crate::value::JSValue) -> bool {
-    if !value.is_pointer() {
-        return false;
-    }
-    let addr = value.as_pointer::<u8>() as usize;
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
-        return false;
-    };
-    header.obj_type == crate::gc::GC_TYPE_CLOSURE
-        && crate::closure::js_closure_get_func(addr as *const crate::closure::ClosureHeader)
-            == buffer_prototype_method_thunk as *const u8
-}
-
 const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "toString",
     "inspect",
@@ -758,6 +737,29 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "utf8Slice",
     "utf8Write",
 ];
+
+/// Is `name` an own builtin member of `Buffer.prototype`
+/// (`BUFFER_PROTOTYPE_METHODS`)?
+pub(crate) fn is_buffer_prototype_member(name: &str) -> bool {
+    BUFFER_PROTOTYPE_METHODS.contains(&name)
+}
+
+/// Is `value` a builtin method member of `Buffer.prototype` that shares
+/// [`buffer_prototype_method_thunk`]? That thunk has no behaviour of its own:
+/// the member's body is the receiver's name dispatch
+/// (`buffer_dispatch::dispatch_buffer_method`). Decided by the closure's body.
+pub(crate) fn is_buffer_prototype_method_thunk(value: crate::value::JSValue) -> bool {
+    if !value.is_pointer() {
+        return false;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_CLOSURE
+        && crate::closure::js_closure_get_func(addr as *const crate::closure::ClosureHeader)
+            == buffer_prototype_method_thunk as *const u8
+}
 
 const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
     "fail",

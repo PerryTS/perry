@@ -577,8 +577,7 @@ pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JS
     let raw = || crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
     let proto_bits = crate::object::prototype_chain::object_static_prototype(raw())
         .unwrap_or_else(|| crate::object::builtin_prototype_value("Buffer").to_bits());
-    // SAFETY: the rooted receiver is a live Buffer; the chain walk reads it.
-    let value = key.with_const_ptr(|key: *const crate::StringHeader| unsafe {
+    let value = key.with_const_ptr(|key: *const crate::StringHeader| {
         crate::object::prototype_chain::resolve_inherited_field_from_prototype(
             raw(),
             proto_bits,
