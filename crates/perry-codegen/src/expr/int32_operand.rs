@@ -82,6 +82,17 @@ fn at_rest_or_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// `e` is a word the facts hold (an I32 lane read, an at-rest element, an
+/// int32 element read), with this module on: `int_product`'s leaf.
+pub(super) fn word_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    enabled() && !ctx.wpfacts_off && !ctx.wpfacts.interp_guard && at_rest_or_read(ctx, e)
+}
+
+/// The i32 of a [`word_read`] operand.
+pub(super) fn lower_word(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String> {
+    lower(ctx, e)
+}
+
 /// `e` is an operand this module takes as an i32: an int32 Number at every
 /// evaluation, a local whose ToInt32 has a shadow (`int32_shadow`), or a
 /// bitwise operator this module lowers itself.

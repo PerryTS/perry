@@ -3390,6 +3390,7 @@ pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
 pub(crate) mod held_len;
+pub(crate) mod int_product;
 pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
@@ -4369,6 +4370,24 @@ fn lower_compare_value(
             "Compare",
             None,
             "ordinary_expr_value.typed_element_relational_i1",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![format!("op={op:?}")],
+        );
+        return Ok(Some(lowered));
+    }
+    // An integer product, sum or difference the intervals bound is compared
+    // as integers (`int_product`).
+    if let Some(bit) = int_product::try_lower_compare(ctx, op, left, right)? {
+        let lowered = LoweredValue::i1(bit);
+        ctx.record_lowered_value(
+            "Compare",
+            None,
+            "ordinary_expr_value.int_product_i1",
             &lowered,
             None,
             None,

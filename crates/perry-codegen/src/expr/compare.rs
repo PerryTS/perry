@@ -1302,6 +1302,18 @@ fn finite_numeric_literal(ctx: &mut FnCtx<'_>, operand: &Expr) -> Result<Option<
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
+            // An integer product, sum or difference the intervals bound is
+            // compared as integers (`int_product`).
+            if let Some(bit) = super::int_product::try_lower_compare(ctx, *op, left, right)? {
+                let tagged = ctx.block().select(
+                    I1,
+                    &bit,
+                    I64,
+                    crate::nanbox::TAG_TRUE_I64,
+                    crate::nanbox::TAG_FALSE_I64,
+                );
+                return Ok(ctx.block().bitcast_i64_to_double(&tagged));
+            }
             // `typeof` always yields a string, so loose and strict equality
             // against a string literal are the same comparison.
             if matches!(

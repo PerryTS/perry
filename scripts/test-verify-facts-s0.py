@@ -148,6 +148,7 @@ def main():
         ("signed-index-negative", "signature-range", "signature"),
         ("local-range-negative", "localrange", "int32 input"),
         ("int32-read-negative", "int32read", "int32 input"),
+        ("int-product-negative", "intprod", "int32 input"),
         ("undef-number-negative", "undefnum", "canonical number"),
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),

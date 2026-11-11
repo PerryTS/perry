@@ -226,6 +226,13 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(bit) = crate::expr::i32_temps::try_lower_compare(ctx, expr)? {
         return Ok(bit);
     }
+    // An integer product, sum or difference the intervals bound is compared
+    // as integers.
+    if let Expr::Compare { op, left, right } = expr {
+        if let Some(bit) = crate::expr::int_product::try_lower_compare(ctx, *op, left, right)? {
+            return Ok(bit);
+        }
+    }
     if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
         return Ok(bit);
     }
