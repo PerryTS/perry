@@ -1,3 +1,4 @@
 sync done
 awaited 42, counter 2
-later, counter 2
+box 3, result 3, counter 3
+later, counter 3

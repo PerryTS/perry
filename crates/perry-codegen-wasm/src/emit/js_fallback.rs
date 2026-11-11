@@ -485,9 +485,11 @@ impl WasmModuleEmitter {
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Object, then value, each evaluated once: the value is both stored and
+                // the expression's result, and may have side effects.
                 format!(
-                    "(toJsValue({}).{} = toJsValue({}), {})",
-                    obj, property, val, val
+                    "((__o, __v) => (toJsValue(__o).{} = toJsValue(__v), __v))({}, {})",
+                    property, obj, val
                 )
             }
             Expr::Object(fields) => {
@@ -701,9 +703,10 @@ impl WasmModuleEmitter {
                 let obj = self.emit_js_expr(target, locals);
                 let k = self.emit_js_expr(key, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
-                    obj, k, val, val
+                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    obj, k, val
                 )
             }
             Expr::ArrayPush {
