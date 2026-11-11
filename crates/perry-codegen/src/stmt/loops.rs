@@ -8012,8 +8012,13 @@ fn lower_for_after_init_impl(
     // instead of `fcmp olt/ole double`. This eliminates the float counter fadd +
     // fcmp per iteration — saves ~2 instructions on the inner loop of
     // nested_loops and similar patterns.
+    // Check mode: a facts-held loop keeps the condition's read of the
+    // length, where the held length is compared with the live one
+    // (`held_len::length_read`).
+    let witnessed = held_by_facts.is_some() && crate::verify_facts::enabled();
     let i32_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
-        if let (Some(_), Some(len_dbl_slot)) = (
+        if let (false, Some(_), Some(len_dbl_slot)) = (
+            witnessed,
             ctx.i32_counter_slots.get(&hoist.counter_id).cloned(),
             hoisted_length_slot.as_ref(),
         ) {
