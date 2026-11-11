@@ -757,6 +757,9 @@ pub(super) fn compile_module_entry(
             // factory without ever reaching that module's __init wrapper. All
             // eager literal pools must be ready before ANY eager body runs.
             // Deferred pools remain lazy and prepare in their own wrapper.
+            if !entry_in_init {
+                blk.store(I8, "1", &format!("@__perry_init_done_{module_prefix}"));
+            }
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -1016,6 +1019,7 @@ pub(super) fn compile_module_entry(
             constructed_kind_locals: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+            deferred_namespace_imports: &cross_module.deferred_namespace_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_nested: &cross_module.namespace_member_nested,
             cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -1352,6 +1356,10 @@ pub(super) fn compile_module_entry(
         }
 
         if !ctx.block().is_terminated() {
+            if !entry_in_init {
+                ctx.block()
+                    .store(I8, "2", &format!("@__perry_init_done_{module_prefix}"));
+            }
             if is_dylib {
                 // Dylib: no event loop — the host manages its own event
                 // loop and calls perry_fn_* entry points as needed. Just

@@ -594,6 +594,12 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
     let mut cur = recv;
     // A prototype chain is acyclic; the bound only guards a corrupt one.
     for _ in 0..256 {
+        // Deferred namespaces perform module evaluation as part of [[Get]].
+        // Resolve the callee before arguments and keep the original receiver
+        // for the existing value-call path, rather than late by-name dispatch.
+        if super::deferred_namespace::is_deferred(cur) {
+            return true;
+        }
         let b = cur.to_bits();
         if is_pointer(b) {
             let addr = (b & crate::value::POINTER_MASK) as usize;
