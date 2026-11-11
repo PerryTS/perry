@@ -116,6 +116,7 @@ mod locked_store;
 mod logical_and;
 mod map_identity_ops;
 mod function_call_value;
+mod set_proto_result;
 mod static_call_value;
 mod memo_context;
 mod named_accessors;

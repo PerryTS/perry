@@ -229,6 +229,12 @@ impl<'a> Gen<'a> {
                     },
                 );
                 self.m.cons(on, Cons::ProtoFrom { src: pn });
+                // ECMA-262 20.1.2.23 step 5: Object.setPrototypeOf returns O
+                // itself; 28.1.13 step 4: Reflect.setPrototypeOf returns the
+                // Boolean of O.[[SetPrototypeOf]](proto), never O.
+                if matches!(e, Expr::ReflectSetPrototypeOf { .. }) {
+                    return self.prim_node(prim::BOOL);
+                }
                 on
             }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
