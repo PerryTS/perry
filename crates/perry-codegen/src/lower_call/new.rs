@@ -752,7 +752,8 @@ fn lower_new_impl_inner<'a>(
         // arm branching into a block nothing terminates.
         // An image birth wrote its plan's stores: that plan, not a second
         // derivation, drives the diamond below.
-        let prologue_plan = if fields_written.is_some() && image_plan.is_some() {
+        let image_written = fields_written.is_some() && image_plan.is_some();
+        let prologue_plan = if image_written {
             image_plan.take()
         } else if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
             super::ctor_prologue_stores::prologue_store_plan(
@@ -782,7 +783,18 @@ fn lower_new_impl_inner<'a>(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
-            ctx.block().cond_br(written, &fast_label, &slow_label);
+            // An image's other arm is the shared birth and the constructor:
+            // the unlikely one (`new_alloc.rs`).
+            let written = if image_written {
+                ctx.block().call(
+                    crate::types::I1,
+                    "llvm.expect.i1",
+                    &[(crate::types::I1, written), (crate::types::I1, "true")],
+                )
+            } else {
+                written.clone()
+            };
+            ctx.block().cond_br(&written, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
             for store in prologue_plan.iter().flatten() {
                 if let Some(key) = &store.family_key {

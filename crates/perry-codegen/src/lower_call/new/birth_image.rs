@@ -185,7 +185,8 @@ pub(super) fn plan(
         }
         Err(why) => {
             crate::expr::note_site(&format!(
-                "birth-image-refused {class_name} why={why} {}",
+                "birth-image-refused {class_name} why={} {}",
+                why.replace(' ', "-"),
                 ctx.func.name
             ));
             None

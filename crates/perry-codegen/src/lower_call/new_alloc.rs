@@ -813,6 +813,22 @@ fn emit_instance_alloc_inner(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
+            // An image site's only birth call is the shared one behind these
+            // two tests; say which arm is the likely one, so values live
+            // across that call are saved next to it and not on the image's
+            // path (`inprocess/cold_paths.rs` on why a call site must say so).
+            let expect = |ctx: &mut FnCtx<'_>, test: &str| {
+                ctx.block().call(
+                    crate::types::I1,
+                    "llvm.expect.i1",
+                    &[(crate::types::I1, test), (crate::types::I1, "true")],
+                )
+            };
+            let fits = if image.is_some() {
+                expect(ctx, &fits)
+            } else {
+                fits
+            };
             let entry_pred = ctx.block().label.clone();
             ctx.block().cond_br(&fits, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
@@ -829,8 +845,9 @@ fn emit_instance_alloc_inner(
                 if let Some(admit) = &image.admit {
                     let write_idx = ctx.new_block("birth_image.write");
                     let write_label = ctx.block_label(write_idx);
+                    let admit = expect(ctx, admit);
                     unadmitted_pred = Some(ctx.block().label.clone());
-                    ctx.block().cond_br(admit, &write_label, &slow_label);
+                    ctx.block().cond_br(&admit, &write_label, &slow_label);
                     ctx.current_block = write_idx;
                 }
                 super::new::birth_image::emit(
