@@ -333,6 +333,10 @@ pub struct BindingFacts {
     /// Numbers with the same elements (`const_arrays::collect`): index `i`
     /// reads the Number with bits `const_elems[i]`, for the whole program.
     pub const_elems: Option<Vec<u64>>,
+    /// It may hold a String, and every String it holds is the value of a
+    /// program string literal (`literal_strings`): born shared, never
+    /// appended to in place.
+    pub literal_strings: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -689,6 +693,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.class_object = class_object_of(m, n);
     out.int_demand = node.int_demand;
     out.zero_tol = node.zs_tol;
+    out.literal_strings = crate::literal_strings::holds(m, &[n]);
     out.rep = match arr_rep(m, &[n]) {
         Some(r) => Rep::Arr(r),
         None => match record_rep(m, n) {

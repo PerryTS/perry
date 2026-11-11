@@ -746,6 +746,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if b.immutable_array {
                 out.immutable_arrays.insert(*id);
             }
+            if b.literal_strings {
+                out.literal_string_locals.insert(*id);
+            }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());
             }
@@ -820,6 +823,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 }
                 if f.rest {
                     out.rest_keys.insert(f.key.clone());
+                }
+                // Interpreted code can store any string.
+                if f.literal_strings && !interp {
+                    out.literal_string_fields.insert((cid, f.key.clone()));
                 }
                 Some(FactsField {
                     classes,

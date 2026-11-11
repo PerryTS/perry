@@ -3380,6 +3380,7 @@ pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
+pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]
