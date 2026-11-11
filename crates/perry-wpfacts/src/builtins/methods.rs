@@ -206,10 +206,10 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         // its chain: the call throws a TypeError there (`x is not a
         // function`), the arguments evaluated and never read.
         Some(Mem::Fn) if name == WK_ITERATOR => {
+            // The string kind runs the String rule: an exact String Iterator
+            // (%StringIteratorPrototype%) over the code point strings.
             if prim & prim::STR != 0 {
-                let s = string_methods::str_node(m);
-                let it = collections::iter_over(m, call, members::ANY_ITERATOR, s);
-                ret_tok(m, call, it);
+                string_methods::string_method(m, call, &name);
             }
         }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
