@@ -813,26 +813,24 @@ fn emit_instance_alloc_inner(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
-            // An image site's only birth call is the shared one behind one
-            // test (the bump fits and the values pass the number test); say
-            // which arm is the likely one, so values live across that call
-            // are saved next to it and not on the image's path
-            // (`inprocess/cold_paths.rs` on why a call site must say so).
-            let admit = image.and_then(|image| image.admit.clone());
-            let take = if image.is_some() {
-                let both = match &admit {
-                    Some(admit) => ctx.block().and(crate::types::I1, &fits, admit),
-                    None => fits.clone(),
-                };
+            // An image site's only birth call is the shared one behind these
+            // two tests; say which arm is the likely one, so values live
+            // across that call are saved next to it and not on the image's
+            // path (`inprocess/cold_paths.rs` on why a call site must say so).
+            let expect = |ctx: &mut FnCtx<'_>, test: &str| {
                 ctx.block().call(
                     crate::types::I1,
                     "llvm.expect.i1",
-                    &[(crate::types::I1, &both), (crate::types::I1, "true")],
+                    &[(crate::types::I1, test), (crate::types::I1, "true")],
                 )
-            } else {
-                fits.clone()
             };
-            ctx.block().cond_br(&take, &fast_label, &slow_label);
+            let fits = if image.is_some() {
+                expect(ctx, &fits)
+            } else {
+                fits
+            };
+            let entry_pred = ctx.block().label.clone();
+            ctx.block().cond_br(&fits, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
             let blk = ctx.block();
             // Arena allocator metadata, not a JS edge.
@@ -840,8 +838,18 @@ fn emit_instance_alloc_inner(
             let data_ptr = blk.load(PTR, &state_ptr);
             let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
             // Birth cost: an image birth writes the header and every slot's
-            // final word here.
+            // final word here. A construction whose values fail the number
+            // test hands its committed bump to the one shared birth below.
+            let mut unadmitted_pred: Option<String> = None;
             let fast_handle = if let Some(image) = image {
+                if let Some(admit) = &image.admit {
+                    let write_idx = ctx.new_block("birth_image.write");
+                    let write_label = ctx.block_label(write_idx);
+                    let admit = expect(ctx, admit);
+                    unadmitted_pred = Some(ctx.block().label.clone());
+                    ctx.block().cond_br(&admit, &write_label, &slow_label);
+                    ctx.current_block = write_idx;
+                }
                 super::new::birth_image::emit(
                     ctx,
                     image,
@@ -872,19 +880,11 @@ fn emit_instance_alloc_inner(
             let fast_pred = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = slow_idx;
-            // A construction whose bump fits but whose values fail the number
-            // test hands its committed bump to the shared birth; one that does
-            // not fit asks it to allocate (null).
-            let slow_raw = if admit.is_some() {
-                let blk = ctx.block();
-                let commit = blk.select(crate::types::I1, &fits, I64, &new_offset, &aligned_off);
-                // Arena allocator metadata, not a JS edge.
-                crate::expr::inline_birth::arena_store(blk, &arena, &commit, &offset_field_ptr);
-                let data_ptr = blk.load(PTR, &state_ptr);
-                let raw = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-                blk.select(crate::types::I1, &fits, PTR, &raw, "null")
-            } else {
-                "null".to_string()
+            let slow_raw = match &unadmitted_pred {
+                Some(pred) => ctx
+                    .block()
+                    .phi(PTR, &[("null", &entry_pred), (&raw_fast, pred)]),
+                None => "null".to_string(),
             };
             let slow_handle = crate::expr::inline_birth::class(
                 ctx,
