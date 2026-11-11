@@ -36,6 +36,11 @@
 //! the thread's first allocation, so it does not weaken the check that
 //! follows it. It is recognized by what it tests: a value the limit is
 //! computed from, against a constant.
+//!
+//! A dropped check there leaves its lookup behind: the read of the thread
+//! register is an `asm sideeffect`, which no pass removes. When the lookup's
+//! blocks hold nothing but the check's own computation, its tests are given
+//! a constant condition too, so the lookup goes with the check.
 
 use inkwell::module::Module;
 use llvm_sys::core::*;
@@ -61,7 +66,7 @@ pub(super) fn apply(module: &Module<'_>) -> usize {
     if !prologue_cost_enabled() {
         return 0;
     }
-    drop_dominated(module, 2).0
+    drop_dominated(module, 2).dropped
 }
 
 /// Test seam: the number of stack checks in `ll_text` and how many of them
@@ -69,11 +74,25 @@ pub(super) fn apply(module: &Module<'_>) -> usize {
 /// its own skip). Ties the shapes this pass reads to the ones
 /// `stack_guard::emit_check` writes, per target.
 #[cfg(test)]
-pub(crate) fn recognized_checks(ll_text: &str) -> (usize, usize) {
+pub(crate) fn recognized_checks(ll_text: &str) -> Recognized {
     let ctx = inkwell::context::Context::create();
     let module = super::parse_ir_text(&ctx, ll_text, "stack_checks").unwrap();
-    let (_, found, covering) = drop_dominated(&module, 1);
-    (found, covering)
+    drop_dominated(&module, 1)
+}
+
+/// What [`drop_dominated`] saw and did.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub(crate) struct Recognized {
+    /// Checks dropped.
+    pub(crate) dropped: usize,
+    /// Checks found, in reachable blocks or not.
+    pub(crate) found: usize,
+    /// Checks in blocks the entry reaches.
+    pub(crate) reachable: usize,
+    /// Reachable checks that cover what follows them.
+    pub(crate) covering: usize,
+    /// Dropped checks whose lookup went with them.
+    pub(crate) lookups: usize,
 }
 
 /// A stack check: the block it ends, and its two arms.
@@ -87,10 +106,16 @@ struct Check {
     unpublished: Vec<(usize, usize)>,
 }
 
-/// Returns (checks dropped, checks found, checks that cover what follows),
-/// looking only at bodies with at least `fewest` checks.
-fn drop_dominated(module: &Module<'_>, fewest: usize) -> (usize, usize, usize) {
-    let (mut dropped, mut found, mut covering) = (0, 0, 0);
+/// A check's lookup of the limit: the branches of its "no limit published"
+/// tests, and every instruction that is the check's own computation.
+struct Lookup {
+    tests: Vec<LLVMValueRef>,
+    own: Vec<LLVMValueRef>,
+}
+
+/// Looks only at bodies with at least `fewest` checks.
+fn drop_dominated(module: &Module<'_>, fewest: usize) -> Recognized {
+    let mut seen = Recognized::default();
     unsafe {
         let ctx = LLVMGetModuleContext(module.as_mut_ptr());
         let never = LLVMConstInt(LLVMInt1TypeInContext(ctx), 0, 0);
@@ -134,28 +159,93 @@ fn drop_dominated(module: &Module<'_>, fewest: usize) -> (usize, usize, usize) {
                         && LLVMIsConditional(first) == 0
                 })
                 .collect();
-            let (checks, branches): (Vec<Check>, Vec<LLVMValueRef>) = branches
-                .into_iter()
-                .filter_map(|(block, branch)| {
-                    let check = Check {
-                        block,
-                        overflow: *index.get(&LLVMGetSuccessor(branch, 0))?,
-                        ok: *index.get(&LLVMGetSuccessor(branch, 1))?,
-                        unpublished: unpublished_tests(branch, &index),
-                    };
-                    Some((check, branch))
-                })
-                .unzip();
-            let (dominated, covers) = dominated_checks(&succ, &forwards, &checks);
-            found += checks.len();
-            covering += covers;
-            for i in dominated {
-                LLVMSetCondition(branches[i], never);
-                dropped += 1;
+            let mut checks = Vec::new();
+            let mut lookups = Vec::new();
+            for (block, branch) in branches {
+                let (Some(&overflow), Some(&ok)) = (
+                    index.get(&LLVMGetSuccessor(branch, 0)),
+                    index.get(&LLVMGetSuccessor(branch, 1)),
+                ) else {
+                    continue;
+                };
+                let (unpublished, lookup) = unpublished_tests(branch, &index);
+                checks.push(Check {
+                    block,
+                    overflow,
+                    ok,
+                    unpublished,
+                });
+                lookups.push((branch, lookup));
+            }
+            let found = dominated_checks(&succ, &forwards, &checks);
+            seen.found += checks.len();
+            seen.reachable += found.reachable;
+            seen.covering += found.covering;
+            for i in found.dominated {
+                let (branch, lookup) = &lookups[i];
+                LLVMSetCondition(*branch, never);
+                seen.dropped += 1;
+                if lookup_is_the_checks_own(&checks[i], lookup, &blocks, &succ, &forwards) {
+                    for &test in &lookup.tests {
+                        LLVMSetCondition(test, never);
+                    }
+                    seen.lookups += 1;
+                }
             }
         }
     }
-    (dropped, found, covering)
+    seen
+}
+
+/// May the lookup in front of a dropped check go with it?
+///
+/// Yes when taking the "no limit published" arm of every test loses nothing:
+/// each such arm only branches on into the check's `ok` block, and the blocks
+/// the tests otherwise enter are the check's alone. Each is entered only from
+/// its test, is the next test's block or the check's, and holds nothing but
+/// the check's own computation.
+unsafe fn lookup_is_the_checks_own(
+    check: &Check,
+    lookup: &Lookup,
+    blocks: &[LLVMBasicBlockRef],
+    succ: &[Vec<usize>],
+    forwards: &[bool],
+) -> bool {
+    unsafe {
+        if check.unpublished.is_empty() {
+            return false;
+        }
+        let entries = |block: usize| succ.iter().flatten().filter(|&&to| to == block).count();
+        let mut skipped = Vec::new();
+        for &(test, arm) in &check.unpublished {
+            if !forwards[arm] || succ[arm] != [check.ok] {
+                return false;
+            }
+            let Some(&on) = succ[test].first() else {
+                return false;
+            };
+            let is_the_checks =
+                on == check.block || check.unpublished.iter().any(|&(next, _)| next == on);
+            if !is_the_checks || on == arm || entries(on) != 1 {
+                return false;
+            }
+            skipped.push(on);
+        }
+        if !skipped.contains(&check.block) {
+            return false;
+        }
+        skipped.iter().all(|&block| {
+            let terminator = LLVMGetBasicBlockTerminator(blocks[block]);
+            let mut inst = LLVMGetFirstInstruction(blocks[block]);
+            while !inst.is_null() && inst != terminator {
+                if !lookup.own.contains(&inst) {
+                    return false;
+                }
+                inst = LLVMGetNextInstruction(inst);
+            }
+            true
+        })
+    }
 }
 
 /// The conditional branch ending `block`, if it is a stack check.
@@ -199,9 +289,14 @@ const LIMIT_CHAIN: usize = 32;
 unsafe fn unpublished_tests(
     branch: LLVMValueRef,
     index: &HashMap<LLVMBasicBlockRef, usize>,
-) -> Vec<(usize, usize)> {
+) -> (Vec<(usize, usize)>, Lookup) {
     unsafe {
         let mut tests = Vec::new();
+        let deep = LLVMGetCondition(branch);
+        let mut lookup = Lookup {
+            tests: Vec::new(),
+            own: vec![deep, LLVMGetOperand(deep, 0)],
+        };
         // The instructions the limit is computed from, nearest first. A phi
         // is not followed: its value is not one computation.
         let mut chain = vec![LLVMGetOperand(LLVMGetCondition(branch), 1)];
@@ -223,6 +318,7 @@ unsafe fn unpublished_tests(
             if LLVMIsAInstruction(value).is_null() {
                 continue;
             }
+            lookup.own.push(value);
             let mut use_ = LLVMGetFirstUse(value);
             while !use_.is_null() {
                 let test = LLVMGetUser(use_);
@@ -254,16 +350,28 @@ unsafe fn unpublished_tests(
                     let arm = index.get(&LLVMGetSuccessor(br, 1));
                     if let (Some(&block), Some(&arm)) = (block, arm) {
                         tests.push((block, arm));
+                        lookup.tests.push(br);
+                        lookup.own.push(test);
                     }
                 }
             }
         }
-        tests
+        (tests, lookup)
     }
 }
 
-/// Indices of the checks that another check dominates, over the CFG `succ`
-/// (block 0 is the entry). `forwards[b]`: block `b` only branches on.
+/// What [`dominated_checks`] found.
+struct Dominance {
+    /// Indices of the checks that another check dominates.
+    dominated: Vec<usize>,
+    /// Checks in blocks the entry reaches.
+    reachable: usize,
+    /// Reachable checks whose `ok` block stands for their edge.
+    covering: usize,
+}
+
+/// The checks that another check dominates, over the CFG `succ` (block 0 is
+/// the entry). `forwards[b]`: block `b` only branches on.
 ///
 /// A check dominates what its `ok` edge dominates. The `ok` block stands for
 /// that edge when nothing else enters it. Every other predecessor is one of:
@@ -274,17 +382,15 @@ unsafe fn unpublished_tests(
 /// - the check's skip for a thread without a limit: a block that only
 ///   branches on, entered only from the check's own tests of that
 ///   ([`Check::unpublished`]), each of which dominates the check.
-///
-/// Also returns how many checks have such an `ok` block.
-fn dominated_checks(
-    succ: &[Vec<usize>],
-    forwards: &[bool],
-    checks: &[Check],
-) -> (Vec<usize>, usize) {
+fn dominated_checks(succ: &[Vec<usize>], forwards: &[bool], checks: &[Check]) -> Dominance {
     const NONE: usize = usize::MAX;
     let n = succ.len();
     if n == 0 {
-        return (Vec::new(), 0);
+        return Dominance {
+            dominated: Vec::new(),
+            reachable: 0,
+            covering: 0,
+        };
     }
     // Reverse postorder from the entry.
     let mut order = Vec::with_capacity(n);
@@ -380,8 +486,13 @@ fn dominated_checks(
     // `ok` blocks that stand for their check's edge.
     let mut guards = vec![false; n];
     let mut covering = 0;
+    let mut reachable = 0;
     for check in checks {
-        if rank[check.block] == NONE || check.ok == check.overflow {
+        if rank[check.block] == NONE {
+            continue;
+        }
+        reachable += 1;
+        if check.ok == check.overflow {
             continue;
         }
         let arm_is_private = pred[check.overflow] == [check.block];
@@ -414,7 +525,11 @@ fn dominated_checks(
         .filter(|(_, check)| rank[check.block] != NONE && depth[check.block] > 0)
         .map(|(i, _)| i)
         .collect();
-    (dominated, covering)
+    Dominance {
+        dominated,
+        reachable,
+        covering,
+    }
 }
 
 #[cfg(test)]
@@ -658,6 +773,39 @@ over2:
 ok2:
   ret void
 }
+define void @lookup_block_does_work(ptr %keyp) {
+entry:
+  %sp = call i64 @llvm.read_register.i64(metadata !0)
+  %lim = load i64, ptr %keyp
+  %deep = icmp ult i64 %sp, %lim
+  br i1 %deep, label %over, label %ok
+over:
+  call void @js_stack_overflow()
+  unreachable
+ok:
+  %key2 = load i64, ptr %keyp
+  %has2 = icmp ne i64 %key2, -1
+  br i1 %has2, label %tsd2, label %slow2
+tsd2:
+  call void @work()
+  %slot2 = inttoptr i64 %key2 to ptr
+  %hot2 = load ptr, ptr %slot2
+  %published2 = icmp ne ptr %hot2, null
+  br i1 %published2, label %fast2, label %slow2
+slow2:
+  br label %ok2
+fast2:
+  %lim2 = load ptr, ptr %hot2
+  %sp2 = call i64 @llvm.read_register.i64(metadata !0)
+  %limit2 = ptrtoint ptr %lim2 to i64
+  %deep2 = icmp ult i64 %sp2, %limit2
+  br i1 %deep2, label %over2, label %ok2
+over2:
+  call void @js_stack_overflow()
+  unreachable
+ok2:
+  ret void
+}
 define void @skipped_for_another_reason(ptr %limitp, i64 %x) {
 entry:
   %lim = load i64, ptr %limitp
@@ -724,7 +872,7 @@ ok:
     fn dropped() -> (String, usize) {
         let ctx = Context::create();
         let module = parse_ir_text(&ctx, IR, "stack_checks").unwrap();
-        let (count, _, _) = drop_dominated(&module, 2);
+        let count = drop_dominated(&module, 2).dropped;
         module.verify().expect("module verifies");
         (module.print_to_string().to_string(), count)
     }
@@ -814,10 +962,33 @@ ok:
     #[test]
     fn a_skip_for_an_unpublished_limit_does_not_uncover() {
         let (ir, _) = dropped();
-        assert_eq!(live_and_dropped(&ir, "hot_tls"), (1, 1));
         let body = body(&ir, "hot_tls");
         assert!(body.contains("br i1 %deep, label %over, label %ok\n"));
         assert!(body.contains("br i1 false, label %over2, label %ok2"));
+        // The first check keeps its lookup.
+        assert!(body.contains("br i1 %has, label %tsd, label %slow\n"));
+        assert!(body.contains("br i1 %published, label %fast, label %slow\n"));
+    }
+
+    /// The dropped check's lookup goes with it: its tests take the skip, so
+    /// the read of the thread register is in a block nothing enters.
+    #[test]
+    fn a_dropped_check_takes_its_own_lookup_along() {
+        let (ir, _) = dropped();
+        let body = body(&ir, "hot_tls");
+        assert!(body.contains("br i1 false, label %tsd2, label %slow2"));
+        assert!(body.contains("br i1 false, label %fast2, label %slow2"));
+    }
+
+    /// Negative control: a lookup block that does anything else stays, and
+    /// only the check's own branch is folded.
+    #[test]
+    fn a_lookup_that_is_not_the_checks_alone_stays() {
+        let (ir, _) = dropped();
+        let body = body(&ir, "lookup_block_does_work");
+        assert!(body.contains("br i1 false, label %over2, label %ok2"));
+        assert!(body.contains("br i1 %has2, label %tsd2, label %slow2"));
+        assert!(body.contains("br i1 %published2, label %fast2, label %slow2"));
     }
 
     /// Negative controls: a way round the check that tests something the
@@ -835,8 +1006,8 @@ ok:
         let (ir, count) = dropped();
         assert_eq!(live_and_dropped(&ir, "single"), (1, 0));
         assert_eq!(
-            count, 5,
-            "inlined, both_arms, rejoining_arm, loops, hot_tls"
+            count, 6,
+            "inlined, both_arms, rejoining_arm, loops, hot_tls, lookup_block_does_work"
         );
     }
 
