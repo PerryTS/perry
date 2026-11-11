@@ -453,6 +453,14 @@ pub const GC_TYPE_STRING: u8 = 3;
 /// boxed binding. A declaring function's inline box read accepts exactly this
 /// kind, unforwarded, of exactly that size.
 pub const GC_TYPE_BOX: u8 = 22;
+/// `gc::GC_TYPE_RECORD_ARRAY`: a value-record array head
+/// (`record_array::RecordArrayHeader`). Never an ordinary array:
+/// `gc_type_is_array!` is false for it, and only the `js_record_array_*`
+/// entries read or write one.
+pub const GC_TYPE_RECORD_ARRAY: u8 = 42;
+/// `gc::GC_TYPE_RECORD_ELEMS`: a record array's element buffer,
+/// `capacity * words` pointer-free JSValue words.
+pub const GC_TYPE_RECORD_ELEMS: u8 = 43;
 
 /// Classify the first four GC-header bytes, loaded as a native-endian u32.
 /// No shape or target read is needed after the creation-time publication.

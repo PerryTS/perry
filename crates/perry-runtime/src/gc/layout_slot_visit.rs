@@ -638,6 +638,11 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
             }
         }
         GcRewriteDescriptorKind::Box => visit(fixed_slot(user_ptr as *mut u64)),
+        GcRewriteDescriptorKind::RecordArray => {
+            // The head's only traced edge: its element buffer, a pointer-free
+            // leaf, or null while the capacity is 0.
+            visit(pointer_slot(crate::record_array::elems_slot(user_ptr)));
+        }
         GcRewriteDescriptorKind::Scope => {
             let slots = user_ptr as *mut u64;
             for i in 0..crate::r#box::scope::scope_slot_count(header) {

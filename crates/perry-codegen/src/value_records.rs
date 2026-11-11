@@ -53,7 +53,26 @@
 //!   destination's field locals and leaves `true` (or `undefined`) in the
 //!   temporary; a boxed result is read key by key.
 //!
-//! Records in arrays are VR-4b.
+//! VR-4b, record arrays (§1.4, §5.3): an Array the facts name a record array
+//! (`ElisionFacts::record_array_*`) is a `GC_TYPE_RECORD_ARRAY`, its
+//! elements the records' words inline. Only these forms touch one, each a
+//! `__perry_runtime` intrinsic `codegen::record_array` lowers:
+//!
+//! - its birth, an empty literal that is the whole value of its holder
+//!   (`let x = []`, `x = []`, `o.k = []`, a class field initializer);
+//! - `push(r)`: the copy of `r`'s lanes is stored (no object is born);
+//! - `pop()` and `a[i]`: record results, bound to lanes as a typed call's
+//!   (the aggregate temporary; absent when empty or out of bounds);
+//! - `length`;
+//! - `for (const r of a)`: the index arm of HIR's for-of
+//!   (`perry_hir::lower::for_of_guard`), whose iterator arm is dropped.
+//!
+//! A receiver is typed by its binding or by its named read; a binding
+//! initialized or assigned from one is typed with it. Any other use of a
+//! typed receiver that is no plain value flow is a compile error: the facts
+//! reject every operation these forms do not cover (`R6Op`), so reaching one
+//! means the two sides disagree, and an ordinary Array lowering of a record
+//! array would read another object's layout.
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::{LocalId, Type};
@@ -128,22 +147,27 @@ pub(crate) struct Census {
     pub returns: usize,
     pub passed: usize,
     pub calls: usize,
+    /// VR-4b: record-array births and operations lowered as intrinsics.
+    pub arrays: usize,
+    pub array_ops: usize,
 }
 
 /// The module with every eligible record binding rewritten, or `None`
 /// when there is none (the module lowers as it is).
 pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Census, Abi)> {
-    if facts.record_locals.is_empty() && !facts.signatures.values().any(has_record) {
+    let arrays = facts.has_record_arrays();
+    if facts.record_locals.is_empty() && !facts.signatures.values().any(has_record) && !arrays {
         return None;
     }
     let shapes = shapes(hir, facts);
+    let ra_locals = record_array_locals(hir, facts, &shapes);
     let cands: HashMap<LocalId, FactsRecRep> = facts
         .record_locals
         .iter()
         .filter(|(_, r)| shapes.contains_key(&r.tmpl))
         .map(|(id, r)| (*id, *r))
         .collect();
-    if cands.is_empty() && !facts.signatures.values().any(has_record) {
+    if cands.is_empty() && !facts.signatures.values().any(has_record) && !arrays {
         return None;
     }
     // VR-3b: the functions whose record slots cross as lanes, and their
@@ -186,7 +210,7 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
     let next = perry_transform::generator::compute_max_local_id(hir).saturating_add(1);
     // A binding whose references the rewrite did not all reach stays a
     // heap object; the others are rewritten again without it.
-    while !eligible.is_empty() || record_sigs {
+    while !eligible.is_empty() || record_sigs || arrays {
         let mut out = hir.clone();
         let mut rw = Rewriter {
             shapes: &shapes,
@@ -194,6 +218,7 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
             eligible: &eligible,
             facts,
             lane_fns: &lane_fns,
+            ra_locals: &ra_locals,
             recs: HashMap::new(),
             next,
             reached: HashMap::new(),
@@ -476,6 +501,9 @@ struct Rewriter<'a> {
     facts: &'a ElisionFacts,
     /// The functions whose record slots cross as lanes (`lane_functions`).
     lane_fns: &'a HashSet<u32>,
+    /// VR-4b: the bindings that hold a record array, and its record's
+    /// template (`record_array_locals`).
+    ra_locals: &'a HashMap<LocalId, u32>,
     /// The result lanes of the record-returning body being rewritten.
     ret: Option<LocalId>,
     /// Declarations of temporaries, placed before the statement in progress.
@@ -489,6 +517,94 @@ struct Rewriter<'a> {
     /// Bindings a use could not be rewritten for.
     failed: HashSet<LocalId>,
     census: Census,
+}
+
+/// VR-4b: the record-array intrinsics, `__perry_runtime` natives that
+/// `codegen::record_array` lowers. Each names its record template as an
+/// integer literal: `new(tmpl)`, `push(a, tmpl, copy)`, `pop(a, tmpl)`,
+/// `get(a, tmpl, i)`, `length(a)`.
+const RT: &str = "__perry_runtime";
+pub(crate) const RA_NEW: &str = "valueRecordArrayNew";
+pub(crate) const RA_PUSH: &str = "valueRecordArrayPush";
+pub(crate) const RA_POP: &str = "valueRecordArrayPop";
+pub(crate) const RA_GET: &str = "valueRecordArrayGet";
+pub(crate) const RA_LENGTH: &str = "valueRecordArrayLength";
+
+pub(crate) fn is_intrinsic(method: &str) -> bool {
+    matches!(method, RA_NEW | RA_PUSH | RA_POP | RA_GET | RA_LENGTH)
+}
+
+fn rt(method: &str, args: Vec<Expr>) -> Expr {
+    Expr::NativeMethodCall {
+        module: RT.into(),
+        class_name: None,
+        object: None,
+        method: method.into(),
+        args,
+    }
+}
+
+fn is_empty_array(e: &Expr) -> bool {
+    matches!(e, Expr::Array(v, _) if v.is_empty())
+}
+
+/// VR-4b: the bindings that hold a record array: the facts' own, and every
+/// binding initialized or assigned from a typed receiver (a local a
+/// transform bound a named read to carries no fact of its own).
+fn record_array_locals(
+    hir: &Module,
+    facts: &ElisionFacts,
+    shapes: &HashMap<u32, Shape>,
+) -> HashMap<LocalId, u32> {
+    let mut out: HashMap<LocalId, u32> = facts
+        .record_array_locals
+        .iter()
+        .filter(|(_, t)| shapes.contains_key(t))
+        .map(|(id, t)| (*id, *t))
+        .collect();
+    if !facts.has_record_arrays() {
+        return out;
+    }
+    loop {
+        let of = |e: &Expr, out: &HashMap<LocalId, u32>| match e {
+            Expr::LocalGet(id) => out.get(id).copied(),
+            Expr::PropertyGet {
+                property,
+                byte_offset,
+                ..
+            } if *byte_offset != 0 => facts
+                .record_array_reads
+                .get(&(*byte_offset, property.clone()))
+                .copied()
+                .filter(|t| shapes.contains_key(t)),
+            _ => None,
+        };
+        let mut found: Vec<(LocalId, u32)> = Vec::new();
+        perry_hir::tdz_check::for_each_module_stmt_list(hir, &mut |list| {
+            for s in list {
+                if let Stmt::Let {
+                    id, init: Some(e), ..
+                } = s
+                {
+                    if let Some(t) = of(e, &out) {
+                        found.push((*id, t));
+                    }
+                }
+            }
+        });
+        perry_hir::tdz_check::for_each_module_expr(hir, &mut |e| {
+            if let Expr::LocalSet(id, v) = e {
+                if let Some(t) = of(v, &out) {
+                    found.push((*id, t));
+                }
+            }
+        });
+        let before = out.len();
+        out.extend(found);
+        if out.len() == before {
+            return out;
+        }
+    }
 }
 
 fn undefined() -> Expr {
@@ -546,6 +662,18 @@ impl Rewriter<'_> {
             self.function(f);
         }
         for c in &mut m.classes {
+            // VR-4b: a field initializer that births a record array.
+            for field in c.fields.iter_mut() {
+                let key = (c.id, field.name.clone());
+                if let (Some(tmpl), Some(e)) = (
+                    self.facts.record_array_birth_fields.get(&key),
+                    &mut field.init,
+                ) {
+                    if is_empty_array(e) {
+                        *e = self.ra_new(*tmpl);
+                    }
+                }
+            }
             if let Some(f) = &mut c.constructor {
                 self.function(f);
             }
@@ -562,6 +690,11 @@ impl Rewriter<'_> {
     }
 
     fn function(&mut self, f: &mut Function) {
+        for p in f.params.iter_mut() {
+            if self.ra_locals.contains_key(&p.id) {
+                p.ty = Type::Any;
+            }
+        }
         let facts: &ElisionFacts = self.facts;
         let sig = facts
             .signatures
@@ -800,6 +933,11 @@ impl Rewriter<'_> {
 
     /// The record a typed call `e` returns.
     fn record_ret_call(&self, e: &Expr) -> Option<FactsRecRep> {
+        // VR-4b: `a.pop()` and `a[i]` of a record array return its record,
+        // absent when the array is empty or the index out of bounds.
+        if let Some(tmpl) = self.ra_source(e) {
+            return Some(FactsRecRep { tmpl, opt: true });
+        }
         self.record_call(e)?
             .record_ret
             .filter(|r| self.shapes.contains_key(&r.tmpl))
@@ -810,6 +948,10 @@ impl Rewriter<'_> {
     /// written into a temporary's), the other operands are rewritten as
     /// usual.
     fn call_operands(&mut self, e: &mut Expr) {
+        if let Some(tmpl) = self.ra_source(e) {
+            self.ra_lower_source(e, tmpl);
+            return;
+        }
         let slots: Vec<Option<FactsRecRep>> = self
             .record_call(e)
             .map(|s| s.record_params.clone())
@@ -849,10 +991,18 @@ impl Rewriter<'_> {
     /// leaves `true` (present, the lanes written) or `undefined`; a boxed
     /// result is an object, read key by key.
     fn call_into(&mut self, u: LocalId, mut call: Expr) -> Vec<Expr> {
+        // VR-4b: a record array's element read is absent only where the
+        // facts say the destination may be (`a[i]` under the for-of's bound
+        // never is).
+        let element = self.ra_source(&call).is_some();
         self.call_operands(&mut call);
         self.census.calls += 1;
         let rec = self.recs[&u].clone();
-        let opt = self.record_ret_call(&call).is_none_or(|r| r.opt);
+        let opt = if element {
+            rec.track
+        } else {
+            self.record_ret_call(&call).is_none_or(|r| r.opt)
+        };
         if opt && !rec.track {
             self.failed.insert(u);
         }
@@ -948,7 +1098,18 @@ impl Rewriter<'_> {
 
     fn stmt(&mut self, s: &mut Stmt) {
         match s {
-            Stmt::Let { init, .. } => {
+            Stmt::Let { id, init, ty, .. } => {
+                // VR-4b: a record array is no Array to the lowering.
+                if self.ra_locals.contains_key(id) {
+                    *ty = Type::Any;
+                }
+                if let (Some(tmpl), Some(e)) =
+                    (self.facts.record_array_birth_locals.get(id), &mut *init)
+                {
+                    if is_empty_array(e) {
+                        *e = self.ra_new(*tmpl);
+                    }
+                }
                 if let Some(e) = init {
                     self.expr(e);
                 }
@@ -969,6 +1130,13 @@ impl Rewriter<'_> {
                 then_branch,
                 else_branch,
             } => {
+                // VR-4b: a for-of over a record array is its index arm; the
+                // iterator arm never runs for one.
+                if self.ra_for_of(condition) {
+                    *condition = Expr::Bool(true);
+                    *else_branch = None;
+                    self.census.array_ops += 1;
+                }
                 self.cond(condition);
                 self.stmts(then_branch);
                 if let Some(b) = else_branch {
@@ -1285,6 +1453,259 @@ impl Rewriter<'_> {
     }
 
     /// A truthiness position: a record is truthy exactly when present.
+    /// VR-4b: the record template of the record array `e` holds, when `e`
+    /// is a typed receiver (a binding, a named read).
+    fn ra_of(&self, e: &Expr) -> Option<u32> {
+        match e {
+            Expr::LocalGet(id) => self.ra_locals.get(id).copied(),
+            Expr::PropertyGet {
+                property,
+                byte_offset,
+                ..
+            } if *byte_offset != 0 => self
+                .facts
+                .record_array_reads
+                .get(&(*byte_offset, property.clone()))
+                .copied()
+                .filter(|t| self.shapes.contains_key(t)),
+            _ => None,
+        }
+    }
+
+    /// VR-4b: `e` is `a.pop()` or `a[i]` of a record array: its record.
+    fn ra_source(&self, e: &Expr) -> Option<u32> {
+        match e {
+            Expr::ArrayPop(id) => self.ra_locals.get(id).copied(),
+            Expr::Call { callee, args, .. } if args.is_empty() => match callee.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if property == "pop" => self.ra_of(object),
+                _ => None,
+            },
+            Expr::IndexGet { object, .. } => self.ra_of(object),
+            _ => None,
+        }
+    }
+
+    /// VR-4b: `a.pop()` / `a[i]` as its intrinsic, operands rewritten.
+    fn ra_lower_source(&mut self, e: &mut Expr, tmpl: u32) {
+        let t = Expr::Integer(i64::from(tmpl));
+        *e = match std::mem::replace(e, undefined()) {
+            Expr::ArrayPop(id) => rt(RA_POP, vec![Expr::LocalGet(id), t]),
+            Expr::Call { callee, .. } => {
+                let Expr::PropertyGet { object, .. } = *callee else {
+                    unreachable!("a record array's pop")
+                };
+                let mut o = *object;
+                self.expr(&mut o);
+                rt(RA_POP, vec![o, t])
+            }
+            Expr::IndexGet { object, index, .. } => {
+                let (mut o, mut i) = (*object, *index);
+                self.expr(&mut o);
+                self.expr(&mut i);
+                rt(RA_GET, vec![o, t, i])
+            }
+            _ => unreachable!("a record array's source"),
+        };
+        self.census.array_ops += 1;
+    }
+
+    /// VR-4b: the birth of a record array of `tmpl`.
+    fn ra_new(&mut self, tmpl: u32) -> Expr {
+        assert!(
+            self.shapes.contains_key(&tmpl),
+            "ICE: value record array: the facts give no layout for record template {tmpl} in this module"
+        );
+        self.census.arrays += 1;
+        rt(RA_NEW, vec![Expr::Integer(i64::from(tmpl))])
+    }
+
+    /// VR-4b: `a.push(v)`: the copy of `v`'s lanes is stored.
+    fn ra_push(&mut self, recv: Expr, tmpl: u32, v: Expr) -> Expr {
+        self.census.passed += 1;
+        self.census.array_ops += 1;
+        let copy = match self.rec_of(&v).filter(|u| self.recs[u].tmpl == tmpl) {
+            Some(u) => {
+                self.reach(u);
+                self.copy(u)
+            }
+            None => {
+                let t = self.temp(tmpl);
+                let list = self.assign(t, v);
+                seq(list, self.copy(t))
+            }
+        };
+        rt(RA_PUSH, vec![recv, Expr::Integer(i64::from(tmpl)), copy])
+    }
+
+    /// VR-4b: the guard of HIR's for-of
+    /// (`arrayRecordNeedsIterator(src) === false`) over a record array.
+    fn ra_for_of(&self, condition: &Expr) -> bool {
+        let Expr::Compare {
+            op: CompareOp::Eq,
+            left,
+            right,
+        } = condition
+        else {
+            return false;
+        };
+        let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            object: None,
+            ..
+        } = left.as_ref()
+        else {
+            return false;
+        };
+        module == RT
+            && method == "arrayRecordNeedsIterator"
+            && matches!(right.as_ref(), Expr::Bool(false))
+            && matches!(args.as_slice(), [a] if self.ra_of(a).is_some())
+    }
+
+    /// VR-4b: `e` is a record array's birth in an expression, its `push`
+    /// or its `length`: rewritten to the intrinsic. Any other operation on
+    /// a typed receiver is a compile error (module docs).
+    fn ra_expr(&mut self, e: &mut Expr) -> bool {
+        if self.ra_locals.is_empty() && !self.facts.has_record_arrays() {
+            return false;
+        }
+        match e {
+            Expr::LocalSet(id, v)
+                if is_empty_array(v) && self.facts.record_array_birth_locals.contains_key(id) =>
+            {
+                **v = self.ra_new(self.facts.record_array_birth_locals[id]);
+                return true;
+            }
+            Expr::PutValueSet {
+                target,
+                key,
+                value,
+                receiver,
+                element_offset,
+                ..
+            } if is_empty_array(value)
+                && self
+                    .facts
+                    .record_array_birth_stores
+                    .contains_key(element_offset) =>
+            {
+                **value = self.ra_new(self.facts.record_array_birth_stores[element_offset]);
+                self.expr(target);
+                self.expr(key);
+                self.expr(receiver);
+                return true;
+            }
+            _ => {}
+        }
+        // `push`, in each form HIR lowering gives it.
+        let pushed: Option<(u32, usize)> = match &*e {
+            Expr::ArrayPush { array_id, .. } => self.ra_locals.get(array_id).map(|t| (*t, 1)),
+            Expr::NativeMethodCall {
+                module,
+                method,
+                object: Some(o),
+                args,
+                ..
+            } if module == "array" && matches!(method.as_str(), "push_single" | "push") => {
+                self.ra_of(o).map(|t| (t, args.len()))
+            }
+            Expr::Call { callee, args, .. } => match callee.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if property == "push" => self.ra_of(object).map(|t| (t, args.len())),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((tmpl, n)) = pushed {
+            if n != 1 {
+                panic!("ICE: value record array: push of {n} values is no record-array intrinsic");
+            }
+            let (mut recv, v) = match std::mem::replace(e, undefined()) {
+                Expr::ArrayPush {
+                    array_id, value, ..
+                } => (Expr::LocalGet(array_id), *value),
+                Expr::NativeMethodCall {
+                    object: Some(o),
+                    mut args,
+                    ..
+                } => (*o, args.remove(0)),
+                Expr::Call {
+                    callee, mut args, ..
+                } => {
+                    let Expr::PropertyGet { object, .. } = *callee else {
+                        unreachable!("a record array's push")
+                    };
+                    (*object, args.remove(0))
+                }
+                _ => unreachable!("a record array's push"),
+            };
+            self.expr(&mut recv);
+            *e = self.ra_push(recv, tmpl, v);
+            return true;
+        }
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = e
+        {
+            if property == "length" && self.ra_of(object).is_some() {
+                let mut o = std::mem::replace(object.as_mut(), undefined());
+                self.expr(&mut o);
+                *e = rt(RA_LENGTH, vec![o]);
+                self.census.array_ops += 1;
+                return true;
+            }
+        }
+        if let Some(what) = self.ra_misuse(e) {
+            panic!("ICE: value record array: {what} is no record-array intrinsic");
+        }
+        false
+    }
+
+    /// VR-4b: an operation on a typed receiver that no intrinsic covers.
+    fn ra_misuse(&self, e: &Expr) -> Option<String> {
+        let on = |o: &Expr| self.ra_of(o).is_some();
+        match e {
+            Expr::PropertyGet {
+                object, property, ..
+            } if on(object) => Some(format!("a read of `{property}`")),
+            Expr::PropertySet {
+                object, property, ..
+            } if on(object) => Some(format!("a store of `{property}`")),
+            Expr::IndexSet { object, .. } if on(object) => Some("an index store".into()),
+            Expr::PutValueSet { target, .. } if on(target) => Some("a store".into()),
+            Expr::Call { callee, .. } => match callee.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if on(object) => Some(format!("a call of `{property}`")),
+                _ => None,
+            },
+            Expr::NativeMethodCall {
+                module,
+                method,
+                object,
+                args,
+                ..
+            } if module != RT || !is_intrinsic(method) => (object.as_deref().is_some_and(on)
+                || args.iter().any(on))
+            .then(|| format!("the native `{module}.{method}`")),
+            Expr::ArrayPop(id)
+            | Expr::ArrayShift(id)
+            | Expr::ArrayPush { array_id: id, .. }
+            | Expr::ArrayPushSpread { array_id: id, .. }
+                if self.ra_locals.contains_key(id) =>
+            {
+                Some("an Array operation".into())
+            }
+            Expr::GetIterator(o) if on(o) => Some("an iteration".into()),
+            _ => None,
+        }
+    }
+
     fn cond(&mut self, e: &mut Expr) {
         if let Some(u) = self.rec_of(e) {
             self.reach(u);
@@ -1311,7 +1732,7 @@ impl Rewriter<'_> {
                     self.discarded(x);
                 }
             }
-            Expr::Call { .. } if self.record_ret_call(e).is_some() => {
+            _ if self.record_ret_call(e).is_some() => {
                 let r = self.record_ret_call(e).expect("a record result");
                 let t = self.temp(r.tmpl);
                 let call = std::mem::replace(e, undefined());
@@ -1339,6 +1760,9 @@ impl Rewriter<'_> {
         }
         if self.record_call(e).is_some() {
             self.call_operands(e);
+            return;
+        }
+        if self.ra_expr(e) {
             return;
         }
         match e {

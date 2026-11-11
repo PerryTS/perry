@@ -105,6 +105,7 @@ mod promise_owner_overflow;
 mod promote_in_place;
 mod promoted_cohort;
 mod proxy_registry;
+mod record_array;
 mod residual_prototype_relocation;
 mod restore_coverage;
 mod restore_walk;

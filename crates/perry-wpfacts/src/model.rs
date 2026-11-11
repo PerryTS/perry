@@ -1386,6 +1386,15 @@ pub struct Model {
     /// The admitted value-record templates (`TemplateFacts::record` is
     /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
     pub records: crate::pts::FxHashSet<TmplId>,
+    /// The admitted record arrays (VR-4b): Arr template -> the record
+    /// template of its elements. Set with `records`; such an Array is no
+    /// plain program Array (`bindings::arr_rep`), it is a
+    /// `GC_TYPE_RECORD_ARRAY` only the record-array intrinsics touch.
+    pub record_arrays: FxHashMap<TmplId, TmplId>,
+    /// S0 negative control `vrarrjoin` (DESIGN-p4l4 §10.3): a holder of a
+    /// record array and of other Arrays is typed a record array (R6's join
+    /// ignored), a wrong claim the receiver witness must catch.
+    pub record_array_join_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
     /// Array is not recorded (`Model::arr_written`), so a literal that is
     /// stored into keeps its constant contents, a wrong claim the constant
@@ -1451,6 +1460,18 @@ pub struct Model {
     pub arr_used: crate::pts::FxHashSet<Tok>,
     /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
     pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
+    /// DESIGN-p4l4 VR-4b: an array literal that is the whole value of a
+    /// `let`, of a local assignment, of a named store or of a class field
+    /// initializer: the holder codegen births it for
+    /// (`records::ArrBirth`).
+    pub(crate) arr_birth_holder: FxHashMap<TmplId, crate::records::ArrBirth>,
+    /// VR-4b: the bindings of a for-of's source and of its iterator arm's
+    /// temporaries (`perry_hir::lower::for_of_guard`), whose iteration
+    /// protocol uses are the for-of intrinsic's.
+    pub(crate) for_of_relays: crate::pts::FxHashSet<NodeId>,
+    /// VR-4b: the receivers of a generic in-place permutation
+    /// (`Gen::permuted_len`), whose `Cons::LenIndex` is not a `pop`'s.
+    pub(crate) arr_permuted: crate::pts::FxHashSet<NodeId>,
     /// The receiver relays `array_method` makes for a fused fill's call.
     pub rest_fill_relays: Vec<NodeId>,
     /// The templates admitted at rest (`rest_elems::admit`), and why each

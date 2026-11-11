@@ -199,6 +199,10 @@ def main():
         # no typed call would hand a copy to the callee's boxed entry, which
         # reports "value record boxed entry".
         ("vr-untyped-negative", "vruntyped", "value record boxed entry"),
+        # VR-4b: a record array is touched only by its intrinsics, whose
+        # receiver holds nothing else; a body that also serves another
+        # Array reports "value record array" at the intrinsic.
+        ("vr-arrjoin-negative", "vrarrjoin", "value record array"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:
