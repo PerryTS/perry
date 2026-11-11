@@ -33,8 +33,26 @@ use super::FnCtx;
 /// the refcount word.
 const STRING_REFCOUNT_OFFSET: &str = "12";
 
+/// `PERRY_FACTS_LITERAL_STRINGS=0` turns the lowerings of this module off
+/// (the facts are then empty too, wpfacts `literal_strings::enabled`), and
+/// with them the one cleanup that is no fact: a class-field store of a
+/// static child (`write_barrier::with_static_child`), whose barrier is
+/// emitted as nothing, no longer tests the value and the parent for it.
+pub(crate) fn enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_LITERAL_STRINGS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 fn usable(ctx: &FnCtx<'_>) -> bool {
-    !ctx.wpfacts_off && !ctx.wpfacts.interp_guard && !super::typed_feedback_emission_enabled()
+    enabled()
+        && !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && !super::typed_feedback_emission_enabled()
 }
 
 /// Local `id` holds only literals' values as Strings, by the facts.

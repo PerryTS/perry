@@ -7,15 +7,16 @@
 // string ("literal string").
 class Log {
   last = "none";
-  keep(s: string): void {
-    this.last = s;
+  run(n: number): number {
+    let line = "start";
+    for (let i = 0; i < n; i++) {
+      line += "x";
+      if (i === 20) this.last = line;
+    }
+    line += "-tail";
+    return line.length;
   }
 }
 const log = new Log();
-let line = "start";
-for (let i = 0; i < 40; i++) {
-  line += "x";
-  if (i === 20) log.keep(line);
-}
-line += "-tail";
-console.log(log.last.length, line.length);
+const total = log.run(40);
+console.log(log.last, log.last.length, total);
