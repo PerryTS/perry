@@ -164,25 +164,26 @@ function putAny(xs: any[], k: number, v: any): number {
 }
 console.log("store neg", putAny(props, -1, "n"), putAny(props, 0, "z"), props[-1], props[0], Object.keys(props).join(","));
 
-// (i) An at-rest int Array read by a key only the facts bound.
+// (i) An at-rest int Array (its elements have int consumers only) read by
+// a key only the facts bound: in the floor, across it and past it.
 class Ring {
   slots: number[] = new Array(16).fill(0);
   head: number = many ? 9 : 4;
-  fill(): void {
-    for (let i = 0; i < 16; i++) this.slots[i] = i * 3;
+  load(): void {
+    for (let i = 0; i < 16; i++) this.slots[i] = (i * 3) | 0;
   }
   peek(): number {
-    return this.slots[this.head] ?? -1;
+    return (this.slots[this.head] ?? -1) | 0;
   }
   next(): number {
-    return this.slots[this.head + 11] ?? -1;
+    return (this.slots[this.head + 11] ?? -1) | 0;
   }
   past(): number {
-    return this.slots[this.head + 12] ?? -1;
+    return (this.slots[this.head + 12] ?? -1) | 0;
   }
 }
 const ring = new Ring();
-ring.fill();
+ring.load();
 console.log("at rest", ring.peek(), ring.next(), ring.past());
 
 // (j) A loop of reads through each form, for the GC schedule arm.
