@@ -121,3 +121,22 @@ fn a_named_proto_read_of_a_parsed_object_writes_there() {
     let pf = whole(&parsed_src("j.__proto__", "Material.call(v);"));
     assert!(escape_with_field(&pf, "a").is_some(), "{}", pf.dump_text());
 }
+
+/// GLTFLoader.js: the GLTF json converted to a string runs
+/// `Array.prototype.toString` on it (an array-like `join` lookup). Node: a
+/// `JSON.parse` object's chain is `Object.prototype`, which has no `join`;
+/// the parsed data holds no function, so `toString` falls back to
+/// `Object.prototype.toString` and nothing is called with the object.
+#[test]
+fn a_parsed_object_finds_no_array_join() {
+    let pf = whole(
+        "const unknown: any = (globalThis as any)[process.argv[2]];
+         class A { a = 1; }
+         const a = new A();
+         const j: any = JSON.parse(process.argv[3] ?? '{}');
+         j.q = a;
+         console.log(Array.prototype.toString.call(j), typeof j.join);
+         console.log(a.a);",
+    );
+    assert_eq!(escape_with_field(&pf, "a"), None, "{}", pf.dump_text());
+}

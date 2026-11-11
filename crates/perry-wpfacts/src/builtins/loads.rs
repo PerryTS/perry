@@ -111,6 +111,13 @@ pub(super) fn family_member(
     dst: NodeId,
 ) {
     let name = m.atoms[a as usize].clone();
+    // A box's chain is the one its creator gave it (`box_chain`): an
+    // ordinary object (a `JSON.parse` object, a descriptor) finds
+    // `Object.prototype`'s members, never `Array.prototype`'s (`join`).
+    let fam = match (fam, what.map(members::box_chain)) {
+        (Family::Box, Some(members::BoxChain::Object)) => Family::Object,
+        _ => fam,
+    };
     match members::member(fam, &name) {
         // An accessor of the realm (a getter the model lists as a method):
         // the getter's result, never the getter or a method.
