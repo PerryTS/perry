@@ -496,6 +496,11 @@ pub struct ModuleBindings {
     pub rest_reads: Vec<(u32, u32)>,
     pub rest_writes: Vec<(u32, u32)>,
     pub rest_births: Vec<u32>,
+    /// I32 at rest, PR C (`rest_fields::export_reads`): the named reads (by
+    /// byte offset) whose receiver may hold an instance with an I32 lane at
+    /// the read's key, with the lane's slot when every receiver value is such
+    /// an instance at that slot or nullish (`u32::MAX` otherwise). Sorted.
+    pub rest_lane_reads: Vec<(u32, u32)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that

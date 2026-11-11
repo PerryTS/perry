@@ -106,6 +106,7 @@ pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
 pub(crate) mod rest_elems;
+pub(crate) mod rest_fields;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]

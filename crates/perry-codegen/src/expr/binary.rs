@@ -946,6 +946,10 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // no boxed fallback at all (the residual per-element check proves the slot
     // is a raw double before the load), so claiming one here would be a lie
     // that other consumers of that predicate would read.
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, expr)? {
+        return Ok((value, true));
+    }
     let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
         if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
     if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {

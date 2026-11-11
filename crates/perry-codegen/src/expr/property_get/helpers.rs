@@ -195,6 +195,10 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
+    // I32 at rest (PR C): an I32 lane holds no double (`rest_fields`).
+    if crate::expr::rest_fields::is_gated_read(ctx, expr) {
+        return Ok(None);
+    }
     let Expr::PropertyGet {
         object, property, ..
     } = expr

@@ -78,6 +78,7 @@ fn ir(rep: FactsRep) -> String {
                 classes: Vec::new(),
                 nullable: false,
                 rep,
+                rest: false,
             }],
         },
     );

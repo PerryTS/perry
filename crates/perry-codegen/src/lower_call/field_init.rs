@@ -787,6 +787,9 @@ pub(crate) fn apply_field_initializers_recursive(
         }
     };
 
+    // I32 at rest (PR C): a root class born keyless gets its I32 lanes once
+    // its own field definitions have run (`rest_fields::emit_lanes`).
+    let lanes_after = chain.len() == 1 && chain[0] == class_name;
     for class_name_in_chain in chain {
         if crate::verify_facts::enabled() {
             crate::verify_facts::body_entry(
@@ -1181,6 +1184,12 @@ pub(crate) fn apply_field_initializers_recursive(
         }
 
         ctx.class_stack.pop();
+    }
+    if lanes_after {
+        if let Some(slot) = ctx.this_stack.last().cloned() {
+            let this_val = ctx.block().load(DOUBLE, &slot);
+            crate::expr::rest_fields::emit_lanes(ctx, class_name, &this_val);
+        }
     }
     Ok(())
 }

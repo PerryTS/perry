@@ -2634,10 +2634,52 @@ fn lower_module(
                 imported_stub_names.contains(class_name.as_str()),
                 class_name,
             );
+            // I32 at rest (PR C): a class born with its keys carries its I32
+            // lanes in its birth rep (`expr::rest_fields`); a class born
+            // keyless gets them after its field definitions.
+            let rep = match class_table.get(class_name) {
+                Some(class)
+                    if !imported_stub_names.contains(class_name.as_str())
+                        && crate::lower_call::new_alloc::keys_defined_at_birth(class) =>
+                {
+                    let lanes = crate::expr::rest_fields::class_lanes(
+                        &opts.program_facts.elision,
+                        &class_table,
+                        &class_ids,
+                        class_name,
+                    );
+                    crate::expr::rest_fields::with_lanes(rep, lanes)
+                }
+                _ => rep,
+            };
             let entry = reps.entry(keys_global.clone()).or_insert(rep);
             if *entry != rep {
                 *entry = 0;
             }
+        }
+        // I32 at rest (PR C): a class born with its keys keeps every lane the
+        // facts give it; other modules read those lanes from the facts.
+        for (class_name, keys_global) in &class_keys_globals_map {
+            let Some(class) = class_table.get(class_name) else {
+                continue;
+            };
+            if imported_stub_names.contains(class_name.as_str())
+                || !crate::lower_call::new_alloc::keys_defined_at_birth(class)
+            {
+                continue;
+            }
+            let lanes = crate::expr::rest_fields::class_lanes(
+                &opts.program_facts.elision,
+                &class_table,
+                &class_ids,
+                class_name,
+            );
+            let rep = reps.get(keys_global).copied().unwrap_or(0);
+            assert_eq!(
+                crate::expr::rest_fields::lanes_of_rep(rep) & lanes,
+                lanes,
+                "I32 at rest: class {class_name} lost its I32 lanes in its birth rep"
+            );
         }
         reps
     };

@@ -77,6 +77,18 @@ pub(crate) unsafe fn checked_slot_bits(
     }
     if rep == field_rep::REP_SPECIAL {
         let record = shape_record_of_receiver((object_shape_stamp(obj)).0);
+        if record.is_some_and(|r| r.lane_is_i32(field_index as u32)) {
+            // I32 at rest (PR C): an int32 Number is stored as its I32 word.
+            // Any other value generalizes the slot first: its I32 word is
+            // rewritten to its double before the lane leaves I32.
+            return match crate::layout_slot::encode_lane(value_bits) {
+                Some(word) => word,
+                None => {
+                    generalize_i32_lane(obj, field_index as u32);
+                    value_bits
+                }
+            };
+        }
         let expected = record.and_then(|r| r.constfn_info(field_index as u32));
         if expected.is_some() && expected == constfn_store_info(value_bits) {
             return value_bits;
@@ -93,6 +105,133 @@ pub(crate) unsafe fn checked_slot_bits(
             value_bits
         }
     }
+}
+
+/// An I32 lane of `obj` meets a value that is no int32 Number (unproven
+/// code; on proven code the facts would have joined the write into the field
+/// and it would not be I32). The slot's I32 word becomes its canonical
+/// double, then `obj` alone moves to the same shape with the lane `Any`
+/// (re-interned through the one identity table, shape word after the slot,
+/// so no instant shows an I32 word under `Any` or a double under I32). Other
+/// objects keep the lane: their words are still I32. The caller writes the
+/// value afterwards.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn generalize_i32_lane(obj: *mut ObjectHeader, slot: u32) {
+    let id = object_shape_stamp(obj);
+    let Some(d) = shape_descriptor_of_receiver(id.0) else {
+        return;
+    };
+    let rep = field_rep::without_lane(d.rep, slot);
+    let infos: Vec<_> = d.constfn_infos().to_vec();
+    let brands = d.brands().to_vec();
+    // The mint may collect: root the receiver across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(obj);
+    let target = publish_shape_result(super::shapes::shape_descriptor_intern_with_special(
+        d.keys_view(),
+        d.logical_key_count,
+        d.live_inline_slot_count,
+        d.semantic_generation,
+        d.object_kind,
+        d.hole_count,
+        d.proto_id,
+        d.summary,
+        rep,
+        &infos,
+        &brands,
+        None,
+        d.integrity_flags,
+    ));
+    receiver.with_mut_ptr(|obj| {
+        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+        let w = *fields.add(slot as usize);
+        // GC_STORE_AUDIT(POINTER_FREE): the decoded canonical double of an
+        // I32 word, never a pointer.
+        *fields.add(slot as usize) = crate::layout_slot::decode_word(w);
+        if target != LayoutWord(0) && target != id {
+            stamp_object_shape_id_with_carrier_note(obj, target);
+        }
+    });
+}
+
+/// Give `obj` I32 lanes at the slots of `mask` (I32 at rest, PR C): a class
+/// born keyless reaches its layout through its field definitions, whose
+/// key-adds learn lanes from values, never from facts; codegen calls this once
+/// the class's own field definitions have run and before any of its code reads
+/// a field (`perry-codegen` `expr::rest_fields`). Each slot's Number becomes
+/// its I32 word and the shape gains the lanes, in one re-intern. A slot that
+/// does not hold an int32 Number keeps its lane (a false proof, which check
+/// mode reports at the next proven read). Returns the receiver.
+pub(crate) unsafe fn install_i32_lanes(obj: *mut ObjectHeader, mask: u32) {
+    let id = object_shape_stamp(obj);
+    let Some(d) = shape_descriptor_of_receiver(id.0) else {
+        return;
+    };
+    if super::overflow::has_overflow(obj) {
+        return;
+    }
+    let live = d.live_inline_slot_count.min(REP_SLOTS);
+    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let mut rep = d.rep;
+    let mut lanes = 0u32;
+    let mut rest = mask;
+    while rest != 0 {
+        let slot = rest.trailing_zeros();
+        rest &= rest - 1;
+        if slot >= live || d.lane_is_constfn(slot) {
+            continue;
+        }
+        if crate::layout_slot::encode_lane(*fields.add(slot as usize)).is_none() {
+            crate::layout_slot::false_proof(*fields.add(slot as usize));
+            continue;
+        }
+        rep = field_rep::with_slot_rep(rep, slot, field_rep::REP_SPECIAL);
+        lanes |= 1 << slot;
+    }
+    if lanes == 0 || rep == d.rep {
+        return;
+    }
+    let infos: Vec<_> = d.constfn_infos().to_vec();
+    let brands = d.brands().to_vec();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(obj);
+    let target = publish_shape_result(super::shapes::shape_descriptor_intern_with_special(
+        d.keys_view(),
+        d.logical_key_count,
+        d.live_inline_slot_count,
+        d.semantic_generation,
+        d.object_kind,
+        d.hole_count,
+        d.proto_id,
+        d.summary,
+        rep,
+        &infos,
+        &brands,
+        None,
+        d.integrity_flags,
+    ));
+    if target == LayoutWord(0) || target == id {
+        return;
+    }
+    receiver.with_mut_ptr(|obj| {
+        // No safepoint from here to the stamp: the words change under the
+        // old lanes (`Any`/`F64`), which the collector reads as non-pointers.
+        if object_shape_stamp(obj) != id {
+            return;
+        }
+        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+        let mut rest = lanes;
+        while rest != 0 {
+            let slot = rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            if let Some(word) = crate::layout_slot::encode_lane(*fields.add(slot)) {
+                // GC_STORE_AUDIT(POINTER_FREE): an I32 word (0x7FFE band).
+                *fields.add(slot) = word;
+            }
+        }
+        stamp_object_shape_id_with_carrier_note(obj, target);
+    });
 }
 
 /// A closure that can preserve an existing ConstFn body claim. Its address
@@ -718,11 +857,21 @@ pub(crate) unsafe fn birth_fill_f64_lanes(obj: *mut ObjectHeader) {
     // Deprecated lanes too: a birth into a lineage that has generalized a
     // lane still carries it (the id is fixed), and the invariant covers it.
     let mut lanes = field_rep::f64_lane_slots(field_rep::identity_with_special(record.rep()));
-    if lanes == 0 {
+    // I32 at rest (PR C): an I32 lane starts as the I32 word of 0.
+    let mut i32_lanes = record.i32_lanes();
+    if lanes == 0 && i32_lanes == 0 {
         return;
     }
     let live = record.live_inline_slot_count();
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    while i32_lanes != 0 {
+        let slot = i32_lanes.trailing_zeros();
+        i32_lanes &= i32_lanes - 1;
+        if slot < live {
+            // GC_STORE_AUDIT(INIT): the I32 word of 0, never a pointer.
+            *fields.add(slot as usize) = crate::value::INT32_TAG;
+        }
+    }
     while lanes != 0 {
         let slot = lanes.trailing_zeros();
         lanes &= lanes - 1;
@@ -775,6 +924,14 @@ pub(crate) unsafe fn assert_field_rep_lanes(
             }
             field_rep::REP_SPECIAL if record.special_constfn_mask() & (1 << slot) != 0 => {
                 assert_constfn_slot_body(obj, record, slot, bits);
+            }
+            field_rep::REP_SPECIAL => {
+                if !crate::layout_slot::is_i32_word(bits) {
+                    panic!(
+                        "field-rep invariant: I32 slot {slot} of {obj:p} (shape {:#x}, rep {rep:#x}) holds {bits:#018x}, not an I32 word",
+                        object_shape_stamp(obj)
+                    );
+                }
             }
             _ => {} // The reserved optional NoPointer producer remains disabled.
         }

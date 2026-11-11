@@ -664,6 +664,19 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).lane_is_constfn(slot) }
     }
 
+    /// The I32 lanes of this shape (`field_rep::i32_lane_slots`), one bit per
+    /// slot below 32 (I32 at rest, PR C).
+    #[inline]
+    pub(crate) fn i32_lanes(self) -> u32 {
+        super::field_rep::i32_lane_slots(self.rep(), self.special_constfn_mask())
+    }
+
+    /// Is `slot` an I32 lane of this shape?
+    #[inline]
+    pub(crate) fn lane_is_i32(self, slot: u32) -> bool {
+        slot < super::field_rep::REP_SLOTS && self.i32_lanes() & (1u32 << slot) != 0
+    }
+
     #[inline]
     pub(crate) fn deprecate_special_to_any(self, slot: u32) -> bool {
         // SAFETY: a live slab record (type docs), with an atomic learned bit.
@@ -1859,9 +1872,10 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
 ) -> Result<LayoutWord, ShapeDescriptorError> {
     let shape_keys: ShapeKeys = keys.into();
     let keys = shape_keys.arr();
-    if !super::field_rep::is_valid(rep) {
-        return Err(ShapeDescriptorError::InvalidFacts);
-    }
+    // I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    // (`field_rep::i32_lane_slots`). Before I32 lanes existed every path that
+    // reached an interner with such a lane aborted
+    // (`shape_descriptor_error_abort`), so none relies on it being refused.
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -2115,9 +2129,10 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     integrity_flags: u16,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
     let shape_keys: ShapeKeys = keys.into();
-    if !super::field_rep::is_valid(rep) {
-        return Err(ShapeDescriptorError::InvalidFacts);
-    }
+    // I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    // (`field_rep::i32_lane_slots`). Before I32 lanes existed every path that
+    // reached an interner with such a lane aborted
+    // (`shape_descriptor_error_abort`), so none relies on it being refused.
     shape_descriptor_intern_with_special(
         shape_keys,
         logical_key_count,
@@ -2207,13 +2222,13 @@ fn shape_descriptor_intern_with_special_mode(
     if !super::field_rep::is_valid_with_special(rep, mask) {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
-    // Every SPECIAL lane in Step 5C names a ConstFn body. P5's optional
-    // NoPointer producer needs its own mask and remains gated by census.
-    // A requested ConstFn id is only legal through the body-aware static
-    // birth/seed entry points; generic dynamic callers fail closed.
-    if mask != super::field_rep::special_lane_slots(rep)
-        || (requested.is_some() && !infos.is_empty() && !static_constfn)
-    {
+    // A SPECIAL lane names a ConstFn body (`mask`) or is an I32 lane (I32
+    // at rest, PR C: the complement, `field_rep::i32_lane_slots`). P5's
+    // optional NoPointer producer needs its own mask beside these and
+    // remains gated by census. A requested ConstFn id is only legal through
+    // the body-aware static birth/seed entry points; generic dynamic callers
+    // fail closed.
+    if requested.is_some() && !infos.is_empty() && !static_constfn {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
     let keys_id = keys as usize as u64;
@@ -4878,6 +4893,11 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
         }
     }
     if !added {
+        return false;
+    }
+    // An I32 lane (I32 at rest, PR C) would become `Any` below while its
+    // word stays I32: a shape with one learns no ConstFn lane.
+    if super::field_rep::i32_lane_slots(current.rep, current.special_constfn_mask) != 0 {
         return false;
     }
     // The other lanes keep their representation; every ConstFn lane is SPECIAL.

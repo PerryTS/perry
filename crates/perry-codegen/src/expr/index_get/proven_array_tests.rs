@@ -382,6 +382,7 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
                 classes: Vec::new(),
                 nullable: false,
                 rep,
+                rest: false,
             }],
         },
     );
