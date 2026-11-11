@@ -11,10 +11,10 @@ fn kinds(src: &str, at: &str, cfg: &FactsConfig) -> Option<u16> {
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], cfg);
     let mb = pf.bindings_for("t.ts").expect("module bindings");
     let offset = src.find(at).expect("call in source") as u32 + 1;
-    mb.call_kinds
-        .iter()
-        .find(|(o, _)| *o == offset)
-        .map(|(_, k)| *k)
+    let mut found = mb.call_kinds.iter().filter(|(o, _, _)| *o == offset);
+    let first = found.next().map(|(_, _, k)| *k);
+    assert!(found.next().is_none(), "one call starts at {at}");
+    first
 }
 
 const SRC: &str = r#"
@@ -80,4 +80,31 @@ fn the_probe_names_each_site() {
         lines.iter().any(|l| l.ends_with("kinds=str|null")),
         "{lines:#?}"
     );
+}
+
+/// `name(i).trim()` holds two calls that start at `name`: the span tells
+/// the string call `name(i)` from the call of its `trim`.
+#[test]
+fn calls_that_start_at_one_offset_are_told_apart_by_their_end() {
+    let src = SRC.replace(
+        "console.log(out);",
+        "console.log(out, name(RUN).trim().length);",
+    );
+    let module = perry_parser::parse_typescript(&src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &FactsConfig::default());
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    let offset = src.find("name(RUN)").expect("call in source") as u32 + 1;
+    let inner_end = offset + "name(RUN)".len() as u32;
+    let at: Vec<_> = mb
+        .call_kinds
+        .iter()
+        .filter(|(o, _, _)| *o == offset)
+        .collect();
+    assert!(
+        at.iter()
+            .any(|(_, e, k)| *e == inner_end && *k == prim::STR),
+        "{at:#?}"
+    );
+    assert!(at.iter().all(|(_, e, _)| *e >= inner_end), "{at:#?}");
 }

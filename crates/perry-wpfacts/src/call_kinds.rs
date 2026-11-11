@@ -7,10 +7,11 @@
 //! alone (the result is a string, so `f(a) + g(b)` is a concatenation) and
 //! a subset of `STR | NULL | UNDEF` with `STR` (`f(a) ?? ""` is a string).
 //!
-//! Keyed by the call's own byte offset (`Expr::Call::byte_offset`, never 0).
-//! Calls that share an offset (`a.b().c()`: both start at `a`; copies of one
-//! source call the inliner made) are joined: one copy that is no primitive
-//! call withdraws the site.
+//! Keyed by the call's own span (`Expr::Call::byte_offset`, never 0, and
+//! `byte_end`): `a.b().c()` holds two calls that start at `a`, and the span
+//! tells them apart. Calls that share a span (copies of one source call: a
+//! body walked twice, a callee the inliner copied) are joined: one copy that
+//! is no primitive call withdraws the site.
 //!
 //! The fact selects a lowering whose every arm is still chosen by the value
 //! at run time (`js_string_concat_box` dispatches on the tags), so a wrong
@@ -33,7 +34,7 @@ pub fn enabled() -> bool {
 }
 
 /// Fill `ModuleBindings::call_kinds` (module docs). `probe`: one
-/// `# call_kinds module= offset= kinds=` line per exported site.
+/// `# call_kinds module= offset= end= kinds=` line per exported site.
 pub(crate) fn collect(
     g: &Gen<'_>,
     bindings: &mut [ModuleBindings],
@@ -44,10 +45,10 @@ pub(crate) fn collect(
         return;
     }
     let claim_all = sabotage == Some("stringcall");
-    // (module, offset) -> the union of the copies' kinds, or None once a
-    // copy holds an object or ⊤.
-    let mut sites: std::collections::BTreeMap<(u32, u32), Option<u16>> = Default::default();
-    for &(mi, offset, n) in &g.call_kinds_at {
+    // (module, offset, end) -> the union of the copies' kinds, or None once
+    // a copy holds an object or ⊤.
+    let mut sites: std::collections::BTreeMap<(u32, u32, u32), Option<u16>> = Default::default();
+    for &(mi, offset, end, n) in &g.call_kinds_at {
         let node = &g.m.nodes[n as usize];
         let kinds = if claim_all {
             Some(prim::STR)
@@ -56,13 +57,13 @@ pub(crate) fn collect(
         } else {
             None
         };
-        let entry = sites.entry((mi, offset)).or_insert(Some(0));
+        let entry = sites.entry((mi, offset, end)).or_insert(Some(0));
         *entry = match (*entry, kinds) {
             (Some(prev), Some(k)) => Some(prev | k),
             _ => None,
         };
     }
-    for ((mi, offset), kinds) in sites {
+    for ((mi, offset, end), kinds) in sites {
         let (Some(kinds), Some(mb)) = (kinds, bindings.get_mut(mi as usize)) else {
             continue;
         };
@@ -71,10 +72,10 @@ pub(crate) fn collect(
         if kinds == 0 {
             continue;
         }
-        mb.call_kinds.push((offset, kinds));
+        mb.call_kinds.push((offset, end, kinds));
         if let Some(p) = probe.as_deref_mut() {
             p.push(format!(
-                "# call_kinds module={mi} offset={offset} kinds={}",
+                "# call_kinds module={mi} offset={offset} end={end} kinds={}",
                 prim::name(kinds)
             ));
         }

@@ -583,7 +583,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
         out.number_calls.extend(mb.number_calls.iter().copied());
-        out.call_kinds.extend(mb.call_kinds.iter().copied());
+        out.call_kinds
+            .extend(mb.call_kinds.iter().map(|&(o, e, k)| ((o, e), k)));
         out.number_element_reads
             .extend(mb.number_element_reads.iter().copied());
         out.int32_element_reads

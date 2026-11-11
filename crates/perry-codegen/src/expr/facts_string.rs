@@ -40,13 +40,21 @@ const K_UNDEF: u16 = 1 << 4;
 /// The kinds the facts give the result of call `e`, when this body may use
 /// them.
 fn call_kinds(ctx: &FnCtx<'_>, e: &Expr) -> Option<u16> {
-    let Expr::Call { byte_offset, .. } = e else {
+    let Expr::Call {
+        byte_offset,
+        byte_end,
+        ..
+    } = e
+    else {
         return None;
     };
     if ctx.wpfacts_off || ctx.wpfacts.interp_guard || *byte_offset == 0 {
         return None;
     }
-    ctx.wpfacts.call_kinds.get(byte_offset).copied()
+    ctx.wpfacts
+        .call_kinds
+        .get(&(*byte_offset, *byte_end))
+        .copied()
 }
 
 /// `e` is a string by the facts: a call that returns only strings, such a

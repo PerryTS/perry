@@ -1676,7 +1676,8 @@ impl<'a> Gen<'a> {
             } => {
                 let result = self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end);
                 if *byte_offset != 0 {
-                    self.call_kinds_at.push((fx.module, *byte_offset, result));
+                    self.call_kinds_at
+                        .push((fx.module, *byte_offset, *byte_end, result));
                 }
                 result
             }
